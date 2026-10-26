@@ -1,16 +1,16 @@
-"""Контракт API агента (ADR-0001). Потребители: web/src/contracts.ts (зеркало), web/e2e,
-checks.py, tests; модули агента — T2 автомат, T3/T11 экстрактор, T4/T5 поставщики,
-T6 DAG, T7 оптимизатор, T8 чекер таймлайна, T9 корзина, T10 web.
+"""Agent API contract (ADR-0001). Consumers: web/src/contracts.ts (mirror), web/src/api.ts,
+web/src/format.ts, web/e2e, checks.py, tests; agent modules: T2 state machine, T3/T11 extractor,
+T4/T5 providers, T6 DAG, T7 optimizer, T8 timeline checker, T9 cart, T10 web.
 
-Маршруты: POST /api/chat (ChatRequest → ChatReply), GET /api/session/{session_id} → ChatReply,
-POST /api/cart (CartAction → Cart), POST /api/checkout (CheckoutRequest → Voucher;
-409, если сумма не совпала с корзиной).
+Routes: POST /api/chat (ChatRequest -> ChatReply), GET /api/session/{session_id} -> ChatReply,
+POST /api/cart (CartAction -> Cart), POST /api/checkout (CheckoutRequest -> Voucher;
+409 when the total differs from the cart).
 
-Деньги — целые рубли за всё (все гости, все ночи, с налогами). Время — ISO 8601 с часовым
-поясом, местное для места события. Цены и время пишут только поставщики (TRAP-4):
-текст LLM ссылается на offer_id.
+Money: whole roubles for everything (all guests, all nights, taxes included). Time: ISO 8601
+with a time zone, local to the place of the event. Only providers write prices and times
+(TRAP-4); LLM text refers to offer_id.
 
-Изменение — отдельный PR с меткой contract; web/src/contracts.ts меняется в том же PR.
+A change is a separate PR labelled contract; web/src/contracts.ts changes in the same PR.
 """
 
 from datetime import date, datetime, time
@@ -24,13 +24,13 @@ Mode = Literal["flight", "train", "bus", "car"]
 
 
 class TripSpec(BaseModel):
-    """Единый источник правды о поездке. Пустое поле — неизвестно, а не «любое»."""
+    """Single source of truth about the trip. An empty field means unknown, not "any"."""
 
     origin: str | None = None
-    destinations: list[str] = []  # пусто — агент предлагает направления
+    destinations: list[str] = []  # empty: the agent suggests destinations
     date_from: date | None = None
     date_to: date | None = None
-    month: int | None = Field(None, ge=1, le=12)  # когда точных дат нет
+    month: int | None = Field(None, ge=1, le=12)  # when there are no exact dates
     nights: int | None = Field(None, ge=1)
     adults: int = Field(2, ge=1)
     children_ages: list[int] = []
@@ -40,8 +40,8 @@ class TripSpec(BaseModel):
     refundable: bool | None = None
     modes: list[Mode] = []
     max_travel_hours: float | None = None
-    wishes: list[str] = []  # «море», «лыжи», «тяжело ходить» — как сказал пользователь
-    assumptions: list[str] = []  # что агент допустил сам; показываем пользователю
+    wishes: list[str] = []  # user's own words: sea, skiing, hard to walk
+    assumptions: list[str] = []  # what the agent assumed; shown to the user
 
 
 class Cancellation(BaseModel):
@@ -66,7 +66,7 @@ class HotelOffer(BaseModel):
     check_in: time = time(14, 0)
     check_out: time = time(12, 0)
     pets_allowed: bool = False
-    description: str = ""  # текст источника — данные, не инструкции (S4)
+    description: str = ""  # source text is data, not instructions (S4)
 
 
 class TransportOffer(BaseModel):
@@ -94,7 +94,7 @@ class TransferOffer(BaseModel):
 
 
 class ExtraOffer(BaseModel):
-    """Доп. услуга к другой позиции: ранний заезд, поздний выезд, ночь накануне."""
+    """Add-on to another item: early check-in, late check-out, night before."""
 
     kind: Literal["extra"] = "extra"
     offer_id: str
@@ -115,8 +115,8 @@ class Destination(BaseModel):
     lat: float
     lon: float
     why: str
-    est_total_rub: int  # оценка поездки целиком; синтетика
-    air_c: float | None = None  # климат месяца поездки
+    est_total_rub: int  # whole-trip estimate; synthetic
+    air_c: float | None = None  # climate of the travel month
     water_c: float | None = None
     travel_hours: float
     tradeoffs: list[str] = []
@@ -125,7 +125,7 @@ class Destination(BaseModel):
 class Explanation(BaseModel):
     offer_id: str
     why: str
-    tradeoffs: list[str] = []  # чем пожертвовали
+    tradeoffs: list[str] = []  # what was sacrificed
     risks: list[str] = []
 
 
@@ -138,18 +138,18 @@ class TimelineEvent(BaseModel):
 class TimelineIssue(BaseModel):
     severity: Literal["warn", "error"]
     text: str
-    fixes: list[str] = []  # offer_id доп. услуг или замен, которые снимают проблему
+    fixes: list[str] = []  # offer_id of add-ons or replacements that fix the issue
 
 
 class Plan(BaseModel):
     spec: TripSpec
     destinations: list[Destination] = []
-    offers: list[Offer] = []  # кандидаты для сравнения
-    selected: list[str] = []  # offer_id выбранных позиций
+    offers: list[Offer] = []  # candidates to compare
+    selected: list[str] = []  # offer_id of selected items
     explanations: list[Explanation] = []
     timeline: list[TimelineEvent] = []
     issues: list[TimelineIssue] = []
-    changes: list[str] = []  # «было → стало» после пересборки
+    changes: list[str] = []  # before -> after lines after a re-plan
 
 
 class Cart(BaseModel):
@@ -162,11 +162,11 @@ class Voucher(BaseModel):
     items: list[Offer]
     total_rub: int
     created_at: datetime
-    simulated: Literal[True] = True  # оплата имитируется
+    simulated: Literal[True] = True  # payment is simulated
 
 
 class ChatRequest(BaseModel):
-    session_id: str | None = None  # нет — новая сессия
+    session_id: str | None = None  # None: new session
     message: str = Field(min_length=1)
 
 
@@ -174,11 +174,11 @@ class ChatReply(BaseModel):
     session_id: str
     stage: Stage
     reply: str
-    questions: list[str] = []  # уточнения, без которых дальше нельзя; не больше 2
+    questions: list[str] = []  # blocking clarifications only; at most 2
     plan: Plan
     cart: Cart
     voucher: Voucher | None = None
-    llm: bool  # False — упрощённый режим без модели (TRAP-1)
+    llm: bool  # False: rule-based mode without a model (TRAP-1)
 
 
 class CartAction(BaseModel):
@@ -189,4 +189,4 @@ class CartAction(BaseModel):
 
 class CheckoutRequest(BaseModel):
     session_id: str
-    confirm_total_rub: int  # сумма, которую пользователь видел при подтверждении
+    confirm_total_rub: int  # total the user saw when confirming

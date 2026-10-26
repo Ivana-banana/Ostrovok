@@ -1,5 +1,5 @@
-// Зеркало backend/src/api/contracts.py. Меняется в том же PR, что и бэкенд (метка contract).
-// Даты и время — строки ISO 8601 (date: "2026-11-08", time: "14:00:00", с поясом: "...+03:00").
+// Mirror of backend/src/api/contracts.py. Changes in the same PR as the backend (label contract).
+// Dates and times are ISO 8601 strings (date "2026-11-08", time "14:00:00", zoned "...+03:00").
 export type Stage = "clarify" | "inspire" | "select" | "compare" | "assemble" | "checkout" | "booked";
 export type Meal = "RO" | "BB" | "HB" | "FB" | "AI";
 export type Mode = "flight" | "train" | "bus" | "car";
