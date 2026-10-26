@@ -78,7 +78,14 @@ SPEC_SCHEMA = {
         "modes": _strings(get_args(Mode)),
         "max_travel_hours": _nullable("number"),
         "wishes": _strings(),
-        "priorities": _strings(get_args(Priority)),
+        "priorities": _nullable(
+            "array",
+            items={"type": "string", "enum": list(get_args(Priority))},
+            description=(
+                "only when the user compares criteria (важнее, главное, приоритет), "
+                "most important first; «недорого» alone goes to wishes"
+            ),
+        ),
     },
 }
 WHY_SCHEMA = {
@@ -106,6 +113,8 @@ Do not repeat values of current_spec that the message does not state again.
 Dates are YYYY-MM-DD and not before today. budget_rub is the whole-trip budget in roubles.
 destinations and origin are place names in Russian, nominative case.
 wishes are short Russian words of the traveller, for example: море, недорого, горы, лыжи.
+priorities only when the user compares criteria (важнее, главное, приоритет).
+"недорого" alone is a wish, not a priority.
 Never write prices of hotels or tickets, times of departure or offer ids."""
 
 WHY_PROMPT = """You explain a trip choice to a traveller in Russian. Reply with one JSON object.

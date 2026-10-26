@@ -615,3 +615,69 @@ def test_trade_off_names_the_priority_only_when_the_first_option_wins_on_it():
     items = offers([plain, hotel("refund", 11_800, refundable=True, rating=7.5)], FLIGHTS)
     first = rank(spec(priorities=["cancellation", "price"]), items)[1][0]
     assert "плата за приоритет «отмена»" in " ".join(first.tradeoffs)
+
+
+def _ural():
+    day = date(2026, 12, 11)
+    s = TripSpec(
+        origin="Москва",
+        destinations=["Екатеринбург"],
+        date_from=day,
+        date_to=day + timedelta(days=2),
+        nights=2,
+    )
+    items = find_offers(s, "Екатеринбург")
+    return s, items, {o.offer_id: o for o in items}
+
+
+def test_cheap_in_wishes_keeps_the_long_train_down_and_a_price_priority_lifts_it():
+    """#53, D-009: «недорого» is a wish; only an explicit price priority sends the user by train."""
+    base, items, by_id = _ural()
+
+    def modes(s):
+        return {by_id[i].mode for i in rank(s, items)[0] if by_id[i].kind == "transport"}
+
+    assert any(o.kind == "transport" and o.mode == "flight" for o in items)
+    assert modes(base.model_copy(update={"wishes": ["недорого"]})) == {"flight"}
+    assert modes(base.model_copy(update={"priorities": ["price"]})) == {"train"}
+
+
+def test_why_for_cheap_wish_names_the_cheaper_option_with_its_road_hours():
+    """#53: not «важнее всего цена» when the first package is not the cheapest (TRAP-4)."""
+    s, items, _ = _ural()
+    s = s.model_copy(update={"wishes": ["недорого"]})
+    why = rank(s, items)[1][0].why
+    assert "важнее всего цена" not in why
+    assert "цена важна («недорого»), самый дешёвый вариант ниже: дорога " in why
+    trains = [o for o in items if o.kind == "transport" and o.mode == "train"]
+    hours = {f"{round((o.arrive_at - o.depart_at).total_seconds() / 3600, 1):g} ч" for o in trains}
+    assert any(why.endswith(f"дорога {h}") for h in hours)
+
+
+def test_why_for_cheap_wish_gives_no_hours_when_the_cheaper_road_is_not_slow():
+    """The cheaper package differs by the hotel, not by a long leg: no «дорога N ч»."""
+    cheap = hotel("cheap", 10_000, rating=5.0)
+    better = hotel("better", 10_300, refundable=True, rating=9.8, meal="BB")
+    far = hotel("far", 30_000, rating=6.0)  # a wide price range: 300 ₽ is a small gap
+    first = rank(spec(wishes=["недорого"]), offers([cheap, better, far], FLIGHTS))[1][0]
+    assert first.offer_id == "h-better"
+    assert first.why.endswith("цена важна («недорого»), самый дешёвый вариант ниже")
+
+
+def test_why_for_cheap_wish_keeps_the_old_text_when_the_first_package_is_the_cheapest():
+    first = rank(spec(wishes=["недорого"]), offers([hotel("a", 10_000)], FLIGHTS))[1][0]
+    assert first.why.endswith("важнее всего цена («недорого»)")
+
+
+def test_slow_leg_line_gives_the_hours_of_the_leg_that_made_it_slow():
+    """#53: the slow leg is the way back; the line must not show the hours of the leg there."""
+    hotel_a = hotel("a", 10_000)
+    legs = [
+        leg("out", 8000),
+        leg("back-flight", 8000, there=False),
+        leg("back-train", 1000, there=False, mode="train", hours=20),
+    ]
+    first = rank(spec(), offers([hotel_a], legs))[1][0]
+    line = next(x for x in first.tradeoffs if "дорога в одну сторону" in x)
+    assert "дорога в одну сторону 20 ч" in line
+    assert "back-train" in line  # the title of the slow leg
