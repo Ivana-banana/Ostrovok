@@ -86,8 +86,9 @@ def test_values_below_one_are_skipped_with_an_assumption(store):
 
 
 def test_unknown_city_is_kept_and_named_honestly(store):
-    r = say(store, "Хочу в Стамбул в ноябре")
-    assert r.plan.spec.destinations == ["Стамбул"]
+    # Istanbul is covered by the providers (T5, #9); Zurbagan is a fictional city.
+    r = say(store, "Хочу в Зурбаган в ноябре")
+    assert r.plan.spec.destinations == ["Зурбаган"]
     assert r.stage == "select" and "каталог" in r.reply
 
 

@@ -260,11 +260,22 @@ def test_week_shift_keeps_the_nights(store, text, days):
 
 
 def test_lower_budget_drops_a_pick_that_no_longer_fits(store):
-    r = say(store, "Сочи, 3 ночи с 20 ноября, двое взрослых, бюджет 58 000 руб")
-    r = say(store, "беру третий", r.session_id)
-    assert r.stage == "assemble" and "Семейный" in _hotel(r).title
-    r = say(store, "а бюджет 55000 руб", r.session_id)
-    assert "Комфорт" in _hotel(r).title
+    # The budget comes from the offers, not from fixture prices: providers are synthetic (T5).
+    r = say(store, "Сочи, 3 ночи с 20 ноября, двое взрослых")
+    hotels = [o for o in r.plan.offers if o.kind == "hotel"][:4]
+    cheapest = min(h.price_rub for h in hotels)
+    i = next(
+        i
+        for i, h in enumerate(hotels)
+        if h.offer_id not in r.plan.selected and h.price_rub > cheapest
+    )
+    r = say(store, "беру " + ("первый", "второй", "третий", "четвёртый")[i], r.session_id)
+    pick = _hotel(r)
+    assert r.stage == "assemble" and pick.offer_id not in dag.rank(r.plan.spec, r.plan.offers)[0]
+    road = dag._total(r.plan) - pick.price_rub
+    budget = road + pick.price_rub - 100  # the pick is 100 ₽ over, cheaper hotels fit
+    r = say(store, f"а бюджет {budget} руб", r.session_id)
+    assert _hotel(r).title != pick.title and dag._total(r.plan) <= budget
     lost = next(c for c in r.plan.changes if c.what == "ваш выбор")
-    assert "Семейный" in lost.before and lost.after.endswith("дороже бюджета")
+    assert pick.title == lost.before and lost.after.endswith("дороже бюджета")
     assert "дороже бюджета" in r.reply
