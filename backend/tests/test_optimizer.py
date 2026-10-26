@@ -23,8 +23,12 @@ from api.model import chat
 from api.offers import find_offers, transfer_id
 from api.optimizer import (
     DEFAULT_WEIGHTS,
+    _pool,
     bundles,
+    enumerate_trips,
+    hotel_rows,
     optimize,
+    order_tariffs,
     pick_hotel,
     rank,
     weights,
@@ -392,6 +396,8 @@ def _allowed_amounts(s, items, out):
         assert b.total_rub == whole, b  # the bundle total is the sum of its offers
         bund |= {whole, road, moves, *(o.price_rub for o in parts)}
     base |= bund
+    pool, _ = _pool(s, enumerate_trips(items))  # the texts compare trips of the pool
+    base |= {t.total for t in pool}
     if s.budget_rub is not None:
         base |= {s.budget_rub} | {t - s.budget_rub for t in base if t > s.budget_rub}
     return base | {abs(a - b) for a in bund for b in base}
@@ -478,7 +484,7 @@ def test_ranked_trip_has_one_total_in_chat_bundle_and_cart(store):
 def test_picked_hotel_brings_only_its_own_transfers(store):
     """«беру второй»: the 2nd hotel and its transfers for the selected legs, totals equal."""
     r = say(store, S6)
-    second = [o for o in r.plan.offers if o.kind == "hotel"][1]
+    second = hotel_rows(r.plan.offers, r.plan.selected)[1]
     assert second.offer_id not in r.plan.selected  # the ranking chose another hotel
     r = say(store, "беру второй", r.session_id)
     assert r.stage == "assemble"
@@ -699,6 +705,36 @@ def test_slow_leg_line_gives_the_hours_of_the_leg_that_made_it_slow():
     line = next(x for x in first.tradeoffs if "дорога в одну сторону" in x)
     assert "дорога в одну сторону 20 ч" in line
     assert "back-train" in line  # the title of the slow leg
+
+
+def test_compare_lists_a_hotel_once_with_its_best_tariff(store):
+    """#39: one row per hotel in the chat and in «беру N»; the row shows the tariff of the spec."""
+    r = say(store, S6)
+    hotels = [o for o in r.plan.offers if o.kind == "hotel"]
+    rows = hotel_rows(r.plan.offers, r.plan.selected)
+    assert len(hotels) > len(rows) and 3 <= len(rows) <= 5
+    assert len({h.title for h in rows}) == len(rows)
+    lines = [x for x in r.reply.splitlines() if x[:2] in {f"{i}." for i in range(1, 10)}]
+    assert len(lines) == len(rows)
+    assert sum(h.offer_id in r.plan.selected for h in rows) == 1  # the ranked tariff is a row
+    assert rows[1].offer_id not in r.plan.selected
+    for i, h in enumerate(rows, 1):
+        assert h.title in lines[i - 1] and h.meal in lines[i - 1]
+    r = say(store, "второй", r.session_id)
+    assert [
+        o.offer_id for o in r.plan.offers if o.offer_id in r.plan.selected and o.kind == "hotel"
+    ] == [rows[1].offer_id]
+
+
+def test_order_tariffs_puts_the_tariff_of_the_spec_first():
+    """The first tariff of a hotel is its best one for the spec; the offers are the same."""
+    s = spec(meal="AI")
+    items = find_offers(s, "Сочи")
+    ordered = order_tariffs(s, items)
+    assert sorted(o.offer_id for o in ordered) == sorted(o.offer_id for o in items)
+    first = {h.title: h for h in reversed(hotel_rows(ordered, []))}
+    sea = next(h for h in first.values() if h.stars == 5)
+    assert sea.meal == "AI"  # the only hotel with all inclusive
 
 
 def _texts(r):
