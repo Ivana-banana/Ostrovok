@@ -566,6 +566,9 @@ def _nominative(word: str) -> str:
     return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
 
 
+WEEKDAYS = ("понедельн", "вторн", "сред", "четвер", "пятниц", "суббот", "воскресен")
+
+
 def _dates(t: str, found: dict, notes: list[str]) -> None:
     """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day."""
     d = r"(\d{1,2})(?:-?го)?"
@@ -596,6 +599,10 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
             found["date_from"] = today + timedelta(
                 days=n * (7 if m.group(2).startswith("нед") else 1)
             )
+        elif m := re.search(rf"\b(?:в|во|на)\s+({'|'.join(WEEKDAYS)})\w{{0,3}}\b", t):
+            ahead = (WEEKDAYS.index(m.group(1)) - today.weekday()) % 7 or 7
+            found["date_from"] = today + timedelta(days=ahead)
+            notes.append(f"даты: {found['date_from']:%d.%m} («{m.group(0)}», ближайший)")
         elif re.search(r"\bследующ\w*\s+недел", t):
             found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
             notes.append(f"даты: с понедельника {found['date_from']:%d.%m} («на следующей неделе»)")
