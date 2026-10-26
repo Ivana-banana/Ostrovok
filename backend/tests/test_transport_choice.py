@@ -282,3 +282,35 @@ def test_plain_hotel_pick_updates_the_why_and_keeps_the_ranked_bundle_first(stor
     assert r.plan.bundles[0] == best and best.label.startswith(("лучший", "ближе"))
     mine = [b for b in r.plan.bundles if b.label.startswith("ваш выбор")]
     assert len(mine) == 1 and set(mine[0].offer_ids) == set(r.plan.selected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "отель 3 звезды, возьми поезд",
+        "возьми поезд, отель 4*",
+        "беру поезд и отель 4 звезды",
+        "хочу отель 4-5*",
+        "отель 5 км от центра",
+        "возьми поезд до отеля 2 часа",
+        "отель 10 минут от вокзала, возьми поезд",
+    ],
+)
+def test_a_number_after_hotel_that_is_not_a_row_does_not_pick_a_hotel(store, text):
+    """#58: «отель 3 звезды» states a need, it is not «отель 3»."""
+    from api.model import hotel_row
+
+    assert hotel_row(text) is None
+    r = say(store, SOCHI)
+    r = say(store, text, r.session_id)
+    assert "Отеля" not in r.reply and "Отель заменён" not in r.reply
+
+
+def test_hotel_in_the_message_on_assemble_changes_only_the_transport_and_says_so(store):
+    r = say(store, SOCHI)
+    r = say(store, "беру", r.session_id)
+    assert r.stage == "assemble"
+    hotels = hotel_ids(r)
+    r = say(store, "беру второй отель и поезд", r.session_id)
+    assert r.stage == "assemble" and hotel_ids(r) == hotels
+    assert "Отель уже выбран, сменить его можно на шаге сравнения." in r.reply

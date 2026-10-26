@@ -909,3 +909,34 @@ def test_switch_transport_recomputes_the_bundles_and_the_why_together():
     assert sum(b.label.startswith("лучший") for b in new.bundles) == 1
     best = next(b for b in new.bundles if b.label.startswith("лучший"))
     assert "t-train" not in best.offer_ids  # the best trip is the other transport
+
+
+@pytest.mark.parametrize(
+    ("place", "update"),
+    [
+        ("Сочи", {"budget_rub": 1000}),
+        ("Казань", {"priorities": ["cancellation", "price"]}),
+        ("Анталия", {"children_ages": [5], "budget_rub": 150_000}),
+        ("Казань", {"priorities": ["travel_time"], "budget_rub": 20_000}),
+    ],
+)
+def test_trap_4_explain_and_selected_bundles_use_only_offer_facts(place, update):
+    """TRAP-4: for every trip the user can select (any hotel, tariff, legs) explain() and the
+    «ваш выбор» bundle name real ids and only amounts that the offers give."""
+    s = spec(destinations=[place], **update)
+    items = find_offers(s, place)
+    ids = {o.offer_id for o in items}
+    trips = enumerate_trips(items)
+    assert trips
+    for trip in trips[:: max(1, len(trips) // 25)]:  # an even sample keeps the test fast
+        out = bundles(s, items, trip.ids)
+        why = explain(s, items, trip.ids)
+        assert why[0].offer_id == trip.hotel.offer_id
+        assert {e.offer_id for e in why} <= set(trip.ids) and set(trip.ids) <= ids
+        assert all(set(b.offer_ids) <= ids for b in out)
+        allowed = _allowed_amounts(s, items, out)
+        texts = [x for e in why for x in (e.why, *e.tradeoffs, *e.risks)]
+        texts += [t for b in out for t in b.tradeoffs]
+        for text in texts:
+            for m in RUB_RE.finditer(text):
+                assert int(m.group(1).replace(" ", "")) in allowed, (trip.ids, text)

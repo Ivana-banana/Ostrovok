@@ -208,7 +208,9 @@ LegCommand = tuple[str, str | int, str | None]
 # «второй отель и поезд»: the hotel row named in a pick of transport (same rows as «беру 2»).
 HOTEL_ROW_RES = (
     re.compile(rf"\b({LEG_ORDINAL})\s+отел\w*"),
-    re.compile(r"\bотел\w*\s+(?:№\s*|номер\s+)?(\d{1,2})\b"),
+    # A digit is a row only when it ends the clause: «отель 3 звезды», «отель 4*», «отель 5 км
+    # от центра», «до отеля 2 часа» state a need and name no row.
+    re.compile(r"\bотел\w*\s+(?:№\s*|номер\s+)?(\d{1,2})(?=\s*(?:$|[,;.!?]|и\b))"),
 )
 
 
@@ -475,8 +477,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         "modes"
     } and not SHIFT_RE.search(t.replace("ё", "е"))
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
-        row = hotel_row(message) if old.stage == "compare" else None
-        plan, note = switch_transport(old.plan, message, row)
+        row = hotel_row(message)
+        plan, note = switch_transport(old.plan, message, row if old.stage == "compare" else None)
+        if plan and row is not None and old.stage == "assemble":
+            note = f"Отель уже выбран, сменить его можно на шаге сравнения. {note}"
         if old.stage == "checkout" and (plan or note):
             note = "Корзина уже собрана, транспорт в ней не меняю."
             hint = HINTS["checkout"]

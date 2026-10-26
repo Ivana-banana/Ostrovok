@@ -73,6 +73,8 @@ PRIORITY_TEXT = {
     "rating": "рейтинг",
 }
 MAX_ALTERNATIVES = 3
+# Labels of the best bundle: every requirement met / the nearest trip. dag.py finds the ranking by them.
+BEST_LABELS = ("лучший по вашим приоритетам", "ближе всего к условиям")
 # Team estimate without a source (D-009): a leg longer than one night on the road does not go
 # first while a trip without such a leg exists.
 LONG_LEG_H = 13.0
@@ -535,7 +537,7 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
     best = pool[0]
     explanations = _explanations(spec, best, offers, trips)
     sacrificed = explanations[0].tradeoffs
-    label = "лучший по вашим приоритетам" if fits else "ближе всего к условиям"
+    label = BEST_LABELS[0] if fits else BEST_LABELS[1]
     bundles = [_bundle(label, best, sacrificed + best.rules)]
     bundles += [_bundle(lb, t, _versus(t, best)) for lb, t in _alternatives(best, pool, trips)]
     return Ranked(best.ids, explanations, bundles)
@@ -549,8 +551,8 @@ def rank(spec: TripSpec, offers: list[Offer]) -> tuple[list[str], list[Explanati
 
 def bundles(spec: TripSpec, offers: list[Offer], selected: list[str] | None = None) -> list[Bundle]:
     """Whole-trip options for Plan.bundles. The first one is always the best trip of the spec
-    (labelled «лучший по вашим приоритетам» or «ближе всего к условиям»): dag.py reads it to
-    tell the ranking from a manual pick.
+    (labelled BEST_LABELS): dag.py finds it by the label, to tell the ranking from a
+    manual pick.
 
     With `selected` that is another trip (the user switched a leg or picked a hotel), the
     bundle of the selected trip goes second as «ваш выбор»: it matches `explain`.
