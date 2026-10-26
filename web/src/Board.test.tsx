@@ -93,6 +93,21 @@ suite("доска поездки", () => {
     expect(cart).toContain("Подтвердить бронь на 600 ₽ (синтетика) · оплата имитируется");
   });
 
+  it("TRAP-7: превышение бюджета и кнопка подтверждения помечены по данным корзины", () => {
+    const r = structuredClone(base);
+    r.stage = "checkout";
+    r.voucher = null;
+    r.plan.spec.budget_rub = 500;
+    const note = render(r).querySelector("[aria-label='Корзина'] [role='note']");
+    expect(note?.querySelector(".price")?.textContent).toBe("100 ₽синтетика");
+    r.cart.items = r.cart.items.map((o) => ({ ...o, synthetic: false }));
+    const real = render(r).querySelector("[aria-label='Корзина']");
+    expect(real?.querySelector("button.primary")?.textContent).toBe(
+      "Подтвердить бронь на 600 ₽ · оплата имитируется",
+    );
+    expect(real?.querySelector(".synth")).toBeNull();
+  });
+
   it("направления: карточки с кнопкой выбора на этапе inspire", () => {
     const doc = render({ ...base, stage: "inspire", voucher: null });
     const card = doc.querySelector("[aria-label='Направления'] .card");

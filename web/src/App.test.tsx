@@ -177,4 +177,36 @@ suite("приложение", () => {
     await click("Выбрать");
     expect(calls.at(-1)?.body).toMatchObject({ message: "беру первый" });
   });
+
+  it("хранилище браузера бросает ошибку — приложение работает, ответ показан", async () => {
+    const boom = () => {
+      throw new DOMException("blocked", "SecurityError");
+    };
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(boom);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(boom);
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(boom);
+    routes["POST /api/chat"] = () => ({ status: 200, body: checkoutStage });
+    try {
+      await mount();
+      await click("Выходные в Казани");
+      await click("Отправить");
+      expect(box.querySelector("[role='alert']")).toBeNull();
+      expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
+      expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
+      await click("Новая поездка");
+      expect(box.textContent).toContain("Здесь появится доска поездки");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("испорченная история чата в хранилище — берём ответ сервера", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    localStorage.setItem("trip.ui.s1", JSON.stringify({ messages: "x", removed: [1, null] }));
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    expect(box.querySelector("[role='alert']")).toBeNull();
+    expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
+    expect(box.querySelector("[aria-label='Корзина']")?.textContent).not.toContain("Вернуть");
+  });
 });

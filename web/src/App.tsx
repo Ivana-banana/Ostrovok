@@ -15,10 +15,56 @@ const EXAMPLES = [
   "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё.",
 ];
 
+// Storage can throw (private mode, blocked cookies, quota): the app then works without it.
+function readSid(): string | null {
+  try {
+    return localStorage.getItem(SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeSid(id: string) {
+  try {
+    localStorage.setItem(SESSION_KEY, id);
+  } catch {
+    // no storage: reload starts a new trip, the current one keeps working
+  }
+}
+
+function dropSid() {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // no storage: nothing to drop
+  }
+}
+
+const isMsg = (m: unknown): m is Msg =>
+  typeof m === "object" &&
+  m !== null &&
+  ((m as Msg).role === "user" || (m as Msg).role === "agent") &&
+  typeof (m as Msg).text === "string";
+
+const isOffer = (o: unknown): o is Offer =>
+  typeof o === "object" &&
+  o !== null &&
+  typeof (o as Offer).offer_id === "string" &&
+  typeof (o as Offer).title === "string" &&
+  typeof (o as Offer).price_rub === "number";
+
+// Saved chat of a session; broken or foreign data falls back to an empty chat.
 function loadUi(sid: string): Ui {
   try {
     const raw = localStorage.getItem(uiKey(sid));
-    if (raw) return JSON.parse(raw) as Ui;
+    const data: unknown = raw ? JSON.parse(raw) : null;
+    if (typeof data === "object" && data !== null) {
+      const { messages, removed } = data as Record<string, unknown>;
+      return {
+        messages: Array.isArray(messages) ? messages.filter(isMsg) : [],
+        removed: Array.isArray(removed) ? removed.filter(isOffer) : [],
+      };
+    }
   } catch {
     // broken storage: start the chat history from the server state
   }
@@ -43,7 +89,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [restoring, setRestoring] = useState(() => !!localStorage.getItem(SESSION_KEY));
+  const [restoring, setRestoring] = useState(() => !!readSid());
   const end = useRef<HTMLDivElement>(null);
 
   const sid = reply?.session_id ?? null;
@@ -55,14 +101,14 @@ export function App() {
 
   // Reload restores the session: the server keeps the last reply, the browser keeps the chat.
   useEffect(() => {
-    const stored = localStorage.getItem(SESSION_KEY);
+    const stored = readSid();
     if (!stored) return;
     let live = true;
     getSession(stored)
       .then((r) => {
         if (!live) return;
         if (!r) {
-          localStorage.removeItem(SESSION_KEY);
+          dropSid();
           return;
         }
         const saved = loadUi(stored);
@@ -93,7 +139,7 @@ export function App() {
     setUi(withUser);
     try {
       const r = await chat({ session_id: sid, message: m });
-      localStorage.setItem(SESSION_KEY, r.session_id);
+      writeSid(r.session_id);
       setReply(r);
       update(
         { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r) }] },
@@ -159,7 +205,7 @@ export function App() {
   }
 
   function reset() {
-    localStorage.removeItem(SESSION_KEY);
+    dropSid();
     setReply(null);
     setUi({ messages: [], removed: [] });
     setError(null);

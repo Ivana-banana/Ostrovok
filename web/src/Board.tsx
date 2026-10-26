@@ -416,6 +416,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   const back = removed.filter((r) => !cart.items.some((o) => o.offer_id === r.offer_id));
   if (!cart.items.length && !back.length) return null;
   const over = spec.budget_rub !== null && cart.total_rub > spec.budget_rub;
+  const synthetic = isSynthetic(cart.items);
   return (
     <section className="card" aria-label="Корзина">
       <h2>Корзина</h2>
@@ -455,16 +456,18 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
         </ul>
       )}
       <p className="total" data-testid="cart-total">
-        Итого: <Price value={cart.total_rub} synthetic={isSynthetic(cart.items)} />
+        Итого: <Price value={cart.total_rub} synthetic={synthetic} />
       </p>
       {over && (
         <p className="warn" role="note">
-          Итог больше бюджета {rub(spec.budget_rub!)} на {rub(cart.total_rub - spec.budget_rub!)}.
+          Итог больше бюджета {rub(spec.budget_rub!)} на{" "}
+          <Price value={cart.total_rub - spec.budget_rub!} synthetic={synthetic} />.
         </p>
       )}
       {editable && cart.items.length > 0 && (
         <button type="button" className="primary" disabled={busy} onClick={onCheckout}>
-          Подтвердить бронь на {rub(cart.total_rub)} (синтетика) · оплата имитируется
+          Подтвердить бронь на {rub(cart.total_rub)}
+          {synthetic && " (синтетика)"} · оплата имитируется
         </button>
       )}
     </section>
