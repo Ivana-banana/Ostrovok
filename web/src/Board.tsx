@@ -6,6 +6,7 @@ import type {
   HotelOffer,
   Offer,
   Plan,
+  Priority,
   Stage,
   TransportOffer,
   TripSpec,
@@ -22,7 +23,10 @@ import {
   hours,
   localDate,
   localTime,
+  movePriority,
   ordinal,
+  PRIORITIES,
+  priorityMessage,
   rub,
 } from "./format";
 
@@ -103,6 +107,76 @@ function SpecSummary({ spec }: { spec: TripSpec }) {
             ))}
           </ul>
         </div>
+      )}
+    </section>
+  );
+}
+
+// The order of importance as chips. A move sends one chat message: the agent changes only
+// the priorities and ranks the options again (S9). After the cart is built the order is fixed.
+function PriorityChips({ order, stage, busy, onSend }: {
+  order: Priority[];
+  stage: Stage;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
+  const editable = stage === "compare" || stage === "assemble";
+  const absent = (Object.keys(PRIORITIES) as Priority[]).filter((p) => !order.includes(p));
+  if (!order.length && !editable) return null;
+  return (
+    <section className="card" aria-label="Приоритеты">
+      <h2>Что для вас важнее</h2>
+      {order.length > 0 ? (
+        <ol className="chips">
+          {order.map((p, i) => (
+            <li key={p} className="chip">
+              <span>
+                {i + 1}. {PRIORITIES[p]}
+              </span>
+              {editable && (
+                <>
+                  <button
+                    type="button"
+                    disabled={busy || i === 0}
+                    aria-label={`Поднять приоритет ${PRIORITIES[p]}`}
+                    onClick={() => onSend(priorityMessage(movePriority(order, i, -1)!))}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || i === order.length - 1}
+                    aria-label={`Опустить приоритет ${PRIORITIES[p]}`}
+                    onClick={() => onSend(priorityMessage(movePriority(order, i, 1)!))}
+                  >
+                    ↓
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="muted">Порядок не задан: агент считает по умолчанию, цена важнее остального.</p>
+      )}
+      {editable && absent.length > 0 && (
+        <p className="chips-add">
+          <span className="muted">Добавить:</span>
+          {absent.map((p) => (
+            <button
+              key={p}
+              type="button"
+              disabled={busy}
+              aria-label={`Добавить приоритет ${PRIORITIES[p]}`}
+              onClick={() => onSend(priorityMessage([...order, p]))}
+            >
+              + {PRIORITIES[p]}
+            </button>
+          ))}
+        </p>
+      )}
+      {editable && order.length > 0 && (
+        <p className="muted">Первый приоритет важнее всех. Сдвиньте чип: агент пересчитает порядок вариантов.</p>
       )}
     </section>
   );
@@ -587,6 +661,7 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
       )}
       {voucher && <VoucherView voucher={voucher} />}
       <SpecSummary spec={plan.spec} />
+      <PriorityChips order={plan.spec.priorities} stage={stage} busy={busy} onSend={onSend} />
       <Changes plan={plan} />
       {plan.destinations.length > 0 && (
         <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />

@@ -859,7 +859,10 @@ def check_S6(case: dict) -> tuple[bool, str]:
     seconds = time.perf_counter() - started
     items["1"] = _need(seconds <= 180, f"поток занял {seconds:.0f} с")
     ordered = dict(sorted(items.items()))
-    facts = f"итог {_rub(v.total_rub)}, поток {seconds:.1f} с; клики и консоль браузера — в e2e"
+    facts = (
+        f"итог {_rub(v.total_rub)}, поток {seconds:.1f} с; "
+        "в API — данные сравнения; в e2e — таблицы в UI, клики, консоль"
+    )
     return _result(facts, ordered)
 
 

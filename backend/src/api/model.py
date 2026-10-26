@@ -108,6 +108,7 @@ LEG_BACK_RE = re.compile(r"\bобратно\b|\bназад\b|\bобратн\w+")
 LEG_CLAUSE_RE = re.compile(r"[,;]|\bа\b|\bи\b")
 # Assumption text starts with "<label>:"; a stated field removes its assumption.
 LABELS = {
+    "destinations": "направление",
     "month": "когда",
     "date_from": "даты",
     "nights": "длительность",
