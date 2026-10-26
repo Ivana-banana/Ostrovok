@@ -7,7 +7,7 @@
 import os
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime, time
 
 # TRAP-3: варианты написания топонимов. Ключ — нормализованная форма.
@@ -55,10 +55,13 @@ def resolve_destination(
     return None
 
 
+LLM_VARS = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
+
+
 def llm_available(env: dict[str, str] | None = None) -> bool:
-    """TRAP-1: без ключа LLM агент работает в режиме правил, а не падает."""
+    """TRAP-1: LLM включена, только если заданы ключ, адрес и модель; иначе — режим правил."""
     env = os.environ if env is None else env
-    return bool(env.get("LLM_API_KEY", "").strip())
+    return all(env.get(k, "").strip() for k in LLM_VARS)
 
 
 def rule_extract(text: str) -> dict:
@@ -89,13 +92,22 @@ def check_arrival_vs_checkin(arrival: datetime, check_in: time = time(14, 0)) ->
     return []
 
 
-PRICE_RE = re.compile(r"(\d[\d\s]{2,})\s*(₽|руб)")
+PRICE_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[ \u00a0\u202f]\d{3}(?!\d))+|\d+)\s*(₽|руб)")
 
 
-def unknown_prices(text: str, offers: list[dict]) -> list[int]:
-    """TRAP-4: цены в ответе, которых нет ни в одном предложении инструментов."""
-    known = {int(o["price_rub"]) for o in offers if "price_rub" in o}
-    seen = [int(m.group(1).replace(" ", "")) for m in PRICE_RE.finditer(text)]
+def unknown_prices(
+    text: str, offers: list[dict], totals: Iterable[int] = (), nights: int | None = None
+) -> list[int]:
+    """TRAP-4: суммы в ответе, которых нет у инструментов и которые нельзя из них вывести.
+
+    Известны: цена каждого предложения, итоги (корзина, пакет, разницы — их пишет код),
+    цена отеля × ночи и цена за ночь (цена ÷ ночи), если ночей больше одной.
+    """
+    prices = {int(o["price_rub"]) for o in offers if "price_rub" in o}
+    known = prices | {int(t) for t in totals}
+    if nights and nights > 1:
+        known |= {p * nights for p in prices} | {p // nights for p in prices if p % nights == 0}
+    seen = [int(re.sub(r"\D", "", m.group(1))) for m in PRICE_RE.finditer(text)]
     return [p for p in seen if p not in known]
 
 
