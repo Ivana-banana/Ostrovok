@@ -1,0 +1,5 @@
+# colcon ищет пакеты только в src/: в корне могут лежать данные и чужие пакеты организаторов.
+build:
+  base-paths: [src]
+test:
+  base-paths: [src]

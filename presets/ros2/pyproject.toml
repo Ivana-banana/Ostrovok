@@ -1,0 +1,21 @@
+# Хост-окружение пресета ros2: тесты логики и инструменты чтения bag без ROS.
+# Рантайм ноды — в контейнере ros:humble (docker/), не здесь.
+[project]
+name = "ros-tools"
+version = "0.1.0"
+requires-python = ">=3.10,<3.14"
+dependencies = ["rosbags>=0.10"]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.6"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

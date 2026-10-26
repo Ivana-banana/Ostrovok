@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Без взятой задачи не пушим. Не проверяются: push только удалений веток (уборка после
+# merge: у всех обновлений локальный sha — нули) и ветки arch/<run> (team.py планировщика).
+# Затем — Git LFS, если он есть: core.hooksPath отключает его собственные хуки.
+refs="$(cat)"
+lfs() {
+  if command -v git-lfs >/dev/null 2>&1; then
+    printf '%s\n' "$refs" | git lfs pre-push "$@"
+  elif grep -qs 'filter=lfs' "$(git rev-parse --show-toplevel)/.gitattributes"; then
+    echo "[lfs] git-lfs не установлен, а .gitattributes требует LFS — установите git-lfs" >&2
+    return 1
+  fi
+}
+if [ -n "$refs" ] && ! printf '%s\n' "$refs" | awk '$2 !~ /^0+$/ && $3 !~ /^refs\/heads\/arch\// {found=1} END {exit !found}'; then
+  lfs "$@"; exit $?
+fi
+script="$(git rev-parse --show-toplevel)/scripts/issues.sh"
+if [ ! -f "$script" ]; then
+  echo "[issues] в этой ветке нет scripts/issues.sh — влейте origin/main; работа без задачи запрещена" >&2
+  exit 1
+fi
+bash "$script" check . || exit 1
+lfs "$@"

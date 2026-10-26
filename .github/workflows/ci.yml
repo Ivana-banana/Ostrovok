@@ -1,0 +1,29 @@
+# Проверки только вручную (Actions → CI → Run workflow): обязательная проверка — локальный
+# make check в scripts/finish.sh. Без стека (сам шаблон) make check = make template-test.
+name: CI
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: git identity for hook tests
+        run: git config --global user.name ci && git config --global user.email ci@example.com
+      - name: make setup
+        run: make setup
+      - name: make check
+        run: make check

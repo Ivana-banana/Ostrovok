@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Для всех, кто коммитит: люди, Codex, IDE. Подключает `make setup`
+# (git config core.hooksPath .githooks). Проверки:
+#   1. без взятой задачи не коммитим (scripts/issues.sh check);
+#   2. данные и файлы > 5 МБ — только через LFS (check-data-files.sh);
+#   3. секреты в индексе (check-secrets.sh --git);
+#   4. режим «финал»: новый md-файл — только README.md или файл в .claude/;
+#   5. правка ролей или скиллов — слой Codex перегенерирован (scripts/codex-sync.py --check).
+# Обход (--no-verify) — только по явной просьбе человека.
+top="$(git rev-parse --show-toplevel)"
+script="$top/scripts/issues.sh"
+if [ ! -f "$script" ]; then
+  echo "[issues] в этой ветке нет scripts/issues.sh — влейте origin/main; работа без задачи запрещена" >&2
+  exit 1
+fi
+bash "$script" check . || exit 1
+bash "$top/.claude/hooks/check-data-files.sh" || exit 1
+bash "$top/.claude/hooks/check-secrets.sh" --git || exit 1
+if git diff --cached --name-only | grep -qE '^(\.claude/(agents|skills)/|\.codex/agents/|\.agents/skills/)' &&
+   [ -f "$top/scripts/codex-sync.py" ]; then
+  python3 "$top/scripts/codex-sync.py" --check >/dev/null || {
+    echo "[codex] роли или скиллы изменены, слой Codex устарел: python3 scripts/codex-sync.py, затем git add .codex/agents .agents/skills" >&2
+    exit 1
+  }
+fi
+if [ "$(bash "$top/scripts/mode.sh")" = финал ]; then
+  new_md="$(git diff --cached --name-only --diff-filter=A -- '*.md' | grep -vE '(^|/)README\.md$|^\.claude/')"
+  if [ -n "$new_md" ]; then
+    . "$top/.claude/hooks/lib.sh"; hook_log pre-commit "новый md в финале: $new_md"
+    printf '[docs] режим «финал»: новые md-файлы запрещены — отчёт в чат, итог в описание PR:\n%s\n' "$new_md" >&2
+    exit 1
+  fi
+fi
+exit 0

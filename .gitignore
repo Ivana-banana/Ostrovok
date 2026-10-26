@@ -1,0 +1,27 @@
+# Окружение и секреты
+.env
+.env.*
+!.env.example
+
+# Worktree задач и рабочие папки планировщика (team.py прячет .arch/ сам — дубль для надёжности)
+.claude/worktrees/
+.claude/settings.local.json
+.arch/
+**/_arch/kickoff-plan.json
+
+# Данные — вне git (загрузка по README); примеры — tests/fixtures/
+data/*
+!data/README.md
+outputs/
+
+# Байткод Python: make lint (py_compile) и скрипты шаблона — в любом каталоге
+__pycache__/
+*.pyc
+
+# Редакторы и ОС
+.idea/
+.vscode/
+.DS_Store
+
+# Личные настройки участника (скилл /tests)
+CLAUDE.local.md

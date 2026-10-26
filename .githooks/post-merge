@@ -1,0 +1,4 @@
+#!/bin/sh
+# Git LFS: core.hooksPath=.githooks отключает хуки LFS в .git/hooks — вызываем сами.
+command -v git-lfs >/dev/null 2>&1 || exit 0
+git lfs post-merge "$@"
