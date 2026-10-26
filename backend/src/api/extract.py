@@ -197,6 +197,26 @@ def _unknown_first_city(
     return m.start(1), _nominative(word)
 
 
+# S5: «тогда Барселона», «лучше Сочи»: a lead word and a bare city, no preposition.
+SWITCH_LEAD = re.compile(
+    r"\s*(?:ну\s+|а\s+)?(?:тогда|лучше|ладно|пусть|давай(?:те)?|может(?:\s+быть)?|а\s+если)\W+"
+    r"(?:(?:в|во|на)\s+)?",
+    re.IGNORECASE,
+)
+
+
+def _switch_city(text: str) -> tuple[int, str] | None:
+    """The bare city right after a lead word: «тогда Барселона», «Лучше Анталию».
+
+    Only a city of places.json counts: «Лучше завтра», «Тогда Дети» name no place. A name
+    outside the catalogue needs a preposition («тогда в Ухту») and is read by the rules below.
+    """
+    lead = SWITCH_LEAD.match(text)
+    m = re.compile(r"[А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)*\b").match(text, lead.end()) if lead else None
+    known = _known(m.group(0)) if m else None
+    return (m.start(), known) if m and known else None
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> None:
     """Origin after «из/от», then destinations in text order: known places and capitalized names."""
     for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
@@ -223,6 +243,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n))
+    if switch := _switch_city(text):
+        hits.append(switch)
     # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
     if first := _first_city(text, t, not hits and not has_destination, None if hits else notes):
         hits.append(first)
