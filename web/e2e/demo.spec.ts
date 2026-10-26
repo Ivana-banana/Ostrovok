@@ -6,6 +6,9 @@ const REQUEST = "Выходные в Казани, из Москвы, 2 взро
 
 const EMPTY = /^\s*(—|)\s*$/;
 
+// «41 000 ₽синтетика» → 41000.
+const rub = (t: string | null) => Number((t ?? "").replace("синтетика", "").replace(/\D/g, ""));
+
 // S6 п.2 в UI: ≥ 3 разных отеля, у каждого заполнены ≥ 5 признаков. Отели считаем по названию,
 // а не по числу строк: строка может быть тарифом отеля.
 async function expectHotelTable(hotels: Locator) {
@@ -74,16 +77,30 @@ test("S6: запрос → сравнение → план → корзина �
 
   // Выбор другого отеля — один клик; агент собирает план с таймлайном.
   await hotels.getByRole("button", { name: /^Выбрать/ }).first().click();
-  await expect(page.getByRole("region", { name: "Таймлайн" })).toBeVisible();
+  const timeline = page.getByRole("region", { name: "Таймлайн" });
+  await expect(timeline).toBeVisible();
+
+  // Выбор транспорта: рейс (прилёт 10:30), затем поезд обратно. S6 п.3: при поезде таймлайн
+  // помечает прибытие 07:10 при заезде с 14:00 и предлагает действие с ценой.
+  await transport.getByRole("button", { name: /^Выбрать рейс \d+: Перелёт Москва → Казань, 11\.12 08:55/ }).click();
+  await expect(timeline).toContainText("Прилёт");
+  await expect(timeline).toContainText("10:30");
+  await transport.getByRole("button", { name: /^Выбрать рейс \d+: Поезд Москва → Казань/ }).click();
+  const note = timeline.getByRole("note").filter({ hasText: "Прибытие в 07:10" });
+  await expect(note).toContainText("заезд с 14:00");
+  await expect(note.locator("li").filter({ hasText: "Ранний заезд" }).locator(".price")).toContainText("синтетика");
 
   await page.getByRole("button", { name: "Положить в корзину" }).click();
   const cart = page.getByRole("region", { name: "Корзина" });
   await expect(cart.getByTestId("cart-total")).toContainText("синтетика");
+  // S6 п.4: итог = сумма цен позиций, без дублей.
+  const cartItems = cart.locator("ul.plain").first().locator("li");
+  const sumItems = async () => (await cartItems.locator(".price").allTextContents()).reduce((a, t) => a + rub(t), 0);
+  expect(rub(await cart.getByTestId("cart-total").textContent())).toBe(await sumItems());
 
   // Убрать и вернуть позицию: итог пересчитан сервером, без дублей.
   const before = (await cart.getByTestId("cart-total").textContent()) ?? "";
   const rows = await cart.locator("ul.plain").first().locator("li").count();
-  const timeline = page.getByRole("region", { name: "Таймлайн" });
   await expect(timeline.getByText("убрано из корзины")).toHaveCount(0);
   await cart.getByRole("button", { name: /^Убрать/ }).first().click();
   await expect(cart.getByTestId("cart-total")).not.toHaveText(before);
@@ -92,14 +109,26 @@ test("S6: запрос → сравнение → план → корзина �
   await cart.getByRole("button", { name: /^Вернуть/ }).click();
   await expect(cart.getByTestId("cart-total")).toHaveText(before);
   await expect(timeline.getByText("убрано из корзины")).toHaveCount(0);
-  await expect(cart.locator("ul.plain").first().locator("li")).toHaveCount(rows);
+  await expect(cartItems).toHaveCount(rows);
+  expect(rub(await cart.getByTestId("cart-total").textContent())).toBe(await sumItems());
 
   const confirm = page.getByRole("button", { name: /^Подтвердить бронь/ });
   await expect(confirm).toContainText("оплата имитируется");
+  // S6 п.5–6: на кнопке итоговая сумма; бюджет 50 000 ₽ не превышен.
+  const total = rub(await cart.getByTestId("cart-total").textContent());
+  expect(rub(await confirm.textContent())).toBe(total);
+  expect(total).toBeLessThanOrEqual(50_000);
   await expect(page.getByRole("region", { name: "Ваучер" })).toHaveCount(0);
   await confirm.click();
   const voucher = page.getByRole("region", { name: "Ваучер" });
   await expect(voucher).toContainText("Номер брони");
+  // S6 п.6: даты, гости, все позиции с offer_id, итог совпадает с корзиной.
+  await expect(voucher).toContainText("11.12.2026 – 13.12.2026");
+  await expect(voucher).toContainText("2 взр.");
+  const items = voucher.locator("ul.plain li");
+  expect(await items.count()).toBe(rows);
+  for (const id of await items.locator("small").allTextContents()) expect(id).toMatch(/^[a-z]+-[\w-]+$/);
+  expect(rub(await voucher.locator(".total").textContent())).toBe(total);
 
   // Перезагрузка: бронь, корзина и план на месте.
   const booking = await voucher.locator("h2").textContent();
