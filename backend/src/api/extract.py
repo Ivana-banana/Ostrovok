@@ -42,11 +42,53 @@ PLACES = {
     "Армения": "армени", "Минск": "минск", "Баку": "баку", "Ярославль": "ярославл",
     "Суздаль": "суздал", "Новосибирск": "новосибирск", "Владивосток": "владивосток",
 }  # fmt: skip
+
+
+# Nominative ending -> case endings. «Минеральная вода» is not «Минеральные Воды».
+ADJECTIVE_FORMS = {
+    ("ые", "ие"): "(?:ые|ие|ых|их|ым|им|ыми|ими)",
+    ("ый", "ий", "ой"): "(?:ый|ий|ой|ого|его|ому|ему|ом|ем|ым|им)",
+    ("ая", "яя"): "(?:ая|яя|ой|ей|ую|юю)",
+}
+
+
+def _word_re(word: str, first: str | None = None) -> str:
+    """A word of a two-word name in any case: «Великого», «Воды» -> «воду».
+
+    first: a pattern for its first letter («В»); None keeps the lower case letter."""
+    w = word.lower().replace("ё", "е")
+    rest = re.sub(r"[аяыиеийьюуо]+$", "", w) + r"\w*"
+    for tails, forms in ADJECTIVE_FORMS.items():
+        if w.endswith(tails):
+            rest = w[:-2] + forms
+    return (first or rest[0]) + rest[1:]
+
+
 PLACE_RES = [
     (name, re.compile(rf"\b(?:{'|'.join(c['stems'])})\w*")) for name, c in CATALOG.items()
 ] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
 # Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not.
 CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)"))]
+# Two-word cities of places.json not listed above (TRAP-3): «Великий Новгород в мае». Their
+# words are common («лечение минеральными водами»), so a name counts only with a capital first
+# letter (original text) or right after «в/во/из/до» (lower text).
+AFTER_PREPOSITION = r"(?:(?<=\bв )|(?<=\bво )|(?<=\bиз )|(?<=\bдо ))"
+
+
+def _two_word_places() -> None:
+    for p in places():
+        if " " not in p["name"] or p["name"] in PLACES:
+            continue
+        words = p["name"].split()
+        # the original text may have «ё»; the lower text has none
+        cap = [w[0].upper() + _word_re(w)[1:].replace("е", "[её]") for w in words]
+        cap[1:] = [f"[{w[0]}{w[0].lower()}]{w[1:]}" for w in cap[1:]]
+        CAPITAL_PLACES.append((p["name"], re.compile(r"\b" + r"\s+".join(cap))))
+        low = r"\s+".join(_word_re(w) for w in words)
+        PLACE_RES.append((p["name"], re.compile(AFTER_PREPOSITION + low)))
+
+
+_two_word_places()
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск"}
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
 # An unknown capitalized word counts only in main's narrow pattern: «Ухта, 3 ночи»,
@@ -197,6 +239,26 @@ def _unknown_first_city(
     return m.start(1), _nominative(word)
 
 
+# S5: «тогда Барселона», «лучше Сочи»: a lead word and a bare city, no preposition.
+SWITCH_LEAD = re.compile(
+    r"\s*(?:ну\s+|а\s+)?(?:тогда|лучше|ладно|пусть|давай(?:те)?|может(?:\s+быть)?|а\s+если)\W+"
+    r"(?:(?:в|во|на)\s+)?",
+    re.IGNORECASE,
+)
+
+
+def _switch_city(text: str) -> tuple[int, str] | None:
+    """The bare city right after a lead word: «тогда Барселона», «Лучше Анталию».
+
+    Only a city of places.json counts: «Лучше завтра», «Тогда Дети» name no place. A name
+    outside the catalogue needs a preposition («тогда в Ухту») and is read by the rules below.
+    """
+    lead = SWITCH_LEAD.match(text)
+    m = re.compile(r"[А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)*\b").match(text, lead.end()) if lead else None
+    known = _known(m.group(0)) if m else None
+    return (m.start(), known) if m and known else None
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> None:
     """Origin after «из/от», then destinations in text order: known places and capitalized names."""
     for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
@@ -223,6 +285,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n))
+    if switch := _switch_city(text):
+        hits.append(switch)
     # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
     if first := _first_city(text, t, not hits and not has_destination, None if hits else notes):
         hits.append(first)
