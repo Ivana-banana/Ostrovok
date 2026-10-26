@@ -272,10 +272,11 @@ def test_lower_budget_drops_a_pick_that_no_longer_fits(store):
     r = say(store, "беру " + ("первый", "второй", "третий", "четвёртый")[i], r.session_id)
     pick = _hotel(r)
     assert r.stage == "assemble" and pick.offer_id not in dag.rank(r.plan.spec, r.plan.offers)[0]
-    road = dag._total(r.plan) - pick.price_rub
-    budget = road + pick.price_rub - 100  # the pick is 100 ₽ over, cheaper hotels fit
+    total = sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
+    budget = total - 100  # the pick is 100 ₽ over, cheaper hotels fit
     r = say(store, f"а бюджет {budget} руб", r.session_id)
-    assert _hotel(r).title != pick.title and dag._total(r.plan) <= budget
+    assert _hotel(r).title != pick.title
+    assert sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected) <= budget
     lost = next(c for c in r.plan.changes if c.what == "ваш выбор")
     assert pick.title == lost.before and lost.after.endswith("дороже бюджета")
     assert "дороже бюджета" in r.reply

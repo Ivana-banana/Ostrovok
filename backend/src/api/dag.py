@@ -21,6 +21,7 @@ from datetime import timedelta
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
 from api.extract import MONTH_NAMES, NUM, NUMS
 from api.fixtures import build_timeline, find_offers, rank
+from api.optimizer import bundles
 
 NODES = ("destination", "offers", "ranking", "timeline", "cart")
 # The first node that reads the field. "assumptions" is text for the user, no node reads it.
@@ -183,7 +184,7 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
         done.append("offers")
     if "ranking" in dirty:
         plan.selected, plan.explanations = rank(spec, plan.offers)
-        plan.bundles = []  # TODO(T7, #13): the optimizer returns bundles with the ranking
+        plan.bundles = bundles(spec, plan.offers)  # whole-trip options (T7, #13)
         lost = _keep_pick(old, plan) if old.offers else None
         done.append("ranking")
     # Invariant: build_timeline reads only the selected offers, not the spec; T8 (#14) must
