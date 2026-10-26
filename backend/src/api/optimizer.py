@@ -14,8 +14,8 @@
   «недорого» means price first) over min-max scores of the candidates. Ties: lower total,
   shorter trip, then offer ids, so the result does not depend on the offer order.
 - Bundles: the best one and up to 3 alternatives of another kind (cheapest, cheapest hotel,
-  fastest, most comfortable, within the budget). The selection is the best bundle without
-  its transfers; the hotel explanation names them as outside the cart.
+  fastest, most comfortable, within the budget). The selection is the best bundle; a hotel
+  the user picks replaces the hotel and its transfers (pick_hotel).
 
 Texts use only offer fields, spec values and sums or differences of offer prices (TRAP-4).
 """
@@ -27,6 +27,7 @@ from typing import NamedTuple
 from api.contracts import (
     Bundle,
     Explanation,
+    ExtraOffer,
     HotelOffer,
     Offer,
     Priority,
@@ -338,7 +339,7 @@ def _hotel_why(spec: TripSpec, t: Trip) -> str:
     if t.legs:
         parts.append(f"дорога {_rub(t.road)}")
     if t.transfers:
-        parts.append(f"трансферы {_rub(t.transfer_rub)} — отдельно от корзины")
+        parts.append(f"трансферы {_rub(t.transfer_rub)}")
     why = f"{', '.join(facts)}; поездка целиком {_rub(t.total)} ({' + '.join(parts)})"
     order = list(dict.fromkeys(spec.priorities))
     if order:
@@ -460,15 +461,11 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
     label = "лучший по вашим приоритетам" if fits else "ближе всего к условиям"
     bundles = [_bundle(label, best, sacrificed + best.rules)]
     bundles += [_bundle(lb, t, _versus(t, best)) for lb, t in _alternatives(best, pool, trips)]
-    # TODO(#13): transfers stay in the bundle, not in the selection: a hotel picked by number
-    # (model.py) replaces only the hotel id, and a selected transfer would lead to the old
-    # hotel. The selection takes them when the pick swaps the transfers with the hotel.
-    selected = [best.hotel.offer_id, *(x.offer_id for x in best.legs)]
-    return Ranked(selected, explanations, bundles)
+    return Ranked(best.ids, explanations, bundles)
 
 
 def rank(spec: TripSpec, offers: list[Offer]) -> tuple[list[str], list[Explanation]]:
-    """Selected offer ids (hotel, leg there, leg back) of the best trip and why."""
+    """Selected offer ids (hotel, leg there, leg back, their transfers) and why."""
     r = optimize(spec, offers)
     return r.selected, r.explanations
 
@@ -476,3 +473,19 @@ def rank(spec: TripSpec, offers: list[Offer]) -> tuple[list[str], list[Explanati
 def bundles(spec: TripSpec, offers: list[Offer]) -> list[Bundle]:
     """Whole-trip options for Plan.bundles: the best one first."""
     return optimize(spec, offers).bundles
+
+
+def pick_hotel(selected: list[str], offers: list[Offer], hotel_id: str) -> list[str]:
+    """The selection with another hotel: its transfers for the selected legs replace the old
+    hotel, its transfers and its add-ons; the legs stay. Order: hotel, legs, transfers."""
+    by_id = {o.offer_id: o for o in offers}
+    hotel = by_id[hotel_id]
+    if not isinstance(hotel, HotelOffer):
+        raise TypeError(f"{hotel_id} is not a hotel offer")
+    chosen = [by_id[i] for i in selected if i in by_id]
+    legs = [o for o in chosen if isinstance(o, TransportOffer)]
+    transfers = [_tid(hotel, x) for x in legs if x.mode != "car" and _tid(hotel, x) in by_id]
+    extras = [
+        o.offer_id for o in chosen if isinstance(o, ExtraOffer) and o.for_offer_id == hotel_id
+    ]
+    return [hotel_id, *(x.offer_id for x in legs), *transfers, *extras]

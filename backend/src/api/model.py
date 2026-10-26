@@ -20,6 +20,7 @@ from api.contracts import Cart, ChatReply, ChatRequest, Plan, Question, Stage, T
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract
 from api.fixtures import build_timeline, future_date, suggest_destinations
+from api.optimizer import pick_hotel
 from api.store import SessionStore
 
 DEFAULT_NIGHTS = 7
@@ -274,8 +275,8 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
         hotels = [o for o in plan.offers if o.kind == "hotel"]
         if idx is not None and idx < len(hotels):
-            ids = {h.offer_id for h in hotels}
-            plan.selected = [hotels[idx].offer_id] + [i for i in plan.selected if i not in ids]
+            # The hotel brings its own transfers for the selected legs (T7, #13).
+            plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
         plan.timeline, plan.issues = build_timeline(plan)
         return reply("assemble", plan, _text_assemble(plan))
     if old.stage == "assemble" and _confirmed(t):

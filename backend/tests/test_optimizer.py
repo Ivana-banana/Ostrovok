@@ -12,14 +12,18 @@ from api import dag
 from api.contracts import (
     Cancellation,
     Cart,
+    ChatRequest,
+    ExtraOffer,
     HotelOffer,
     Plan,
     TransferOffer,
     TransportOffer,
     TripSpec,
 )
+from api.model import chat
 from api.offers import find_offers, transfer_id
-from api.optimizer import DEFAULT_WEIGHTS, bundles, optimize, rank, weights
+from api.optimizer import DEFAULT_WEIGHTS, bundles, optimize, pick_hotel, rank, weights
+from api.store import SessionStore
 
 TZ = ZoneInfo("Europe/Moscow")
 DAY_IN, DAY_OUT = date(2030, 11, 20), date(2030, 11, 23)
@@ -130,13 +134,7 @@ def test_bundle_is_the_whole_trip_and_its_total_is_the_sum():
         want = {transfer_id(h.offer_id, t.offer_id) for t in legs if t.mode != "car"}
         assert {i for i in b.offer_ids if by_id[i].kind == "transfer"} == want
         assert b.travel_hours > 0
-    assert _no_transfers(out[0].offer_ids, items) == rank(s, items)[0]
-
-
-def _no_transfers(ids, items):
-    """The selection is the best bundle without its transfers (they follow the hotel)."""
-    kinds = {o.offer_id: o.kind for o in items}
-    return [i for i in ids if kinds[i] != "transfer"]
+    assert out[0].offer_ids == rank(s, items)[0]
 
 
 def test_s7_transfer_eats_the_hotel_saving():
@@ -317,7 +315,7 @@ def test_alternatives_differ_in_kind():
     assert len({b.label for b in out}) == len(out)
     assert len({tuple(b.offer_ids) for b in out}) == len(out)
     assert len({b.bundle_id for b in out}) == len(out)
-    assert _no_transfers(out[0].offer_ids, items) == rank(s, items)[0]
+    assert out[0].offer_ids == rank(s, items)[0]
     cheapest = next((b for b in out if b.label == "самый дешёвый"), out[0])
     assert cheapest.total_rub == min(b.total_rub for b in out)
     fastest = next((b for b in out if b.label == "самый быстрый"), None)
@@ -419,6 +417,91 @@ def test_replan_fills_the_bundles_with_the_ranking():
     s = spec(date_from=date(2030, 11, 20), date_to=date(2030, 11, 23))
     plan, _, done = dag.replan(Plan(spec=TripSpec()), s, Cart())
     assert "ranking" in done and plan.bundles
-    assert _no_transfers(plan.bundles[0].offer_ids, plan.offers) == plan.selected
+    assert plan.bundles[0].offer_ids == plan.selected
     edited, _, _ = dag.replan(plan, s.model_copy(update={"budget_rub": 1000}), Cart())
     assert edited.bundles[0].label == "ближе всего к условиям"
+
+
+S6 = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."
+
+
+@pytest.fixture
+def store(tmp_path):
+    return SessionStore(tmp_path / "sessions.db")
+
+
+def say(store, text, sid=None):
+    return chat(ChatRequest(session_id=sid, message=text), store)
+
+
+def _itogo(reply):
+    return int(re.search(r"Итого (\d[\d ]*) ₽", reply).group(1).replace(" ", ""))
+
+
+def _transfers_of(hotel, items, ids):
+    by_id = {o.offer_id: o for o in items}
+    legs = [by_id[i] for i in ids if by_id[i].kind == "transport" and by_id[i].mode != "car"]
+    return {transfer_id(hotel.offer_id, x.offer_id) for x in legs}
+
+
+def test_ranked_trip_has_one_total_in_chat_bundle_and_cart(store):
+    r = say(store, S6)
+    items = r.plan.offers
+    assert r.plan.selected == r.plan.bundles[0].offer_ids
+    total_rub = r.plan.bundles[0].total_rub
+    assert _itogo(r.reply) == total_rub == total(r.plan.selected, items)
+    assert any(o.kind == "transfer" for o in items if o.offer_id in r.plan.selected)
+    for text in ("беру", "да"):
+        r = say(store, text, r.session_id)
+    assert r.stage == "checkout" and r.cart.total_rub == total_rub
+    assert [o.offer_id for o in r.cart.items] == r.plan.selected
+
+
+def test_picked_hotel_brings_only_its_own_transfers(store):
+    """«беру второй»: the 2nd hotel and its transfers for the selected legs, totals equal."""
+    r = say(store, S6)
+    second = [o for o in r.plan.offers if o.kind == "hotel"][1]
+    assert second.offer_id not in r.plan.selected  # the ranking chose another hotel
+    r = say(store, "беру второй", r.session_id)
+    assert r.stage == "assemble"
+    items = r.plan.offers
+    chosen = [o for o in items if o.offer_id in r.plan.selected]
+    assert [o.offer_id for o in chosen if o.kind == "hotel"] == [second.offer_id]
+    got = {o.offer_id for o in chosen if o.kind == "transfer"}
+    assert got and got == _transfers_of(second, items, r.plan.selected)
+    assert _itogo(r.reply) == total(r.plan.selected, items)
+    r = say(store, "да", r.session_id)
+    assert r.stage == "checkout"
+    assert {o.offer_id for o in r.cart.items} == set(r.plan.selected)
+    assert r.cart.total_rub == sum(o.price_rub for o in r.cart.items) == _itogo_cart(r.reply)
+
+
+def _itogo_cart(reply):
+    return int(re.search(r"на (\d[\d ]*) ₽", reply).group(1).replace(" ", ""))
+
+
+def test_replan_keeps_the_pick_with_its_own_transfers(store):
+    r = say(store, S6)
+    r = say(store, "беру второй", r.session_id)
+    pick = next(o for o in r.plan.offers if o.offer_id in r.plan.selected and o.kind == "hotel")
+    r = say(store, "а бюджет 60 000 руб", r.session_id)  # a re-rank keeps the manual pick
+    hotel = next(o for o in r.plan.offers if o.offer_id in r.plan.selected and o.kind == "hotel")
+    assert hotel.title == pick.title
+    got = {
+        o.offer_id for o in r.plan.offers if o.offer_id in r.plan.selected and o.kind == "transfer"
+    }
+    assert got == _transfers_of(hotel, r.plan.offers, r.plan.selected)
+
+
+def test_pick_hotel_swaps_the_hotel_part_and_keeps_the_legs():
+    a, b = hotel("A", 10_000), hotel("B", 12_000)
+    extra = ExtraOffer(offer_id="e-A", title="Ранний заезд", for_offer_id="h-A", price_rub=900)
+    items = [*offers([a, b], FLIGHTS), extra]
+    old = [*rank(spec(), items)[0], "e-A"]
+    assert old[0] == "h-A"
+    new = pick_hotel(old, items, "h-B")
+    want = {transfer_id("h-B", x.offer_id) for x in FLIGHTS}
+    assert new == ["h-B", "t-out", "t-back", *sorted(want, key=new.index)]
+    assert set(new[3:]) == want  # no transfer or add-on of hotel A is left
+    with pytest.raises(TypeError):
+        pick_hotel(old, items, "t-out")
