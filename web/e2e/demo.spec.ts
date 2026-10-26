@@ -4,14 +4,10 @@ import { expect, test } from "@playwright/test";
 // поездки до ваучера, затем перезагрузка. Работает на агенте с фикстурами (без ключа LLM).
 const REQUEST = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё.";
 
-// TODO(#11): POST /api/cart и /api/checkout ещё нет в main; браузер пишет 404/405 в консоль,
-// UI честно откатывается на сообщение агенту. Эти строки не считаем ошибками.
-const PENDING_ROUTES = /\/api\/(cart|checkout)$/;
-
 test("S6: запрос → сравнение → план → корзина → ваучер → перезагрузка", async ({ page }) => {
   const errors: string[] = [];
   page.on("console", (m) => {
-    if (m.type() === "error" && !PENDING_ROUTES.test(m.location().url)) errors.push(m.text());
+    if (m.type() === "error") errors.push(m.text());
   });
 
   await page.goto("/");
@@ -21,26 +17,26 @@ test("S6: запрос → сравнение → план → корзина �
 
   // Сравнение: ≥ 3 отеля, цены с пометкой «синтетика», транспорт со временем в пути.
   const hotels = page.getByRole("region", { name: "Сравнение отелей" });
-  await expect(hotels.locator("tbody tr")).toHaveCount(3);
+  await expect(hotels.locator("tbody tr").nth(2)).toBeVisible(); // S6: не меньше 3
   await expect(hotels.locator(".price .synth").first()).toHaveText("синтетика");
   await expect(page.getByRole("region", { name: "Сравнение транспорта" })).toContainText("ч ");
 
   // Выбор другого отеля — один клик; агент собирает план с таймлайном.
-  await page.getByRole("button", { name: /^Выбрать Отель/ }).first().click();
+  await hotels.getByRole("button", { name: /^Выбрать/ }).first().click();
   await expect(page.getByRole("region", { name: "Таймлайн" })).toBeVisible();
 
   await page.getByRole("button", { name: "Положить в корзину" }).click();
   const cart = page.getByRole("region", { name: "Корзина" });
   await expect(cart.getByTestId("cart-total")).toContainText("синтетика");
 
-  // Убрать и вернуть позицию; без маршрута /api/cart — пояснение, корзина та же.
-  const before = await cart.getByTestId("cart-total").textContent();
+  // Убрать и вернуть позицию: итог пересчитан сервером, без дублей.
+  const before = (await cart.getByTestId("cart-total").textContent()) ?? "";
+  const rows = await cart.locator("ul.plain").first().locator("li").count();
   await cart.getByRole("button", { name: /^Убрать/ }).first().click();
-  const notice = page.locator(".notice");
-  const back = cart.getByRole("button", { name: /^Вернуть/ });
-  await expect(notice.or(back)).toBeVisible();
-  if (await back.isVisible()) await back.click();
-  await expect(cart.getByTestId("cart-total")).toHaveText(before ?? "");
+  await expect(cart.getByTestId("cart-total")).not.toHaveText(before);
+  await cart.getByRole("button", { name: /^Вернуть/ }).click();
+  await expect(cart.getByTestId("cart-total")).toHaveText(before);
+  await expect(cart.locator("ul.plain").first().locator("li")).toHaveCount(rows);
 
   const confirm = page.getByRole("button", { name: /^Подтвердить бронь/ });
   await expect(confirm).toContainText("оплата имитируется");

@@ -5,11 +5,10 @@ All prices are synthetic (TRAP-7). November climate and flight hours are team es
 without a source; the reply labels them as an estimate.
 """
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from api.contracts import (
-    Cart,
     Destination,
     Explanation,
     Offer,
@@ -17,7 +16,6 @@ from api.contracts import (
     TimelineEvent,
     TimelineIssue,
     TripSpec,
-    Voucher,
 )
 from api.guards import check_arrival_vs_checkin
 from api.offers import find_offers
@@ -188,27 +186,3 @@ def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]
                     issues.append(TimelineIssue(severity="warn", text=text))
     events.sort(key=lambda e: e.at)
     return events, issues
-
-
-def fill_cart(plan: Plan) -> Cart:
-    """Cart with the selected items; it replaces the old cart.
-
-    TODO(T9, #11): replace with the cart module (POST /api/cart).
-    """
-    items = [o for o in plan.offers if o.offer_id in plan.selected]
-    return Cart(items=items, total_rub=sum(o.price_rub for o in items))
-
-
-def book(spec: TripSpec, cart: Cart) -> Voucher:
-    """Simulated purchase of the cart.
-
-    TODO(T9, #11): replace with the checkout of POST /api/checkout.
-    """
-    now = datetime.now(UTC)
-    return Voucher(
-        booking_id=f"B-{now:%Y%m%d%H%M%S}",
-        items=cart.items,
-        spec=spec,
-        total_rub=cart.total_rub,
-        created_at=now,
-    )

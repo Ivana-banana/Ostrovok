@@ -127,16 +127,6 @@ suite("приложение", () => {
     expect(box.querySelectorAll("[aria-label='Корзина'] li").length).toBe(1);
   });
 
-  it("корзина: нет маршрута на сервере — корзина не меняется, есть пояснение", async () => {
-    localStorage.setItem(SESSION_KEY, "s1");
-    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
-    routes["POST /api/cart"] = () => ({ status: 405 });
-    await mount();
-    await click("Убрать");
-    expect(box.querySelector("[role='note'].notice")?.textContent).toContain("Корзина не изменилась");
-    expect(box.querySelector("[data-testid='cart-total']")?.textContent).toContain("600 ₽");
-  });
-
   it("подтверждение: отправляет итог, который видел пользователь, и показывает ваучер", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     let session: ChatReply = checkoutStage;
@@ -154,17 +144,17 @@ suite("приложение", () => {
     expect(box.querySelector("[aria-label='Ваучер']")?.textContent).toContain("OST-0001");
   });
 
-  it("подтверждение: нет маршрута checkout — бронь через сообщение «подтверждаю»", async () => {
+  it("подтверждение: 409 показывает текст сервера и не создаёт ваучер", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
-    routes["POST /api/chat"] = () => ({ status: 200, body: booked });
+    routes["POST /api/checkout"] = () => ({
+      status: 409,
+      body: { detail: "Итог корзины 700 ₽, а вы подтверждаете 600 ₽." },
+    });
     await mount();
     await click("Подтвердить бронь");
-    expect(calls.at(-1)).toMatchObject({
-      key: "POST /api/chat",
-      body: { session_id: "s1", message: "подтверждаю" },
-    });
-    expect(box.querySelector("[aria-label='Ваучер']")?.textContent).toContain("OST-0001");
+    expect(box.querySelector("[role='alert']")?.textContent).toContain("Итог корзины 700 ₽");
+    expect(box.querySelector("[aria-label='Ваучер']")).toBeNull();
   });
 
   it("выбор отеля на этапе сравнения — сообщение агенту порядковым словом", async () => {
