@@ -575,6 +575,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         spec_model = merge(old.plan.spec, with_model, notes)
         if spec_model != spec:
             found, spec, used = with_model, spec_model, True
+    swapped = [d for d in old.plan.spec.destinations if d not in spec.destinations]
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
         return ChatReply(
@@ -630,6 +631,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             text += f" Город вылета {spec.origin} совпадает с направлением: перевозки в плане нет."
         if plan.changes:
             text = "\n".join(["Было → стало:", *describe(plan.changes), text])
+        if old.stage == "select" and swapped:
+            # The user named a city that is not in the catalogue and picked another one:
+            # the reply says so, the new city never comes silently (#93).
+            gone, now = ", ".join(swapped), spec.destinations[0]
+            text = f"«{gone}» нет в каталоге. По вашему выбору — {now}.\n{text}"
         return reply("compare", plan, text, cart)
 
     if old.stage == "compare" and (idx is not None or _confirmed(t)):

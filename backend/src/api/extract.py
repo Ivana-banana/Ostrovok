@@ -89,7 +89,7 @@ def _two_word_places() -> None:
 
 
 _two_word_places()
-NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск"}
+NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой"}
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
 # An unknown capitalized word counts only in main's narrow pattern: «Ухта, 3 ночи»,
 # «Калуга в мае», «Тула на 3 дня». Even then the lists below veto ordinary first words.
@@ -101,10 +101,15 @@ NOT_CITY_START = re.compile(
     r"|нельз|будем|будет|как\b|что\b|где\b|куд|когд|сколько|есть\b|если\b|для\b|мне\b|нам\b"
     r"|мы\b|ну\b|вот\b|так\b|или\b|тепл|хорош|нормал|красив|дешев|дорог|быстр|скоро|срочно"
     r"|лучш|любо|какой|какая|какое|зим|весн|осен|друз|компан|сем[ьъ]|одн|вмест"
-    r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят)"
+    r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят"
+    r"|(?:другой|простой|большой|небольшой|выходной|мой|твой|свой|такой|мамой|папой|подругой"
+    r"|другом|дочкой|сестрой|бабушкой|мужем|женой|перенеси|подвинь|сдвинь)\b)"
 )  # fmt: skip
 # Not a city by its ending: verbs («Планируем», «Ищете»), adjectives («Тёплое»), infinitives.
-NOT_CITY_END = re.compile(r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ой|ая|яя|ое|ее|ые|ие)$")
+# «ой» is not here: «Ханой» is a city. The ordinary words in «ой» that can stand before a
+# number («Другой на 3 ночи», «Мамой на 3 дня») are a list of whole words in NOT_CITY_START;
+# «Домой» is in NOT_PLACES.
+NOT_CITY_END = re.compile(r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ая|яя|ое|ее|ые|ие)$")
 CASES = "(?:а|у|е|ом|ем|ой|ы|и|ю|я|ь|ею|ам|ах|ами)"
 CASES_SHORT = "(?:а|у|е|ы)"  # «Рим», «Вена»: a longer ending would make a common word
 # Short stems that are ordinary words in these forms: «мала ли комната» is not «Мале».
