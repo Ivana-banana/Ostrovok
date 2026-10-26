@@ -11,7 +11,6 @@ from datetime import UTC, date, datetime, time, timedelta, timezone
 from api.contracts import (
     Cancellation,
     Cart,
-    Change,
     Destination,
     Explanation,
     HotelOffer,
@@ -339,29 +338,6 @@ def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]
                     issues.append(TimelineIssue(severity="warn", text=text))
     events.sort(key=lambda e: e.at)
     return events, issues
-
-
-def plan_changes(old: TripSpec, new: TripSpec) -> list[Change]:
-    """Before -> after lines for changed trip fields.
-
-    TODO(T6, #10): replace with the re-plan DAG (recompute only dependent nodes).
-    """
-    out = []
-    for field in (
-        "destinations",
-        "date_from",
-        "date_to",
-        "nights",
-        "adults",
-        "children_ages",
-        "budget_rub",
-        "meal",
-        "origin",
-    ):
-        a, b = getattr(old, field), getattr(new, field)
-        if a != b:
-            out.append(Change(what=field, before=str(a), after=str(b)))
-    return out
 
 
 def fill_cart(plan: Plan) -> Cart:
