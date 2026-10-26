@@ -615,3 +615,41 @@ def test_trade_off_names_the_priority_only_when_the_first_option_wins_on_it():
     items = offers([plain, hotel("refund", 11_800, refundable=True, rating=7.5)], FLIGHTS)
     first = rank(spec(priorities=["cancellation", "price"]), items)[1][0]
     assert "плата за приоритет «отмена»" in " ".join(first.tradeoffs)
+
+
+def test_cheap_in_wishes_without_priorities_acts_like_price_first():
+    """#53: «недорого» only in wishes keeps the overnight train, as priorities [price] does."""
+    day = date(2026, 12, 11)
+    base = TripSpec(
+        origin="Москва",
+        destinations=["Екатеринбург"],
+        date_from=day,
+        date_to=day + timedelta(days=2),
+        nights=2,
+    )
+    items = find_offers(base, "Екатеринбург")
+    by_id = {o.offer_id: o for o in items}
+
+    def modes(s):
+        return {by_id[i].mode for i in rank(s, items)[0] if by_id[i].kind == "transport"}
+
+    assert modes(base) == {"flight"}  # no preference: the long train does not go first
+    by_priority = base.model_copy(update={"priorities": ["price"]})
+    by_wish = base.model_copy(update={"wishes": ["недорого"]})
+    assert modes(by_priority) == {"train"}
+    assert modes(by_wish) == modes(by_priority)
+    assert rank(by_wish, items)[0] == rank(by_priority, items)[0]
+
+
+def test_slow_leg_line_gives_the_hours_of_the_leg_that_made_it_slow():
+    """#53: the slow leg is the way back; the line must not show the hours of the leg there."""
+    hotel_a = hotel("a", 10_000)
+    legs = [
+        leg("out", 8000),
+        leg("back-flight", 8000, there=False),
+        leg("back-train", 1000, there=False, mode="train", hours=20),
+    ]
+    first = rank(spec(), offers([hotel_a], legs))[1][0]
+    line = next(x for x in first.tradeoffs if "дорога в одну сторону" in x)
+    assert "дорога в одну сторону 20 ч" in line
+    assert "back-train" in line  # the title of the slow leg

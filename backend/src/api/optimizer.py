@@ -116,8 +116,14 @@ class Trip:
         return sum(t.price_rub for t in self.transfers)
 
     @property
+    def slow_leg(self) -> TransportOffer | None:
+        """The longest leg when it is longer than LONG_LEG_H; it is the reason for `slow`."""
+        longest = max(self.legs, key=_leg_hours, default=None)
+        return longest if longest and _leg_hours(longest) > LONG_LEG_H else None
+
+    @property
     def slow(self) -> bool:
-        return any(_leg_hours(x) > LONG_LEG_H for x in self.legs)
+        return self.slow_leg is not None
 
     @property
     def hours(self) -> float:
@@ -165,11 +171,17 @@ def _diff(d: int) -> str:
     return f"дороже на {_rub(d)}" if d > 0 else f"дешевле на {_rub(-d)}" if d else "по той же цене"
 
 
-def weights(spec: TripSpec) -> dict[Priority, float]:
-    """Order -> weights: the i-th priority weighs 1/(i+1), the rest keep half the default."""
+def _order(spec: TripSpec) -> list[Priority]:
+    """The priorities of the user; «недорого» in wishes without priorities means [price]."""
     order = list(dict.fromkeys(spec.priorities))
     if not order and "недорого" in spec.wishes:
         order = ["price"]
+    return order
+
+
+def weights(spec: TripSpec) -> dict[Priority, float]:
+    """Order -> weights: the i-th priority weighs 1/(i+1), the rest keep half the default."""
+    order = _order(spec)
     if not order:
         return dict(DEFAULT_WEIGHTS)
     w = {c: DEFAULT_WEIGHTS[c] / 2 for c in CRITERIA}
@@ -271,7 +283,7 @@ def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
     _score(pool, weights(spec))
     # The price weight must not send the user on a long train when a faster trip exists; a user
     # who put the price first has chosen.
-    demote = spec.priorities[:1] != ["price"] and any(not t.slow for t in pool)
+    demote = _order(spec)[:1] != ["price"] and any(not t.slow for t in pool)
     if any(t.over for t in pool):
         # nothing fits the budget: smallest overrun
         pool.sort(key=lambda t: (t.over, demote and t.slow, *t.key))
@@ -386,8 +398,11 @@ def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
         first = spec.priorities[0] if spec.priorities else None
         if first and first != "price" and _wins_on(first, t, cheapest):
             line += f" — плата за приоритет «{PRIORITY_TEXT[first]}»"  # the user put it above price
-        if cheapest.slow and not t.slow:
-            line += f"; у самого дешёвого дорога в одну сторону {_h(cheapest.hours)}"
+        if cheapest.slow_leg and not t.slow:
+            line += (
+                f"; у самого дешёвого дорога в одну сторону {_h(_leg_hours(cheapest.slow_leg))} "
+                f"({cheapest.slow_leg.title})"
+            )
         out.append(line)
     if not h.cancellation.refundable:
         refund = [x for x in pool if x.hotel.cancellation.refundable]
