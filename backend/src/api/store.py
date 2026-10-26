@@ -57,7 +57,10 @@ class SessionStore:
                 self._write(out, con)
                 con.execute("COMMIT")
             except BaseException:
-                con.execute("ROLLBACK")
+                try:
+                    con.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass  # the original error matters more than a failed rollback
                 raise
             return out
         finally:

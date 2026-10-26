@@ -15,7 +15,7 @@ import re
 from datetime import date, timedelta
 from uuid import uuid4
 
-from api.cart import book, fill_cart
+from api.cart import CartRefusal, checkout_reply, fill_cart
 from api.contracts import Cart, ChatReply, ChatRequest, Plan, Question, Stage, TripSpec
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract
@@ -286,15 +286,14 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
         )
         return reply("checkout", plan, text, cart)
     if old.stage == "checkout" and BOOK_RE.search(t) and not NOT_BOOK_RE.search(t):
-        voucher = book(spec, old.cart)
-        text = f"Бронь {voucher.booking_id} оформлена на {_rub(voucher.total_rub)}. Оплата имитирована."
-        return reply("booked", plan, text, voucher=voucher)
+        try:  # the same rules as POST /api/checkout; the user saw the stored cart total
+            return checkout_reply(old, old.cart.total_rub)
+        except CartRefusal as e:
+            return reply(old.stage, plan, e.text)
     return reply(old.stage, plan, HINTS.get(old.stage, "Уточните запрос."))
 
 
 def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
     """POST /api/chat: an unknown session_id starts a new session with that id."""
     sid = req.session_id or uuid4().hex
-    out = step(store.get(sid), sid, req.message)
-    store.put(out)
-    return out
+    return store.update(sid, lambda prev: step(prev, sid, req.message))

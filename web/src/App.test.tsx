@@ -144,6 +144,19 @@ suite("приложение", () => {
     expect(box.querySelector("[aria-label='Ваучер']")?.textContent).toContain("OST-0001");
   });
 
+  it("подтверждение: 409 показывает текст сервера и не создаёт ваучер", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    routes["POST /api/checkout"] = () => ({
+      status: 409,
+      body: { detail: "Итог корзины 700 ₽, а вы подтверждаете 600 ₽." },
+    });
+    await mount();
+    await click("Подтвердить бронь");
+    expect(box.querySelector("[role='alert']")?.textContent).toContain("Итог корзины 700 ₽");
+    expect(box.querySelector("[aria-label='Ваучер']")).toBeNull();
+  });
+
   it("выбор отеля на этапе сравнения — сообщение агенту порядковым словом", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };

@@ -50,24 +50,25 @@ def fill_cart(plan: Plan) -> Cart:
 
 
 def edit_cart(plan: Plan, cart: Cart, action: str, offer_id: str) -> Cart:
-    """Cart after "add" or "remove". Raises HTTPException for an offer outside the plan."""
+    """Cart after "add" or "remove". Raises CartRefusal for an offer outside the plan."""
     offer = next((o for o in plan.offers if o.offer_id == offer_id), None)
     if offer is None:
-        raise HTTPException(status_code=422, detail="Такого предложения нет в плане поездки.")
+        raise CartRefusal(422, "Такого предложения нет в плане поездки.")
     if action == "remove":
         gone = {offer_id} | {
             o.offer_id for o in cart.items if o.kind == "extra" and o.for_offer_id == offer_id
         }
         return make_cart([o for o in cart.items if o.offer_id not in gone])
     if offer.kind == "extra" and all(o.offer_id != offer.for_offer_id for o in cart.items):
-        raise HTTPException(
-            status_code=409, detail="Услуга относится к позиции, которой нет в корзине."
-        )
+        raise CartRefusal(409, "Услуга относится к позиции, которой нет в корзине.")
     slot = _slot(offer, plan.spec)
     items = list(cart.items)
     for i, o in enumerate(items):
         if _slot(o, plan.spec) == slot:
             items[i] = offer  # replace in place, no duplicate
+            # Extras belong to the old item; they do not follow the new one.
+            if o.offer_id != offer.offer_id:
+                items = [x for x in items if x.kind != "extra" or x.for_offer_id != o.offer_id]
             return make_cart(items)
     return make_cart(items + [offer])
 
@@ -84,64 +85,83 @@ def book(spec: TripSpec, cart: Cart) -> Voucher:
     )
 
 
+class CartRefusal(Exception):
+    """The cart or the checkout cannot go on. `status` is the HTTP code, `text` is for the user."""
+
+    def __init__(self, status: int, text: str):
+        super().__init__(text)
+        self.status = status
+        self.text = text
+
+
+def _guard_cart_open(reply: ChatReply) -> None:
+    if reply.voucher:
+        raise CartRefusal(409, f"Бронь {reply.voucher.booking_id} уже оформлена.")
+    if reply.stage != "checkout":
+        raise CartRefusal(
+            409, "Корзина откроется, когда вы согласитесь с планом: напишите «да» после плана."
+        )
+
+
+def checkout_reply(reply: ChatReply, confirm_total_rub: int) -> ChatReply:
+    """The one booking rule for POST /api/checkout and the chat «подтверждаю».
+
+    The cart must be open and not empty. Prices come from the plan, never from the stored or
+    the sent cart (TRAP-4). The confirmed total must equal the cart total. A repeated call
+    returns the same booking.
+    """
+    if reply.voucher:
+        if reply.voucher.total_rub != confirm_total_rub:
+            raise CartRefusal(409, f"Бронь уже оформлена на {_rub(reply.voucher.total_rub)}.")
+        return reply
+    _guard_cart_open(reply)
+    in_cart = {o.offer_id for o in reply.cart.items}
+    cart = make_cart([o for o in reply.plan.offers if o.offer_id in in_cart])
+    if not cart.items:
+        raise CartRefusal(409, "Корзина пуста: оформлять нечего.")
+    if cart.total_rub != confirm_total_rub:
+        raise CartRefusal(
+            409,
+            f"Итог корзины {_rub(cart.total_rub)}, а вы подтверждаете "
+            f"{_rub(confirm_total_rub)}. Проверьте сумму и подтвердите ещё раз.",
+        )
+    voucher = book(reply.plan.spec, cart)
+    text = f"Бронь {voucher.booking_id} оформлена на {_rub(voucher.total_rub)}. Оплата имитирована."
+    return reply.model_copy(
+        update={"stage": "booked", "reply": text, "questions": [], "cart": cart, "voucher": voucher}
+    )
+
+
 def _known(prev: ChatReply | None) -> ChatReply:
     if prev is None:
-        raise HTTPException(status_code=404, detail="Сессия не найдена.")
+        raise CartRefusal(404, "Сессия не найдена.")
     return prev
+
+
+def _http(e: CartRefusal) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.text)
 
 
 def cart_route(req: CartAction, store: SessionStore) -> Cart:
     def change(prev: ChatReply | None) -> ChatReply:
         reply = _known(prev)
-        if reply.voucher:
-            raise HTTPException(
-                status_code=409, detail=f"Бронь {reply.voucher.booking_id} уже оформлена."
-            )
+        _guard_cart_open(reply)
         cart = edit_cart(reply.plan, reply.cart, req.action, req.offer_id)
         return reply.model_copy(update={"cart": cart})
 
-    return store.update(req.session_id, change).cart
+    try:
+        return store.update(req.session_id, change).cart
+    except CartRefusal as e:
+        raise _http(e) from e
 
 
 def checkout_route(req: CheckoutRequest, store: SessionStore) -> Voucher:
     def change(prev: ChatReply | None) -> ChatReply:
-        reply = _known(prev)
-        if reply.voucher:  # a repeated click returns the same booking, never a second one
-            if reply.voucher.total_rub != req.confirm_total_rub:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Бронь уже оформлена на {_rub(reply.voucher.total_rub)}.",
-                )
-            return reply
-        if not reply.cart.items:
-            raise HTTPException(status_code=409, detail="Корзина пуста: оформлять нечего.")
-        # Prices come from the plan, never from the stored or the sent cart (TRAP-4).
-        cart = make_cart([o for o in reply.plan.offers if o.offer_id in _ids(reply.cart)])
-        if cart.total_rub != req.confirm_total_rub:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Итог корзины {_rub(cart.total_rub)}, а вы подтверждаете "
-                    f"{_rub(req.confirm_total_rub)}. Проверьте сумму и подтвердите ещё раз."
-                ),
-            )
-        voucher = book(reply.plan.spec, cart)
-        text = f"Бронь {voucher.booking_id} оформлена на {_rub(voucher.total_rub)}. Оплата имитирована."
-        budget = reply.plan.spec.budget_rub
-        if budget is not None and voucher.total_rub > budget:
-            text += f" Итог больше бюджета {_rub(budget)}."
-        return reply.model_copy(
-            update={
-                "stage": "booked",
-                "reply": text,
-                "questions": [],
-                "cart": cart,
-                "voucher": voucher,
-            }
-        )
+        return checkout_reply(_known(prev), req.confirm_total_rub)
 
-    return store.update(req.session_id, change).voucher  # type: ignore[return-value]
-
-
-def _ids(cart: Cart) -> set[str]:
-    return {o.offer_id for o in cart.items}
+    try:
+        voucher = store.update(req.session_id, change).voucher
+    except CartRefusal as e:
+        raise _http(e) from e
+    assert voucher is not None
+    return voucher

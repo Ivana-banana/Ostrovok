@@ -183,7 +183,7 @@ export function App() {
       update({ ...ui, messages: [...ui.messages, { role: "agent", text }] });
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        setError("Итог корзины изменился. Проверьте сумму и подтвердите ещё раз.");
+        setError(e.message);
         const fresh = await getSession(id).catch(() => null);
         if (fresh) setReply(fresh);
       } else setError(userError(e));
