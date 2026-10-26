@@ -334,6 +334,7 @@ DISLIKE = re.compile(
     r"\bне\s+(?:хочу|хотим|хочется|хотелось|надо|нужн\w*|вариант|подходит|подойд\w*|нравит\w*"
     r"|интересует|едем|поедем|поеду|летим|полетим)"
     r"|\b(?:надоел\w*|надоест|хватит|отверга\w+|отвергн\w+|ненавид\w+|скучно|табу)\b"
+    r"|\b(?:куда|что)-(?:то|нибудь|либо)\s+(?:нов\w+|друг\w+)"
 )
 # Right after a place, only a few light words in between and no comma: «Турция надоела».
 AFTER_LEAD = (
@@ -365,35 +366,34 @@ def _sentence(t: str, start: int, end: int) -> str:
     return t[before[-1] if before else 0 : stop.start() if stop else len(t)]
 
 
-def _adds_place(t: str, spans: list[tuple[int, int]], i: int) -> bool:
-    """«Кроме Сочи хотим ещё в Казань»: the exception adds a place, it refuses nothing."""
+def _adds_place(t: str, spans: list[tuple[int, int]], i: int, refused: list[bool]) -> bool:
+    """«Кроме Сочи хотим ещё в Казань»: the exception adds a place, it refuses nothing.
+
+    It needs another place after X in the sentence (not in X's list, not refused itself)
+    and a wish word or «ещё/тоже» in the sentence."""
     s, e = spans[i]
-    sentence = _sentence(t, s, e)
-    if ADDITION.search(sentence):
-        return True
+    j = i + 1
+    while j < len(spans) and LIST_FORWARD.fullmatch(t[spans[j - 1][1] : spans[j][0]]):
+        j += 1
     stop = SENTENCE_END.search(t, e)
     end = stop.start() if stop else len(t)
-    wish = WANT_AFTER.search(t, e, end)
-    return bool(wish) and any(wish.end() <= x < end for x, _ in spans[i + 1 :])
+    later = [k for k in range(j, len(spans)) if spans[k][0] < end and not refused[k]]
+    return bool(later) and bool(
+        ADDITION.search(_sentence(t, s, e)) or WANT_AFTER.search(t, e, spans[later[0]][0])
+    )
 
 
 def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
     """Which of the place mentions (start, end; sorted) a negation refuses.
 
-    «кроме X» refuses X unless the sentence adds a place («ещё», «тоже»). «уже были в X» refuses
+    «кроме X» refuses X unless the sentence adds a place («ещё в Казань»). «уже были в X» refuses
     X only with a dislike in the sentence («не хочется», «надоело») or another place wanted
     next to it, and never with «снова», «ещё раз», «понравилось»."""
-    neg = [False] * len(spans)
-    weak = [False] * len(spans)
-    for i, (s, e) in enumerate(spans):
-        before = t[max(0, s - 60) : s]
-        weak[i] = bool(WEAK_BEFORE.search(before))
-        neg[i] = (
-            bool(NEG_BEFORE.search(before))
-            or (bool(EXCEPT_BEFORE.search(before)) and not _adds_place(t, spans, i))
-            or (i > 0 and neg[i - 1] and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : s])))
-        )
-    for i in reversed(range(len(spans))):
+    n = len(spans)
+    strong = [bool(NEG_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
+    exc = [bool(EXCEPT_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
+    weak = [bool(WEAK_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
+    for i in reversed(range(n)):
         e = spans[i][1]
         stop = SENTENCE_END.search(t, e)
         limit = min([stop.start() if stop else len(t)] + [x for x, _ in spans[i + 1 :] if x >= e])
@@ -403,16 +403,25 @@ def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
             # «уже были в Турции»: the preposition right after the marker belongs to the next place
             if after and not re.fullmatch(r"\s+(?:в|во|на)\s*", area[after.end() :]):
                 if rx is NEG_AFTER:
-                    neg[i] = True
+                    strong[i] = True
                 else:
                     weak[i] = True
+    neg = [False] * n
+    for i in range(n):
+        in_list = i > 0 and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : spans[i][0]]))
+        neg[i] = (
+            strong[i]
+            or (exc[i] and not _adds_place(t, spans, i, strong))
+            or (in_list and neg[i - 1])
+        )
+        weak[i] = weak[i] or (in_list and weak[i - 1])
     for i, (s, e) in enumerate(spans):
         if weak[i] and not neg[i]:
             sentence = _sentence(t, s, e)
-            wanted = any(j != i and not weak[j] for j in range(len(spans)))
+            wanted = any(j != i and not weak[j] and not neg[j] for j in range(n))
             neg[i] = not WISH_AGAIN.search(sentence) and (bool(DISLIKE.search(sentence)) or wanted)
     # A list shares the refusal: «кроме Турции и Египта», «В Турции и Египте уже были».
-    for i in reversed(range(len(spans) - 1)):
+    for i in reversed(range(n - 1)):
         if neg[i + 1] and LIST_BACK.fullmatch(t[spans[i][1] : spans[i + 1][0]]):
             neg[i] = True
     return neg

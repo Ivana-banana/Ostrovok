@@ -8,7 +8,7 @@ assumption «исключено: …» (no TripSpec field), so it holds for the 
 import pytest
 
 from api.contracts import ChatRequest
-from api.extract import excluded_places, extract
+from api.extract import excluded_places, extract, is_excluded
 from api.fixtures import suggest_destinations
 from api.model import chat
 from api.store import SessionStore
@@ -50,6 +50,11 @@ REFUSED = [
     ("В Египте мы уже ездили, не хочется", ["Египет"]),
     ("Хочу на море, в Египте надоело, уже были", ["Египет"]),
     ("Кроме Сочи ничего не надо", ["Сочи"]),
+    ("Мы уже были в Турции и в Египте, хотим куда-то новое", ["Турция", "Египет"]),
+    ("Мы уже были в Турции, в Египте, хотим куда-то новое", ["Турция", "Египет"]),
+    ("Хотим на море в ноябре вдвоём, кроме Турции, ещё хотим бассейн", ["Турция"]),
+    ("Хотим на море, кроме Турции, тоже недорого", ["Турция"]),
+    ("Кроме Турции, Египет тоже не хочу", ["Турция", "Египет"]),
     ("Хочу на море, исключите Анталию", ["Анталия"]),
 ]
 
@@ -155,3 +160,31 @@ def test_model_destination_in_a_refused_country_is_dropped():
     out = with_llm({}, {"destinations": ["Турция"], "month": 11}, ["Турция"])
     assert "destinations" not in out and out["month"] == 11
     assert with_llm({}, {"destinations": ["Сочи"]}, ["Турция"])["destinations"] == ["Сочи"]
+
+
+# The jury table of #113, through the chat: (text, refused, kept). Refused: in «исключено: …», not
+# in destinations, not in inspire. Kept: in destinations, not in «исключено».
+JURY_TABLE = [
+    (REPRO_1, ["Турция", "Египет"], []),
+    (REPRO_2, ["Турция", "Египет"], []),
+    ("Мы уже были в Турции и в Египте, хотим куда-то новое", ["Турция", "Египет"], []),
+    ("Хочу на море, кроме Турции, ещё хотим бассейн", ["Турция"], []),
+    ("Хочу на море, кроме Турции и Египта", ["Турция", "Египет"], []),
+    ("Хочу на море, ни в Турцию, ни в Египет", ["Турция", "Египет"], []),
+    ("Хочу на море, Турция надоела", ["Турция"], []),
+    ("Уже были в Сочи, понравилось, хотим ещё раз", [], ["Сочи"]),
+    ("Кроме Сочи хотим ещё в Казань", [], ["Сочи", "Казань"]),
+    ("Хотим в Сочи, не дорого", [], ["Сочи"]),
+    ("Тёплое море в ноябре, недорого, с ребёнком", [], []),
+]
+
+
+@pytest.mark.parametrize(("text", "refused", "kept"), JURY_TABLE)
+def test_trap_3_jury_table(store, text, refused, kept):
+    r = say(store, text)
+    marks = [a for a in r.plan.spec.assumptions if a.startswith("исключено")]
+    assert marks == ([f"исключено: {', '.join(refused)}"] if refused else [])
+    assert not set(refused) & {d for d in r.plan.spec.destinations}
+    assert not any(is_excluded(n, refused) for n in names(r) + r.plan.spec.destinations)
+    assert r.plan.spec.destinations == kept or not kept
+    assert not set(kept) & set(refused)
