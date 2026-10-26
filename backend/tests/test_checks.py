@@ -466,7 +466,29 @@ def test_a_booking_in_another_city_is_not_counted_as_reached(monkeypatch):
 
 
 def test_only_checks_py_reads_the_unseen_pool():
-    """Anti-tuning guard (D-011): no agent module may read or mention the unseen pool."""
-    src = Path(checks.__file__).parent
-    readers = {p.name for p in src.rglob("*.py") if "cases_unseen" in p.read_text("utf-8")}
-    assert readers == {"checks.py"}
+    """Anti-tuning guard (D-011): no agent, script or web file may read or mention the pool."""
+    root = Path(checks.__file__).resolve().parents[3]
+    places = [root / "backend/src", root / "scripts", root / "web/src"]
+    suffixes = {".py", ".sh", ".ts", ".tsx", ".js", ".json", ".mk"}
+    readers = {
+        str(p.relative_to(root))
+        for base in places
+        for p in base.rglob("*")
+        if p.is_file() and p.suffix in suffixes and "cases_unseen" in p.read_text("utf-8")
+    }
+    assert readers == {"backend/src/api/checks.py"}
+
+
+def test_over_budget_note_needs_the_optimizer_phrase_not_two_loose_words():
+    run = booked_run()
+    loose = run.last.model_copy(update={"reply": "бюджет у нас выше, чем вы думаете"})
+    assert not checks._over_budget_with_note(loose, 1, 100)
+    said = run.last.model_copy(update={"reply": "Не укладывается в бюджет 1 ₽: поездка 100 ₽"})
+    assert checks._over_budget_with_note(said, 1, 100)
+    assert checks._over_budget_with_note(loose, 100, 100)
+
+
+def test_sea_temperature_follows_the_booking_month_not_the_asked_one():
+    run = booked_run("Анталия на 5 ночей в январе")
+    # expect.month says 11, the booking is in January: the November climate must not be used
+    assert verdicts(run, {"warm_sea": True, "month": 11})["тёплое море"] == checks.UNKNOWN

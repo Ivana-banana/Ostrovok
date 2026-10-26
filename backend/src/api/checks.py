@@ -772,11 +772,22 @@ def _same_name(value: str, names: list[str]) -> bool:
     return False
 
 
+OVER_BUDGET_PHRASE = "не укладывается в бюджет"  # the optimizer's own words (D-006)
+
+
 def _over_budget_with_note(reply: ChatReply, budget: int, total: int) -> bool:
-    """Over budget is allowed only if the reply or the assumptions say so."""
-    said = (reply.reply + " " + " ".join(reply.plan.spec.assumptions)).lower()
-    note = "бюджет" in said and any(w in said for w in ("превы", "выше", "не укладыва"))
-    return total <= budget or note
+    """Over budget is allowed only if the plan says it in the optimizer's words (D-006)."""
+    plan = reply.plan
+    said = " ".join(
+        [
+            reply.reply,
+            *plan.spec.assumptions,
+            *(t for b in plan.bundles for t in b.tradeoffs),
+            *(t for e in plan.explanations for t in (*e.tradeoffs, *e.risks)),
+            *(t for d in plan.destinations for t in (*d.tradeoffs, *d.risks)),
+        ]
+    ).lower()
+    return total <= budget or OVER_BUDGET_PHRASE in said
 
 
 def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
@@ -835,11 +846,12 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
     if expect.get("warm_sea"):
         place = resolve_place(first.city)
         dest = next((c for n, c in fixtures.CATALOG.items() if _same_name(first.city, [n])), None)
+        month = first.date_in.month  # the month of the booking, not the one asked for
         if place is None:
             out.append(("тёплое море", UNKNOWN, "города нет в places.json"))
         elif not place["sea"]:
             put("тёплое море", False, f"{first.city}: моря нет (places.json)")
-        elif expect.get("month") == 11 and dest and dest["nov"][1] is not None:
+        elif month == 11 and dest and dest["nov"][1] is not None:
             put("тёплое море", dest["nov"][1] >= WARM_WATER_C, f"вода {dest['nov'][1]} °C")
         else:
             out.append(("тёплое море", UNKNOWN, "море есть, температуры в этом месяце нет"))
