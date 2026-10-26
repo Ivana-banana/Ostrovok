@@ -86,12 +86,13 @@ def rule_extract(text: str) -> dict:
     if month is None and re.search(r"\bма[йяе]\b", t):
         month = 5
     budget = None
-    m = re.search(r"(\d[\d\s]*)\s*(тыс|k|к)\b", t)
+    # «40 тысяч», «40к», «тысяч 150»; затем «150 000 ₽».
+    m = re.search(r"(\d+)\s*(?:тыс\w*|k|к)\b", t) or re.search(r"\bтыс\w*\s+(\d+)", t)
     if m:
-        budget = int(m.group(1).replace(" ", "")) * 1000
+        budget = int(m.group(1)) * 1000
     else:
-        m = re.search(r"\b(\d{5,7})\s*(₽|руб|р\b)", t)
-        budget = int(m.group(1)) if m else None
+        m = re.search(r"\b(\d{1,3}(?:\s\d{3})+|\d{5,7})\s*(?:₽|руб|р\b)", t)
+        budget = int(m.group(1).replace(" ", "")) if m else None
     return {
         "month": month,
         "budget_rub": budget,

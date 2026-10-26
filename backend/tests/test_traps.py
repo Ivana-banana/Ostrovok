@@ -76,3 +76,17 @@ def test_trap_7_synthetic_offer_is_labeled():
     """TRAP-7."""
     assert label_synthetic({"offer_id": "h1"})["label"] == "синтетика"
     assert label_synthetic({"offer_id": "h2", "synthetic": False})["synthetic"] is False
+
+
+@pytest.mark.parametrize(
+    "text,budget",
+    [
+        ("отель до 40 тысяч за всё", 40_000),  # S3-A
+        ("до 50 тысяч на всё", 50_000),  # S6
+        ("бюджет тысяч 150 максимум", 150_000),  # S2
+        ("итог 150 000 ₽", 150_000),
+    ],
+)
+def test_trap_1_rules_parse_budget(text, budget):
+    """TRAP-1: без ключа бюджет из живой речи не теряется."""
+    assert rule_extract(text)["budget_rub"] == budget
