@@ -99,7 +99,7 @@ def test_spec_edit_after_offers_replans_and_resets_the_cart(store):
     assert r.stage == "checkout" and r.cart.items
     r = say(store, "а бюджет 30 000 руб", r.session_id)
     assert r.stage == "compare" and r.cart.items == []
-    assert any(c.what == "budget_rub" for c in r.plan.changes)
+    assert any(c.what == "бюджет" for c in r.plan.changes)
 
 
 @pytest.mark.parametrize("text", ["да нет, дорого", "можно в четверг?"])
