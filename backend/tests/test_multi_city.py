@@ -2,7 +2,7 @@
 
 Without a model (TRAP-1). The plan covers the first city only. The reply says so, names the lost
 city, and offers one chip per city. The lost city stays in the plan as an assumption line.
-Candidates («Сочи или Анапа») are no route: their reply stays as it was.
+Candidates («Сочи или Анапа») are no route: they have their own notice (test_candidates.py).
 """
 
 import pytest
@@ -87,7 +87,8 @@ def test_candidates_and_one_city_have_no_route_notice(store, text):
     r = say(store, text)
     assert "В плане только:" not in r.reply
     assert not [a for a in r.plan.spec.assumptions if a.startswith("маршрут:")]
-    assert r.questions == []
+    # Candidates get chips since #139; one city gets none.
+    assert (r.questions == []) == ("или" not in text)
 
 
 def test_route_with_a_child_shows_the_notice_after_the_party_question(store):

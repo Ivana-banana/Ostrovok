@@ -168,10 +168,15 @@ LABELS = {
     "max_travel_hours": "время в пути",
 }
 # #128: a route through several cities. The plan covers the first city; the rest is named here.
+# #139: cities as candidates («Сочи или Анапа») get the same notice and chips.
 ROUTE = "маршрут"
+CANDIDATES = "варианты"
 ROUTE_RE = re.compile(
     r"\b(?:потом|затем|далее|оттуда|следом|а\s+после|после\s+(?:этого|того|чего))\b"
+    r"|\s[—–]\s|→|->"
 )
+DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
+MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
 STAY_RE = re.compile(
     r"\b(?:\d+|од(?:ин|на|ну)|дв(?:а|е|ое)|тр(?:и|ое)|четыре|пять|шесть|семь|восемь|девять|десять)"
     r"\s*(?:ноч|дн|сут)"
@@ -188,12 +193,16 @@ def _label(assumption: str) -> str:
     return assumption.split(":", 1)[0]
 
 
+def _noted(spec: TripSpec, label: str) -> bool:
+    return any(_label(a) == label for a in spec.assumptions)
+
+
 def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     """Stated fields override the spec; their old assumptions are dropped."""
     data = spec.model_dump()
     stated = {LABELS[k] for k in found if k in LABELS}
     if "destinations" in found:
-        stated.add(ROUTE)  # a new choice of the city ends the route note
+        stated |= {ROUTE, CANDIDATES}  # a new choice of the city ends the route note
     if stated & {"когда", "даты", "длительность"}:
         data["date_to"] = None  # derived from date_from + nights again
         assumed = [a for a in data["assumptions"] if _label(a) == "даты" and not is_shift_note(a)]
@@ -278,7 +287,7 @@ def assume(spec: TripSpec) -> TripSpec:
     data["month"] = data["month"] or data["date_from"].month
     data["date_to"] = data["date_to"] or data["date_from"] + timedelta(days=data["nights"])
     if not data["origin"]:
-        data["origin"] = "Москва"
+        data["origin"] = DEFAULT_ORIGIN
         note("откуда", "Москва (город вылета не назван)")
     if data["budget_rub"] is None:
         cheap = "недорого" in data["wishes"]
@@ -289,7 +298,7 @@ def assume(spec: TripSpec) -> TripSpec:
 def is_route(message: str, destinations: list[str]) -> bool:
     """#128: several cities named as a route («потом в Казань», two cities each with nights).
 
-    «Сочи или Анапа» are candidates, not a route: the rules stay as they were.
+    «Сочи или Анапа» are candidates, not a route: see severals().
     """
     low = message.lower().replace("ё", "е")
     if len(destinations) < 2 or OR_RE.search(low):
@@ -298,14 +307,34 @@ def is_route(message: str, destinations: list[str]) -> bool:
     return bool(ROUTE_RE.search(low)) or len(stays) > 1
 
 
-def route_note(destinations: list[str]) -> str:
+def severals(message: str, destinations: list[str]) -> str | None:
+    """ROUTE or CANDIDATES when the message names several cities; the plan covers the first."""
+    if len(destinations) < 2:
+        return None
+    return ROUTE if is_route(message, destinations) else CANDIDATES
+
+
+def route_note(destinations: list[str], kind: str = ROUTE) -> str:
     rest = ", ".join(destinations[1:])
+    if kind == CANDIDATES:
+        return f"{CANDIDATES}: в плане сначала {destinations[0]}, ещё: {rest}"
     return f"{ROUTE}: в плане только {destinations[0]}, не вошло: {rest}"
 
 
-def route_reply(destinations: list[str]) -> tuple[str, list[Question]]:
-    """The notice and one chip per city; a city without offers (out of the data) gets no chip."""
-    first, rest = destinations[0], ", ".join(destinations[1:])
+def route_reply(destinations: list[str], kind: str = ROUTE) -> tuple[str, list[Question]]:
+    """The notice and the chips «План: город»; a city without offers (out of the data) gets none."""
+    first = destinations[0]
+    if kind == CANDIDATES:
+        tail = destinations[1:]
+        chips = [d for d in tail[: MAX_CANDIDATES - 1] if resolve_place(d) is not None]
+        text = f"Сравниваю сначала {first}."
+        if chips:
+            text += f" {', '.join(chips)} — {'кнопкой' if len(chips) == 1 else 'кнопками'} ниже."
+        if left := [d for d in tail if d not in chips]:
+            text += f" Не вошло: {', '.join(left)}."
+        questions = [Question(text="Что планировать?", options=[f"План: {d}" for d in chips])]
+        return text, questions if chips else []
+    rest = ", ".join(destinations[1:])
     text = (
         f"В плане только: {first}. Поездку {' → '.join(destinations)} "
         f"как один план я пока не собираю. Не вошло: {rest}. Выберите, что планировать."
@@ -692,6 +721,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         notes.append(PARTY_UNKNOWN)
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
+    # The departure city is no destination (#139): «Москва — Питер — Казань» starts in Москва.
+    named_here = found.get("destinations", [])
+    start = found.get("origin") or old.plan.spec.origin or DEFAULT_ORIGIN
+    if len(named_here) > 1 and start in named_here:
+        found["destinations"] = [d for d in named_here if d != start]
     spec = merge(old.plan.spec, found, notes)
     used = False  # the LLM output changed this reply
     if llm_found:
@@ -708,17 +742,14 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if not any(is_excluded(d, [r]) for d in named)
     ]
     spec = with_refused(spec, refused)
-    if is_route(message, found.get("destinations", [])):  # the lost city stays visible (#128)
+    route = severals(message, found.get("destinations", []))
+    if route:  # the lost city stays visible (#128, #139)
         spec = spec.model_copy(
-            update={"assumptions": [*spec.assumptions, route_note(spec.destinations)]}
+            update={"assumptions": [*spec.assumptions, route_note(spec.destinations, route)]}
         )
-        route = True
-    else:  # a route of an earlier message: the notice comes with the first plan (after a question)
-        route = any(_label(a) == ROUTE for a in spec.assumptions) and old.stage not in (
-            "compare",
-            "assemble",
-            "checkout",
-        )
+    elif old.stage not in ("compare", "assemble", "checkout"):
+        # A route of an earlier message: the notice comes with the first plan (after a question)
+        route = next((k for k in (ROUTE, CANDIDATES) if _noted(spec, k)), None)
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
         return ChatReply(
@@ -802,7 +833,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             text = f"«{gone}» нет в каталоге. По вашему выбору — {now}.\n{text}"
         questions = party_question(spec)
         if route:
-            notice, chips = route_reply(spec.destinations)
+            notice, chips = route_reply(spec.destinations, route)
             return reply("compare", plan, f"{notice}\n{text}", cart, questions=[*chips, *questions])
         return reply("compare", plan, text, cart, questions=questions)
 
