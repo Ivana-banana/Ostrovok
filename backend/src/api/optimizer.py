@@ -538,3 +538,51 @@ def pick_hotel(selected: list[str], offers: list[Offer], hotel_id: str) -> list[
         o.offer_id for o in chosen if isinstance(o, ExtraOffer) and o.for_offer_id == hotel_id
     ]
     return [hotel_id, *(x.offer_id for x in legs), *transfers, *extras]
+
+
+def order_tariffs(spec: TripSpec, offers: list[Offer]) -> list[Offer]:
+    """The offers with the tariffs of each hotel ordered best first for this spec.
+
+    The best tariff of a hotel is the one in its best trip: trips of the pool first, in pool
+    order, then the rest by broken rules, overrun and price. Hotels keep their order, the
+    other offers stay where they are. So the first tariff of a hotel is its row in the
+    comparison (hotel_rows), for the chat and the board alike.
+    """
+    trips = enumerate_trips(offers)
+    if not trips:
+        return offers
+    pool, _ = _pool(spec, trips)
+    chosen = {id(t) for t in pool}
+    rest = sorted(
+        (t for t in trips if id(t) not in chosen),
+        key=lambda t: (len(t.rules), t.over, t.total, t.key),
+    )
+    place: dict[str, int] = {}
+    for i, t in enumerate([*pool, *rest]):
+        place.setdefault(t.hotel.offer_id, i)
+    slots: dict[tuple[str, str], list[int]] = {}
+    for i, o in enumerate(offers):
+        if isinstance(o, HotelOffer):
+            slots.setdefault((o.title, o.city), []).append(i)
+    out = list(offers)
+    for at in slots.values():
+        group = sorted(
+            (offers[i] for i in at), key=lambda h: (place.get(h.offer_id, len(place)), h.offer_id)
+        )
+        for i, h in zip(at, group, strict=True):
+            out[i] = h
+    return out
+
+
+def hotel_rows(offers: list[Offer], selected: list[str]) -> list[HotelOffer]:
+    """One row per hotel: its selected tariff, else its first (best) tariff (order_tariffs).
+
+    The chat, «беру второй» and the board (web/src/Board.tsx) use the same rule.
+    """
+    rows: dict[tuple[str, str], HotelOffer] = {}
+    for o in offers:
+        if isinstance(o, HotelOffer):
+            key = (o.title, o.city)
+            if key not in rows or (o.offer_id in selected and rows[key].offer_id not in selected):
+                rows[key] = o
+    return list(rows.values())

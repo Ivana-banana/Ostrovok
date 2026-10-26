@@ -158,13 +158,28 @@ function Destinations({ plan, stage, busy, onSend }: {
   );
 }
 
+// One row per hotel, as in the chat: the selected tariff of the hotel, else its first one.
+// The backend orders the tariffs of a hotel best first for the spec (optimizer.hotel_rows).
+function hotelRows(plan: Plan): HotelOffer[] {
+  const rows = new Map<string, HotelOffer>();
+  for (const o of plan.offers) {
+    if (o.kind !== "hotel") continue;
+    const key = `${o.title}|${o.city}`;
+    const row = rows.get(key);
+    if (!row || (plan.selected.includes(o.offer_id) && !plan.selected.includes(row.offer_id))) {
+      rows.set(key, o);
+    }
+  }
+  return [...rows.values()];
+}
+
 function Hotels({ plan, stage, busy, onSend }: {
   plan: Plan;
   stage: Stage;
   busy: boolean;
   onSend: (t: string) => void;
 }) {
-  const hotels = plan.offers.filter((o): o is HotelOffer => o.kind === "hotel");
+  const hotels = hotelRows(plan);
   if (!hotels.length) return null;
   return (
     <section aria-label="Сравнение отелей">
