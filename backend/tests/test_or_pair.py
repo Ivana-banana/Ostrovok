@@ -71,3 +71,22 @@ def test_no_second_name_from_ordinary_words_trap_2(store, text):
     r = say(store, text)
     assert "Новый" not in (r.plan.spec.destinations if r.plan else [])
     assert len(r.plan.spec.destinations if r.plan else []) <= 1
+
+
+@pytest.mark.parametrize(
+    "text, dests",
+    [
+        ("Нижний Новгород или Казань в ноябре", ["Нижний Новгород", "Казань"]),
+        ("Минеральные Воды или Сочи", ["Минеральные Воды", "Сочи"]),
+        ("Великий Новгород или Псков", ["Великий Новгород", "Псков"]),
+    ],
+)
+def test_word_inside_a_two_word_city_is_no_second_name_trap_3(store, text, dests):
+    r = say(store, text)
+    assert r.plan.spec.destinations == dests
+    assert not any(o in ("План: Новгород", "План: Воды") for q in r.questions for o in q.options)
+
+
+def test_origin_in_a_pair_is_no_destination_trap_2(store):
+    r = say(store, "Вылет из Казани или Самары, хотим в Турцию в ноябре")
+    assert r.plan.spec.destinations == ["Турция"]

@@ -505,18 +505,21 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
     sides = set()
     for m in OR_PAIR.finditer(text):
         words = [(m.start(i), m.end(i), m.group(i)) for i in (1, 2)]
-        starts = {h[0] for h in hits}
+        if any(t[s] == " " for s, _, _ in words):
+            continue  # a word of the origin span: «из Казани или Самары» is no pair of places
+
+        def taken(s: int) -> bool:
+            return any(hs <= s < he for hs, _, he in hits)  # inside «Нижний Новгород» too
+
         sure = [
-            s in starts or _known(w) or any(rx.fullmatch(t[s:e]) for _, rx in COUNTRY_RES)
+            taken(s) or _known(w) or any(rx.fullmatch(t[s:e]) for _, rx in COUNTRY_RES)
             for s, e, w in words
         ]
         if not any(sure):
             continue
         for s, e, w in words:
-            if t[s] == " ":
-                continue  # the origin span
             sides.add(s)
-            if s not in starts and (name := _pair_name(w, t[s:e])):
+            if not taken(s) and (name := _pair_name(w, t[s:e])):
                 hits.append((s, name, e))
     return sides
 
