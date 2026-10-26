@@ -595,3 +595,19 @@ def tuesday(monkeypatch):
 def test_relative_date_is_the_nearest_from_today(tuesday, text, expected):
     found, _ = extract(text)
     assert found["date_from"] == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["отдых в средней полосе в ноябре, двое", "Казань по субботам, двое", "Казань в среде, двое"],
+)
+def test_weekday_lookalikes_are_not_dates(tuesday, text):
+    found, _ = extract(text)
+    assert "date_from" not in found
+    if "ноябре" in text:
+        assert found["month"] == 11
+
+
+def test_weekday_respects_the_named_month(tuesday):
+    found, _ = extract("в Сочи в ноябре в пятницу, двое")
+    assert found["date_from"] == date(2026, 11, 6) and found["month"] == 11

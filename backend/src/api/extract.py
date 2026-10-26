@@ -615,7 +615,7 @@ def _nominative(word: str) -> str:
     return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
 
 
-WEEKDAYS = ("понедельн", "вторн", "сред", "четвер", "пятниц", "суббот", "воскресен")
+WEEKDAYS = ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
 
 
 def _dates(t: str, found: dict, notes: list[str]) -> None:
@@ -648,9 +648,13 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
             found["date_from"] = today + timedelta(
                 days=n * (7 if m.group(2).startswith("нед") else 1)
             )
-        elif m := re.search(rf"\b(?:в|во|на)\s+({'|'.join(WEEKDAYS)})\w{{0,3}}\b", t):
-            ahead = (WEEKDAYS.index(m.group(1)) - today.weekday()) % 7 or 7
-            found["date_from"] = today + timedelta(days=ahead)
+        elif m := re.search(rf"\b(?:в|во|на)\s+({'|'.join(WEEKDAYS)})\b", t):
+            wd, month = WEEKDAYS.index(m.group(1)), found.get("month")
+            if month and month != (today + timedelta(days=1)).month:
+                base = future_date(month, 1)  # first such weekday of the named month
+                found["date_from"] = base + timedelta(days=(wd - base.weekday()) % 7)
+            else:
+                found["date_from"] = today + timedelta(days=(wd - today.weekday()) % 7 or 7)
             notes.append(f"даты: {found['date_from']:%d.%m} («{m.group(0)}», ближайший)")
         elif re.search(r"\bследующ\w*\s+недел", t):
             found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
