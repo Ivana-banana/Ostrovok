@@ -1,7 +1,8 @@
 """Stand-ins for agent modules that are not in main yet (accepted on fixtures).
 
 Each function is one seam: the owning task replaces it and keeps the signature.
-All prices are synthetic (TRAP-7). Climate is an approximate November snapshot only.
+All prices are synthetic (TRAP-7). November climate and flight hours are team estimates
+without a source; the reply labels them as an estimate.
 """
 
 import re
@@ -26,6 +27,7 @@ from api.guards import MONTHS, check_arrival_vs_checkin, rule_extract
 
 ORIGIN_TZ = timezone(timedelta(hours=3))  # Moscow; the only origin in the fixture
 
+# TODO(T12, #20): climate from Open-Meteo and travel hours from the catalogue (T4, #8).
 # name -> slug, country, lat, lon, IANA tz, UTC offset, stems, sea, hours from Moscow,
 # November (air, water) °C, room-night price for 2 adults, why, tradeoffs.
 # fmt: off
@@ -54,7 +56,9 @@ _ROWS = [
 # fmt: on
 CATALOG: dict[str, dict] = {row[0]: dict(zip(_KEYS, row[1:], strict=True)) for row in _ROWS}
 
-WARM_WATER_C = 22.0
+# Estimate, not from a source: below this the sea counts as cold for swimming.
+# It sits between catalogue values on purpose (Antalya 22, Sochi 16).
+WARM_WATER_C = 21.5
 ORIGINS = {"москв": "Москва", "петербург": "Санкт-Петербург", "питер": "Санкт-Петербург"}
 WORD_NUMBERS = {"двое": 2, "вдвоем": 2, "вдвоём": 2, "трое": 3, "втроем": 3, "четверо": 4}
 
@@ -85,28 +89,37 @@ def extract(text: str) -> tuple[dict, list[str]]:
     if m:
         found["origin"] = ORIGINS[m.group(1)]
         t = t.replace(m.group(0), " ")  # the origin is not a destination
-    dests = [n for n, c in CATALOG.items() if any(s in t for s in c["stems"])]
-    if dests:
-        found["destinations"] = dests[:1]
+    dests = [n for n, c in CATALOG.items() if any(re.search(rf"\b{s}", t) for s in c["stems"])]
+    # TODO(T4, #8): a city outside the catalogue is kept as written; the geocoder resolves it.
+    other = re.search(r"\b[вВ]о?\s+([А-ЯЁ][а-яё-]+)", text)
+    if dests or other:
+        found["destinations"] = dests[:1] or [other.group(1)]
     if raw["month"]:
         found["month"] = raw["month"]
     m = re.search(r"\bс\s+(\d{1,2})\s+([а-я]+)", t)
     if m and (month := _month_of(m.group(2))):
-        found["date_from"] = future_date(month, int(m.group(1)))
         found["month"] = month
-    m = re.search(r"(\d{1,2})\s*ноч", t)
-    if m:
+        try:
+            found["date_from"] = future_date(month, int(m.group(1)))
+        except ValueError:
+            notes.append(f"даты: «{m.group(1)} {m.group(2)}» нет в календаре, даты подобраны")
+    m = re.search(r"\b(\d{1,2})\s*ноч\w*", t)
+    if m and int(m.group(1)) >= 1:
         found["nights"] = int(m.group(1))
+    elif m:
+        notes.append(f"длительность: «{m.group(0)}» не бывает, взята длительность по умолчанию")
     elif re.search(r"\bнедел", t):
         found["nights"] = 7
-    m = re.search(r"(\d)\s*взросл", t)
+    m = re.search(r"\b(\d)\s*взросл\w*", t)
     word = next((n for w, n in WORD_NUMBERS.items() if re.search(rf"\b{w}\b", t)), None)
-    if m or word:
+    if m and int(m.group(1)) < 1:
+        notes.append(f"взрослых: «{m.group(0)}» не бывает, состав прежний")
+    elif m or word:
         found["adults"] = int(m.group(1)) if m else word
     if raw["budget_rub"]:
         found["budget_rub"] = raw["budget_rub"]
     if raw["kids"]:
-        ages = [int(a) for a in re.findall(r"(\d{1,2})\s*(?:лет|год)", t)]
+        ages = [int(a) for a in re.findall(r"\b(\d{1,2})\s*(?:лет|год)", t)]
         if not ages:
             ages = [7]
             notes.append("возраст ребёнка: 7 лет (возраст не назван)")

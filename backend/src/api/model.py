@@ -37,8 +37,13 @@ MONTH_NAMES = [
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
-BOOK_RE = re.compile(r"(?<!не )\bподтверждаю\b")
-ORDINAL_RE = re.compile(r"\b(перв|втор|трет|четв)\w*|^\s*([1-4])\s*$")
+NEGATION_RE = re.compile(r"\b(нет|не)\b")
+BOOK_RE = re.compile(r"\bподтверждаю\b")
+NOT_BOOK_RE = re.compile(r"\bне\s+подтверждаю\b")
+ORDINAL_RE = re.compile(
+    r"\b(перв(?:ый|ая|ое|ую|ого)|втор(?:ой|ая|ое|ую|ого)|трет(?:ий|ья|ье|ью|ьего)"
+    r"|четв[её]рт(?:ый|ая|ое|ую|ого))\b|^\s*([1-4])\s*$"
+)
 ORDINALS = {"перв": 0, "втор": 1, "трет": 2, "четв": 3}
 # Assumption text starts with "<label>:"; a stated field removes its assumption.
 LABELS = {
@@ -48,6 +53,7 @@ LABELS = {
     "origin": "откуда",
     "budget_rub": "бюджет",
     "children_ages": "возраст ребёнка",
+    "adults": "взрослых",
 }
 TRIP_FIELDS = {
     "destinations", "date_from", "date_to", "nights", "adults", "children_ages",
@@ -136,7 +142,11 @@ def _ordinal(text: str) -> int | None:
     m = ORDINAL_RE.search(text.lower())
     if not m:
         return None
-    return ORDINALS[m.group(1)] if m.group(1) else int(m.group(2)) - 1
+    return ORDINALS[m.group(1)[:4]] if m.group(1) else int(m.group(2)) - 1
+
+
+def _confirmed(text: str) -> bool:
+    return bool(CONFIRM_RE.search(text)) and not NEGATION_RE.search(text)
 
 
 def _tail(spec: TripSpec, hint: str) -> list[str]:
@@ -151,7 +161,7 @@ def _text_clarify(questions: list[Question]) -> str:
 def _text_inspire(plan: Plan) -> str:
     spec = plan.spec
     guests = spec.adults + len(spec.children_ages)
-    lines = ["Подходящие направления (цены — синтетика):"]
+    lines = ["Подходящие направления (цены, климат и время в пути — оценка, синтетика):"]
     for i, d in enumerate(plan.destinations, 1):
         climate = "".join(
             f", {label} {v:g} °C" for label, v in (("воздух", d.air_c), ("вода", d.water_c)) if v
@@ -260,26 +270,30 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
         if old.plan.offers:
             plan.changes = plan_changes(old.plan.spec, spec)
         if not plan.offers:
-            text = f"По направлению {spec.destinations[0]} предложений пока нет. {HINTS['select']}"
+            # TODO(T4, #8): the geocoder and synthetic offers cover any city.
+            text = (
+                f"Направления «{spec.destinations[0]}» пока нет в каталоге, предложений нет. "
+                f"{HINTS['select']}"
+            )
             return reply("select", plan, text, Cart())
         return reply("compare", plan, _text_compare(plan), Cart())
 
     t = message.lower()
-    if old.stage == "compare" and (idx is not None or CONFIRM_RE.search(t)):
+    if old.stage == "compare" and (idx is not None or _confirmed(t)):
         hotels = [o for o in plan.offers if o.kind == "hotel"]
         if idx is not None and idx < len(hotels):
             ids = {h.offer_id for h in hotels}
             plan.selected = [hotels[idx].offer_id] + [i for i in plan.selected if i not in ids]
         plan.timeline, plan.issues = build_timeline(plan)
         return reply("assemble", plan, _text_assemble(plan))
-    if old.stage == "assemble" and CONFIRM_RE.search(t):
+    if old.stage == "assemble" and _confirmed(t):
         cart = fill_cart(plan)
         text = (
             f"В корзине {len(cart.items)} поз. на {_rub(cart.total_rub)} "
             f"(синтетика, оплата имитируется). {HINTS['checkout']}"
         )
         return reply("checkout", plan, text, cart)
-    if old.stage == "checkout" and BOOK_RE.search(t):
+    if old.stage == "checkout" and BOOK_RE.search(t) and not NOT_BOOK_RE.search(t):
         voucher = book(spec, old.cart)
         text = f"Бронь {voucher.booking_id} оформлена на {_rub(voucher.total_rub)}. Оплата имитирована."
         return reply("booked", plan, text, voucher=voucher)
