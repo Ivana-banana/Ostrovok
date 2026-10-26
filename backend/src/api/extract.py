@@ -2,7 +2,8 @@
 
 extract(text) -> (found, notes): found holds only the TripSpec fields the message states;
 notes are assumptions "<label>: text" made while reading it. model.merge drops a label
-when a later message states its field. The LLM extractor (T11, #19) returns the same pair.
+when a later message states its field. The LLM extractor (llm.extract_spec, T11 #15) returns
+the same `found`; with_llm merges it: rules first, the LLM fills what rules missed.
 Invalid values (31 ноября, 0 ночей) are skipped with a note, never an exception.
 """
 
@@ -308,3 +309,22 @@ def extract(text: str) -> tuple[dict, list[str]]:
     if wishes:
         found["wishes"] = wishes
     return found, notes
+
+
+DATE_KEYS = {"date_from", "date_to", "month", "nights"}
+
+
+def with_llm(found: dict, llm_found: dict | None) -> dict:
+    """Rule fields win; the LLM adds the fields rules missed and its wishes (T11, #15).
+
+    Dates are one group: if rules read any date field, the LLM dates are not mixed in.
+    """
+    if not llm_found:
+        return found
+    out = dict(found)
+    for k, v in llm_found.items():
+        if k == "wishes":
+            out["wishes"] = found.get("wishes", []) + [w for w in v if w not in found.get(k, [])]
+        elif k not in found and not (k in DATE_KEYS and DATE_KEYS & found.keys()):
+            out[k] = v
+    return out
