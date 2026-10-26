@@ -45,14 +45,15 @@ CRITERIA: tuple[Priority, ...] = (
     "travel_time",
     "rating",
 )
-# Team estimate without a source: price matters most when the user said nothing.
+# Team estimate without a source: the user said nothing, so the cheapest whole trip goes first
+# (price dominates, the rest only break near-ties). A priority the user names beats price (S9).
 DEFAULT_WEIGHTS: dict[Priority, float] = {
-    "price": 0.35,
-    "rating": 0.2,
-    "travel_time": 0.15,
-    "cancellation": 0.1,
-    "meal": 0.1,
-    "location": 0.1,
+    "price": 0.85,
+    "rating": 0.04,
+    "travel_time": 0.03,
+    "cancellation": 0.03,
+    "meal": 0.03,
+    "location": 0.02,
 }
 MEAL_LEVEL = {"RO": 0, "BB": 1, "HB": 2, "FB": 3, "AI": 4}
 MEAL_TEXT = {
@@ -349,15 +350,18 @@ def _hotel_why(spec: TripSpec, t: Trip) -> str:
     return why
 
 
-def _sacrificed(t: Trip, pool: list[Trip]) -> list[str]:
+def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
     """What the best trip gives up against the other candidates, from offer fields."""
     h, out = t.hotel, []
     cheapest = min(pool, key=lambda x: (x.total, x.key))
     if cheapest.total < t.total:
-        out.append(
+        line = (
             f"дороже самого дешёвого варианта на {_rub(t.total - cheapest.total)} "
             f"({cheapest.hotel.title}, {_rub(cheapest.total)})"
         )
+        if spec.priorities and spec.priorities[0] != "price":  # the user put it above the price
+            line += f" — плата за приоритет «{PRIORITY_TEXT[spec.priorities[0]]}»"
+        out.append(line)
     if not h.cancellation.refundable:
         refund = [x for x in pool if x.hotel.cancellation.refundable]
         if refund:
@@ -448,7 +452,7 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
         return Ranked([], [], [])
     pool, fits = _pool(spec, trips)
     best = pool[0]
-    sacrificed = _sacrificed(best, pool)
+    sacrificed = _sacrificed(spec, best, pool)
     explanations = [
         Explanation(
             offer_id=best.hotel.offer_id,

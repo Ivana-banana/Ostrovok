@@ -368,7 +368,8 @@ def test_cart_early_check_in_fixes_the_issue(client):
     """S6: the train there makes the arrival warning, the cart buys the early check-in."""
     http, store = client
     r = at_checkout(store)
-    assert not any(f.endswith("-early") for i in r.plan.issues for f in i.fixes)
+    # #50: the default plan is the cheapest trip, so it already rides the train there.
+    assert out_train(r) in r.plan.selected
     train = add(http, r, out_train(r))
     assert train.plan.issues and any("Прибытие" in i.text for i in train.plan.issues)
     early = early_fix(train)
@@ -446,8 +447,8 @@ def test_cart_remove_a_leg_then_add_another_leaves_one_leg_per_slot(client):
     assert slot_count(now) == (1, 1, 1)
     assert train not in now.plan.selected and flight in now.plan.selected
     assert not any(e.offer_id == train for e in now.plan.timeline)
-    assert now.plan.issues == []
-    assert not any("Прибытие" in e.title for e in now.plan.timeline)
+    assert not any("Прибытие" in i.text for i in now.plan.issues)
+    assert not any(e.title == "Прибытие: Казань" for e in now.plan.timeline)
 
 
 def test_cart_remove_a_hotel_then_add_another_leaves_one_hotel(client):

@@ -505,3 +505,53 @@ def test_pick_hotel_swaps_the_hotel_part_and_keeps_the_legs():
     assert set(new[3:]) == want  # no transfer or add-on of hotel A is left
     with pytest.raises(TypeError):
         pick_hotel(old, items, "t-out")
+
+
+S9_FIRST = "Казань, 11–13 декабря, двое взрослых, из Москвы"
+
+
+def _first_hotel(reply):
+    by_id = {o.offer_id: o for o in reply.plan.offers}
+    top = reply.plan.bundles[0]
+    return top, next(by_id[i] for i in top.offer_ids if isinstance(by_id[i], HotelOffer))
+
+
+def test_default_order_puts_the_cheapest_trip_first():
+    """#50: nothing said about priorities -> the cheapest whole trip is the first option."""
+    cheap = hotel("cheap", 10_000, rating=7.0)
+    refund = hotel("refund", 11_800, refundable=True, rating=7.5)
+    star = hotel("star", 25_000, rating=9.6, stars=5)
+    items = offers([cheap, refund, star], FLIGHTS)
+    for s in (spec(), spec(wishes=["недорого"])):
+        assert hotel_of(s, items) == cheap
+    assert hotel_of(spec(priorities=["cancellation", "price"]), items) == refund
+
+
+def test_s9_edit_priorities_changes_the_first_option(store, monkeypatch):
+    """S9 (eval/cases.json, check_S9): the first option is the cheapest non-refundable one;
+    «мне важнее бесплатная отмена» moves only the priorities and puts a refundable tariff first,
+    the text names the priority and the price of the trade-off."""
+    for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    r = say(store, S9_FIRST)
+    while r.stage == "clarify":
+        r = say(store, " ".join(q.options[0] for q in r.questions if q.options), r.session_id)
+    assert r.stage == "compare"
+    top, first = _first_hotel(r)
+    assert top.total_rub == min(b.total_rub for b in r.plan.bundles)
+    assert not first.cancellation.refundable
+
+    after = say(store, "Мне важнее бесплатная отмена, чем цена.", r.session_id)
+    spec_after, spec_before = after.plan.spec, r.plan.spec
+    assert spec_after.priorities[:1] == ["cancellation"] and spec_after.refundable is None
+    assert spec_after.model_dump(exclude={"priorities"}) == spec_before.model_dump(
+        exclude={"priorities"}
+    )
+    assert after.questions == []
+    top, hotel_after = _first_hotel(after)
+    assert hotel_after.cancellation.refundable
+    expl = next(e for e in after.plan.explanations if e.offer_id == hotel_after.offer_id)
+    text = " ".join([expl.why, *expl.tradeoffs])
+    gap = top.total_rub - min(b.total_rub for b in after.plan.bundles)
+    assert gap > 0 and "отмен" in text.lower() and f"{gap:,} ₽".replace(",", " ") in text
+    assert "плата за приоритет «отмена»" in text
