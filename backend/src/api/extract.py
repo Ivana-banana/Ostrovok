@@ -275,6 +275,17 @@ def _switch_city(text: str) -> tuple[int, str] | None:
     return (m.start(), known) if m and known else None
 
 
+def _vetoed_first_word(text: str, t: str, notes: list[str]) -> None:
+    """#109: a first word before «на 3 дня» / «в мае» that the veto rejects leaves a neutral line.
+
+    The word is not quoted: by form «Хотим» and «Иерусалим» look the same (TRAP-2)."""
+    m = re.match(r"\s*([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)", text)
+    if m and FIRST_NEXT.match(t, m.end()):
+        low = t[m.start(1) : m.end(1)]
+        if len(low) >= 3 and (NOT_CITY_START.match(low) or NOT_CITY_END.search(low)):
+            notes.append("направление: не названо — если имели в виду город, напишите «в <город>»")
+
+
 # #113: a place after a negation is refused, not wanted: «кроме Турции», «в Турции уже были».
 # Countries are not destinations by themselves (the alias of places.json takes «Турция» to
 # a city), so the refusal must know them: «Турцию и Египет муж отвергает» names two countries.
@@ -406,6 +417,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
     if first := _first_city(text, t, not hits and not has_destination, None if hits else notes):
         hits.append((*first, _word_end(t, first[0])))
+    elif not hits and not has_destination:
+        _vetoed_first_word(text, t, notes)
     # Mentions for the negation: the places above and the bare countries («Турцию и Египет…»).
     # The refused name is the country when the word is one: «египет» is a hit of Хургада.
     mentions = {s: (e, name, name) for s, name, e in hits}
