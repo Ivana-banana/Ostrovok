@@ -311,3 +311,88 @@ def test_s9_precondition_needs_the_cheapest_non_refundable_first_option():
     assert by_id  # the walk found offers
     assert checks._s9_precondition(with_top(False)) is None
     assert "предусловие кейса не воспроизведено" in checks._s9_precondition(with_top(True))
+
+
+# ---------------------------------------------------------------- unseen pool (#89)
+
+
+def booked_run(text: str = "Казань на 3 ночи в марте, нас двое"):
+    with checks._api() as (client, _):
+        run = checks._walk(client, "T", "unseen", text, record=False)
+    assert run.booked
+    return run
+
+
+def verdicts(run, expect: dict) -> dict[str, str]:
+    return {name: status for name, status, _ in checks.unseen_findings(run, expect)}
+
+
+def test_unseen_pool_has_the_jury_probes_and_at_least_ten_queries():
+    pool = json.loads(checks.UNSEEN_FILE.read_text("utf-8"))["queries"]
+    texts = [q["text"] for q in pool]
+    assert len(pool) >= 10 and all(q["expect"] for q in pool)
+    for probe in (
+        "Хочу в Лиссабон в марте",
+        "поехать в Хошимин на 10 дней",
+        "тёплое море в январе, недорого",
+        "горнолыжка в феврале на неделю",
+        "недорого на выходные из Казани",
+    ):
+        assert probe in texts
+
+
+def test_unseen_pool_is_not_the_s5_pool():
+    s5 = set(checks._quotes(BY_ID["S5"]))
+    pool = {q["text"] for q in json.loads(checks.UNSEEN_FILE.read_text("utf-8"))["queries"]}
+    assert not s5 & pool
+
+
+def test_seeded_is_the_places_and_hotels_snapshots_not_the_seven_fixture_cities():
+    assert checks.known_place("Санкт-Петербург") and checks.known_place("Питер")
+    assert checks.known_place("Ереван")  # in places.json, not in fixtures.CATALOG
+    assert "Ереван" not in checks.fixtures.CATALOG
+    assert not checks.known_place("Лиссабон") and not checks.known_place("Хошимин")
+
+
+def test_unseen_findings_flag_a_city_that_is_not_the_named_one():
+    run = booked_run()
+    assert verdicts(run, {"destination": ["Казань"]}) == {"город": checks.OK}
+    assert verdicts(run, {"destination": ["Лиссабон"]}) == {"город": checks.VIOLATED}
+
+
+def test_unseen_findings_flag_month_nights_and_guests():
+    run = booked_run()
+    wrong = {"month": 7, "nights": 11, "adults": 4, "children": [5]}
+    assert set(verdicts(run, wrong).values()) == {checks.VIOLATED}
+
+
+def test_unseen_findings_budget_over_without_a_note_is_a_violation():
+    run = booked_run()
+    assert verdicts(run, {"budget_rub": 1}) == {"бюджет": checks.VIOLATED}
+    assert verdicts(run, {"budget_rub": 10**9}) == {"бюджет": checks.OK}
+
+
+def test_unseen_findings_never_count_what_the_data_cannot_check_as_ok():
+    run = booked_run()
+    got = verdicts(run, {"ski": True, "cheap_without_sum": True})
+    assert set(got.values()) == {checks.UNKNOWN}
+    # warm sea in a month that has no climate in the data: the place has a sea, the water is unknown
+    sea = booked_run("Анталия на 5 ночей в январе")
+    assert verdicts(sea, {"warm_sea": True, "month": 1})["тёплое море"] == checks.UNKNOWN
+    # a place without a sea is a violation, not a doubt
+    assert verdicts(run, {"warm_sea": True})["тёплое море"] == checks.VIOLATED
+
+
+def test_unseen_line_is_a_separate_metric_line_and_leaves_the_main_metric_alone():
+    checks.check_S5(BY_ID["S5"])
+    before = checks.metric("visible")
+    assert before["system"] == 1.0
+    lines = [d for d in before["details"] if d.startswith("незнакомые: до брони ")]
+    assert len(lines) == 1 and " из 12, без нарушений " in lines[0]
+    assert "сессий 10," in before["details"][0]  # the unseen sessions are not in RUNS
+    assert "незнакомые" not in str(checks.metric("holdout")["details"])
+
+
+def test_unseen_metric_says_when_the_pool_file_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(checks, "UNSEEN_FILE", tmp_path / "none.json")
+    assert checks.unseen_metric({})["line"].startswith("незнакомые: нет файла")
