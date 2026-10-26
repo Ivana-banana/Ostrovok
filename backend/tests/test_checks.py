@@ -389,6 +389,8 @@ def test_unseen_line_is_a_separate_metric_line_and_leaves_the_main_metric_alone(
     assert before["system"] == 1.0
     lines = [d for d in before["details"] if d.startswith("незнакомые: до брони ")]
     assert len(lines) == 1 and " из 12, без нарушений " in lines[0]
+    assert "режим правил, без LLM, без сети" in lines[0]
+    assert "бронь в названном городе" in lines[0]
     assert "сессий 10," in before["details"][0]  # the unseen sessions are not in RUNS
     assert "незнакомые" not in str(checks.metric("holdout")["details"])
 
@@ -396,3 +398,75 @@ def test_unseen_line_is_a_separate_metric_line_and_leaves_the_main_metric_alone(
 def test_unseen_metric_says_when_the_pool_file_is_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(checks, "UNSEEN_FILE", tmp_path / "none.json")
     assert checks.unseen_metric({})["line"].startswith("незнакомые: нет файла")
+
+
+def result(**kw):
+    return {"text": "q", "outside": True, "booked": True, "kept": True, "stage": "booked",
+            "findings": [], **kw}  # fmt: skip
+
+
+def test_same_name_compares_places_not_the_first_five_letters():
+    assert checks._same_name("Санкт-Петербург", ["Питер"])
+    assert checks._same_name("Лиссабон", ["Лиссабон"])
+    assert not checks._same_name("Самарканд", ["Самара"])
+    assert not checks._same_name("Нижний Тагил", ["Нижний Новгород"])
+
+
+def test_expect_keys_of_the_pool_are_all_handled():
+    pool = json.loads(checks.UNSEEN_FILE.read_text("utf-8"))["queries"]
+    used = {k for q in pool for k in q["expect"]}
+    assert used <= checks.EXPECT_KEYS
+
+
+def test_unknown_expect_key_fails_loudly():
+    run = booked_run()
+    with pytest.raises(ValueError, match="skii"):
+        checks.unseen_findings(run, {"skii": True})
+
+
+def test_ten_days_accept_nine_or_ten_nights():
+    run = booked_run("Казань на 3 ночи в марте, нас двое")
+    assert verdicts(run, {"nights": [3, 4]}) == {"ночей": checks.OK}
+    assert verdicts(run, {"nights": [9, 10]}) == {"ночей": checks.VIOLATED}
+
+
+def test_s5_is_red_when_no_city_outside_the_data_is_booked_in_that_city(monkeypatch):
+    """#92: the honest state of the product today. Part b of S5 is not softened."""
+    monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [result(kept=False)])
+    ok, note = checks.check_S5(BY_ID["S5"])
+    assert not ok and "до брони 10 из 10" in note
+    assert "бронь в названном городе 0 из 1" in note
+
+
+def test_s5_is_green_with_one_booking_in_the_named_city_outside_the_data(monkeypatch):
+    monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [result(), result(kept=False)])
+    ok, note = checks.check_S5(BY_ID["S5"])
+    assert ok and "бронь в названном городе 1 из 2" in note
+
+
+def test_s5_is_red_when_the_sample_pool_misses_even_with_a_good_unseen_pool(monkeypatch):
+    monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [result()])
+    rewrite(monkeypatch, lambda r: r.model_copy(update={"stage": "select", "voucher": None}))
+    ok, _ = checks.check_S5(BY_ID["S5"])
+    assert not ok
+
+
+def test_s5_is_red_without_the_unseen_pool_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(checks, "UNSEEN_FILE", tmp_path / "none.json")
+    ok, note = checks.check_S5(BY_ID["S5"])
+    assert not ok and "нет файла пула" in note
+
+
+def test_a_booking_in_another_city_is_not_counted_as_reached(monkeypatch):
+    bad = result(kept=False, findings=[("город", checks.VIOLATED, "в брони Санкт-Петербург")])
+    monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [bad, result()])
+    line = checks.unseen_metric({})["line"]
+    assert line.startswith("незнакомые: до брони 1 из 2, без нарушений 1 из 2")
+    assert "бронь не в тот город 1" in line and "бронь в названном городе 1 из 2" in line
+
+
+def test_only_checks_py_reads_the_unseen_pool():
+    """Anti-tuning guard (D-011): no agent module may read or mention the unseen pool."""
+    src = Path(checks.__file__).parent
+    readers = {p.name for p in src.rglob("*.py") if "cases_unseen" in p.read_text("utf-8")}
+    assert readers == {"checks.py"}

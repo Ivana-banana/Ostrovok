@@ -706,11 +706,13 @@ def _reached_booking(run: Run, minutes: float) -> bool:
 
 @rules_mode
 def check_S5(case: dict) -> tuple[bool, str]:
-    """The whole sample pool of the case: every query must reach a booking in rule mode.
+    """Two parts, both needed (human decision on #92).
 
-    The case asks ≥ 4 of 5 random queries; the pool of 10 gets the same share, ≥ 80%.
-    The pool is the visible one, and the agent was tuned on it. The "city outside the data"
-    part is measured on the separate pool eval/cases_unseen.json (#89), not here.
+    a) The visible sample pool of the case: ≥ 80% of the queries reach a booking in rule mode
+       (the case asks ≥ 4 of 5; the pool of 10 gets the same share). The agent was tuned on it.
+    b) The case says "at least 1 of 5 names a city the team did not seed". The visible pool has
+       none, so the separate pool eval/cases_unseen.json (#89) decides: at least one query that
+       names a city outside places.json and osm_hotels.json must be booked in that city.
     """
     pool = _quotes(case)
     booked, outside, failed = 0, 0, []
@@ -726,24 +728,48 @@ def check_S5(case: dict) -> tuple[bool, str]:
                 failed.append(f"«{run.label}…» ({run.last.stage if run.replies else run.codes})")
     need = math.ceil(0.8 * len(pool))
     note = (
-        f"пул-образец из cases.json (видимый, на нём шла настройка): до брони {booked} "
+        f"а) пул-образец из cases.json (видимый, на нём шла настройка): до брони {booked} "
         f"из {len(pool)} (нужно ≥ {need}); вне places.json и osm_hotels.json {outside}"
     )
+    if failed:
+        note += "; не дошли: " + ", ".join(failed)
+    results = _unseen_results({})
+    if results is None:
+        return False, note + f"; б) нет файла пула {UNSEEN_FILE.name}"
+    named = [r for r in results if r["outside"]]
+    kept = [r for r in named if r["kept"]]
+    note += f"; б) вне данных: бронь в названном городе {len(kept)} из {len(named)}"
     if booked < need:
-        return False, note + "; не дошли: " + ", ".join(failed)
-    return True, note + ("; не дошли: " + ", ".join(failed) if failed else "")
+        return False, note
+    if not kept:
+        return False, note + " (нужна хотя бы одна, eval/cases_unseen.json)"
+    return True, note
 
 
 # ---------------------------------------------------------------- unseen pool (#89)
 
 UNSEEN_FILE = Path(__file__).resolve().parents[3] / "eval" / "cases_unseen.json"
 OK, VIOLATED, UNKNOWN = "ok", "нарушено", "не проверяется"
+EXPECT_KEYS = {
+    "destination", "month", "nights", "origin", "adults", "children", "budget_rub",
+    "warm_sea", "ski", "cheap_without_sum",
+}  # fmt: skip
 
 
 def _same_name(value: str, names: list[str]) -> bool:
-    """A name as the offers write it equals one of the names the user may mean."""
-    v = _norm(value)
-    return any(_norm(n)[:5] == v[:5] or _norm(n) in v for n in names)
+    """A name as the offers write it is one of the names the user may mean.
+
+    Same place in places.json (aliases, case endings), or the same full normalised name.
+    No prefix guess: Самара is not Самарканд.
+    """
+    mine = resolve_place(value)
+    for n in names:
+        other = resolve_place(n)
+        if mine and other and mine["slug"] == other["slug"]:
+            return True
+        if _norm(n) == _norm(value):
+            return True
+    return False
 
 
 def _over_budget_with_note(reply: ChatReply, budget: int, total: int) -> bool:
@@ -759,6 +785,11 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
     Every verdict comes from the voucher and from data the system has: places.json, the
     November climate of the catalogue, the offers. No data - UNKNOWN, never OK.
     """
+    unknown = set(expect) - EXPECT_KEYS
+    if unknown:
+        raise ValueError(
+            f"cases_unseen.json: key not handled by unseen_findings: {sorted(unknown)}"
+        )
     reply = run.last
     v = reply.voucher
     assert v is not None
@@ -778,7 +809,8 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
         put("месяц", first.date_in.month == expect["month"], f"заезд {first.date_in}")
     if "nights" in expect:
         nights = (last.date_out - first.date_in).days
-        put("ночей", nights == expect["nights"], f"в брони {nights}")
+        want = expect["nights"] if isinstance(expect["nights"], list) else [expect["nights"]]
+        put("ночей", nights in want, f"в брони {nights}")
     if "origin" in expect:
         got = legs[0].origin if legs else ""
         put(
@@ -819,47 +851,79 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
 
 
 @rules_mode
-def unseen_metric(_case: dict | None = None) -> dict:
-    """Run the unseen pool through the API (not in RUNS, so the main metric does not move).
+def _unseen_results(_case: dict | None = None) -> list[dict] | None:
+    """Drive every query of the unseen pool through the API (not in RUNS: the main metric stays).
 
-    Returns the printable line and notes; a pool that is not found is said, not skipped.
+    One dict per query: text, outside (the named city is not in the data), booked, kept (booked in
+    the named city, or no city named), stage, findings (constraint checks of a kept booking).
+    None: no pool file.
     """
     if not UNSEEN_FILE.is_file():
-        return {"line": f"незнакомые: нет файла {UNSEEN_FILE.name}"}
+        return None
     queries = json.loads(UNSEEN_FILE.read_text(encoding="utf-8"))["queries"]
-    booked = clean = violated = unknown = outside = 0
-    notes: list[str] = []
+    results = []
     with _api() as (client, _):
         for q in queries:
             started = time.perf_counter()
             run = _walk(client, "unseen", q["text"][:24], q["text"], record=False)
             minutes = (time.perf_counter() - started) / 60
-            if not _reached_booking(run, minutes):
-                stage = run.last.stage if run.replies else run.codes
-                notes.append(f"«{q['text']}»: без брони ({stage})")
-                continue
-            booked += 1
-            outside += any(not known_place(d) for d in run.last.plan.spec.destinations)
-            found = unseen_findings(run, q["expect"])
-            bad = [f"{n} ({why})" for n, st, why in found if st == VIOLATED]
-            unk = [n for n, st, _ in found if st == UNKNOWN]
-            violated += bool(bad)
-            unknown += bool(unk) and not bad
-            clean += not bad and not unk
-            if bad:
-                notes.append(f"«{q['text']}»: нарушено {', '.join(bad)}")
-            elif unk:
-                notes.append(f"«{q['text']}»: не проверяется {', '.join(unk)}")
-            else:
-                notes.append(f"«{q['text']}»: все ограничения проверены, нарушений нет")
-    n = len(queries)
+            booked = _reached_booking(run, minutes)
+            found = unseen_findings(run, q["expect"]) if booked else []
+            wrong = any(n in ("город", "отель") and st == VIOLATED for n, st, _ in found)
+            results.append(
+                {
+                    "text": q["text"],
+                    "outside": bool(q["expect"].get("destination"))
+                    and not any(known_place(d) for d in q["expect"]["destination"]),
+                    "booked": booked,
+                    "kept": booked and not wrong,
+                    "stage": run.last.stage if run.replies else run.codes,
+                    "findings": found,
+                }
+            )
+    return results
+
+
+@rules_mode
+def unseen_metric(_case: dict | None = None) -> dict:
+    """The printable line and notes of the unseen pool; a pool that is not found is said."""
+    results = _unseen_results({})
+    if results is None:
+        return {"line": f"незнакомые: нет файла {UNSEEN_FILE.name}"}
+    reached = clean = violated = unknown = wrong_city = 0
+    notes: list[str] = []
+    for r in results:
+        bad = [f"{n} ({why})" for n, st, why in r["findings"] if st == VIOLATED]
+        unk = [n for n, st, _ in r["findings"] if st == UNKNOWN]
+        if not r["booked"]:
+            notes.append(f"«{r['text']}»: без брони ({r['stage']})")
+            continue
+        if not r["kept"]:
+            wrong_city += 1
+            notes.append(f"«{r['text']}»: бронь не в тот город ({', '.join(bad)})")
+            continue
+        reached += 1
+        violated += bool(bad)
+        unknown += bool(unk) and not bad
+        clean += not bad and not unk
+        if bad:
+            notes.append(f"«{r['text']}»: нарушено {', '.join(bad)}")
+        elif unk:
+            notes.append(f"«{r['text']}»: не проверяется {', '.join(unk)}")
+        else:
+            notes.append(f"«{r['text']}»: все ограничения проверены, нарушений нет")
+    n = len(results)
+    named = [r for r in results if r["outside"]]
     line = (
-        f"незнакомые: до брони {booked} из {n}, без нарушений {clean} из {n} "
-        f"(с нарушением {violated}; часть ограничений не проверить по данным: {unknown}; "
-        f"города вне places.json и osm_hotels.json: {outside}; пул eval/{UNSEEN_FILE.name}, "
-        "на нём агента не настраивали)"
+        f"незнакомые: до брони {reached} из {n}, без нарушений {clean} из {n} "
+        "(режим правил, без LLM, без сети; "
+        f"бронь не в тот город {wrong_city}, не считается; с нарушением {violated}; "
+        f"часть ограничений не проверить по данным: {unknown}; "
+        f"вне данных (places.json, osm_hotels.json): бронь в названном городе "
+        f"{sum(r['kept'] for r in named)} из {len(named)}; "
+        f"пул eval/{UNSEEN_FILE.name}, на нём агента не настраивали)"
     )
-    return {"line": line, "notes": notes, "booked": booked, "clean": clean, "n": n}
+    return {"line": line, "notes": notes, "booked": reached, "clean": clean, "n": n}
 
 
 # ---------------------------------------------------------------- S6
