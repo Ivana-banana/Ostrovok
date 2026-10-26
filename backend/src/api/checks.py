@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
-from api import dag, fixtures
+from api import catalog, dag, fixtures
 from api.contracts import (
     Bundle,
     Cancellation,
@@ -110,16 +110,34 @@ def _record(run: Run) -> Run:
     return run
 
 
+GEOCODER_FILE = Path(__file__).resolve().parents[3] / "eval" / "geocoder_answers.json"
+
+
+def _recorded(url: str, params: dict) -> dict:
+    """Open-Meteo answers recorded once (record_geocoder), not the network (TRAP-6)."""
+    try:
+        answers = json.loads(GEOCODER_FILE.read_text(encoding="utf-8"))["answers"]
+        return answers[catalog.request_url(url, params)]
+    except (OSError, KeyError) as e:
+        raise OSError(f"no recorded answer: {e}") from e
+
+
 @contextmanager
 def _api() -> Iterator[tuple[TestClient, SessionStore]]:
-    """A client on a temporary store; the directory and our own override go away after."""
+    """A client on a temporary store and the recorded geocoder; all of it goes away after."""
     with tempfile.TemporaryDirectory(prefix="eval-") as tmp:
         store = SessionStore(Path(tmp) / "eval.db")
         previous = app.dependency_overrides.get(get_store)
         app.dependency_overrides[get_store] = lambda: store
+        saved = catalog._get, catalog.ONLINE_CACHE, dict(catalog._online)
+        catalog._get, catalog.ONLINE_CACHE = _recorded, Path(tmp) / "online_places.json"
+        catalog._online.clear()
         try:
             yield TestClient(app, raise_server_exceptions=False), store
         finally:
+            catalog._get, catalog.ONLINE_CACHE = saved[:2]
+            catalog._online.clear()
+            catalog._online.update(saved[2])
             if previous is None:
                 app.dependency_overrides.pop(get_store, None)
             else:
@@ -693,21 +711,12 @@ def check_S4(case: dict) -> tuple[bool, str]:
 # ---------------------------------------------------------------- S5
 
 
-SEEDED_FILE = Path(__file__).resolve().parents[3] / "eval" / "seeded_places.json"
-
-
-@functools.cache
-def _seeded() -> frozenset[str]:
-    return frozenset(json.loads(SEEDED_FILE.read_text(encoding="utf-8"))["names"])
-
-
 def known_place(name: str) -> bool:
-    """The team seeded the place: eval/seeded_places.json (any alias) or osm_hotels.json.
+    """The team seeded the place: it is in catalog.json (names, aliases) or in osm_hotels.json.
 
-    Not the whole catalog.json (#8): the script took its places by country, not for queries.
+    Snapshot only: a place the geocoder finds online is not seeded (human decision on #8, D-013).
     """
-    place = resolve_place(name)
-    return bool(place and place["name"] in _seeded()) or name in osm_hotels()
+    return catalog.resolve(name) is not None or name in osm_hotels()
 
 
 def _reached_booking(run: Run, minutes: float) -> bool:
@@ -724,7 +733,9 @@ def check_S5(case: dict) -> tuple[bool, str]:
        (the case asks ≥ 4 of 5; the pool of 10 gets the same share). The agent was tuned on it.
     b) The case says "at least 1 of 5 names a city the team did not seed". The visible pool has
        none, so the separate pool eval/cases_unseen.json (#89) decides: at least one query that
-       names a city outside eval/seeded_places.json and osm_hotels.json must be booked in that city.
+       names a city outside catalog.json and osm_hotels.json must be booked in that city. The agent
+       finds such a city with the geocoder; eval gives it recorded answers, so the result is the
+       same on every machine. No recorded answer for any of them: "не проверено", not a pass.
     """
     pool = _quotes(case)
     booked, outside, failed = 0, 0, []
@@ -741,7 +752,7 @@ def check_S5(case: dict) -> tuple[bool, str]:
     need = math.ceil(0.8 * len(pool))
     note = (
         f"а) пул-образец из cases.json (видимый, на нём шла настройка): до брони {booked} "
-        f"из {len(pool)} (нужно ≥ {need}); вне seeded_places.json и osm_hotels.json {outside}"
+        f"из {len(pool)} (нужно ≥ {need}); вне catalog.json и osm_hotels.json {outside}"
     )
     if failed:
         note += "; не дошли: " + ", ".join(failed)
@@ -750,7 +761,12 @@ def check_S5(case: dict) -> tuple[bool, str]:
         return False, note + f"; б) нет файла пула {UNSEEN_FILE.name}"
     named = [r for r in results if r["outside"]]
     kept = [r for r in named if r["kept"]]
-    note += f"; б) вне исходных 101 городов (e3e5119): бронь в названном городе {len(kept)} из {len(named)}"
+    note += f"; б) вне catalog.json и osm_hotels.json: бронь в названном городе {len(kept)} из {len(named)}"
+    if not any(r["geocoded"] for r in named):
+        return (
+            False,
+            note + f" — не проверено: нет записанных ответов геокодера ({GEOCODER_FILE.name})",
+        )
     if booked < need:
         return False, note
     if not kept:
@@ -878,8 +894,9 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
 def _unseen_results(_case: dict | None = None) -> list[dict] | None:
     """Drive every query of the unseen pool through the API (not in RUNS: the main metric stays).
 
-    One dict per query: text, outside (the named city is not in the data), booked, kept (booked in
-    the named city, or no city named), stage, findings (constraint checks of a kept booking).
+    One dict per query: text, outside (the named city is not in the data), geocoded (outside, and
+    the recorded geocoder knows it), booked, kept (booked in the named city, or no city named),
+    stage, findings (constraint checks of a kept booking).
     None: no pool file.
     """
     if not UNSEEN_FILE.is_file():
@@ -894,11 +911,13 @@ def _unseen_results(_case: dict | None = None) -> list[dict] | None:
             booked = _reached_booking(run, minutes)
             found = unseen_findings(run, q["expect"]) if booked else []
             wrong = any(n in ("город", "отель") and st == VIOLATED for n, st, _ in found)
+            named = q["expect"].get("destination") or []
+            outside = bool(named) and not any(known_place(d) for d in named)
             results.append(
                 {
                     "text": q["text"],
-                    "outside": bool(q["expect"].get("destination"))
-                    and not any(known_place(d) for d in q["expect"]["destination"]),
+                    "outside": outside,
+                    "geocoded": outside and any(resolve_place(d) for d in named),
                     "booked": booked,
                     "kept": booked and not wrong,
                     "stage": run.last.stage if run.replies else run.codes,
@@ -906,6 +925,45 @@ def _unseen_results(_case: dict | None = None) -> list[dict] | None:
                 }
             )
     return results
+
+
+def record_geocoder() -> None:
+    """Record Open-Meteo answers for the pool cities outside the catalogue into GEOCODER_FILE.
+
+        cd backend && uv run python -c "from api import checks; checks.record_geocoder()"
+
+    Needs the network once; on an error (Open-Meteo 429) it stops and keeps what it recorded.
+    """
+    old = json.loads(GEOCODER_FILE.read_text("utf-8"))["answers"] if GEOCODER_FILE.is_file() else {}
+    answers = dict(old)
+
+    def fetch(url: str, params: dict) -> dict:
+        key = catalog.request_url(url, params)
+        if key not in answers:
+            answers[key] = catalog._get(url, params)
+        return answers[key]
+
+    pool = json.loads(UNSEEN_FILE.read_text(encoding="utf-8"))["queries"]
+    named = [q["expect"].get("destination") or [] for q in pool]
+    try:
+        for spellings in (n for n in named if n and not any(known_place(x) for x in n)):
+            for name in spellings:  # the first spelling the geocoder knows is enough
+                place = catalog._online_place(name, fetch)
+                print(f"{name}: {place['name'] + ', ' + place['country'] if place else 'нет'}")
+                if place:
+                    break
+    except OSError as e:
+        print(f"{e}: стоп, файл хранит записанное")
+    note = (
+        f"Ответы Open-Meteo (Geocoding, Historical Weather, Marine; CC BY 4.0), записаны "
+        f"{datetime.now():%Y-%m-%d} checks.record_geocoder для городов пула незнакомых вне "
+        "catalog.json. make eval отдаёт их геокодеру агента вместо сети (#8)."
+    )
+    data = {"_note": note, "answers": answers}
+    GEOCODER_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+    )
+    print(f"новых ответов {len(answers) - len(old)}, всего {len(answers)}")
 
 
 @rules_mode
@@ -943,7 +1001,7 @@ def unseen_metric(_case: dict | None = None) -> dict:
         "(режим правил, без LLM, без сети; "
         f"бронь не в тот город {wrong_city}, не считается; с нарушением {violated}; "
         f"часть ограничений не проверить по данным: {unknown}; "
-        f"вне исходных 101 городов (e3e5119; seeded_places.json, osm_hotels.json): бронь в названном городе "
+        f"вне catalog.json и osm_hotels.json: бронь в названном городе "
         f"{sum(r['kept'] for r in named)} из {len(named)}; "
         f"пул eval/{UNSEEN_FILE.name}, на нём агента не настраивали)"
     )

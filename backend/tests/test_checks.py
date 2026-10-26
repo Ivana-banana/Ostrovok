@@ -349,9 +349,18 @@ def test_unseen_pool_is_not_the_s5_pool():
 
 def test_seeded_is_the_places_and_hotels_snapshots_not_the_seven_fixture_cities():
     assert checks.known_place("Санкт-Петербург") and checks.known_place("Питер")
-    assert checks.known_place("Ереван")  # in places.json, not in fixtures.CATALOG
+    assert checks.known_place("Ереван")  # in catalog.json, not in fixtures.CATALOG
     assert "Ереван" not in checks.fixtures.CATALOG
-    assert not checks.known_place("Лиссабон") and not checks.known_place("Хошимин")
+    assert not checks.known_place("Тихвин") and not checks.known_place("Зурбаган")
+
+
+def test_a_place_the_geocoder_found_is_not_seeded():
+    """D-013: only the snapshot is seeded; an online place is the agent's work, not our data."""
+    checks.catalog._online[checks.catalog.norm("Зурбаган")] = {
+        "name": "Зурбаган",
+        "source": "online",
+    }
+    assert checks.resolve_place("Зурбаган") and not checks.known_place("Зурбаган")
 
 
 def test_unseen_findings_flag_a_city_that_is_not_the_named_one():
@@ -388,7 +397,7 @@ def test_unseen_line_is_a_separate_metric_line_and_leaves_the_main_metric_alone(
     before = checks.metric("visible")
     assert before["system"] == 1.0
     lines = [d for d in before["details"] if d.startswith("незнакомые: до брони ")]
-    assert len(lines) == 1 and " из 12, без нарушений " in lines[0]
+    assert len(lines) == 1 and " из 22, без нарушений " in lines[0]
     assert "режим правил, без LLM, без сети" in lines[0]
     assert "бронь в названном городе" in lines[0]
     assert "сессий 10," in before["details"][0]  # the unseen sessions are not in RUNS
@@ -401,8 +410,8 @@ def test_unseen_metric_says_when_the_pool_file_is_missing(monkeypatch, tmp_path)
 
 
 def result(**kw):
-    return {"text": "q", "outside": True, "booked": True, "kept": True, "stage": "booked",
-            "findings": [], **kw}  # fmt: skip
+    return {"text": "q", "outside": True, "geocoded": True, "booked": True, "kept": True,
+            "stage": "booked", "findings": [], **kw}  # fmt: skip
 
 
 def test_same_name_compares_places_not_the_first_five_letters():
@@ -442,6 +451,14 @@ def test_s5_is_green_with_one_booking_in_the_named_city_outside_the_data(monkeyp
     monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [result(), result(kept=False)])
     ok, note = checks.check_S5(BY_ID["S5"])
     assert ok and "бронь в названном городе 1 из 2" in note
+
+
+def test_s5_b_is_not_checked_without_recorded_geocoder_answers(monkeypatch):
+    """TRAP-6: eval has no network; a city outside the catalogue it cannot geocode is not a pass."""
+    blind = result(geocoded=False, booked=False, kept=False)
+    monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [blind])
+    ok, note = checks.check_S5(BY_ID["S5"])
+    assert not ok and "не проверено" in note
 
 
 def test_s5_is_red_when_the_sample_pool_misses_even_with_a_good_unseen_pool(monkeypatch):

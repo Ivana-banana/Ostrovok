@@ -41,6 +41,12 @@ def test_trap_3_close_spelling_is_not_another_city():
     assert catalog.resolve("Малага") is None
 
 
+def test_trap_3_letters_after_a_short_name_are_not_a_case_ending():
+    """TRAP-3: «Гори» (Georgia) is not «Гоа» + «ри»; «в Нижнем Новгороде» still is the city."""
+    assert catalog.resolve("Гори") is None
+    assert catalog.resolve("в Нижнем Новгороде")["name"] == "Нижний Новгород"
+
+
 def test_trap_5_home_airport_and_zone_of_a_new_airport():
     """TRAP-5: Выборг flies from LED, not Finnish LPP; GSV (2019) is UTC+4 as Саратов, not +3."""
     assert catalog.resolve("Выборг")["airport"]["iata"] == "LED"

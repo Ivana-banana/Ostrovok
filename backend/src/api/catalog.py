@@ -33,6 +33,10 @@ AIRPORT_KM = 200
 FUZZY = 0.85  # «Антлия» -> «Анталия», but «Малага» is not «Мале»
 ENDINGS = ("ий", "ый", "ой", "ая", "ое", "ие", "ые", "ь", "й", "а", "я", "о", "е", "и", "у",
            "ю", "ы")  # fmt: skip
+# Case endings after a stem: «Гори» is not «Гоа» + «ри» (TRAP-3).
+CASES = {"", "а", "я", "у", "ю", "е", "и", "ы", "ой", "ей", "ом", "ем", "ою", "ею", "ью", "ам", "ям",
+         "ах", "ях", "ий", "ый", "ая", "ое", "ие", "ые", "ую", "ого", "его", "ому", "ему", "ых",
+         "их"}  # fmt: skip
 PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _online: dict[str, dict | None] = {}
@@ -65,7 +69,7 @@ def _stem(word: str) -> str:
 def _same_words(query: list[str], key: list[str]) -> bool:
     """Same words up to a Russian case ending: «нижнем новгороде» = «нижний новгород»."""
     return len(query) == len(key) and all(
-        q.startswith(_stem(k)) and len(q) - len(_stem(k)) <= 2
+        q.startswith(_stem(k)) and q[len(_stem(k)) :] in CASES
         for q, k in zip(query, key, strict=True)
     )
 
@@ -189,8 +193,13 @@ def origin_hub(name: str, fetch: Callable[[str, dict], dict] | None = None) -> t
     )
 
 
+def request_url(url: str, params: dict) -> str:
+    """The full GET address; eval/geocoder_answers.json keys its recorded answers by it."""
+    return f"{url}?{urllib.parse.urlencode(params)}"
+
+
 def _get(url: str, params: dict) -> dict:
-    req = urllib.request.Request(f"{url}?{urllib.parse.urlencode(params)}")
+    req = urllib.request.Request(request_url(url, params))
     with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
         return json.loads(r.read())
 
@@ -242,7 +251,7 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
     """A place outside the snapshot from the Open-Meteo geocoder and climate API, or None.
 
     Cached in the process and, when the path is writable, in data/online_places.json.
-    Climate here is one year (YEAR), not the five-year mean of the snapshot.
+    Climate here is one year (YEAR), not the ten-year mean of the snapshot.
     """
     key = norm(name)
     if not key:
