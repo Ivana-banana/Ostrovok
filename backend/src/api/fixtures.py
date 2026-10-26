@@ -73,8 +73,8 @@ def travel_hours(spec: TripSpec, origin: dict, place: dict) -> float:
     )
 
 
-def suggest_destinations(spec: TripSpec) -> list[Destination]:
-    """2–4 destinations for the spec, violations marked.
+def suggest_destinations(spec: TripSpec, limit: int = 4) -> list[Destination]:
+    """2–4 destinations (up to `limit`) for the spec, violations marked.
 
     TODO(T12, #20): replace with the inspiration ranking over the catalogue.
     """
@@ -108,4 +108,4 @@ def suggest_destinations(spec: TripSpec) -> list[Destination]:
             )
         )
     out.sort(key=lambda d: (bool(d.violates), d.est_total_rub))
-    return out[:4]
+    return out[:limit]
