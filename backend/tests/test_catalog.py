@@ -45,6 +45,7 @@ def test_trap_3_letters_after_a_short_name_are_not_a_case_ending():
     """TRAP-3: «Гори» (Georgia) is not «Гоа» + «ри»; «в Нижнем Новгороде» still is the city."""
     assert catalog.resolve("Гори") is None
     assert catalog.resolve("в Нижнем Новгороде")["name"] == "Нижний Новгород"
+    assert catalog.country_of("из Нидерландов") == "Нидерланды"
 
 
 def test_trap_5_home_airport_and_zone_of_a_new_airport():
@@ -99,6 +100,20 @@ def test_trap_2_online_place_outside_snapshot():
     assert place["source"] == "online" and place["sea"] and place["airport"]["iata"]
     assert catalog.month_climate(place, 7) == (6, 20.0)
     assert resolve_place("Зурбаган") is place  # cached in the process
+
+
+def test_trap_6_a_network_error_is_not_remembered():
+    """TRAP-6: one timeout on the demo must not make the city unknown until a restart."""
+
+    def timeout(url: str, params: dict) -> dict:
+        raise TimeoutError
+
+    def nothing(url: str, params: dict) -> dict:
+        return {"results": []}
+
+    assert catalog.lookup_online("Зурбаган", timeout) is None
+    assert "зурбаган" not in catalog._online
+    assert catalog.lookup_online("Зурбаган", nothing) is None and "зурбаган" in catalog._online
 
 
 def test_trap_6_empty_geocoder_answer_uses_snapshot():

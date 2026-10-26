@@ -410,8 +410,8 @@ def test_unseen_metric_says_when_the_pool_file_is_missing(monkeypatch, tmp_path)
 
 
 def result(**kw):
-    return {"text": "q", "outside": True, "geocoded": True, "booked": True, "kept": True,
-            "stage": "booked", "findings": [], **kw}  # fmt: skip
+    return {"text": "q", "outside": True, "booked": True, "kept": True, "stage": "booked",
+            "findings": [], **kw}  # fmt: skip
 
 
 def test_same_name_compares_places_not_the_first_five_letters():
@@ -447,16 +447,18 @@ def test_s5_is_red_when_no_city_outside_the_data_is_booked_in_that_city(monkeypa
     assert "бронь в названном городе 0 из 1" in note
 
 
-def test_s5_is_green_with_one_booking_in_the_named_city_outside_the_data(monkeypatch):
+def test_s5_is_green_with_one_booking_in_the_named_city_outside_the_data(monkeypatch, tmp_path):
+    (tmp_path / "answers.json").write_text('{"answers": {}}', "utf-8")
+    monkeypatch.setattr(checks, "GEOCODER_FILE", tmp_path / "answers.json")
     monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [result(), result(kept=False)])
     ok, note = checks.check_S5(BY_ID["S5"])
     assert ok and "бронь в названном городе 1 из 2" in note
 
 
-def test_s5_b_is_not_checked_without_recorded_geocoder_answers(monkeypatch):
-    """TRAP-6: eval has no network; a city outside the catalogue it cannot geocode is not a pass."""
-    blind = result(geocoded=False, booked=False, kept=False)
-    monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [blind])
+def test_s5_b_is_not_checked_without_recorded_geocoder_answers(monkeypatch, tmp_path):
+    """TRAP-6: eval has no network; without recorded answers part b is not a pass, even booked."""
+    monkeypatch.setattr(checks, "GEOCODER_FILE", tmp_path / "none.json")
+    monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [result()])
     ok, note = checks.check_S5(BY_ID["S5"])
     assert not ok and "не проверено" in note
 

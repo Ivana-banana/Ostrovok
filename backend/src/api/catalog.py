@@ -35,8 +35,8 @@ ENDINGS = ("ий", "ый", "ой", "ая", "ое", "ие", "ые", "ь", "й", "
            "ю", "ы")  # fmt: skip
 # Case endings after a stem: «Гори» is not «Гоа» + «ри» (TRAP-3).
 CASES = {"", "а", "я", "у", "ю", "е", "и", "ы", "ой", "ей", "ом", "ем", "ою", "ею", "ью", "ам", "ям",
-         "ах", "ях", "ий", "ый", "ая", "ое", "ие", "ые", "ую", "ого", "его", "ому", "ему", "ых",
-         "их"}  # fmt: skip
+         "ах", "ях", "ов", "ев", "ий", "ый", "ая", "ое", "ие", "ые", "ую", "ого", "его", "ому",
+         "ему", "ых", "их"}  # fmt: skip
 PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _online: dict[str, dict | None] = {}
@@ -268,7 +268,7 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
     try:
         place = _online_place(name.strip(), fetch or _get)
     except Exception:  # noqa: BLE001  TRAP-6: no network, a timeout or a strange answer
-        place = None
+        return None  # not cached: the next call asks again
     _online[key] = place
     if place is not None:
         try:
