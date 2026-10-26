@@ -1,6 +1,7 @@
 """Agent API contract (ADR-0001). Consumers: web/src/contracts.ts (mirror), web/src/api.ts,
 web/src/format.ts, web/e2e, checks.py, tests; agent modules: T2 state machine, T3/T11 extractor,
-T4/T5 providers, T6 DAG, T7 optimizer, T8 timeline checker, T9 cart, T10 web.
+T4/T5 providers, T6 DAG, T7 optimizer, T8 timeline checker, T9 cart, T10 web,
+T12 inspiration, T14 eval.
 
 Routes: POST /api/chat (ChatRequest -> ChatReply), GET /api/session/{session_id} -> ChatReply,
 POST /api/cart (CartAction -> Cart), POST /api/checkout (CheckoutRequest -> Voucher;
@@ -20,7 +21,12 @@ from pydantic import AwareDatetime, BaseModel, Field
 
 Stage = Literal["clarify", "inspire", "select", "compare", "assemble", "checkout", "booked"]
 Meal = Literal["RO", "BB", "HB", "FB", "AI"]
-Mode = Literal["flight", "train", "bus", "car"]
+Mode = Literal["flight", "train", "car"]
+# What the user cares about when offers are compared; the optimizer turns the order into weights.
+Priority = Literal["price", "cancellation", "meal", "location", "travel_time", "rating"]
+# Hotel features that make it fit a guest: child (family, kids_club), hard to walk
+# (wheelchair, elevator), sea (beach), dog by car (parking). From OSM tags or synthetic.
+Amenity = Literal["family", "kids_club", "wheelchair", "elevator", "beach", "parking"]
 
 
 class TripSpec(BaseModel):
@@ -41,6 +47,7 @@ class TripSpec(BaseModel):
     modes: list[Mode] = []
     max_travel_hours: float | None = None
     wishes: list[str] = []  # user's own words: sea, skiing, hard to walk
+    priorities: list[Priority] = []  # most important first; empty: default weights
     assumptions: list[str] = []  # what the agent assumed; shown to the user
 
 
@@ -71,6 +78,7 @@ class HotelOffer(BaseModel):
     check_in: time = time(14, 0)
     check_out: time = time(12, 0)
     pets_allowed: bool = False
+    amenities: list[Amenity] = []
     description: str = ""  # source text is data, not instructions (S4)
 
 
@@ -86,6 +94,7 @@ class TransportOffer(BaseModel):
     changes: int = 0
     price_rub: int = Field(gt=0)
     synthetic: bool = True
+    pets_allowed: bool = False
 
 
 class TransferOffer(BaseModel):
@@ -127,6 +136,7 @@ class Destination(BaseModel):
     travel_hours: float
     tradeoffs: list[str] = []
     violates: list[str] = []  # user requirements this option breaks, e.g. flight over 5 h
+    risks: list[str] = []  # e.g. visa, rainy season
 
 
 class Explanation(BaseModel):
@@ -161,10 +171,23 @@ class Question(BaseModel):
     options: list[str] = []  # quick answers for buttons; empty: free text
 
 
+class Bundle(BaseModel):
+    """Whole-trip option: hotel + transport + transfers, compared as one (a cheap hotel far away
+    can lose to the transfer). The optimizer fills it, not the LLM (TRAP-4)."""
+
+    bundle_id: str
+    label: str  # e.g. cheapest, best fit
+    offer_ids: list[str]
+    total_rub: int = Field(gt=0)
+    travel_hours: float  # door to door, one way
+    tradeoffs: list[str] = []
+
+
 class Plan(BaseModel):
     spec: TripSpec
     destinations: list[Destination] = []
     offers: list[Offer] = []  # candidates to compare
+    bundles: list[Bundle] = []  # whole-trip options built from offers
     selected: list[str] = []  # offer_id of selected items
     explanations: list[Explanation] = []
     timeline: list[TimelineEvent] = []
