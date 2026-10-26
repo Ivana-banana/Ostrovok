@@ -601,7 +601,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     spec = merge(old.plan.spec, found, notes)
     used = False  # the LLM output changed this reply
     if llm_found:
-        with_model = with_llm(found, llm_found, new_refused)
+        with_model = with_llm(found, llm_found, [*refused_before(old.plan.spec), *new_refused])
         spec_model = merge(old.plan.spec, with_model, notes)
         if spec_model != spec:
             found, spec, used = with_model, spec_model, True

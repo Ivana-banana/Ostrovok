@@ -314,16 +314,35 @@ NEG_VERBS = (
 )
 # Right before a place; «не дорого, в Турцию» is no match: only these words may stand between.
 NEG_BEFORE = re.compile(
-    rf"(?:\b(?:кроме|без|ни)\s+|\bне\s+(?:{NEG_VERBS}\s+)*"
-    r"|\b(?:надоел\w*|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|избега\w+|устал\w*\s+от)\s+"
-    r"|\bуже\s+(?:были|бывали|ездили|летали|отдыхали)\s+(?:там\s+)?)"
+    rf"(?:\b(?:без|ни)\s+|\bне\s+(?:{NEG_VERBS}\s+)*"
+    r"|\b(?:надоел\w*|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|избега\w+|устал\w*\s+от)\s+)"
     r"(?:(?:в|во|на)\s+)?$"
 )
+# «кроме X» refuses X, but «кроме Сочи хотим ещё в Казань» adds Казань to Сочи.
+EXCEPT_BEFORE = re.compile(r"\bкроме\s+(?:(?:в|во|на)\s+)?$")
+ADDITION = re.compile(r"\b(?:еще|тоже|также|заодно)\b")
+WANT_AFTER = re.compile(r"\b(?:хотим|хочу|хотел\w*|заедем|заехать|поедем|поехать|съездить)\b")
+# «уже были» alone is no refusal («понравилось, хотим снова»): see _negated.
+WEAK_BEFORE = re.compile(
+    r"\bуже\s+(?:были|бывали|ездили|летали|отдыхали)\s+(?:там\s+)?(?:(?:в|во|на)\s+)?$"
+)
+WEAK_WORD = r"уже\s+(?:был\w*|бывал\w*|ездил\w*|летал\w*|отдыхал\w*|посетил\w*)"
+WISH_AGAIN = re.compile(
+    r"\b(?:снова|опять|еще\s+раз|понравил\w*|вернуться|вернемся|возвращ\w+|повторить)\b"
+)
+DISLIKE = re.compile(
+    r"\bне\s+(?:хочу|хотим|хочется|хотелось|надо|нужн\w*|вариант|подходит|подойд\w*|нравит\w*"
+    r"|интересует|едем|поедем|поеду|летим|полетим)"
+    r"|\b(?:надоел\w*|надоест|хватит|отверга\w+|отвергн\w+|ненавид\w+|скучно|табу)\b"
+)
 # Right after a place, only a few light words in between and no comma: «Турция надоела».
-NEG_AFTER = re.compile(
+AFTER_LEAD = (
     r"\s*(?:[—–-]\s*)?(?:(?:мы|я|они|там|уже|вс[её]|давно|тоже|муж|жена|мама|папа|нам|мне|нас|ему|ей"
     r"|совсем|категорически|точно|никак|вот)\s+){0,3}"
-    r"(?:уже\s+(?:был\w*|бывал\w*|ездил\w*|летал\w*|отдыхал\w*|посетил\w*)|надоел\w*|надоест"
+)
+WEAK_AFTER = re.compile(AFTER_LEAD + WEAK_WORD)
+NEG_AFTER = re.compile(
+    AFTER_LEAD + r"(?:надоел\w*|надоест"
     r"|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|ненавид\w+|табу|отпада\w+"
     r"|не\s+(?:хочу|хотим|хочется|хотелось|надо|нужн\w*|подходит|подойд\w*|нравится|нравятся"
     r"|интересует|вариант|едем|поедем|поеду|летим|полетим|рассматрива\w*|любим|люблю))"
@@ -339,24 +358,63 @@ def _word_end(t: str, pos: int) -> int:
     return m.end() if m else pos
 
 
+def _sentence(t: str, start: int, end: int) -> str:
+    """The sentence (up to «.!?;») around the mention."""
+    before = [m.end() for m in SENTENCE_END.finditer(t, 0, start)]
+    stop = SENTENCE_END.search(t, end)
+    return t[before[-1] if before else 0 : stop.start() if stop else len(t)]
+
+
+def _adds_place(t: str, spans: list[tuple[int, int]], i: int) -> bool:
+    """«Кроме Сочи хотим ещё в Казань»: the exception adds a place, it refuses nothing."""
+    s, e = spans[i]
+    sentence = _sentence(t, s, e)
+    if ADDITION.search(sentence):
+        return True
+    stop = SENTENCE_END.search(t, e)
+    end = stop.start() if stop else len(t)
+    wish = WANT_AFTER.search(t, e, end)
+    return bool(wish) and any(wish.end() <= x < end for x, _ in spans[i + 1 :])
+
+
 def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
-    """Which of the place mentions (start, end; sorted) a negation refuses."""
+    """Which of the place mentions (start, end; sorted) a negation refuses.
+
+    «кроме X» refuses X unless the sentence adds a place («ещё», «тоже»). «уже были в X» refuses
+    X only with a dislike in the sentence («не хочется», «надоело») or another place wanted
+    next to it, and never with «снова», «ещё раз», «понравилось»."""
     neg = [False] * len(spans)
-    for i, (s, _) in enumerate(spans):
-        gap = t[spans[i - 1][1] : s] if i else ""
-        neg[i] = bool(NEG_BEFORE.search(t[max(0, s - 60) : s])) or (
-            i > 0 and neg[i - 1] and bool(LIST_FORWARD.fullmatch(gap))
+    weak = [False] * len(spans)
+    for i, (s, e) in enumerate(spans):
+        before = t[max(0, s - 60) : s]
+        weak[i] = bool(WEAK_BEFORE.search(before))
+        neg[i] = (
+            bool(NEG_BEFORE.search(before))
+            or (bool(EXCEPT_BEFORE.search(before)) and not _adds_place(t, spans, i))
+            or (i > 0 and neg[i - 1] and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : s])))
         )
     for i in reversed(range(len(spans))):
         e = spans[i][1]
         stop = SENTENCE_END.search(t, e)
         limit = min([stop.start() if stop else len(t)] + [x for x, _ in spans[i + 1 :] if x >= e])
         area = t[e:limit]
-        after = NEG_AFTER.match(area)
-        # «уже были в Турции»: the preposition right after the marker belongs to the next place
-        marked = bool(after) and not re.fullmatch(r"\s+(?:в|во|на)\s*", area[after.end() :])
-        listed = i + 1 < len(spans) and neg[i + 1] and LIST_BACK.fullmatch(t[e : spans[i + 1][0]])
-        neg[i] = neg[i] or marked or bool(listed)
+        for rx in (NEG_AFTER, WEAK_AFTER):
+            after = rx.match(area)
+            # «уже были в Турции»: the preposition right after the marker belongs to the next place
+            if after and not re.fullmatch(r"\s+(?:в|во|на)\s*", area[after.end() :]):
+                if rx is NEG_AFTER:
+                    neg[i] = True
+                else:
+                    weak[i] = True
+    for i, (s, e) in enumerate(spans):
+        if weak[i] and not neg[i]:
+            sentence = _sentence(t, s, e)
+            wanted = any(j != i and not weak[j] for j in range(len(spans)))
+            neg[i] = not WISH_AGAIN.search(sentence) and (bool(DISLIKE.search(sentence)) or wanted)
+    # A list shares the refusal: «кроме Турции и Египта», «В Турции и Египте уже были».
+    for i in reversed(range(len(spans) - 1)):
+        if neg[i + 1] and LIST_BACK.fullmatch(t[spans[i][1] : spans[i + 1][0]]):
+            neg[i] = True
     return neg
 
 
