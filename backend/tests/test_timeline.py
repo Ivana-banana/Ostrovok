@@ -11,14 +11,17 @@ from api.fixtures import rank
 from api.main import app, get_store
 from api.model import chat
 from api.offers import find_offers, offers_for_place, resolve_place, transfer_id
+from api.optimizer import pick_hotel
 from api.store import SessionStore
 from api.timeline import build_timeline
 
 KAZAN = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."
 
 
-def trip(city: str, day_in: date, day_out: date) -> Plan:
-    """Plan with the default selection (hotel and the cheapest legs) of real offers."""
+def trip(city: str, day_in: date, day_out: date, mode: str | None = None) -> Plan:
+    """Plan with a fixed selection of real offers: the hotel the optimizer ranks first, the
+    cheapest leg there (of `mode`) and the 15:20 flight back, with the transfers of the pick.
+    The test must not move when the optimizer changes its choice of legs."""
     spec = TripSpec(
         origin="Москва",
         destinations=[city],
@@ -27,7 +30,17 @@ def trip(city: str, day_in: date, day_out: date) -> Plan:
         nights=(day_out - day_in).days,
     )
     offers = find_offers(spec, city)
-    selected, _ = rank(spec, offers)
+    ranked, _ = rank(spec, offers)
+    hotel = next(i for i in ranked if i.startswith("h-"))
+    legs = [o for o in offers if o.kind == "transport"]
+    there = min(
+        (o for o in legs if o.destination == city and (mode is None or o.mode == mode)),
+        key=lambda o: o.price_rub,
+    )
+    back = next(
+        o for o in legs if o.origin == city and o.mode == "flight" and o.depart_at.hour == 15
+    )
+    selected = pick_hotel([there.offer_id, back.offer_id], offers, hotel)
     return Plan(spec=spec, offers=offers, selected=selected)
 
 
@@ -72,7 +85,7 @@ def kinds_of(plan: Plan, ids: list[str]) -> list[str]:
 
 def test_s6_morning_train_warns_and_offers_early_check_in_night_and_flight():
     """S6: the night train lands at 07:10, check-in is from 14:00."""
-    plan = trip("Казань", date(2026, 12, 11), date(2026, 12, 13))
+    plan = trip("Казань", date(2026, 12, 11), date(2026, 12, 13), "train")
     _hotel, out, _ = parts(plan)
     assert out.mode == "train" and out.arrive_at.strftime("%H:%M") == "07:10"
     events, issues = build_timeline(plan)
@@ -89,7 +102,7 @@ def test_s6_morning_train_warns_and_offers_early_check_in_night_and_flight():
 
 
 def test_bought_early_check_in_or_night_before_removes_the_issue():
-    plan = trip("Казань", date(2026, 12, 11), date(2026, 12, 13))
+    plan = trip("Казань", date(2026, 12, 11), date(2026, 12, 13), "train")
     _, issues = build_timeline(plan)
     for fix in issues[0].fixes[:2]:
         bought = plan.model_copy(update={"selected": [*plan.selected, fix]})
@@ -101,7 +114,7 @@ def test_bought_early_check_in_or_night_before_removes_the_issue():
 
 
 def test_alternative_flight_is_a_fix_that_really_fixes():
-    plan = trip("Казань", date(2026, 12, 11), date(2026, 12, 13))
+    plan = trip("Казань", date(2026, 12, 11), date(2026, 12, 13), "train")
     _, issues = build_timeline(plan)
     flight = next(f for f in issues[0].fixes if f.startswith("t-"))
     _, _, back = parts(plan)
@@ -276,7 +289,7 @@ def test_default_selection_has_no_errors_and_local_events(city, day_in, day_out)
 def test_no_hotel_and_empty_plan_do_not_fail():
     spec = TripSpec(origin="Москва", date_from=date(2026, 12, 11), date_to=date(2026, 12, 13))
     assert build_timeline(Plan(spec=spec)) == ([], [])
-    plan = trip("Казань", date(2026, 12, 11), date(2026, 12, 13))
+    plan = trip("Казань", date(2026, 12, 11), date(2026, 12, 13), "train")
     _hotel, out, back = parts(plan)
     legs = plan.model_copy(update={"selected": [out.offer_id, back.offer_id]})
     events, issues = build_timeline(legs)
@@ -419,3 +432,64 @@ def test_return_flight_after_midnight_gets_both_night_transfer_and_long_wait():
     assert "Ночной трансфер" in texts[0] and "ждать" in texts[1]
     assert_fixes_exist(plan, issues)
     assert issues[1].fixes[0].endswith("-late")
+
+
+def transfers_of(reply: ChatReply, ids) -> set[str]:
+    by_id = {o.offer_id: o for o in reply.plan.offers}
+    return {i for i in ids if by_id[i].kind == "transfer"}
+
+
+def pair_ids(reply: ChatReply, ids) -> set[str]:
+    by_id = {o.offer_id: o for o in reply.plan.offers}
+    hotels = [i for i in ids if by_id[i].kind == "hotel"]
+    legs = [i for i in ids if by_id[i].kind == "transport" and by_id[i].mode != "car"]
+    return {transfer_id(h, x) for h in hotels for x in legs}
+
+
+def test_cart_new_hotel_brings_its_transfers_and_drops_the_old_ones(client):
+    """Transfers are a slot of hotel x leg: replacing a hotel replaces its transfers."""
+    http, store = client
+    r = at_checkout(store)
+    old = next(i for i in r.plan.selected if i.startswith("h-"))
+    assert transfers_of(r, [o.offer_id for o in r.cart.items])
+    other = next(o for o in r.plan.offers if o.kind == "hotel" and o.offer_id != old)
+    now = add(http, r, other.offer_id)
+    cart_ids = [o.offer_id for o in now.cart.items]
+    assert transfers_of(now, cart_ids) == pair_ids(now, cart_ids)
+    assert transfers_of(now, now.plan.selected) == pair_ids(now, now.plan.selected)
+    assert now.cart.total_rub == sum(o.price_rub for o in now.cart.items)
+    titles = [e.title for e in now.plan.timeline if e.title.startswith("Трансфер")]
+    assert len(titles) == 2 and all(other.title in t for t in titles)
+
+
+def test_cart_new_leg_brings_its_transfer(client):
+    http, store = client
+    r = at_checkout(store)
+    by_id = {o.offer_id: o for o in r.plan.offers}
+    leg = next(i for i in r.plan.selected if by_id[i].kind == "transport")
+    alt = next(
+        o
+        for o in r.plan.offers
+        if o.kind == "transport"
+        and o.offer_id != leg
+        and o.mode != "car"
+        and (o.origin, o.destination) == (by_id[leg].origin, by_id[leg].destination)
+    )
+    now = add(http, r, alt.offer_id)
+    cart_ids = [o.offer_id for o in now.cart.items]
+    assert transfers_of(now, cart_ids) == pair_ids(now, cart_ids)
+    assert transfers_of(now, now.plan.selected) == pair_ids(now, now.plan.selected)
+
+
+def test_optimizer_pick_hotel_selection_is_what_the_timeline_reads():
+    """«беру второй»: selected is the whole bundle with transfers; the timeline follows the hotel."""
+    plan = trip("Казань", date(2026, 12, 11), date(2026, 12, 13), "train")
+    hotel, _, _ = parts(plan)
+    other = next(o for o in plan.offers if o.kind == "hotel" and o.offer_id != hotel.offer_id)
+    picked = plan.model_copy(
+        update={"selected": pick_hotel(plan.selected, plan.offers, other.offer_id)}
+    )
+    events, _ = build_timeline(picked)
+    moves = [e for e in events if e.title.startswith("Трансфер")]
+    assert len(moves) == 2 and all(other.title in e.title for e in moves)
+    assert not any(hotel.title in e.title for e in events)

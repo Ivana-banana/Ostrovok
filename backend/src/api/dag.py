@@ -22,6 +22,7 @@ from datetime import timedelta
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
 from api.extract import MONTH_NAMES, NUM, NUMS
 from api.fixtures import find_offers, rank
+from api.optimizer import bundles, pick_hotel
 from api.timeline import build_timeline
 
 NODES = ("destination", "offers", "ranking", "timeline", "cart")
@@ -145,6 +146,9 @@ def _keep_pick(old: Plan, plan: Plan) -> Change | None:
         return None  # the ranking chose it, not the user
     same, spec = _same_hotel(picked, plan.offers), plan.spec
     budget = spec.budget_rub if spec.budget_rub != old.spec.budget_rub else None
+    # The pick brings its own transfers for the selected legs (T7, #13).
+    swapped = pick_hotel(plan.selected, plan.offers, same.offer_id) if same else []
+    swapped_rub = sum(o.price_rub for o in plan.offers if o.offer_id in swapped)
     if not same:
         why = "его нет в новых предложениях"
     elif spec.meal != old.spec.meal and spec.meal and same.meal != spec.meal:
@@ -155,13 +159,12 @@ def _keep_pick(old: Plan, plan: Plan) -> Change | None:
         and same.cancellation.refundable != spec.refundable
     ):
         why = f"в нём {_refundable(same.cancellation.refundable)}"
-    elif budget is not None and (
-        _total(plan) <= budget < _total(plan) - ranked.price_rub + same.price_rub
-    ):  # the ranked set fits the new budget, the set with the pick does not
+    elif budget is not None and _total(plan) <= budget < swapped_rub:
+        # the ranked set fits the new budget, the set with the pick does not
         why = "дороже бюджета"
     else:
         ids = {o.offer_id for o in plan.offers if isinstance(o, HotelOffer)}
-        plan.selected = [same.offer_id] + [i for i in plan.selected if i not in ids]
+        plan.selected = swapped
         plan.explanations = [Explanation(offer_id=same.offer_id, why=MANUAL_WHY)] + [
             e for e in plan.explanations if e.offer_id not in ids
         ]
@@ -185,7 +188,7 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
         done.append("offers")
     if "ranking" in dirty:
         plan.selected, plan.explanations = rank(spec, plan.offers)
-        plan.bundles = []  # TODO(T7, #13): the optimizer returns bundles with the ranking
+        plan.bundles = bundles(spec, plan.offers)  # whole-trip options (T7, #13)
         lost = _keep_pick(old, plan) if old.offers else None
         done.append("ranking")
     # Invariant: build_timeline reads plan.selected and plan.offers, not the spec (T8, #14).
