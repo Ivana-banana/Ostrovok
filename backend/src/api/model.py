@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from uuid import uuid4
 
 from api.contracts import Cart, ChatReply, ChatRequest, Plan, Question, Stage, TripSpec
-from api.dag import describe, dirty_nodes, replan
+from api.dag import describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract
 from api.fixtures import (
     book,
@@ -254,7 +254,10 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
         plan = Plan(spec=spec, destinations=suggest_destinations(spec))
         return reply("inspire", plan, _text_inspire(plan))
 
-    plan = old.plan.model_copy(update={"spec": spec})
+    if "date_from" not in found:
+        spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
+    # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
+    plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     if dirty_nodes(old.plan.spec, spec) or not plan.offers:
         # The DAG recomputes only the nodes that depend on the changed fields (T6, #10).
         plan, cart, _ = replan(old.plan, spec, old.cart)

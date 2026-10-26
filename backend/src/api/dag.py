@@ -15,7 +15,11 @@ The timeline also stops early: the same selected offers keep the same timeline.
 Plan.changes are "before -> after" lines from spec fields and tool data, not the LLM (TRAP-4).
 """
 
-from api.contracts import Cart, Change, Offer, Plan, TripSpec
+import re
+from datetime import timedelta
+
+from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
+from api.extract import MONTH_NAMES, NUM, NUMS
 from api.fixtures import build_timeline, find_offers, rank
 
 NODES = ("destination", "offers", "ranking", "timeline", "cart")
@@ -54,6 +58,7 @@ LABELS = {
     "wishes": "пожелания",
     "priorities": "что важнее",
     "hotel": "отель",
+    "choice": "ваш выбор",
     "transport": "дорога",
     "total_rub": "итог",
     "issues": "стыковки",
@@ -66,10 +71,6 @@ MEALS = {
     "FB": "полный пансион",
     "AI": "всё включено",
 }
-MONTHS = (
-    "январь", "февраль", "март", "апрель", "май", "июнь",
-    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
-)  # fmt: skip
 MODES = {"flight": "самолёт", "train": "поезд", "car": "машина"}
 PRIORITIES = {
     "price": "цена",
@@ -79,6 +80,28 @@ PRIORITIES = {
     "travel_time": "время в пути",
     "rating": "рейтинг",
 }
+
+
+# «на два дня позже», «на неделю раньше»: a shift of the current dates, not a duration.
+SHIFT_RE = re.compile(rf"\bна\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)\s+(позже|раньше)")
+MANUAL_WHY = "вы выбрали этот отель сами"
+
+
+def shift_dates(spec: TripSpec, text: str) -> TripSpec:
+    """The spec with its dates moved by «на N дней позже/раньше»; unchanged without the phrase.
+
+    The extractor sees one message, not the spec, so the shift is applied here (S2).
+    """
+    m = SHIFT_RE.search(text.lower().replace("ё", "е"))
+    if not m or not (spec.date_from and spec.date_to):
+        return spec
+    n = int(m.group(1)) if m.group(1) and m.group(1).isdigit() else NUMS.get(m.group(1), 1)
+    days = n * (7 if m.group(2).startswith("нед") else 1) * (1 if m.group(3) == "позже" else -1)
+    start, end = spec.date_from + timedelta(days=days), spec.date_to + timedelta(days=days)
+    kept = [a for a in spec.assumptions if not a.startswith("даты:")]  # dates are stated now
+    return spec.model_copy(
+        update={"date_from": start, "date_to": end, "month": start.month, "assumptions": kept}
+    )
 
 
 def dirty_nodes(old: TripSpec, new: TripSpec) -> set[str]:
@@ -93,6 +116,50 @@ def _chosen(plan: Plan) -> list[Offer]:
     return [o for o in plan.offers if o.offer_id in plan.selected]
 
 
+def _hotel_of(plan: Plan) -> HotelOffer | None:
+    return next((o for o in _chosen(plan) if isinstance(o, HotelOffer)), None)
+
+
+def _same_hotel(h: HotelOffer, offers: list[Offer]) -> HotelOffer | None:
+    """The same hotel among new offers: the same offer, else the same title for other dates."""
+    hotels = [o for o in offers if isinstance(o, HotelOffer)]
+    return next((o for o in hotels if o.offer_id == h.offer_id), None) or next(
+        (o for o in hotels if (o.title, o.city) == (h.title, h.city)), None
+    )
+
+
+def _keep_pick(old: Plan, plan: Plan) -> Change | None:
+    """Keeps the hotel the user picked over the ranking («беру первый»).
+
+    The pick is manual when the old ranking chose another hotel. It is dropped only when the
+    hotel is gone or the edit changed a hotel requirement it fails; the Change says why.
+    """
+    picked, ranked = _hotel_of(old), _hotel_of(plan)
+    if not picked or not ranked or ranked.title == picked.title:
+        return None
+    if picked.offer_id in rank(old.spec, old.offers)[0]:
+        return None  # the ranking chose it, not the user
+    same, spec = _same_hotel(picked, plan.offers), plan.spec
+    if not same:
+        why = "его нет в новых предложениях"
+    elif spec.meal != old.spec.meal and spec.meal and same.meal != spec.meal:
+        why = f"в нём {MEALS[same.meal]}, а нужно {MEALS[spec.meal]}"
+    elif (
+        spec.refundable != old.spec.refundable
+        and spec.refundable is not None
+        and same.cancellation.refundable != spec.refundable
+    ):
+        why = f"в нём {_refundable(same.cancellation.refundable)}"
+    else:
+        ids = {o.offer_id for o in plan.offers if isinstance(o, HotelOffer)}
+        plan.selected = [same.offer_id] + [i for i in plan.selected if i not in ids]
+        plan.explanations = [Explanation(offer_id=same.offer_id, why=MANUAL_WHY)] + [
+            e for e in plan.explanations if e.offer_id not in ids
+        ]
+        return None
+    return Change(what=LABELS["choice"], before=picked.title, after=f"{ranked.title}: {why}")
+
+
 def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]]:
     """New plan and cart for the edited spec, and the nodes recomputed, in order.
 
@@ -101,6 +168,7 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
     dirty = dirty_nodes(old.spec, spec) if old.offers else set(NODES)
     plan = old.model_copy(update={"spec": spec, "changes": []})
     done: list[str] = []
+    lost: Change | None = None
     if "destination" in dirty:
         done.append("destination")
     if "offers" in dirty:
@@ -109,7 +177,10 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
     if "ranking" in dirty:
         plan.selected, plan.explanations = rank(spec, plan.offers)
         plan.bundles = []  # TODO(T7, #13): the optimizer returns bundles with the ranking
+        lost = _keep_pick(old, plan) if old.offers else None
         done.append("ranking")
+    # Invariant: build_timeline reads only the selected offers, not the spec; T8 (#14) must
+    # revisit this shortcut if the checker starts reading spec fields.
     if _chosen(plan) != _chosen(old):
         if old.timeline:
             plan.timeline, plan.issues = build_timeline(plan)
@@ -122,6 +193,8 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
         done.append("cart")
     if old.offers:
         plan.changes = changes(old, plan, cart, new_cart)
+        if lost:
+            plan.changes.append(lost)
     return plan, new_cart, done
 
 
@@ -150,7 +223,7 @@ SPEC_VIEWS = {  # LABELS key -> TripSpec as text
     "destinations": lambda s: ", ".join(s.destinations) or "не выбрано",
     "origin": lambda s: s.origin or "не задано",
     "dates": _dates,
-    "month": lambda s: MONTHS[s.month - 1] if s.month else "не задан",
+    "month": lambda s: MONTH_NAMES[s.month - 1] if s.month else "не задан",
     "guests": _guests,
     "pets": lambda s: "с питомцем" if s.pets else "без питомца",
     "modes": lambda s: ", ".join(MODES[m] for m in s.modes) or "любой",

@@ -153,3 +153,95 @@ def test_budget_change_line_is_readable(store, booked):
     r = say(store, "а бюджет 30 000 руб", booked.session_id)
     assert "бюджет: 40 000 ₽ → 30 000 ₽" in r.reply
     assert "budget_rub" not in r.reply
+
+
+def test_before_after_lives_only_in_the_replan_reply(store, booked):
+    r = say(store, "а 4 ночи", booked.session_id)
+    assert r.plan.changes
+    for text in ("беру", "да"):
+        r = say(store, text, r.session_id)
+    assert r.stage == "checkout" and r.cart.items
+    assert r.plan.changes == []  # no «корзина: … → пусто» next to a full cart
+
+
+S2_SESSION = "Анталия с 8 ноября на 7 ночей, двое взрослых и ребёнок 5 лет, летим из Москвы"
+S2 = "А если на два дня позже? И бюджет тысяч 150 максимум на всё."
+
+
+def test_s2_shifts_dates_and_budget_without_new_questions(store):
+    r = say(store, S2_SESSION)
+    for text in ("беру", "да"):
+        r = say(store, text, r.session_id)
+    old = r.plan.spec
+    assert r.stage == "checkout" and r.cart.items and old.date_from and old.date_to
+    r = say(store, S2, r.session_id)
+    spec = r.plan.spec
+    assert r.stage == "compare" and r.questions == [] and r.cart.items == []
+    assert spec.date_from == old.date_from + timedelta(days=2)
+    assert spec.date_to == old.date_to + timedelta(days=2) and spec.nights == old.nights
+    assert spec.budget_rub == 150_000
+    assert (spec.destinations, spec.adults, spec.children_ages, spec.origin) == (
+        old.destinations,
+        old.adults,
+        old.children_ages,
+        old.origin,
+    )
+    assert {"даты", "бюджет", "корзина"} <= {c.what for c in r.plan.changes}
+    assert all(o.date_in == spec.date_from for o in r.plan.offers if o.kind == "hotel")
+
+
+@pytest.mark.parametrize(
+    ("text", "days"),
+    [
+        ("на два дня позже", 2),
+        ("а на 3 дня раньше?", -3),
+        ("сдвинь на неделю позже", 7),
+        ("на день раньше", -1),
+        ("на 3 дня", 0),  # a duration, not a shift
+        ("бюджет меньше", 0),
+    ],
+)
+def test_shift_dates_moves_the_current_dates(text, days):
+    spec = TripSpec.model_validate(
+        {
+            "date_from": date(2030, 11, 8),
+            "date_to": date(2030, 11, 15),
+            "nights": 7,
+            "assumptions": ["даты: 08.11–15.11 (точных дат не было)", "откуда: Москва"],
+        }
+    )
+    out = dag.shift_dates(spec, text)
+    assert out.date_from == date(2030, 11, 8) + timedelta(days=days)
+    assert out.date_to == date(2030, 11, 15) + timedelta(days=days) and out.nights == 7
+    assert (out.assumptions == spec.assumptions) == (days == 0)
+
+
+@pytest.fixture
+def picked(store):
+    """Session where the user picked the first hotel over the ranked one."""
+    r = say(store, SOCHI)
+    ranked = r.plan.selected[0]
+    r = say(store, "первый", r.session_id)
+    assert r.stage == "assemble" and r.plan.selected[0] != ranked
+    return r
+
+
+def _hotel(r):
+    return next(o for o in r.plan.offers if o.kind == "hotel" and o.offer_id in r.plan.selected)
+
+
+def test_replan_keeps_the_hotel_the_user_picked(store, picked):
+    title = _hotel(picked).title
+    r = say(store, "а бюджет 30 000 руб", picked.session_id)
+    assert _hotel(r).title == title and r.plan.explanations[0].why == dag.MANUAL_WHY
+    r = say(store, "а 4 ночи", r.session_id)  # new offers: the same hotel for new dates
+    assert _hotel(r).title == title and _hotel(r).date_out == r.plan.spec.date_to
+    assert "ваш выбор" not in {c.what for c in r.plan.changes}
+
+
+def test_replan_says_why_the_picked_hotel_changed(store, picked):
+    r = say(store, "а можно всё включено", picked.session_id)
+    assert _hotel(r).meal == "AI" and _hotel(r).title != _hotel(picked).title
+    lost = next(c for c in r.plan.changes if c.what == "ваш выбор")
+    assert lost.before == _hotel(picked).title and "всё включено" in lost.after
+    assert "ваш выбор: " in r.reply
