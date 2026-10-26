@@ -33,7 +33,8 @@ def transport_rows(r):
 
 def test_train_phrase_switches_both_legs_and_rebuilds_the_timeline(store):
     r = say(store, SOCHI)
-    assert [x.mode for x in legs(r)] == ["flight", "train"]
+    r = say(store, "возьми самолёт", r.session_id)  # the default pick does not matter
+    assert [x.mode for x in legs(r)] == ["flight", "flight"]
     before = r.plan.selected
     r = say(store, "возьми поезд", r.session_id)
     assert r.stage == "compare"  # the user has not accepted the set yet
