@@ -9,16 +9,21 @@ One user message moves the session as far as the known TripSpec allows:
 - checkout: the cart holds the set and waits for an explicit "подтверждаю";
 - booked: the voucher is issued.
 A change of trip fields after offers exist re-plans the trip and returns to compare.
+
+The LLM (T11, #15) only adds TripSpec fields the rules missed and rewrites the `why` of the
+optimizer explanations; reply.llm is True only when its output was used. Without it the
+same path runs on rules (TRAP-1).
 """
 
 import re
 from datetime import date, timedelta
 from uuid import uuid4
 
+from api import llm
 from api.cart import CartRefusal, checkout_reply, fill_cart
 from api.contracts import Cart, ChatReply, ChatRequest, Plan, Question, Stage, TripSpec
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
-from api.extract import MONTH_NAMES, extract
+from api.extract import MONTH_NAMES, extract, with_llm
 from api.fixtures import build_timeline, future_date, suggest_destinations
 from api.optimizer import pick_hotel
 from api.store import SessionStore
@@ -29,6 +34,20 @@ CONFIRM_RE = re.compile(
 )
 NEGATION_RE = re.compile(r"\b(нет|не)\b")
 BOOK_RE = re.compile(r"\bподтверждаю\b")
+# S4: orders to set a price, to book without the confirmation or to show the prompt are
+# refused. Only orders: «цена 0 ₽ за ребёнка?» or «отель без подтверждения по телефону» pass.
+REFUSE_RE = re.compile(
+    r"\bпромпт|system\s*prompt|(?:системн|служебн)\w*\s+инструкц"
+    r"|(?:постав|установ|сдела|измен|смен)\w*\s+(?:\w+\s+)?цен\w*\s+(?:на\s+|в\s+)?0\b"
+    r"|\bне\s+подтверждай\b"
+    r"|(?:оформ|бронир|выда|выпиш)\w*\s+(?:\w+\s+){0,2}без\s+(?:\w+\s+)?(?:подтвержд|оплат)"
+    r"|\bсразу\s+(?:\w+\s+)?(?:выда|оформ|выпиш)\w*\s+(?:\w+\s+)?ваучер"
+    r"|ваучер\w*\s+без\s+(?:\w+\s+)?(?:подтвержд|оплат)"
+)
+REFUSAL = (
+    "Цены задаёт каталог, а бронь оформляю только после вашего подтверждения итоговой суммы. "
+    "Служебные инструкции не показываю."
+)
 NOT_BOOK_RE = re.compile(r"\bне\s+подтверждаю\b")
 ORDINAL_RE = re.compile(
     r"\b(перв(?:ый|ая|ое|ую|ого)|втор(?:ой|ая|ое|ую|ого)|трет(?:ий|ья|ье|ью|ьего)"
@@ -217,11 +236,15 @@ HINTS: dict[Stage, str] = {
 }
 
 
-def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
-    """One user message -> the next ChatReply of the session."""
+def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) -> ChatReply:
+    """One user message -> the next ChatReply of the session.
+
+    use_llm: ask the model (llm.py) when it is configured; this blocks on the network, so the
+    caller runs it outside the store transaction.
+    """
     if prev and prev.voucher:
         text = f"Бронь {prev.voucher.booking_id} уже оформлена."
-        return prev.model_copy(update={"reply": text, "questions": []})
+        return prev.model_copy(update={"reply": text, "questions": [], "llm": False})
     old = prev or ChatReply(
         session_id=sid,
         stage="clarify",
@@ -230,19 +253,47 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
         cart=Cart(),
         llm=False,
     )
-    found, notes = extract(message)
-    if SHIFT_RE.search(message.lower().replace("ё", "е")):
-        found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
-    if prev is None and "adults" not in found:
-        notes.append("взрослых: 2 (состав не назван)")
+    t = message.lower()
+    booking = old.stage == "checkout" and BOOK_RE.search(t) and not NOT_BOOK_RE.search(t)
+    if REFUSE_RE.search(t.replace("ё", "е")) and not booking:
+        # The message goes to no model and changes nothing: the plan and the cart stay.
+        # At checkout «подтверждаю» books first: the prices come from the catalogue anyway.
+        hint = HINTS.get(old.stage, "Опишите поездку: куда, когда и кто едет.")
+        return old.model_copy(update={"reply": f"{REFUSAL} {hint}", "questions": [], "llm": False})
     idx = _ordinal(message)
+    deadline = llm.deadline()
+    # A service turn («беру», «да», «подтверждаю», a number) goes to no model: a field it
+    # adds would re-plan the trip and send the user back to compare.
+    # The stage decides: «оформи мне отдых на Алтае» on the first turn is a request, not consent.
+    # A new session, clarify and select are never service turns.
+    consent = old.stage in ("compare", "assemble", "checkout") and (
+        _confirmed(t) or bool(BOOK_RE.search(t))
+    )
+    pick = old.stage in ("inspire", "compare") and idx is not None
+    service = prev is not None and (old.stage in ("assemble", "checkout") or consent or pick)
+    found, notes = extract(message)
+    llm_found = (
+        None if service or not use_llm else llm.extract_spec(message, old.plan.spec, deadline)
+    )
+    if SHIFT_RE.search(t.replace("ё", "е")):
+        found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
+        if llm_found:
+            llm_found.pop("nights", None)
+    if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
+        notes.append("взрослых: 2 (состав не назван)")
     if old.stage == "inspire" and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
     spec = merge(old.plan.spec, found, notes)
+    used = False  # the LLM output changed this reply
+    if llm_found:
+        with_model = with_llm(found, llm_found)
+        spec_model = merge(old.plan.spec, with_model, notes)
+        if spec_model != spec:
+            found, spec, used = with_model, spec_model, True
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
         return ChatReply(
-            session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=False, **kw
+            session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
         )
 
     if prev is None and (questions := blocking_questions(spec)):
@@ -258,7 +309,7 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     if dirty_nodes(old.plan.spec, spec) or not plan.offers:
         # The DAG recomputes only the nodes that depend on the changed fields (T6, #10).
-        plan, cart, _ = replan(old.plan, spec, old.cart)
+        plan, cart, done = replan(old.plan, spec, old.cart)
         if not plan.offers:
             # TODO(T4, #8): the geocoder and synthetic offers cover any city.
             text = (
@@ -266,12 +317,14 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
                 f"{HINTS['select']}"
             )
             return reply("select", plan, text, cart)
+        why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
+        if why and why != plan.explanations:
+            plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)
         text = _text_compare(plan.model_copy(update={"changes": []}))
         if plan.changes:
             text = "\n".join(["Было → стало:", *describe(plan.changes), text])
         return reply("compare", plan, text, cart)
 
-    t = message.lower()
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
         hotels = [o for o in plan.offers if o.kind == "hotel"]
         if idx is not None and idx < len(hotels):
@@ -286,15 +339,23 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
             f"(синтетика, оплата имитируется). {HINTS['checkout']}"
         )
         return reply("checkout", plan, text, cart)
-    if old.stage == "checkout" and BOOK_RE.search(t) and not NOT_BOOK_RE.search(t):
+    if booking:
         try:  # the same rules as POST /api/checkout; the user saw the stored cart total
-            return checkout_reply(old, old.cart.total_rub)
+            return checkout_reply(old, old.cart.total_rub).model_copy(update={"llm": used})
         except CartRefusal as e:
             return reply(old.stage, plan, e.text)
     return reply(old.stage, plan, HINTS.get(old.stage, "Уточните запрос."))
 
 
 def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
-    """POST /api/chat: an unknown session_id starts a new session with that id."""
+    """POST /api/chat: an unknown session_id starts a new session with that id.
+
+    The LLM runs before the store transaction: BEGIN IMMEDIATE locks the whole SQLite file,
+    and a slow model must not hold the other sessions. The draft is written only if the
+    session did not change meanwhile; otherwise the step runs again on the new state, rules
+    only, inside the transaction.
+    """
     sid = req.session_id or uuid4().hex
-    return store.update(sid, lambda prev: step(prev, sid, req.message))
+    prev = store.get(sid)
+    draft = step(prev, sid, req.message, use_llm=True)
+    return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
