@@ -550,6 +550,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
             plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
+            # «Почему» and the bundles name the picked hotel, not the ranked one (#58).
+            plan.explanations = explain(plan.spec, plan.offers, plan.selected)
+            plan.bundles = bundles(plan.spec, plan.offers, plan.selected)
         plan.timeline, plan.issues = build_timeline(plan)
         return reply("assemble", plan, _text_assemble(plan))
     if old.stage == "assemble" and _confirmed(t):

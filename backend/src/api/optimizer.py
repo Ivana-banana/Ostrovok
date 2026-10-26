@@ -548,11 +548,12 @@ def rank(spec: TripSpec, offers: list[Offer]) -> tuple[list[str], list[Explanati
 
 
 def bundles(spec: TripSpec, offers: list[Offer], selected: list[str] | None = None) -> list[Bundle]:
-    """Whole-trip options for Plan.bundles: the best one first.
+    """Whole-trip options for Plan.bundles. The first one is always the best trip of the spec
+    (labelled «лучший по вашим приоритетам» or «ближе всего к условиям»): dag.py reads it to
+    tell the ranking from a manual pick.
 
-    With `selected` that is a trip other than the best one (the user switched a leg or a
-    hotel), the bundle of the selected trip goes first as «ваш выбор»: it matches `explain`.
-    The best trip keeps its own label. So no label sits on a trip the «Почему» does not name.
+    With `selected` that is another trip (the user switched a leg or picked a hotel), the
+    bundle of the selected trip goes second as «ваш выбор»: it matches `explain`.
     """
     r = optimize(spec, offers)
     trips = enumerate_trips(offers)
@@ -563,7 +564,7 @@ def bundles(spec: TripSpec, offers: list[Offer], selected: list[str] | None = No
     old = next((b for b in r.bundles if b.offer_ids == mine.ids), None)
     label = f"ваш выбор ({old.label})" if old else "ваш выбор"
     own = _bundle(label, mine, _versus(mine, pool[0]))
-    return [own, *(b for b in r.bundles if b.offer_ids != mine.ids)]
+    return [r.bundles[0], own, *(b for b in r.bundles[1:] if b.offer_ids != mine.ids)]
 
 
 def pick_hotel(selected: list[str], offers: list[Offer], hotel_id: str) -> list[str]:

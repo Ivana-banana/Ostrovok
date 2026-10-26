@@ -882,17 +882,16 @@ def test_explain_names_the_selected_trip_not_the_best_one():
     assert f"поездка целиком {t:,} ₽".replace(",", " ") in why[0].why
 
 
-def test_bundles_put_the_selected_trip_first_under_its_own_label():
+def test_bundles_keep_the_best_first_and_add_the_selected_trip_as_own_choice():
     """#58: after a switch the label «лучший» must not sit on a trip the «Почему» does not name."""
     s, items, r = _train_case()
     assert bundles(s, items, r.selected) == r.bundles == bundles(s, items)
     other = _trip_ids(items, "a", "t-train", "t-tb")
     out = bundles(s, items, other)
-    assert out[0].offer_ids == other and out[0].label.startswith("ваш выбор")
-    best = next(b for b in out if b.offer_ids == r.selected)
-    assert best.label == r.bundles[0].label  # the best trip keeps its label
+    assert out[0] == r.bundles[0] and out[0].offer_ids == r.selected  # dag.py reads bundles[0]
+    assert out[1].offer_ids == other and out[1].label.startswith("ваш выбор")
     assert len({tuple(b.offer_ids) for b in out}) == len(out)  # each trip once
-    assert out[0].total_rub == total(other, items)
+    assert out[1].total_rub == total(other, items)
 
 
 def test_switch_transport_recomputes_the_bundles_and_the_why_together():
@@ -902,8 +901,10 @@ def test_switch_transport_recomputes_the_bundles_and_the_why_together():
     plan = Plan(spec=s, offers=items, bundles=r.bundles, selected=r.selected)
     new, note = switch_transport(plan, "возьми поезд")
     assert new is not None, note
-    assert new.bundles[0].offer_ids == new.selected and new.bundles[0].label.startswith("ваш")
-    assert new.explanations[0].offer_id in new.bundles[0].offer_ids
+    own = next(b for b in new.bundles if b.label.startswith("ваш выбор"))
+    assert set(own.offer_ids) == set(new.selected)
+    assert new.explanations[0].offer_id in own.offer_ids
+    assert new.bundles[0].label.startswith("лучший") and new.bundles[0] == r.bundles[0]
     assert [e.offer_id for e in new.explanations[1:]] == ["t-train", "t-tb"]
     assert sum(b.label.startswith("лучший") for b in new.bundles) == 1
     best = next(b for b in new.bundles if b.label.startswith("лучший"))

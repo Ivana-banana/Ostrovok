@@ -220,7 +220,7 @@ def test_second_hotel_and_train_changes_both(store):
     assert mine <= set(r.plan.selected)  # the transfers of the new hotel, not of the old one
     assert {i for i in r.plan.selected if by_id[i].kind == "transfer"} == mine
     assert r.plan.explanations[0].offer_id == rows[1].offer_id  # «Почему» names the new hotel
-    assert r.plan.bundles[0].offer_ids == r.plan.selected
+    assert any(set(b.offer_ids) == set(r.plan.selected) for b in r.plan.bundles)
 
 
 def test_hotel_and_train_in_the_other_order_and_with_a_digit(store):
@@ -253,11 +253,32 @@ def test_unknown_hotel_row_changes_nothing(store):
 
 
 def test_why_and_bundles_follow_a_plain_switch(store):
-    """#58: the first bundle is the selected trip; «Почему» names the same legs."""
+    """#58: a «ваш выбор» bundle is the selected trip; «Почему» names the same legs."""
     r = say(store, SOCHI)
     r = say(store, "возьми самолёт", r.session_id)
     r = say(store, "возьми поезд", r.session_id)
-    top = r.plan.bundles[0]
+    assert r.plan.bundles[0].label.startswith(("лучший", "ближе"))  # the ranking stays first
+    top = next(b for b in r.plan.bundles if b.label.startswith("ваш выбор"))
     assert set(top.offer_ids) == set(r.plan.selected)
     legs_why = {e.offer_id for e in r.plan.explanations[1:]}
     assert legs_why == {x.offer_id for x in legs(r)} <= set(top.offer_ids)
+
+
+def test_plain_hotel_pick_updates_the_why_and_keeps_the_ranked_bundle_first(store):
+    """#58: «второй» (compare -> assemble): «Почему» names the picked hotel.
+
+    bundles[0] stays the optimizer's best trip (dag._keep_pick of #37 reads it to find a manual
+    pick); the picked trip is a «ваш выбор» bundle after it.
+    """
+    from api.optimizer import hotel_rows
+
+    r = say(store, SOCHI)
+    rows = hotel_rows(r.plan.offers, r.plan.selected)
+    best = r.plan.bundles[0]
+    r = say(store, "второй", r.session_id)
+    assert r.stage == "assemble" and hotel_ids(r) == [rows[1].offer_id]
+    assert r.plan.explanations[0].offer_id == rows[1].offer_id
+    assert {e.offer_id for e in r.plan.explanations} <= set(r.plan.selected)
+    assert r.plan.bundles[0] == best and best.label.startswith(("лучший", "ближе"))
+    mine = [b for b in r.plan.bundles if b.label.startswith("ваш выбор")]
+    assert len(mine) == 1 and set(mine[0].offer_ids) == set(r.plan.selected)
