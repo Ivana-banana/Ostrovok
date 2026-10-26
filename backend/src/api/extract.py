@@ -478,6 +478,49 @@ def _other_city(place: dict, excluded: list[str]) -> str | None:
     )
 
 
+# #142: two names joined by «или»/«либо», each may stand after «в»: «Египет или Турция».
+OR_PAIR = re.compile(
+    r"([А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)*)\s+(?:или|либо)\s+(?:(?:в|во|на)\s+)?([А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)*)"
+)
+
+
+def _pair_name(word: str, low: str) -> str | None:
+    """The place a word of a pair names: a known city, a country, or a capitalized unknown name."""
+    if known := _known(word):
+        return known
+    if country := next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None):
+        return country
+    ordinary = [low in NOT_PLACES, len(low) < 3, not word[0].isupper(), low in NUMS]
+    ordinary += [bool(re.match(MONTH, low)), bool(NOT_CITY_START.match(low))]
+    ordinary += [bool(NOT_CITY_END.search(low)), any(re.search(p, low) for _, p in WISHES)]
+    return None if any(ordinary) else _nominative(word)
+
+
+def _or_pairs(text: str, t: str, hits: list) -> set[int]:
+    """Add the names of «X или Y» that the other rules miss; one side must be a place for sure.
+
+    «Египет или Турция»: Египет is a place of the catalogue, Турция has no stem of its own.
+    «Ханой или Сочи»: Ханой is outside the catalogue and has no preposition. «Привет или
+    Здравствуйте» names no place. Returns the starts of the pair words (see _places)."""
+    sides = set()
+    for m in OR_PAIR.finditer(text):
+        words = [(m.start(i), m.end(i), m.group(i)) for i in (1, 2)]
+        starts = {h[0] for h in hits}
+        sure = [
+            s in starts or _known(w) or any(rx.fullmatch(t[s:e]) for _, rx in COUNTRY_RES)
+            for s, e, w in words
+        ]
+        if not any(sure):
+            continue
+        for s, e, w in words:
+            if t[s] == " ":
+                continue  # the origin span
+            sides.add(s)
+            if s not in starts and (name := _pair_name(w, t[s:e])):
+                hits.append((s, name, e))
+    return sides
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -508,6 +551,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n, m.end(1)))
+    pair_sides = _or_pairs(text, t, hits)
     if switch := _switch_city(text):
         hits.append((*switch, _word_end(t, switch[0])))
     # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
@@ -530,6 +574,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     for s, name, _ in sorted(hits):
         if s in refused_at or name == found.get("origin"):
             continue
+        if s in pair_sides and name in COUNTRIES and (city := resolve_place(name)):
+            name = city["name"]  # «Египет или Турция»: the city of the catalogue for the country
         place = resolve_place(name)
         if place and mentions[s][2] in COUNTRIES and place["name"] in refused:
             # The country is named, its city is refused: another city of the country.
