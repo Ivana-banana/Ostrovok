@@ -35,7 +35,7 @@ from api.contracts import (
 )
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract, with_llm
-from api.fixtures import build_timeline, future_date, suggest_destinations
+from api.fixtures import CATALOG, build_timeline, future_date, suggest_destinations
 from api.optimizer import (
     _hotel_why,
     _leg_why,
@@ -76,6 +76,28 @@ REFUSAL = (
     "Служебные инструкции не показываю."
 )
 NOT_BOOK_RE = re.compile(r"\bне\s+подтверждаю\b")
+# S5 (#90): a way out of any stage. «Начать заново» drops the plan and the cart; «другое
+# направление» drops the city and shows others from the catalogue.
+RESTART_RE = re.compile(
+    r"\bнач(?:ать|ни|ните|н[её]м|инаем)\s+"
+    r"(?:(?:вс[её]|поиск|план|диалог|поездку)\s+)?(?:заново|сначала|с\s+нуля)\b"
+    r"|\b(?:давай(?:те)?|хочу|попробу\w+|поехали)\s+(?:вс[её]\s+)?(?:заново|с\s+нуля)\b"
+    r"|\bвс[её]\s+заново\b"
+    r"|\bсбрось(?:те)?(?:\s+(?:вс[её]|план|поиск|поездку|диалог))?\s*(?:[.!,;]|$)"
+    r"|\bнов(?:ый|ую)\s+(?:поиск|запрос|поездк\w*)\b",
+    re.IGNORECASE,
+)
+# A negation before the phrase («не хочу с нуля») or after it («с нуля не надо»).
+NOT_RESTART_RE = re.compile(
+    r"\bне\s+(?:\w+\s+)?(?:начин\w+|начат\w*|сбрас\w+|с\s+нуля|заново|сначала)"
+    r"|\b(?:с\s+нуля|заново|сначала|поиск\w*|запрос\w*|поездк\w*)\s+(?:\w+\s+)?"
+    r"не\s+(?:надо|нужн\w*|хочу|будем)"
+)
+OTHER_RE = re.compile(
+    r"\b(?:друг(?:ое|ой|ую|ие|их)|ино[ейю])\s+(?:направлен\w*|город\w*|мест\w*|стран\w*|курорт\w*)"
+    r"|\bне\s+(?:хочу|нравится|подходит)\s+(?:это|этот|эта)\s+(?:направлен|город|мест)"
+)
+OTHER_VARIANTS_RE = re.compile(r"\bдруг(?:ие|их|ой)\s+вариант\w*")
 # «второй половине ноября» is a part of a month, not the second offer.
 ORDINAL_RE = re.compile(
     r"\b(перв(?:ый|ая|ое|ую|ого)|втор(?:ой|ая|ое|ую|ого)|трет(?:ий|ья|ье|ью|ьего)"
@@ -434,6 +456,22 @@ def _text_assemble(plan: Plan) -> str:
     return "\n".join(lines)
 
 
+def _alternatives(spec: TripSpec, skip: list[str]) -> list[str]:
+    """Up to 3 destination names from the catalogue (code, never invented), without `skip`."""
+    names = [d.name for d in suggest_destinations(spec) if d.name not in skip]
+    return names[:3]
+
+
+def _no_offers(plan: Plan, text: str) -> tuple[str, list[Question]]:
+    """The «choose another» exit of the select stage: 2–3 destinations as the text and buttons."""
+    names = _alternatives(plan.spec, plan.spec.destinations)
+    if not names:
+        return text, []
+    plan.destinations = [d for d in suggest_destinations(plan.spec) if d.name in names]
+    options = f" Например: {', '.join(names)}."
+    return text + options, [Question(text="Куда поедем вместо этого?", options=names)]
+
+
 HINTS: dict[Stage, str] = {
     "select": "Выберите другое направление.",
     "compare": "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».",
@@ -448,6 +486,14 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     use_llm: ask the model (llm.py) when it is configured; this blocks on the network, so the
     caller runs it outside the store transaction.
     """
+    low = message.lower().replace("ё", "е")
+    restart = RESTART_RE.search(message) and not NOT_RESTART_RE.search(low)
+    if prev and restart and not REFUSE_RE.search(low):
+        # The plan, the cart and the voucher go; what is left of the message starts the trip.
+        rest = RESTART_RE.sub(" ", message).strip(" ,.!;:-")
+        fresh = step(None, sid, rest, use_llm)
+        kept = f" Бронь {prev.voucher.booking_id} остаётся оформленной." if prev.voucher else ""
+        return fresh.model_copy(update={"reply": f"Начинаем заново.{kept} {fresh.reply}"})
     if prev and prev.voucher:
         text = f"Бронь {prev.voucher.booking_id} уже оформлена."
         return prev.model_copy(update={"reply": text, "questions": [], "llm": False})
@@ -498,8 +544,21 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     pick = old.stage in ("inspire", "compare") and idx is not None
     service = prev is not None and (consent or pick)
     found, notes = extract(message, bool(old.plan.spec.destinations))
+    # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
+    other = (
+        prev is not None
+        and "destinations" not in found
+        and bool(
+            OTHER_RE.search(low)
+            or (OTHER_VARIANTS_RE.search(low) and old.stage in ("inspire", "select"))
+        )
+    )
+    if other:
+        found["destinations"] = []
     llm_found = (
-        None if service or not use_llm else llm.extract_spec(message, old.plan.spec, deadline)
+        None
+        if service or other or not use_llm
+        else llm.extract_spec(message, old.plan.spec, deadline)
     )
     if SHIFT_RE.search(t.replace("ё", "е")):
         found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
@@ -507,7 +566,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             llm_found.pop("nights", None)
     if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
         notes.append("взрослых: 2 (состав не назван)")
-    if old.stage == "inspire" and idx is not None and idx < len(old.plan.destinations):
+    if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
     spec = merge(old.plan.spec, found, notes)
     used = False  # the LLM output changed this reply
@@ -526,10 +585,23 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return reply("clarify", Plan(spec=spec), _text_clarify(questions), questions=questions)
     spec = assume(spec)
     if not spec.destinations:
+        dests = suggest_destinations(spec)
+        if other:
+            gone = old.plan.spec.destinations
+            ranked = suggest_destinations(spec, len(CATALOG))
+            shown = [d.name for d in old.plan.destinations] if old.stage == "inspire" else []
+            # Without the options already shown, if enough others are left.
+            dests = [d for d in ranked if d.name not in [*gone, *shown]]
+            dests = (dests if len(dests) >= 2 else [d for d in ranked if d.name not in gone])[:3]
         # The origin is no destination: a stay in the city of departure has no transport (#94).
-        ideas = [d for d in suggest_destinations(spec) if d.name != spec.origin]
-        plan = Plan(spec=spec, destinations=ideas)
-        return reply("inspire", plan, _text_inspire(plan))
+        dests = [d for d in dests if d.name != spec.origin]
+        plan = Plan(spec=spec, destinations=dests)
+        if not other:
+            return reply("inspire", plan, _text_inspire(plan))
+        gone_text = f"Убираю «{', '.join(gone)}» из плана, корзину очищаю. " if gone else ""
+        question = Question(text="Куда поедем?", options=[d.name for d in dests])
+        text = gone_text + _text_inspire(plan)
+        return reply("inspire", plan, text, Cart(), questions=[question])
 
     if "date_from" not in found:
         spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
@@ -544,7 +616,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
                 f"Направления «{spec.destinations[0]}» пока нет в каталоге, предложений нет. "
                 f"{HINTS['select']}"
             )
-            return reply("select", plan, text, cart)
+            text, questions = _no_offers(plan, text)
+            return reply("select", plan, text, cart, questions=questions)
         why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
         if why and why != plan.explanations:
             plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)
@@ -574,7 +647,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return checkout_reply(old, old.cart.total_rub).model_copy(update={"llm": used})
         except CartRefusal as e:
             return reply(old.stage, plan, e.text)
-    return reply(old.stage, plan, HINTS.get(old.stage, "Уточните запрос."))
+    text = HINTS.get(old.stage, "Уточните запрос.")
+    if old.stage == "select":
+        text, questions = _no_offers(plan, text)
+        return reply("select", plan, text, questions=questions)
+    return reply(old.stage, plan, text)
 
 
 def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
