@@ -55,9 +55,14 @@ OUT_FLIGHTS = [(time(10, 30), 1.0), (time(17, 40), 0.9)]  # arrival, local to th
 BACK_FLIGHTS = [(time(15, 20), 1.0), (time(21, 5), 0.9)]  # departure, local to the place
 ENDINGS = ("ий", "ый", "ой", "ая", "ое", "ие", "ые", "ь", "й", "а", "я", "о", "е", "и", "у",
            "ю", "ы")  # fmt: skip
-SYNTH_NOTE = "Синтетический отель для демо: такого объекта может не быть."
-OSM_NOTE = "Объект из OpenStreetMap (© участники OpenStreetMap, ODbL)."
-TARIFF_NOTE = "Цена, питание, отмена и рейтинг — синтетика."
+SYNTH_NOTE = (
+    "Синтетический отель для демо: такого объекта может не быть. "
+    "Цена, питание, отмена, рейтинг и удобства — синтетика."
+)
+OSM_NOTE = (
+    "Объект из OpenStreetMap (© участники OpenStreetMap, ODbL); удобства — только из тегов OSM. "
+    "Цена, питание, отмена и рейтинг — синтетика."
+)
 
 
 def _rand(*parts: object) -> float:
@@ -176,29 +181,28 @@ def _night_factor(d: date) -> float:
 
 
 def _hotel_base(place: dict, key: str, name: str, stars: int, lat: float, lon: float,
-                tags: dict) -> dict:  # fmt: skip
-    """Hotel features; what OSM tags do not say is synthetic."""
+                tags: dict, synthetic: bool) -> dict:  # fmt: skip
+    """Hotel features. A real OSM hotel gets a feature only from its tag (no tag: no flag);
+    a synthetic hotel gets synthetic features."""
 
     def r(what: str) -> float:
         return _rand(place["name"], key, what)
 
     km = round(km_between(place, {"lat": lat, "lon": lon}), 1)
-    wheelchair = (
-        tags["wheelchair"] == "yes"
-        if "wheelchair" in tags
-        else r("wheelchair") < (0.7 if stars >= 4 else 0.2)
-    )
     pet_tag = tags.get("pets", tags.get("dog"))
-    pets = pet_tag in ("yes", "leashed") if pet_tag else r("pets") < 0.3
-    family = r("family") < (0.8 if stars >= 4 or place["sea"] else 0.3)
-    flags = {
-        "family": family,
-        "kids_club": place["sea"] and stars == 5,
-        "wheelchair": wheelchair,
-        "elevator": wheelchair or stars >= 4 or r("elevator") < 0.6,
-        "beach": place["sea"] and (km <= 1.5 or stars >= 4),
-        "parking": stars <= 2 or r("parking") < 0.6,
-    }
+    flags = {"wheelchair": tags.get("wheelchair") == "yes"}
+    pets = pet_tag in ("yes", "leashed")
+    if synthetic:
+        flags = {
+            "family": r("family") < (0.8 if stars >= 4 or place["sea"] else 0.3),
+            "kids_club": place["sea"] and stars == 5,
+            "wheelchair": r("wheelchair") < (0.7 if stars >= 4 else 0.2),
+            "elevator": stars >= 4 or r("elevator") < 0.6,
+            "beach": place["sea"] and (km <= 1.5 or stars >= 4),
+            "parking": stars <= 2 or r("parking") < 0.6,
+        }
+        flags["elevator"] = flags["elevator"] or flags["wheelchair"]
+        pets = pets or r("pets") < 0.3
     return {
         "key": key,
         "name": name,
@@ -224,7 +228,7 @@ def _osm_bases(place: dict) -> list[dict]:
             else 3 + (_rand(place["name"], key) < 0.5)
         )
         name = tags.get("name:ru") or tags["name"]
-        base = _hotel_base(place, key, name, stars, e["lat"], e["lon"], tags)
+        base = _hotel_base(place, key, name, stars, e["lat"], e["lon"], tags, synthetic=False)
         out.append({**base, "title": f"{name}, {place['name']}", "note": OSM_NOTE})
     return out
 
@@ -242,7 +246,7 @@ def _synthetic_bases(place: dict) -> list[dict]:
         name = names[(shift + i) % len(names)]
         # The second hotel always takes pets: a dog owner has at least one option.
         tags = {"pets": "yes"} if i == 1 else {}
-        base = _hotel_base(place, key, name, stars, round(lat, 6), round(lon, 6), tags)
+        base = _hotel_base(place, key, name, stars, round(lat, 6), round(lon, 6), tags, True)
         out.append({**base, "title": f"Отель «{name}», {place['name']}", "note": SYNTH_NOTE})
     return out
 
@@ -274,6 +278,8 @@ def _hotel(
     nights = max(1, (date_out - date_in).days)
     key = base["key"]
     meal = spec.meal if spec.meal in _meals(place, base["stars"]) else _default_meal(place, base)
+    # The tariff (price and offer_id) does not depend on the clock; only the cancellation
+    # state does: after the deadline a refundable tariff has no free cancellation left.
     refundable = (
         spec.refundable
         if spec.refundable is not None
@@ -283,8 +289,11 @@ def _hotel(
     if refundable:
         days = (7, 3, 1)[int(_rand(place["name"], key, "deadline") * 3)]
         free_until = datetime.combine(date_in - timedelta(days=days), time(12, 0), tz)
-        if free_until <= now:  # the free-cancellation deadline has passed
-            refundable, free_until = False, None
+    cancellation = (
+        Cancellation(refundable=True, free_until=free_until)
+        if free_until and free_until > now
+        else Cancellation(refundable=False)
+    )
     room = place["level"] * STAR_FACTOR[base["stars"]] * _room_factor(spec)
     jitter = _between(0.9, 1.12, place["name"], key, date_in, nights, _guests_tag(spec))
     people = spec.adults + 0.5 * sum(a >= 2 for a in spec.children_ages)
@@ -308,13 +317,13 @@ def _hotel(
         stars=base["stars"],
         rating=base["rating"],
         meal=meal,
-        cancellation=Cancellation(refundable=refundable, free_until=free_until),
+        cancellation=cancellation,
         distance_center_km=base["km"],
         lat=base["lat"],
         lon=base["lon"],
         pets_allowed=base["pets"],
         amenities=base["amenities"],
-        description=f"{base['note']} {TARIFF_NOTE}",
+        description=base["note"],
     )
     night = sum(rooms) / nights
     before = date_in - timedelta(days=1)
@@ -449,13 +458,13 @@ def transfer_offers(
                 start = _shift(
                     leg.arrive_at.astimezone(tz), timedelta(minutes=40 if flight else 15)
                 )
-                title = f"Трансфер: {hub} → {h.title}, {road:g} км"
+                title = f"Трансфер: {hub} → {h.title}, ≈{road:g} км"
             else:
                 end = _shift(
                     leg.depart_at.astimezone(tz), -timedelta(minutes=120 if flight else 40)
                 )
                 start = _shift(end, -ride)
-                title = f"Трансфер: {h.title} → {hub}, {road:g} км"
+                title = f"Трансфер: {h.title} → {hub}, ≈{road:g} км"
             out.append(
                 TransferOffer(
                     offer_id=transfer_id(h.offer_id, leg.offer_id),
@@ -468,7 +477,9 @@ def transfer_offers(
     return out
 
 
-def offers_for_place(spec: TripSpec, place: dict, origin: dict | None = None) -> list[Offer]:
+def offers_for_place(
+    spec: TripSpec, place: dict, origin: dict | None = None, now: datetime | None = None
+) -> list[Offer]:
     """All offers for one place and the spec dates: hotels, transport, transfers, add-ons.
 
     place and origin need only name, lat, lon and tz (TRAP-2); the rest has defaults.
@@ -476,7 +487,7 @@ def offers_for_place(spec: TripSpec, place: dict, origin: dict | None = None) ->
     if not spec.date_from:
         return []
     place = _complete(place)
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)  # only the cancellation state depends on it
     osm = _osm_bases(place)
     bases = osm if len(osm) >= 3 else _synthetic_bases(place)
     pairs = [_hotel(spec, place, b, now) for b in bases]
@@ -486,10 +497,10 @@ def offers_for_place(spec: TripSpec, place: dict, origin: dict | None = None) ->
     return [*hotels, *legs, *transfers, *(x for _, extras in pairs for x in extras)]
 
 
-def find_offers(spec: TripSpec, name: str) -> list[Offer]:
+def find_offers(spec: TripSpec, name: str, now: datetime | None = None) -> list[Offer]:
     """Offers for a destination name from the spec; [] when the name is unknown."""
     place = resolve_place(name)
     if place is None:
         return []
     origin = resolve_place(spec.origin) if spec.origin else None
-    return offers_for_place(spec, place, origin)
+    return offers_for_place(spec, place, origin, now)

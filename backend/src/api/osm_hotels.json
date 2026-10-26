@@ -1,5 +1,5 @@
 {
- "_source": "© участники OpenStreetMap, ODbL 1.0 (https://www.openstreetmap.org/copyright). Overpass API, данные на 2026-10-26T16:29:00Z: tourism=hotel в 4 км от центра; оставлены теги name, name:ru, stars, wheelchair. Цены, питание и отмена к этим объектам — синтетика.",
+ "_source": "© участники OpenStreetMap, ODbL 1.0 (https://www.openstreetmap.org/copyright). Запрос к https://overpass-api.de/api/interpreter, данные на 2026-10-26T16:29:00Z: [out:json][timeout:60];node[\"tourism\"=\"hotel\"][\"name\"](around:4000,55.7961,49.1064);out 40; Из 40 ответов оставлены 5 с тегом stars, выбраны вручную ради разброса звёзд: 5★ Корстон, 4★ Шаляпин Палас Отель, 4★ DoubleTree, 3★ Островский, 2★ Kazantel. Теги — name, name:ru, stars, wheelchair. Цена, питание, отмена и рейтинг к этим объектам — синтетика.",
  "places": {
   "Казань": [
    {

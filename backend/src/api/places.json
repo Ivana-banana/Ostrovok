@@ -1,5 +1,5 @@
 {
-  "_source": "Координаты центров городов и IANA-пояса — открытые справочные данные (сверка с GeoNames — задача #8). level — цена ночи в 3★ на двоих, ₽, оценка команды для синтетики. airport_km и station_km — оценка расстояния от центра до аэропорта и вокзала; null — нет.",
+  "_source": "Координаты центров и IANA-пояса — оценка команды, источника нет; сверка с GeoNames — задача #8. level — цена ночи в 3★ на двоих, ₽; airport_km и station_km — расстояние от центра до аэропорта и вокзала (null — нет). Всё это тоже оценка команды для синтетики.",
   "places": [
     {"name": "Москва", "slug": "mow", "country": "Россия", "lat": 55.7558, "lon": 37.6173, "tz": "Europe/Moscow", "sea": false, "level": 7500, "airport_km": 35, "station_km": 3, "aliases": ["moscow", "мск"]},
     {"name": "Санкт-Петербург", "slug": "led", "country": "Россия", "lat": 59.9343, "lon": 30.3351, "tz": "Europe/Moscow", "sea": false, "level": 5000, "airport_km": 20, "station_km": 2, "aliases": ["петербург", "питер", "спб", "saint petersburg"]},
@@ -60,7 +60,7 @@
     {"name": "Нальчик", "slug": "nal", "country": "Россия", "lat": 43.4853, "lon": 43.6071, "tz": "Europe/Moscow", "sea": false, "level": 3800, "airport_km": 5, "station_km": 2, "aliases": ["эльбрус"]},
     {"name": "Домбай", "slug": "dmb", "country": "Россия", "lat": 43.2900, "lon": 41.6200, "tz": "Europe/Moscow", "sea": false, "level": 6000, "airport_km": 200, "station_km": null, "aliases": []},
     {"name": "Стамбул", "slug": "ist", "country": "Турция", "lat": 41.0082, "lon": 28.9784, "tz": "Europe/Istanbul", "sea": true, "level": 7000, "airport_km": 40, "station_km": null, "aliases": ["istanbul"]},
-    {"name": "Анталия", "slug": "ayt", "country": "Турция", "lat": 36.8969, "lon": 30.7133, "tz": "Europe/Istanbul", "sea": true, "level": 6500, "airport_km": 12, "station_km": null, "aliases": ["анталья", "antalya"]},
+    {"name": "Анталия", "slug": "ayt", "country": "Турция", "lat": 36.8969, "lon": 30.7133, "tz": "Europe/Istanbul", "sea": true, "level": 6500, "airport_km": 12, "station_km": null, "aliases": ["анталья", "antalya", "турция"]},
     {"name": "Алания", "slug": "aly", "country": "Турция", "lat": 36.5444, "lon": 31.9954, "tz": "Europe/Istanbul", "sea": true, "level": 5500, "airport_km": 120, "station_km": null, "aliases": ["аланья", "alanya"]},
     {"name": "Бодрум", "slug": "bjv", "country": "Турция", "lat": 37.0344, "lon": 27.4305, "tz": "Europe/Istanbul", "sea": true, "level": 7000, "airport_km": 35, "station_km": null, "aliases": []},
     {"name": "Гёреме", "slug": "nav", "country": "Турция", "lat": 38.6431, "lon": 34.8289, "tz": "Europe/Istanbul", "sea": false, "level": 6000, "airport_km": 40, "station_km": null, "aliases": ["каппадокия", "гереме"]},
@@ -76,7 +76,7 @@
     {"name": "Бишкек", "slug": "frs", "country": "Киргизия", "lat": 42.8746, "lon": 74.5698, "tz": "Asia/Bishkek", "sea": false, "level": 4000, "airport_km": 30, "station_km": null, "aliases": ["киргизия", "кыргызстан"]},
     {"name": "Дубай", "slug": "dxb", "country": "ОАЭ", "lat": 25.2048, "lon": 55.2708, "tz": "Asia/Dubai", "sea": true, "level": 9000, "airport_km": 10, "station_km": null, "aliases": ["оаэ", "эмираты", "dubai"]},
     {"name": "Абу-Даби", "slug": "auh", "country": "ОАЭ", "lat": 24.4539, "lon": 54.3773, "tz": "Asia/Dubai", "sea": true, "level": 9000, "airport_km": 30, "station_km": null, "aliases": []},
-    {"name": "Хургада", "slug": "hrg", "country": "Египет", "lat": 27.2579, "lon": 33.8116, "tz": "Africa/Cairo", "sea": true, "level": 6000, "airport_km": 8, "station_km": null, "aliases": ["египет"]},
+    {"name": "Хургада", "slug": "hrg", "country": "Египет", "lat": 27.2579, "lon": 33.8116, "tz": "Africa/Cairo", "sea": true, "level": 6000, "airport_km": 8, "station_km": null, "aliases": ["египет", "египта", "египте", "египту", "египтом"]},
     {"name": "Шарм-эль-Шейх", "slug": "ssh", "country": "Египет", "lat": 27.9158, "lon": 34.3300, "tz": "Africa/Cairo", "sea": true, "level": 6000, "airport_km": 15, "station_km": null, "aliases": ["шарм"]},
     {"name": "Каир", "slug": "cai", "country": "Египет", "lat": 30.0444, "lon": 31.2357, "tz": "Africa/Cairo", "sea": false, "level": 5000, "airport_km": 20, "station_km": null, "aliases": []},
     {"name": "Пхукет", "slug": "hkt", "country": "Таиланд", "lat": 7.8804, "lon": 98.3923, "tz": "Asia/Bangkok", "sea": true, "level": 5000, "airport_km": 30, "station_km": null, "aliases": ["таиланд", "тайланд"]},

@@ -66,6 +66,10 @@ def test_trap_2_city_outside_the_old_catalogue_reaches_booking(tmp_path):
         ("Грузию", "Тбилиси"),
         ("Стамбуле", "Стамбул"),
         ("Санкт-Петербурге", "Санкт-Петербург"),
+        ("Турцию", "Анталия"),
+        ("Турции", "Анталия"),
+        ("Египте", "Хургада"),
+        ("Египта", "Хургада"),
     ],
 )
 def test_trap_3_spelling_and_case_variants_resolve(written, name):
@@ -153,14 +157,16 @@ def test_trap_5_times_are_local_and_transfers_dock():
         assert o.arrive_at.utcoffset() == o.arrive_at.astimezone(tz).utcoffset()
         assert o.depart_at.utcoffset() == timedelta(hours=3)  # Moscow
         assert o.arrive_at > o.depart_at
-    transfers = kinds(items, "transfer")
+    by_id = {t.offer_id: t for t in kinds(items, "transfer")}
+    hotels = kinds(items, "hotel")
+
+    def of(leg):  # the transfers of this leg, one per hotel
+        return [by_id[transfer_id(h.offer_id, leg.offer_id)] for h in hotels]
+
     for leg in there:
-        mine = [t for t in transfers if t.depart_at >= leg.arrive_at + timedelta(minutes=40)]
-        assert len(mine) >= 5
+        assert all(t.depart_at >= leg.arrive_at + timedelta(minutes=40) for t in of(leg))
     for leg in back:
-        assert any(leg.depart_at - timedelta(hours=2) == t.arrive_at for t in transfers), (
-            leg.offer_id
-        )
+        assert all(t.arrive_at == leg.depart_at - timedelta(hours=2) for t in of(leg))
 
 
 def test_s6_kazan_has_morning_train_and_flight_and_a_rich_comparison():
@@ -246,3 +252,26 @@ def test_trap_5_overnight_train_across_a_dst_change_keeps_real_duration():
     assert ride(dst) == ride(plain)
     assert dst.arrive_at.utcoffset() == timedelta(hours=2)
     assert dst.depart_at.utcoffset() == timedelta(hours=1)
+
+
+def test_trap_7_real_osm_hotel_has_no_made_up_amenities():
+    """TRAP-7: an OSM hotel gets a feature only from its tag; a synthetic one says so."""
+    hotels = {h.title.split(",")[0]: h for h in kinds(kazan_weekend(), "hotel")}
+    korston = hotels["Корстон"]  # OSM: no wheelchair, pets or other amenity tags
+    assert korston.amenities == [] and not korston.pets_allowed
+    assert hotels["DoubleTree"].amenities == ["wheelchair"]  # wheelchair=yes in OSM
+    synthetic = kinds(find_offers(spec(), "Анапа"), "hotel")
+    assert all("удобства — синтетика" in h.description for h in synthetic)
+
+
+def test_clock_changes_only_the_cancellation_state():
+    """The same request gives the same ids and prices before and after a deadline."""
+    s = spec(refundable=True)
+    early = datetime(2000, 1, 1, tzinfo=ZoneInfo("UTC"))
+    late = datetime.combine(s.date_from, datetime.min.time(), ZoneInfo("UTC"))
+    a = kinds(find_offers(s, "Казань", now=early), "hotel")
+    b = kinds(find_offers(s, "Казань", now=late), "hotel")
+    assert [(h.offer_id, h.price_rub) for h in a] == [(h.offer_id, h.price_rub) for h in b]
+    assert all(h.cancellation.refundable for h in a)
+    assert not any(h.cancellation.refundable for h in b)
+    assert find_offers(s, "Казань", now=early) == find_offers(s, "Казань", now=early)
