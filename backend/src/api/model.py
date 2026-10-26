@@ -460,7 +460,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # S6 (#31): «возьми поезд», «второй рейс» pick offers of the plan. It goes to no model and is
     # no constraint: the spec stays, only plan.selected and the timeline change. A message that
     # also states trip fields or moves the dates («давай в Сочи поездом») is a re-plan, as before.
-    pure = set(extract(message)[0]) <= {"modes"} and not SHIFT_RE.search(t.replace("ё", "е"))
+    pure = set(extract(message, bool(old.plan.spec.destinations))[0]) <= {
+        "modes"
+    } and not SHIFT_RE.search(t.replace("ё", "е"))
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
         plan, note = switch_transport(old.plan, message)
         if old.stage == "checkout" and (plan or note):
@@ -485,7 +487,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     )
     pick = old.stage in ("inspire", "compare") and idx is not None
     service = prev is not None and (old.stage in ("assemble", "checkout") or consent or pick)
-    found, notes = extract(message)
+    found, notes = extract(message, bool(old.plan.spec.destinations))
     llm_found = (
         None if service or not use_llm else llm.extract_spec(message, old.plan.spec, deadline)
     )

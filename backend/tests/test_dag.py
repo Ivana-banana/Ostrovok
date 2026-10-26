@@ -72,7 +72,9 @@ def test_meal_change_reranks_without_a_new_search(booked, calls):
     assert done == ["ranking", "timeline", "cart"] and cart.items == []
     assert "find_offers" not in calls
     # transport and hotels are kept, the tariffs of a hotel are only ordered again
-    assert sorted(o.offer_id for o in plan.offers) == sorted(o.offer_id for o in booked.plan.offers)
+    assert sorted(plan.offers, key=lambda o: o.offer_id) == sorted(
+        booked.plan.offers, key=lambda o: o.offer_id
+    )
     hotel = next(o for o in plan.offers if o.offer_id in plan.selected and o.kind == "hotel")
     assert hotel.meal == "AI"
     assert any(c.what == "питание" for c in plan.changes)

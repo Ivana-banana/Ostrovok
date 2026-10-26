@@ -279,8 +279,8 @@ def _hotel(
 ) -> list[tuple[HotelOffer, list[ExtraOffer]]]:
     """2-4 tariffs of one hotel (meal x cancellation), each with its add-ons.
 
-    A hotel with a free-cancellation rate sells both rates for each meal plan; any other
-    hotel sells only the non-refundable one. The tariffs do not read spec.meal or
+    A hotel with a free-cancellation rate that is still open sells both rates for each meal
+    plan; any other hotel sells only the non-refundable one. The tariffs do not read spec.meal or
     spec.refundable: the re-plan DAG (api/dag.py) answers those edits by re-ranking the
     same offers, without a new search. The optimizer treats every tariff as its own hotel.
     """
@@ -288,13 +288,15 @@ def _hotel(
     date_in, date_out = _dates(spec)
     nights = max(1, (date_out - date_in).days)
     key = base["key"]
-    # The tariff (price and offer_id) does not depend on the clock; only the cancellation
-    # state does: after the deadline a refundable tariff has no free cancellation left.
-    has_refundable = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 0.2
+    # A tariff (price and offer_id) does not depend on the clock. The free-cancellation rate
+    # exists only until its deadline: after it the hotel sells the non-refundable rate alone,
+    # so no two tariffs of a hotel share (meal, refundable).
+    refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 0.2
     free_until = None
-    if has_refundable:
+    if refundable_rate:
         days = (7, 3, 1)[int(_rand(place["name"], key, "deadline") * 3)]
         free_until = datetime.combine(date_in - timedelta(days=days), time(12, 0), tz)
+    has_refundable = free_until is not None and free_until > now
     room = place["level"] * STAR_FACTOR[base["stars"]] * _room_factor(spec)
     jitter = _between(0.9, 1.12, place["name"], key, date_in, nights, _guests_tag(spec))
     people = spec.adults + 0.5 * sum(a >= 2 for a in spec.children_ages)
@@ -305,10 +307,8 @@ def _hotel(
     for meal in _meals(place, base):
         meal_night = MEAL_RUB[meal] * place["level"] / 5000 * people
         for refundable in (True, False) if has_refundable else (False,):
-            cancellation = (
-                Cancellation(refundable=True, free_until=free_until)
-                if refundable and free_until and free_until > now
-                else Cancellation(refundable=False)
+            cancellation = Cancellation(
+                refundable=refundable, free_until=free_until if refundable else None
             )
             tariff = 1.0 if refundable else 0.9
             offer_id = (

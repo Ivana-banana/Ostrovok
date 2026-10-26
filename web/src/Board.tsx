@@ -388,31 +388,46 @@ function Changes({ plan }: { plan: Plan }) {
   );
 }
 
-function Timeline({ plan, canAdd, busy, onCart }: {
+function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
   plan: Plan;
+  cart: Cart;
+  marked: boolean; // the cart is final or open: an item outside it is shown as removed
   canAdd: boolean;
   busy: boolean;
   onCart: BoardProps["onCart"];
 }) {
   if (!plan.timeline.length && !plan.issues.length) return null;
   const offer = (id: string) => plan.offers.find((o) => o.offer_id === id);
+  // The server keeps a removed item in `plan.selected` so it can come back, and the timeline
+  // still has its events. Once the cart exists, an event of an item outside it is «removed».
+  const inCart = new Set(cart.items.map((o) => o.offer_id));
+  const gone = (id: string | null) => marked && id !== null && !inCart.has(id);
+  // A fix for a removed item (an add-on of a removed hotel) is useless: the server refuses it.
+  const dead = (id: string) => {
+    const o = offer(id);
+    return marked && o?.kind === "extra" && o.for_offer_id !== null && gone(o.for_offer_id);
+  };
   return (
     <section className="card" aria-label="Таймлайн">
       <h2>Таймлайн</h2>
       <p className="muted">Время местное для места события.</p>
       <ol className="timeline">
         {plan.timeline.map((e, i) => (
-          <li key={`${e.at}-${i}`}>
-            <time>{localTime(e.at)}</time> {e.title}
+          <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined}>
+            <time>{localTime(e.at)}</time> <span className="gone-title">{e.title}</span>
+            {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}
           </li>
         ))}
       </ol>
-      {plan.issues.map((issue, i) => (
+      {plan.issues.map((issue, i) => {
+        const fixes = issue.fixes.filter((id) => !dead(id));
+        if (issue.fixes.length > 0 && fixes.length === 0) return null; // only for a removed item
+        return (
         <div key={i} className={`issue ${issue.severity}`} role="note">
           <b>{issue.severity === "error" ? "Ошибка стыковки" : "Внимание"}:</b> {issue.text}
-          {issue.fixes.length > 0 && (
+          {fixes.length > 0 && (
             <ul>
-              {issue.fixes.map((id) => {
+              {fixes.map((id) => {
                 const o = offer(id);
                 return (
                   <li key={id}>
@@ -434,7 +449,8 @@ function Timeline({ plan, canAdd, busy, onCart }: {
             </ul>
           )}
         </div>
-      ))}
+        );
+      })}
     </section>
   );
 }
@@ -579,7 +595,14 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
       <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
       <Bundles plan={plan} />
       <Explanations plan={plan} />
-      <Timeline plan={plan} canAdd={stage === "checkout"} busy={busy} onCart={onCart} />
+      <Timeline
+        plan={plan}
+        cart={cart}
+        marked={stage === "checkout" || stage === "booked"}
+        canAdd={stage === "checkout"}
+        busy={busy}
+        onCart={onCart}
+      />
       {next && (
         <button type="button" className="primary" disabled={busy} onClick={() => onSend(next.text)}>
           {next.label}

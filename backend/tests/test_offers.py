@@ -1,5 +1,6 @@
 """Offer providers (T5, #9) through the public functions of api.offers."""
 
+import re
 import socket
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -336,14 +337,30 @@ def test_trap_7_real_osm_hotel_has_no_made_up_amenities():
     assert all("удобства — синтетика" in h.description for h in synthetic)
 
 
-def test_clock_changes_only_the_cancellation_state():
-    """The same request gives the same ids and prices before and after a deadline."""
+def test_clock_only_removes_the_free_cancellation_rate_after_its_deadline():
+    """Before the deadline a hotel sells both rates; after it, only the non-refundable one,
+    with the same ids and prices. No hotel sells two tariffs with the same terms."""
     s = spec()
     early = datetime(2000, 1, 1, tzinfo=ZoneInfo("UTC"))
     late = datetime.combine(s.date_from, datetime.min.time(), ZoneInfo("UTC"))
     a = kinds(find_offers(s, "Казань", now=early), "hotel")
     b = kinds(find_offers(s, "Казань", now=late), "hotel")
-    assert [(h.offer_id, h.price_rub) for h in a] == [(h.offer_id, h.price_rub) for h in b]
     assert any(h.cancellation.refundable for h in a)
     assert not any(h.cancellation.refundable for h in b)
+    assert [h for h in a if not h.cancellation.refundable] == b  # the same ids, prices, terms
+    assert 2 <= len(b) < len(a)
     assert find_offers(s, "Казань", now=early) == find_offers(s, "Казань", now=early)
+
+
+@pytest.mark.parametrize("days", [0, 1, 2, 5])
+def test_near_dates_do_not_double_a_non_refundable_tariff(days):
+    """After the deadline a hotel has no 'refundable' tariff that is really non-refundable."""
+    day = date.today() + timedelta(days=days)
+    s = spec(date_from=day, date_to=day + timedelta(days=2))
+    for tariffs in hotel_tariffs(find_offers(s, "Сочи")).values():
+        terms = [(t.meal, t.cancellation.refundable) for t in tariffs]
+        assert len(terms) == len(set(terms)) and 2 <= len(terms) <= 4
+        for t in tariffs:  # the id says «r» only for a really refundable tariff
+            assert (re.search(r"-(RO|BB|HB|AI)r-", t.offer_id) is not None) == (
+                t.cancellation.refundable
+            )

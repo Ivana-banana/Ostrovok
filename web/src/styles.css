@@ -362,6 +362,19 @@ ul.plain li:last-child {
   margin-right: 0.4rem;
 }
 
+.timeline li.gone {
+  color: var(--muted);
+}
+
+.timeline li.gone .gone-note {
+  font-weight: 600;
+}
+
+.timeline li.gone time,
+.timeline li.gone .gone-title {
+  text-decoration: line-through;
+}
+
 .issue {
   margin-top: 0.5rem;
   padding: 0.5rem 0.75rem;
