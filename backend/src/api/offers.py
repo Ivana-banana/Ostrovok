@@ -1,8 +1,8 @@
 """Offer providers (T5, #9): hotels, tariffs, transport, transfers and add-ons for any place.
 
-- Places: places.json (centre, IANA zone, price level, distance to airport and station).
-  offers_for_place works for any coordinates (TRAP-2); TODO(#8): the geocoder resolves
-  names outside the snapshot, until then find_offers returns [] for them.
+- Places: the catalogue snapshot (api/catalog.py: centre, IANA zone, price level, distance
+  to airport and station). offers_for_place works for any coordinates (TRAP-2); a name
+  outside the snapshot goes to the online geocoder, [] when it finds nothing.
 - Hotels: osm_hotels.json (OpenStreetMap snapshot) when it has the city, else synthetic
   hotels around the centre. Every tariff (price, meal, cancellation) is synthetic.
 - Transport: flight, train or car from the great-circle distance, fixed local time slots.
@@ -10,20 +10,20 @@
 - Add-ons: early check-in, late check-out and the night before, per hotel.
 
 Deterministic: the same place, dates and guests give the same offers (sha256 seed, no
-random module). No network at runtime: both snapshots are files (TRAP-6). Every offer is
-synthetic=True (TRAP-7); prices and times come only from here (TRAP-4).
+random module). Network only for a name outside the catalogue, with a fallback (TRAP-6).
+Every offer is synthetic=True (TRAP-7); prices and times come only from here (TRAP-4).
 All coefficients below are team estimates without a source.
 """
 
 import hashlib
 import json
 import math
-import re
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from api import catalog
 from api.contracts import (
     Cancellation,
     ExtraOffer,
@@ -35,7 +35,6 @@ from api.contracts import (
     TransportOffer,
     TripSpec,
 )
-from api.guards import normalize_toponym
 
 HERE = Path(__file__).parent
 DEFAULT_LEVEL = 5500  # night in a 3-star room for two, roubles, when a place has no level
@@ -53,8 +52,6 @@ NO_DIRECT = {"Италия", "Франция", "Испания", "Чехия", "
              "Греция", "Кипр"}  # fmt: skip
 OUT_FLIGHTS = [(time(10, 30), 1.0), (time(17, 40), 0.9)]  # arrival, local to the place
 BACK_FLIGHTS = [(time(15, 20), 1.0), (time(21, 5), 0.9)]  # departure, local to the place
-ENDINGS = ("ий", "ый", "ой", "ая", "ое", "ие", "ые", "ь", "й", "а", "я", "о", "е", "и", "у",
-           "ю", "ы")  # fmt: skip
 SYNTH_NOTE = (
     "Синтетический отель для демо: такого объекта может не быть. "
     "Цена, питание, отмена, рейтинг и удобства — синтетика."
@@ -89,45 +86,14 @@ def _shift(at: datetime, delta: timedelta) -> datetime:
 
 
 @cache
-def places() -> list[dict]:
-    return json.loads((HERE / "places.json").read_text(encoding="utf-8"))["places"]
-
-
-@cache
 def osm_hotels() -> dict[str, list[dict]]:
     """Overpass elements (tourism=hotel) by place name."""
     return json.loads((HERE / "osm_hotels.json").read_text(encoding="utf-8"))["places"]
 
 
-def _norm(name: str) -> str:
-    return re.sub(r"[\s\-]+", " ", name.strip().lower().replace("ё", "е"))
-
-
-def _stem(word: str) -> str:
-    end = next((e for e in ENDINGS if word.endswith(e) and len(word) - len(e) >= 2), "")
-    return word[: len(word) - len(end)]
-
-
-def _same_words(query: list[str], key: list[str]) -> bool:
-    """Same words up to a Russian case ending: «нижнем новгороде» = «нижний новгород»."""
-    return len(query) == len(key) and all(
-        q.startswith(_stem(k)) and len(q) - len(_stem(k)) <= 2
-        for q, k in zip(query, key, strict=True)
-    )
-
-
 def resolve_place(name: str) -> dict | None:
-    """Snapshot place for a name as the user wrote it (TRAP-3), or None.
-
-    TODO(#8): names outside the snapshot go to the geocoder.
-    """
-    q = _norm(normalize_toponym(name))
-    keys = [(p, _norm(k)) for p in places() for k in (p["name"], *p["aliases"])]
-    exact = [p for p, k in keys if k == q]
-    if exact:
-        return exact[0]
-    near = sorted(((len(k), p["name"], p) for p, k in keys if _same_words(q.split(), k.split())))
-    return near[-1][2] if near else None
+    """Catalogue place for a name as the user wrote it (TRAP-3), else the online geocoder, or None."""
+    return catalog.resolve(name) or catalog.lookup_online(name)
 
 
 def _complete(p: dict) -> dict:

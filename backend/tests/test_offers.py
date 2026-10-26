@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from api import offers
+from api import catalog, offers
 from api.contracts import ChatRequest, TripSpec
 from api.fixtures import rank
 from api.guards import label_synthetic
@@ -204,7 +204,7 @@ def test_trap_6_offers_need_no_network(monkeypatch):
     def no_network(*args, **kwargs):
         raise OSError("network is down")
 
-    offers.places.cache_clear()
+    catalog.snapshot.cache_clear()
     offers.osm_hotels.cache_clear()
     monkeypatch.setattr(socket.socket, "connect", no_network)
     assert kinds(find_offers(spec(), "Казань"), "hotel")
