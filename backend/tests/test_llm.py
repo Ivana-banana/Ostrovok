@@ -286,7 +286,8 @@ def test_s9_free_text_with_priorities_keeps_the_llm_fields(store, fake, text, fi
     r = say(store, SOCHI)
     fake.spec = lambda p: answer({**NULLS, field: value})
     r = say(store, text, r.session_id)
-    assert getattr(r.plan.spec, field) == value or value[0] in getattr(r.plan.spec, field)
+    got = getattr(r.plan.spec, field)
+    assert (value[0] in got) if field == "wishes" else got == value
     assert r.llm is True
 
 
@@ -329,7 +330,7 @@ def test_s4_injection_is_refused_without_the_llm(store, fake):
     first = say(store, KGD)
     calls = len(fake.calls)
     r = say(store, ATTACK, first.session_id)
-    assert len(reads()) == calls and r.llm is False
+    assert len(fake.calls) == calls and r.llm is False
     assert r.reply.startswith(REFUSAL) and r.stage == first.stage and r.voucher is None
     assert r.plan == first.plan and r.cart == first.cart
     for prompt in (llm.SPEC_PROMPT, llm.WHY_PROMPT):
