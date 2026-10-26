@@ -41,6 +41,16 @@ def test_trap_3_close_spelling_is_not_another_city():
     assert catalog.resolve("Малага") is None
 
 
+def test_trap_5_home_airport_and_zone_of_a_new_airport():
+    """TRAP-5: Выборг flies from LED, not Finnish LPP; GSV (2019) is UTC+4 as Саратов, not +3."""
+    assert catalog.resolve("Выборг")["airport"]["iata"] == "LED"
+    assert catalog.resolve("Саратов")["airport"] == {
+        "iata": "GSV",
+        "km": 23,
+        "tz": "Europe/Saratov",
+    }
+
+
 def test_country_in_text_gives_its_places():
     places = catalog.by_country("в Турцию")
     assert len(places) >= 10 and {p["country"] for p in places} == {"Турция"}

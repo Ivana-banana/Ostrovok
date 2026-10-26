@@ -935,19 +935,25 @@ def read_alternates(path: Path, ids: set[str]) -> dict[str, list[tuple[str, str,
     return out
 
 
-def read_airports(csv_path: Path, dat_path: Path) -> list[list]:
-    tz = {}
+def read_airports(csv_path: Path, dat_path: Path, towns: list[tuple]) -> list[list]:
+    """towns: ((lat, lon), tz) of GeoNames cities, the first source of a missing zone."""
+    tz, zoned = {}, list(towns)
     with open(dat_path, encoding="utf-8") as f:
         for row in csv.reader(f):
-            if len(row) > 11 and row[4] not in ("\\N", "") and row[11] not in ("\\N", ""):
-                tz[row[4]] = row[11]
+            if len(row) > 11 and row[11] not in ("\\N", ""):
+                zoned.append(((float(row[6]), float(row[7])), row[11]))
+                if row[4] not in ("\\N", ""):
+                    tz[row[4]] = row[11]
     out = []
     with open(csv_path, encoding="utf-8") as f:
         for r in csv.DictReader(f):
             if (r["type"] in ("large_airport", "medium_airport") and r["scheduled_service"] == "yes"
                     and re.fullmatch(r"[A-Z]{3}", r["iata_code"] or "")):  # fmt: skip
-                out.append([r["iata_code"], round(float(r["latitude_deg"]), 4),
-                            round(float(r["longitude_deg"]), 4), tz.get(r["iata_code"])])  # fmt: skip
+                at = (round(float(r["latitude_deg"]), 4), round(float(r["longitude_deg"]), 4))
+                # OpenFlights stops in 2017: a newer airport (KCY, GSV) gets the zone of the
+                # nearest town or older airport; GSV is Europe/Saratov, not Moscow as RTW was
+                zone = tz.get(r["iata_code"]) or min(zoned, key=lambda z: km(at, z[0]))[1]
+                out.append([r["iata_code"], *at, zone, r["iso_country"]])
     return out
 
 
@@ -1061,7 +1067,8 @@ def main() -> None:
         return
 
     alts = read_alternates(files["alternateNamesV2.zip"], {r["gid"] for r in resolved})
-    airports = read_airports(files["airports.csv"], files["airports.dat"])
+    towns = [((float(r[4]), float(r[5])), r[17]) for rows in by_cc.values() for r in rows]
+    airports = read_airports(files["airports.csv"], files["airports.dat"], towns)
 
     countries = {}
     for r in resolved:
@@ -1095,7 +1102,10 @@ def main() -> None:
                    and a not in country_keys and len(a) >= 3}  # fmt: skip
         aliases |= {norm(a) for a in EXTRA_ALIASES.get(r["ru"], [])}
         aliases.discard(norm(r["ru"]))
-        ap_ = min(airports, key=lambda a: km((r["lat"], r["lon"]), (a[1], a[2])))
+        by_km = sorted(airports, key=lambda a: km((r["lat"], r["lon"]), (a[1], a[2])))
+        home = next((a for a in by_km if a[4] == r["cc"]), by_km[0])
+        # a home airport within reach, not the nearer one abroad: Выборг is LED, not LPP
+        ap_ = home if km((r["lat"], r["lon"]), (home[1], home[2])) <= AIRPORT_KM else by_km[0]
         ap_km = round(km((r["lat"], r["lon"]), (ap_[1], ap_[2])))
         own = ap_km <= AIRPORT_KM
         if r["ru"] in LEGACY:
@@ -1150,8 +1160,9 @@ def main() -> None:
             "Координаты, IANA-пояс, высота (DEM), население и варианты названий ru/en — GeoNames "
             "cities500 и alternateNamesV2 (CC BY 4.0, geonames.org); несколько посёлков — "
             "Open-Meteo Geocoding (тоже GeoNames). Аэропорт — ближайший с регулярными рейсами "
-            "и кодом IATA из OurAirports (public domain); его пояс — OpenFlights airports.dat "
-            f"(ODbL); airport_km = null, если аэропорт дальше {AIRPORT_KM} км. "
+            f"и кодом IATA из OurAirports (public domain), своей страны, если он ближе {AIRPORT_KM} км; "
+            "его пояс — OpenFlights airports.dat (ODbL), для новых аэропортов — пояс ближайшего "
+            f"города GeoNames; airport_km = null, если аэропорт дальше {AIRPORT_KM} км. "
             "Климат — Open-Meteo Historical Weather (ERA5, CC BY 4.0): air — среднее дневного "
             f"максимума, °C; rain — осадки за месяц, мм; среднее за {START[:4]}–{END[:4]} "
             f"({YEARS} лет). sea — температура поверхности моря, Open-Meteo "
@@ -1167,7 +1178,7 @@ def main() -> None:
             for c in sorted({p["country"] for p in places})
         },
         "places": places,
-        "airports": airports,
+        "airports": [a[:4] for a in airports],
     }
     text = (
         "{\n"
@@ -1179,7 +1190,7 @@ def main() -> None:
     text += '\n ],\n "countries": ' + json.dumps(
         snapshot["countries"], ensure_ascii=False, separators=(",", ":")
     )
-    text += ',\n "airports": ' + json.dumps(airports, separators=(",", ":")) + "\n}\n"
+    text += ',\n "airports": ' + json.dumps(snapshot["airports"], separators=(",", ":")) + "\n}\n"
     args.out.write_text(text, encoding="utf-8")
     print(f"places {len(places)}, hubs {len(hubs)}, sea {sum(p['sea'] for p in places)}, "
           f"airports {len(airports)}, size {args.out.stat().st_size} B, "
