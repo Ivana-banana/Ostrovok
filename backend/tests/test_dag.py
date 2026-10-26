@@ -325,3 +325,29 @@ def test_date_shift_keeps_the_tariff_terms_of_the_picked_hotel(store):
         before.meal,
         before.cancellation.refundable,
     )
+
+
+def test_manual_pick_comes_from_the_stored_ranking_not_a_second_rank(store, monkeypatch):
+    """#37: the pick is read from old.bundles (what the user saw); rank() runs once, for the new spec."""
+    r, pick = _pick_third(store)
+    assert r.plan.bundles and pick.offer_id not in r.plan.bundles[0].offer_ids
+    specs = []
+    real = dag.rank
+
+    def spy(spec, offers):
+        specs.append(spec)
+        return real(spec, offers)
+
+    monkeypatch.setattr(dag, "rank", spy)
+    r = say(store, "а нужна бесплатная отмена", r.session_id)
+    assert _hotel(r).title == pick.title and r.plan.explanations[0].why == dag.MANUAL_WHY
+    assert len(specs) == 1 and specs[0] == r.plan.spec  # no rank() of the old spec
+
+
+def test_pick_of_the_ranked_hotel_is_no_manual_pick(store):
+    """The user took the hotel the ranking showed first: a new ranking may change it."""
+    r = say(store, SOCHI)
+    ranked = _hotel(r)
+    r = say(store, "беру", r.session_id)
+    assert _hotel(r).title == ranked.title
+    assert dag._ranked_hotel(r.plan).title == ranked.title

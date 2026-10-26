@@ -139,17 +139,26 @@ def _same_hotel(h: HotelOffer, offers: list[Offer]) -> HotelOffer | None:
     return next((o for o in group if (o.meal, o.cancellation.refundable) == same), group[0])
 
 
+def _ranked_hotel(plan: Plan) -> HotelOffer | None:
+    """The hotel of the best set the ranking showed: the first bundle, stored with the plan."""
+    ids = set(plan.bundles[0].offer_ids) if plan.bundles else set()
+    return next((o for o in plan.offers if isinstance(o, HotelOffer) and o.offer_id in ids), None)
+
+
 def _keep_pick(old: Plan, plan: Plan) -> Change | None:
     """Keeps the hotel the user picked over the ranking («беру первый»).
 
-    The pick is manual when the old ranking chose another hotel. It is dropped only when the
+    The pick is manual when the old plan selects another hotel than its first bundle, the
+    ranking the user saw. The bundles are stored, so no second rank() of the old spec runs
+    here. It is dropped only when the
     hotel is gone, the edit changed a hotel requirement it fails, or a lowered budget fits the
     ranked set but not the pick; the Change says why.
     """
     picked, ranked = _hotel_of(old), _hotel_of(plan)
     if not picked or not ranked or ranked.title == picked.title:
         return None
-    if picked.offer_id in rank(old.spec, old.offers)[0]:
+    shown = _ranked_hotel(old)
+    if not shown or (shown.title, shown.city) == (picked.title, picked.city):
         return None  # the ranking chose it, not the user
     same, spec = _same_hotel(picked, plan.offers), plan.spec
     budget = spec.budget_rub if spec.budget_rub != old.spec.budget_rub else None
