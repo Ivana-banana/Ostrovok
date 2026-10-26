@@ -85,6 +85,7 @@ function SpecSummary({ spec }: { spec: TripSpec }) {
   rows.push(["Гости", guests(spec)]);
   if (spec.pets) rows.push(["Питомец", "да"]);
   if (spec.budget_rub !== null) rows.push(["Бюджет", rub(spec.budget_rub)]);
+  if (spec.hotel_budget_rub !== null) rows.push(["Бюджет отеля", rub(spec.hotel_budget_rub)]);
   if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
   if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);
   return (
@@ -542,6 +543,11 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   const back = removed.filter((r) => !cart.items.some((o) => o.offer_id === r.offer_id));
   if (!cart.items.length && !back.length) return null;
   const over = spec.budget_rub !== null && cart.total_rub > spec.budget_rub;
+  const hotel = cart.items.find((o) => o.kind === "hotel");
+  const hotelOver =
+    hotel && spec.hotel_budget_rub !== null && hotel.price_rub > spec.hotel_budget_rub
+      ? hotel.price_rub - spec.hotel_budget_rub
+      : 0;
   const synthetic = isSynthetic(cart.items);
   return (
     <section className="card" aria-label="Корзина">
@@ -588,6 +594,12 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
         <p className="warn" role="note">
           Итог больше бюджета {rub(spec.budget_rub!)} на{" "}
           <Price value={cart.total_rub - spec.budget_rub!} synthetic={synthetic} />.
+        </p>
+      )}
+      {hotelOver > 0 && (
+        <p className="warn" role="note">
+          Отель дороже бюджета отеля {rub(spec.hotel_budget_rub!)} на{" "}
+          <Price value={hotelOver} synthetic={hotel!.synthetic} />.
         </p>
       )}
       {editable && cart.items.length > 0 && (

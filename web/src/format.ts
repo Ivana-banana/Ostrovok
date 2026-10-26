@@ -34,6 +34,7 @@ const FIELDS: Record<string, string> = {
   adults: "взрослых",
   children_ages: "дети",
   budget_rub: "бюджет",
+  hotel_budget_rub: "бюджет отеля",
   meal: "питание",
   origin: "откуда",
   month: "месяц",

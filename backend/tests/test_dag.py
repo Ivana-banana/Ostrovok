@@ -157,8 +157,50 @@ def test_chat_shows_before_after_and_replaces_the_cart(store, booked):
 
 def test_budget_change_line_is_readable(store, booked):
     r = say(store, "а бюджет 30 000 руб", booked.session_id)
-    assert "бюджет: 40 000 ₽ → 30 000 ₽" in r.reply
-    assert "budget_rub" not in r.reply
+    assert "бюджет: не задан → 30 000 ₽" in r.reply  # the trip budget; the hotel one stays
+    assert r.plan.spec.hotel_budget_rub == 40_000 and r.plan.spec.budget_rub == 30_000
+    r = say(store, "а отель до 35 000 руб", r.session_id)
+    assert "бюджет отеля: 40 000 ₽ → 35 000 ₽" in r.reply
+    assert "budget_rub" not in r.reply and r.plan.spec.budget_rub == 30_000
+
+
+def test_hotel_budget_edit_recomputes_only_the_ranking(store, booked, calls):
+    """#41: the hotel budget is a ranking field: offers stay, the cart is emptied."""
+    r = say(store, "а отель до 30 000 руб", booked.session_id)
+    assert r.plan.spec.hotel_budget_rub == 30_000 and r.cart.items == []
+    assert "find_offers" not in calls and "rank" in calls
+
+
+def test_hotel_budget_per_night_follows_the_nights(store):
+    """#41: «за ночь» is a price of a night; the total moves with the nights (reviewer of #74)."""
+    r = say(store, "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 10 тысяч за ночь")
+    spec = r.plan.spec
+    assert spec.nights == 3 and spec.hotel_budget_rub == 30_000 and spec.budget_rub is None
+    assert any(
+        a.startswith("бюджет отеля: 10 000 ₽ за ночь, 30 000 ₽ за 3 ноч.") for a in spec.assumptions
+    )
+    r = say(store, "а 5 ночей", r.session_id)
+    spec = r.plan.spec
+    assert spec.nights == 5 and spec.hotel_budget_rub == 50_000
+    assert [a for a in spec.assumptions if a.startswith("бюджет отеля")] == [
+        "бюджет отеля: 10 000 ₽ за ночь, 50 000 ₽ за 5 ноч."
+    ]
+    assert "бюджет отеля: 30 000 ₽ → 50 000 ₽" in r.reply
+    hotel = next(o for o in r.plan.offers if o.offer_id in r.plan.selected and o.kind == "hotel")
+    assert hotel.price_rub <= 50_000
+
+
+def test_hotel_budget_per_night_without_nights_uses_the_default_nights(store):
+    r = say(store, "Сочи с 20 ноября, двое взрослых, отель до 8 тысяч в сутки")
+    spec = r.plan.spec
+    assert spec.nights and spec.hotel_budget_rub == 8_000 * spec.nights
+    assert any("за ночь" in a and a.startswith("бюджет отеля") for a in spec.assumptions)
+
+
+def test_total_hotel_budget_is_not_moved_by_the_nights(store):
+    r = say(store, "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч за всё")
+    r = say(store, "а 5 ночей", r.session_id)
+    assert r.plan.spec.nights == 5 and r.plan.spec.hotel_budget_rub == 40_000
 
 
 def test_before_after_lives_only_in_the_replan_reply(store, booked):

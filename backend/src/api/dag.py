@@ -38,6 +38,7 @@ FIELD_NODE = {
     "pets": "offers",
     "modes": "offers",
     "budget_rub": "ranking",
+    "hotel_budget_rub": "ranking",
     "meal": "ranking",
     "refundable": "ranking",
     "max_travel_hours": "ranking",
@@ -54,6 +55,7 @@ LABELS = {
     "pets": "питомец",
     "modes": "транспорт",
     "budget_rub": "бюджет",
+    "hotel_budget_rub": "бюджет отеля",
     "meal": "питание",
     "refundable": "отмена",
     "max_travel_hours": "время в пути",
@@ -153,6 +155,9 @@ def _keep_pick(old: Plan, plan: Plan) -> Change | None:
         return None  # the ranking chose it, not the user
     same, spec = _same_hotel(picked, plan.offers), plan.spec
     budget = spec.budget_rub if spec.budget_rub != old.spec.budget_rub else None
+    hotel_budget = (
+        spec.hotel_budget_rub if spec.hotel_budget_rub != old.spec.hotel_budget_rub else None
+    )
     # The pick brings its own transfers for the selected legs (T7, #13).
     swapped = pick_hotel(plan.selected, plan.offers, same.offer_id) if same else []
     swapped_rub = sum(o.price_rub for o in plan.offers if o.offer_id in swapped)
@@ -169,6 +174,8 @@ def _keep_pick(old: Plan, plan: Plan) -> Change | None:
     elif budget is not None and _total(plan) <= budget < swapped_rub:
         # the ranked set fits the new budget, the set with the pick does not
         why = "дороже бюджета"
+    elif hotel_budget is not None and ranked.price_rub <= hotel_budget < same.price_rub:
+        why = "дороже бюджета отеля"
     else:
         ids = {o.offer_id for o in plan.offers if isinstance(o, HotelOffer)}
         plan.selected = swapped
@@ -248,6 +255,9 @@ SPEC_VIEWS = {  # LABELS key -> TripSpec as text
     "pets": lambda s: "с питомцем" if s.pets else "без питомца",
     "modes": lambda s: ", ".join(MODES[m] for m in s.modes) or "любой",
     "budget_rub": lambda s: _rub(s.budget_rub) if s.budget_rub is not None else "не задан",
+    "hotel_budget_rub": lambda s: (
+        _rub(s.hotel_budget_rub) if s.hotel_budget_rub is not None else "не задан"
+    ),
     "meal": lambda s: MEALS[s.meal] if s.meal else "не важно",
     "refundable": lambda s: _refundable(s.refundable),
     "max_travel_hours": lambda s: (

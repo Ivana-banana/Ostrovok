@@ -21,8 +21,46 @@ def test_s3a_exact_request_parses_every_field():
     found, notes = extract(S3A)
     assert found["destinations"] == ["Сочи"] and md(found["date_from"]) == (11, 20)
     assert found["nights"] == 3 and found["adults"] == 2
-    assert found["budget_rub"] == 40_000 and found["meal"] == "BB"
-    assert notes == ["бюджет: 40 000 ₽ на всю поездку (сказано про отель)"]
+    assert found["hotel_budget_rub"] == 40_000 and found["meal"] == "BB"
+    assert "budget_rub" not in found  # S3-A: «отель до 40 тысяч» is not a trip budget (#41)
+    assert notes == ["бюджет отеля: 40 000 ₽ за все ночи"]
+
+
+@pytest.mark.parametrize(
+    "text,hotel,trip",
+    [
+        ("отель до 40 тысяч", 40_000, None),
+        ("на отель 40к", 40_000, None),
+        ("40к на отель", 40_000, None),
+        ("отель не дороже 40 000 руб", 40_000, None),
+        ("гостиница до 40 тыс", 40_000, None),
+        ("до 100 тысяч на всех", None, 100_000),
+        ("бюджет 80 тыс", None, 80_000),
+        ("отель 4 звезды, до 100к", None, 100_000),  # a comma ends the hotel clause
+        ("отель и перелёт до 100к", None, 100_000),
+        ("отель до 40 тысяч, всего до 100 тысяч", 40_000, 100_000),
+        ("всего до 100 тысяч, из них отель до 40к", 40_000, 100_000),
+        ("на отель 40к и всего 150 000 руб", 40_000, 150_000),
+    ],
+)
+def test_hotel_and_trip_budgets_are_told_apart(text, hotel, trip):
+    found, notes = extract(text)
+    assert found.get("hotel_budget_rub") == hotel and found.get("budget_rub") == trip
+    assert any(n.startswith("бюджет отеля:") for n in notes) == (hotel is not None)
+    assert not any("на всю поездку" in n for n in notes)
+
+
+def test_hotel_price_per_night_is_multiplied_by_the_nights_when_they_are_named():
+    found, notes = extract("5 ночей, отель до 10к за ночь")
+    assert found["hotel_budget_rub"] == 50_000 and "budget_rub" not in found
+    assert notes == ["бюджет отеля: 10 000 ₽ за ночь, 50 000 ₽ за 5 ноч."]
+
+
+def test_hotel_price_per_night_without_nights_makes_no_total():
+    """The nights are unknown here: no invented total, only the assumption (model resolves it)."""
+    found, notes = extract("отель до 8000 руб в сутки")
+    assert "hotel_budget_rub" not in found and "budget_rub" not in found
+    assert notes == ["бюджет отеля: 8 000 ₽ за ночь"]
 
 
 def test_s6_day_range_gives_dates_and_nights():
@@ -164,7 +202,23 @@ def test_s3a_chat_asks_nothing_and_compares(tmp_path):
     r = chat(ChatRequest(message=S3A), SessionStore(tmp_path / "s.db"))
     assert r.stage == "compare" and r.questions == []
     assert not any(a.startswith(("даты:", "длительность:")) for a in r.plan.spec.assumptions)
-    assert "сказано про отель" in r.reply
+    spec = r.plan.spec
+    assert spec.hotel_budget_rub == 40_000 and spec.budget_rub is None
+    assert "бюджет отеля: 40 000 ₽ за все ночи" in spec.assumptions
+    assert "бюджет отеля: 40 000 ₽ за все ночи" in r.reply  # the user sees the assumption
+    assert "на всю поездку" not in r.reply
+
+
+def test_s3a_plan_has_a_hotel_within_40000_and_reaches_the_booking(tmp_path):
+    """S3-A: the hotel is picked within its own budget, the trip total is not limited by it."""
+    store = SessionStore(tmp_path / "s.db")
+    r = chat(ChatRequest(message=S3A), store)
+    hotels = [o for o in r.plan.offers if o.kind == "hotel" and o.offer_id in r.plan.selected]
+    assert len(hotels) == 1 and hotels[0].price_rub <= 40_000 and hotels[0].meal != "RO"
+    assert not any("бюджет" in x for e in r.plan.explanations for x in e.risks)
+    for text in ("беру", "да", "подтверждаю"):
+        r = chat(ChatRequest(session_id=r.session_id, message=text), store)
+    assert r.stage == "booked" and r.voucher is not None
 
 
 def test_march_is_not_may():

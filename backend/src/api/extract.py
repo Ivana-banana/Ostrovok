@@ -359,16 +359,60 @@ def _people(t: str, found: dict, notes: list[str]) -> None:
         found["adults"] = max(total - len(ages), 1)
 
 
-def _budget(t: str, found: dict, notes: list[str]) -> None:
-    """The first sum in the message; said about the hotel, it still counts for the whole trip."""
+HOTEL_NOTE = "бюджет отеля"  # the label of the assumption; model.LABELS uses it too
+# «отель до 40 тысяч»: up to 3 words between, none of them a comma or a conjunction
+HOTEL_BEFORE_RE = re.compile(
+    r"(?:отел|гостиниц|проживани)\w*\s+(?:(?!(?:и|а|но|да)\s)[^\s,;.!?]+\s+){0,3}$"
+)
+HOTEL_AFTER_RE = re.compile(
+    r"[\w.]*\s*(?:₽|руб\w*|р\b)?\s*(?:на|за|для)\s+(?:отел|гостиниц|проживани)"
+)
+NIGHT_AFTER_RE = re.compile(r"[\w.]*\s*(?:₽|руб\w*|р\b)?\s*(?:за|в|/)\s*(?:ноч|сутк)")
+# «бюджет отеля: 10 000 ₽ за ночь…»: the price of a night, kept in the assumption (see model)
+PER_NIGHT_NOTE_RE = re.compile(rf"^{HOTEL_NOTE}: (\d[\d ]*) ₽ за ночь")
+
+
+def money(n: int) -> str:
+    return f"{n:,} ₽".replace(",", " ")
+
+
+def _sums(t: str) -> list[tuple[int, int, int]]:
+    """(start, end, roubles) of every sum in the message, left to right, without overlaps."""
+    out: list[tuple[int, int, int]] = []
     for pattern, k in BUDGET_RES:
-        if m := re.search(pattern, t):
-            found["budget_rub"] = int(float(m.group(1).replace(" ", "").replace(",", ".")) * k)
-            if re.search(r"отел\w*\s+(?:\S+\s+){0,2}$", t[: m.start()]):
-                # TODO(T7, #13): a hotel-only budget; TripSpec has one budget for the trip.
-                rub = f"{found['budget_rub']:,}".replace(",", " ")
-                notes.append(f"бюджет: {rub} ₽ на всю поездку (сказано про отель)")
-            return
+        for m in re.finditer(pattern, t):
+            if all(m.end() <= a or m.start() >= b for a, b, _ in out):
+                number = float(m.group(1).replace(" ", "").replace(",", "."))
+                out.append((m.start(), m.end(), int(number * k)))
+    return sorted(out)
+
+
+def _budget(t: str, found: dict, notes: list[str]) -> None:
+    """Sums of the message: said about the hotel, a sum is the hotel budget; else the trip budget.
+
+    A sum is about the hotel when «отель» stands up to 3 words before it («отель до 40 тысяч»),
+    when «на отель» follows it, or when it is a price per night. The first sum of each kind
+    counts. A price «за ночь» becomes the total of all nights when the nights are named; else
+    model.resolve_hotel_budget does it when the nights are known, from the assumption.
+    """
+    hotel_said = False
+    for a, b, rub in _sums(t):
+        night = NIGHT_AFTER_RE.match(t, b)
+        if not (night or HOTEL_BEFORE_RE.search(t[:a]) or HOTEL_AFTER_RE.match(t, b)):
+            found.setdefault("budget_rub", rub)
+        elif hotel_said:
+            continue
+        elif not night:
+            found["hotel_budget_rub"] = rub
+            notes.append(f"{HOTEL_NOTE}: {money(rub)} за все ночи")
+            hotel_said = True
+        else:
+            line = f"{HOTEL_NOTE}: {money(rub)} за ночь"
+            if nights := found.get("nights"):
+                found["hotel_budget_rub"] = rub * nights
+                line += f", {money(rub * nights)} за {nights} ноч."
+            notes.append(line)  # nights unknown: the total comes when they are
+            hotel_said = True
 
 
 def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:

@@ -120,6 +120,30 @@ suite("доска поездки", () => {
     expect(cart).toContain("Подтвердить бронь на 600 ₽ (синтетика) · оплата имитируется");
   });
 
+  it("#41: бюджет отеля — своя строка в параметрах, не «Бюджет» на поездку", () => {
+    const r = structuredClone(base);
+    r.plan.spec.budget_rub = null;
+    r.plan.spec.hotel_budget_rub = 40000;
+    const rows = [...render(r).querySelectorAll("[aria-label='Параметры поездки'] dl > div")].map(
+      (d) => d.textContent ?? "",
+    );
+    expect(rows.some((t) => t.startsWith("Бюджет отеля") && t.includes("40 000 ₽"))).toBe(true);
+    expect(rows.some((t) => t.startsWith("Бюджет") && !t.startsWith("Бюджет отеля"))).toBe(false);
+  });
+
+  it("#41: корзина с отелем дороже бюджета отеля — предупреждение до подтверждения", () => {
+    const r = structuredClone(hotelBought);
+    r.stage = "checkout";
+    r.voucher = null;
+    r.plan.spec.hotel_budget_rub = 15000; // the hotel costs 19 600 ₽
+    const cart = render(r).querySelector("[aria-label='Корзина']");
+    const note = cart?.querySelector("[role='note']");
+    expect(note?.textContent).toContain("Отель дороже бюджета отеля 15 000 ₽");
+    expect(note?.querySelector(".price")?.textContent).toBe("4 600 ₽синтетика");
+    r.plan.spec.hotel_budget_rub = 40000;
+    expect(render(r).querySelector("[aria-label='Корзина'] [role='note']")).toBeNull();
+  });
+
   it("TRAP-7: превышение бюджета и кнопка подтверждения помечены по данным корзины", () => {
     const r = structuredClone(base);
     r.stage = "checkout";
