@@ -342,7 +342,10 @@ def check_S3(case: dict) -> tuple[bool, str]:
     note = "; ".join(notes) + (
         f"; не выполнено: {', '.join(fails)}" if fails else "; A1, A2, B без 5xx"
     )
-    note += "; п.1–2 (docker compose ≤ 10 мин, плашка «без ИИ» в UI) — в e2e/запуске"
+    note += (
+        "; п.2 (плашка «без ИИ») — web/src/App.test.tsx (TRAP-1, make check); "
+        "п.1 (docker compose ≤ 10 мин) — командой не проверяется, задача #17"
+    )
     return not fails, note
 
 
@@ -420,6 +423,41 @@ def late_arrival_issues(plan: Plan, hour: int = 23, minute: int = 40):
     return build_timeline(moved)[1]
 
 
+def s2_budget_item(old: Plan, new: Plan, chosen_total: int) -> str | None:
+    """Item 4 of S2: the total fits the budget, or a sacrifice is made and named.
+
+    The sacrifice is a field of the chosen hotel that got worse (meal, free cancellation, the
+    hotel itself). It is named when a line of this turn's changes has the old value in `before`
+    and the new value in `after`. A word search would not do: the «Отель» line always carries the
+    tariff words, before and after (dag.py).
+    """
+    if 0 < chosen_total <= S2_BUDGET:
+        return None
+    h0 = next((o for o in _chosen(old) if isinstance(o, HotelOffer)), None)
+    h1 = next((o for o in _chosen(new) if isinstance(o, HotelOffer)), None)
+    if h0 is None or h1 is None:
+        return f"итог {_rub(chosen_total)}, в плане нет отеля для сравнения"
+    refund = dag._refundable
+    pairs = []  # (old value, new value) of every field that got worse
+    if h1.meal != h0.meal:
+        pairs.append((dag.MEALS[h0.meal], dag.MEALS[h1.meal]))
+    if h0.cancellation.refundable and not h1.cancellation.refundable:
+        pairs.append((refund(True), refund(False)))
+    if (h1.title, h1.city) != (h0.title, h0.city):
+        pairs.append((h0.title, h1.title))
+    if not pairs:
+        return (
+            f"итог {_rub(chosen_total)} > {_rub(S2_BUDGET)}, тариф, питание, отмена и отель "
+            "не изменились"
+        )
+    named = any(
+        c.before != c.after and before in c.before and after in c.after
+        for c in new.changes
+        for before, after in pairs
+    )
+    return None if named else "жертва не названа"
+
+
 @rules_mode
 def check_S2(case: dict) -> tuple[bool, str]:
     turn = _quotes(case)[0]
@@ -492,18 +530,7 @@ def check_S2(case: dict) -> tuple[bool, str]:
             else ""
         ),
     )
-    said = " ".join(
-        [
-            *(f"{c.what} {c.before} {c.after}" for c in r.plan.changes),
-            *(f"{e.why} {' '.join(e.tradeoffs)} {' '.join(e.risks)}" for e in r.plan.explanations),
-        ]
-    ).lower()
-    sacrifice = ("тариф", "питани", "отмен", "расположен", "от пляжа")
-    items["4"] = _need(
-        0 < chosen_total <= S2_BUDGET or (chosen_total > 0 and any(w in said for w in sacrifice)),
-        f"итог {_rub(chosen_total)} больше {_rub(S2_BUDGET)}, жертвы (тариф, питание, отмена, "
-        "расположение) не названы",
-    )
+    items["4"] = s2_budget_item(old.plan, r.plan, chosen_total)
     date_change = next((c for c in r.plan.changes if c.what == "даты"), None)
     old_cart = [
         x

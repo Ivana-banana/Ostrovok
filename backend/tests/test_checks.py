@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from api import checks, main
+from api import checks, dag, main
 from api.cart import book, make_cart
-from api.contracts import Cancellation, ChatReply
+from api.contracts import Cancellation, Change, ChatReply
 
 CASES = json.loads((Path(__file__).resolve().parents[2] / "eval/cases.json").read_text("utf-8"))
 BY_ID = {c["id"]: c for c in CASES}
@@ -72,6 +72,81 @@ def test_s2_fails_when_the_dates_do_not_move(monkeypatch):
     deaf(monkeypatch, "позже")
     ok, note = checks.check_S2(BY_ID["S2"])
     assert not ok and "п.2" in note
+
+
+def over_budget(monkeypatch, refundable: bool, line=None):
+    """S2 turn: the new hotel is the old one at +200 000 ₽ (same meal, title, city).
+
+    `refundable` is the cancellation of the new hotel; `line(old_hotel)` gives the «отель» line
+    (before, after) of the turn, None keeps the lines of the product.
+    """
+    seen = {}
+    real = main.chat
+
+    def chat(req, store):
+        out = real(req, store)
+        if out.stage == "checkout":
+            seen["old"] = next(o for o in checks._chosen(out.plan) if o.kind == "hotel")
+        if "позже" not in req.message:
+            return out
+        old = seen["old"]
+        sel = set(out.plan.selected)
+        offers = [
+            o.model_copy(
+                update={
+                    "price_rub": o.price_rub + 200_000,
+                    "meal": old.meal,
+                    "title": old.title,
+                    "city": old.city,
+                    "cancellation": Cancellation(refundable=refundable),
+                }
+            )
+            if o.offer_id in sel and o.kind == "hotel"
+            else o
+            for o in out.plan.offers
+        ]
+        changes = list(out.plan.changes)
+        if line:
+            before, after = line(old)
+            changes = [Change(what="отель", before=before, after=after)]
+        plan = out.plan.model_copy(update={"offers": offers, "changes": changes})
+        return out.model_copy(update={"plan": plan})
+
+    monkeypatch.setattr(main, "chat", chat)
+
+
+def test_s2_fails_when_the_budget_is_broken_and_nothing_got_worse(monkeypatch):
+    """Reviewer probe: +200 000 ₽ on the hotel, the same tariff, meal and cancellation."""
+    over_budget(monkeypatch, refundable=True)
+    ok, note = checks.check_S2(BY_ID["S2"])
+    assert not ok and "п.4" in note and "не изменились" in note
+
+
+def test_s2_passes_item_4_when_the_lost_cancellation_is_named_before_and_after(monkeypatch):
+    over_budget(
+        monkeypatch,
+        refundable=False,
+        line=lambda h: (
+            f"{h.title}, {dag.MEALS[h.meal]}, бесплатная отмена, {h.price_rub} ₽",
+            f"{h.title}, {dag.MEALS[h.meal]}, невозвратный тариф, {h.price_rub + 200_000} ₽",
+        ),
+    )
+    _, note = checks.check_S2(BY_ID["S2"])
+    assert "п.4" not in note, note
+
+
+def test_s2_fails_when_the_lost_cancellation_is_not_named(monkeypatch):
+    """The words «бесплатная отмена» are in both sides of the line: nothing is said as lost."""
+    over_budget(
+        monkeypatch,
+        refundable=False,
+        line=lambda h: (
+            f"{h.title}, бесплатная отмена, {h.price_rub} ₽",
+            f"{h.title}, бесплатная отмена, {h.price_rub + 200_000} ₽",
+        ),
+    )
+    ok, note = checks.check_S2(BY_ID["S2"])
+    assert not ok and "п.4: жертва не названа" in note
 
 
 def test_s5_fails_when_no_query_gets_offers(monkeypatch):
