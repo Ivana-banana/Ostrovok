@@ -181,7 +181,7 @@ def weights(spec: TripSpec) -> dict[Priority, float]:
         order = ["price"]
     if not order:
         return dict(DEFAULT_WEIGHTS)
-    w = {c: DEFAULT_WEIGHTS[c] / 2 for c in CRITERIA}
+    w: dict[Priority, float] = {c: DEFAULT_WEIGHTS[c] / 2 for c in CRITERIA}
     for i, p in enumerate(order):
         w[p] = 1 / (i + 1)
     s = sum(w.values())
@@ -303,8 +303,8 @@ def _alternatives(best: Trip, pool: list[Trip], trips: list[Trip]) -> list[tuple
         ("самый комфортный", min(pool, key=lambda t: t.comfort_key), None),
     ]
     in_budget = sorted((t for t in trips if t.over == 0), key=lambda t: (len(t.rules), t.key))
-    if best.over and in_budget:
-        kinds.append(("в бюджете", in_budget[0], True))
+    if best.over and in_budget:  # first: MAX_ALTERNATIVES must not push it out
+        kinds.insert(0, ("в бюджете", in_budget[0], True))
     out: list[tuple[str, Trip]] = []
     seen = {tuple(best.ids)}
     for label, t, ok in kinds:
@@ -326,7 +326,7 @@ def _versus(t: Trip, best: Trip) -> list[str]:
     out = []
     if t.total > best.total:
         out.append(_diff(t.total - best.total) + " за всю поездку")
-    if (h.rating or 0) < (b.rating or 0):
+    if h.rating is not None and b.rating is not None and h.rating < b.rating:
         out.append(f"рейтинг {h.rating} вместо {b.rating}")
     if b.cancellation.refundable and not h.cancellation.refundable:
         out.append("невозвратный тариф")
@@ -334,8 +334,9 @@ def _versus(t: Trip, best: Trip) -> list[str]:
         out.append(f"питание: {MEAL_TEXT[h.meal]} вместо {MEAL_TEXT[b.meal]}")
     if t.hours > best.hours:
         out.append(f"дорога {_h(t.hours)} вместо {_h(best.hours)}")
-    if (h.distance_center_km or 0) > (b.distance_center_km or 0):
-        out.append(f"до центра {h.distance_center_km:g} км вместо {b.distance_center_km:g} км")
+    hd, bd = h.distance_center_km, b.distance_center_km
+    if hd is not None and bd is not None and hd > bd:
+        out.append(f"до центра {hd:g} км вместо {bd:g} км")
     if t.transfer_rub > best.transfer_rub:
         line = f"трансферы {_rub(t.transfer_rub)} вместо {_rub(best.transfer_rub)}"
         if h.price_rub < b.price_rub and t.total >= best.total:
@@ -376,6 +377,11 @@ def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
     return why
 
 
+def _less(a: float | None, b: float | None) -> bool:
+    """a < b when both are known; an absent value neither wins nor loses."""
+    return a is not None and b is not None and a < b
+
+
 def _wins_on(p: Priority, t: Trip, other: Trip) -> bool:
     """Whether trip t is better than the other trip on the criterion p, from offer fields."""
     a, b = t.hotel, other.hotel
@@ -383,9 +389,9 @@ def _wins_on(p: Priority, t: Trip, other: Trip) -> bool:
         "price": t.total < other.total,
         "cancellation": a.cancellation.refundable and not b.cancellation.refundable,
         "meal": MEAL_LEVEL[a.meal] > MEAL_LEVEL[b.meal],
-        "location": (a.distance_center_km or 0) < (b.distance_center_km or 0),
+        "location": _less(a.distance_center_km, b.distance_center_km),
         "travel_time": t.hours < other.hours,
-        "rating": (a.rating or 0) > (b.rating or 0),
+        "rating": _less(b.rating, a.rating),
     }[p]
 
 
@@ -416,7 +422,7 @@ def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
                 f"{_diff(r.total - t.total)}"
             )
     top = min(pool, key=lambda x: (-(x.hotel.rating or 0), x.total, x.key))
-    if (top.hotel.rating or 0) > (h.rating or 0):
+    if _less(h.rating, top.hotel.rating):
         out.append(f"рейтинг ниже, чем у варианта {top.hotel.title} ({top.hotel.rating})")
     fast = min(pool, key=lambda x: (x.hours, x.total, x.key))
     if fast.hours < t.hours:
