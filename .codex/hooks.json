@@ -1,0 +1,103 @@
+{
+  "description": "Хуки Codex — те же скрипты .claude/hooks/, что у Claude Code (.claude/settings.json), плюс check-git.sh вместо permissions.deny. Включить один раз: /hooks → trust (AGENTS.md).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[CLAUDE.md — общие правила команды для Claude Code и Codex, см. AGENTS.md]'; cat \"$(git rev-parse --show-toplevel)/CLAUDE.md\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/session-context.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/check-issue.sh\"",
+            "timeout": 15,
+            "statusMessage": "Взята ли задача для этой работы…"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/check-paths.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/check-git.sh\"",
+            "timeout": 10,
+            "statusMessage": "Запрещённые команды git…"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/check-data-files.sh\" pre-tool",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/check-upstream.sh\" post",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/check-secrets.sh\"",
+            "timeout": 30,
+            "statusMessage": "Поиск секретов в файлах для коммита…"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/check-upstream.sh\" stop",
+            "timeout": 30,
+            "statusMessage": "Чужие коммиты в origin/main против текущей работы…"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/check-tests.sh\"",
+            "timeout": 1200,
+            "statusMessage": "Режим «сборка»: make check…"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/check-worktrees.sh\"",
+            "timeout": 60,
+            "statusMessage": "Секреты в worktree субагентов…"
+          }
+        ]
+      }
+    ]
+  }
+}

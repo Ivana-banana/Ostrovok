@@ -1,0 +1,196 @@
+{
+  "model": "claude-opus-5-5",
+  "effortLevel": "high",
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git fetch:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git pull --ff-only:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git rev-list:*)",
+      "Bash(git worktree add:*)",
+      "Bash(git worktree list:*)",
+      "Bash(git worktree remove:*)",
+      "Bash(git worktree prune)",
+      "Bash(git merge origin/main)",
+      "Bash(git merge --no-edit origin/main)",
+      "Bash(git push -u origin HEAD:*)",
+      "Bash(git push origin --delete worktree-*)",
+      "Bash(git branch -d:*)",
+      "Bash(git branch -D worktree-*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue comment:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(bash scripts/issues.sh:*)",
+      "Bash(bash scripts/finish.sh:*)",
+      "Bash(bash scripts/mode.sh:*)",
+      "Bash(bash .claude/hooks/*)",
+      "Bash(python3 scripts/codex-sync.py:*)",
+      "Bash(make:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)",
+      "Bash(npm ci:*)",
+      "Bash(npm run:*)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f)",
+      "Bash(git push * -f *)",
+      "Bash(git push * +*)",
+      "Bash(git push * --delete main)",
+      "Bash(git push * :main)",
+      "Bash(git push origin HEAD:main)",
+      "Bash(git push origin main)",
+      "Bash(git push * main)",
+      "Bash(git push * HEAD:main)",
+      "Bash(git branch -d main)",
+      "Bash(git branch -D main)",
+      "Bash(git add -A:*)",
+      "Bash(git add --all:*)",
+      "Bash(git add .)",
+      "Bash(git add -u:*)",
+      "Bash(git add --update:*)",
+      "Bash(git commit -a:*)",
+      "Bash(git commit --all:*)",
+      "Bash(git commit -am:*)",
+      "Bash(git commit --amend:*)",
+      "Bash(git commit * --amend*)",
+      "Bash(git commit --no-verify:*)",
+      "Bash(git commit * --no-verify*)",
+      "Bash(git push --no-verify:*)",
+      "Bash(git rebase:*)",
+      "Bash(git pull --rebase:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(git lfs migrate:*)",
+      "Bash(gh pr merge * --squash*)",
+      "Bash(gh pr merge * --rebase*)",
+      "Bash(gh pr merge * --admin*)",
+      "Bash(gh repo delete:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-context.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-issue.sh\"",
+            "timeout": 15,
+            "statusMessage": "Взята ли задача для этой работы…"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-paths.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-data-files.sh\" pre-tool",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-config.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-upstream.sh\" post",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-secrets.sh\"",
+            "timeout": 30,
+            "statusMessage": "Поиск секретов в файлах для коммита…"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-upstream.sh\" stop",
+            "timeout": 30,
+            "statusMessage": "Чужие коммиты в origin/main против текущей работы…"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-tests.sh\"",
+            "timeout": 1200,
+            "statusMessage": "Режим «сборка»: make check…"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-worktrees.sh\"",
+            "timeout": 60,
+            "statusMessage": "Секреты в worktree субагентов…"
+          }
+        ]
+      }
+    ]
+  }
+}

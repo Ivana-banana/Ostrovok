@@ -1,0 +1,13 @@
+# LF везде, включая клоны на Windows с core.autocrlf=true: *.sh и .githooks не должны получить CRLF.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.xlsx binary
+*.docx binary
+*.pptx binary
+*.mp4 binary

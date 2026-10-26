@@ -1,0 +1,9 @@
+# Один сервис: FastAPI отдаёт API и собранный фронтенд. docker compose up --build → http://localhost:8000
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
