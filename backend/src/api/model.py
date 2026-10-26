@@ -164,6 +164,14 @@ LABELS = {
     "adults": "взрослых",
     "max_travel_hours": "время в пути",
 }
+# #128: a route through several cities. The plan covers the first city; the rest is named here.
+ROUTE = "маршрут"
+ROUTE_RE = re.compile(
+    r"\b(?:потом|затем|далее|оттуда|следом|а\s+после|после\s+(?:этого|того|чего))\b"
+)
+STAY_RE = re.compile(
+    r"\b(?:\d+|одну?|дв[ае]|три|четыре|пять|шесть|семь|восемь|девять|десять)\s*(?:ноч|дн|сут)"
+)
 # #113: the refused places live in this assumption (TripSpec has no field for them).
 EXCLUDED = "исключено"
 
@@ -176,6 +184,8 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     """Stated fields override the spec; their old assumptions are dropped."""
     data = spec.model_dump()
     stated = {LABELS[k] for k in found if k in LABELS}
+    if "destinations" in found:
+        stated.add(ROUTE)  # a new choice of the city ends the route note
     if stated & {"когда", "даты", "длительность"}:
         data["date_to"] = None  # derived from date_from + nights again
         assumed = [a for a in data["assumptions"] if _label(a) == "даты" and not is_shift_note(a)]
@@ -254,6 +264,31 @@ def assume(spec: TripSpec) -> TripSpec:
         cheap = "недорого" in data["wishes"]
         note("бюджет", "не задан — сначала дешёвые" if cheap else "не задан — разные цены")
     return TripSpec.model_validate(data)
+
+
+def is_route(message: str, destinations: list[str]) -> bool:
+    """#128: several cities named as a route («потом в Казань», two cities each with nights).
+
+    «Сочи или Анапа» are candidates, not a route: the rules stay as they were.
+    """
+    low = message.lower().replace("ё", "е")
+    return len(destinations) > 1 and (bool(ROUTE_RE.search(low)) or len(STAY_RE.findall(low)) > 1)
+
+
+def route_note(destinations: list[str]) -> str:
+    rest = ", ".join(destinations[1:])
+    return f"{ROUTE}: в план вошёл только {destinations[0]}, не вошло: {rest}"
+
+
+def route_reply(destinations: list[str]) -> tuple[str, Question]:
+    first, rest = destinations[0], ", ".join(destinations[1:])
+    text = (
+        f"Пока планирую только {first}. Поездку {' → '.join(destinations)} "
+        f"как один план я пока не собираю. В этот план не вошло: {rest}. "
+        "Выберите, что планировать."
+    )
+    options = [f"Спланировать {d}" for d in destinations]
+    return text, Question(text="Что спланировать?", options=options)
 
 
 def _cap(s: str) -> str:
@@ -626,6 +661,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if not any(is_excluded(d, [r]) for d in named)
     ]
     spec = with_refused(spec, refused)
+    route = is_route(message, found.get("destinations", []))
+    if route:  # the lost city stays visible in the plan (#128)
+        spec = spec.model_copy(
+            update={"assumptions": [*spec.assumptions, route_note(spec.destinations)]}
+        )
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
         return ChatReply(
@@ -704,6 +744,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             # the reply says so, the new city never comes silently (#93).
             gone, now = ", ".join(swapped), spec.destinations[0]
             text = f"«{gone}» нет в каталоге. По вашему выбору — {now}.\n{text}"
+        if route:
+            notice, chips = route_reply(spec.destinations)
+            return reply("compare", plan, f"{notice}\n{text}", cart, questions=[chips])
         return reply("compare", plan, text, cart)
 
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
