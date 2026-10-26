@@ -1,0 +1,117 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe as suite, expect, it } from "vitest";
+import fixture from "../../tests/fixtures/chat_reply.json";
+import { Board } from "./Board";
+import type { ChatReply } from "./contracts";
+import { changeValue, localTime } from "./format";
+
+const base = fixture as unknown as ChatReply;
+const noop = () => {};
+
+function render(r: ChatReply): Document {
+  const html = renderToStaticMarkup(
+    <Board reply={r} busy={false} removed={[]} onSend={noop} onCart={noop} onCheckout={noop} />,
+  );
+  return new DOMParser().parseFromString(html, "text/html");
+}
+
+suite("доска поездки", () => {
+  it("TRAP-7: у каждой синтетической цены есть пометка «синтетика»", () => {
+    const doc = render(base);
+    const prices = [...doc.querySelectorAll(".price")];
+    // hotel, transport, destination, bundle, fix in the issue, cart item + total, voucher item + total
+    expect(prices.length).toBeGreaterThanOrEqual(9);
+    for (const p of prices) expect(p.querySelector(".synth")?.textContent).toBe("синтетика");
+    // a ₽ sign outside a labelled price is a price without the label
+    const bare = doc.body.innerHTML.replace(/<span class="price">.*?<\/span><\/span>/g, "");
+    expect(bare).not.toMatch(/\d ₽<\/(td|p|li|span)>/);
+  });
+
+  it("TRAP-7: цена реальных данных без пометки", () => {
+    const real = structuredClone(base);
+    real.plan.offers = real.plan.offers.map((o) => ({ ...o, synthetic: false }));
+    const doc = render(real);
+    const row = [...doc.querySelectorAll("tr")].find((r) => r.textContent?.includes("Отель у Кремля"));
+    expect(row?.querySelector(".synth")).toBeNull();
+  });
+
+  it("TRAP-1: плашка «без ИИ», когда модель недоступна", () => {
+    expect(render({ ...base, llm: false }).body.textContent).toContain("без ИИ");
+    expect(render({ ...base, llm: true }).body.textContent).not.toContain("без ИИ");
+  });
+
+  it("TRAP-5: время событий местное, как в ISO, без перевода в пояс браузера", () => {
+    const tz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      expect(localTime("2026-12-11T07:10:00+03:00")).toBe("11.12 07:10");
+      const text = render(base).querySelector("[aria-label='Таймлайн']")?.textContent ?? "";
+      expect(text).toContain("11.12 07:10");
+      expect(text).toContain("прибытие 07:10 раньше заезда 14:00");
+      expect(text).toContain("Ранний заезд"); // the fix offer is shown by its offer_id
+    } finally {
+      process.env.TZ = tz;
+    }
+  });
+
+  it("таблица сравнения отелей: не меньше 5 признаков", () => {
+    const head = render(base).querySelector("[aria-label='Сравнение отелей'] thead")?.textContent;
+    for (const col of ["Цена за всё", "Отмена", "Питание", "До центра", "Рейтинг", "Звёзды"])
+      expect(head).toContain(col);
+  });
+
+  it("сравнение транспорта: время прибытия и время в пути", () => {
+    const t = render(base).querySelector("[aria-label='Сравнение транспорта']")?.textContent ?? "";
+    expect(t).toContain("11.12 07:10");
+    expect(t).toContain("11 ч 40 мин");
+    expect(t).toContain("поезд");
+  });
+
+  it("пересборка: «было → стало»", () => {
+    const t = render(base).querySelector("[aria-label='Что изменилось']")?.textContent ?? "";
+    expect(t).toContain("было 11–13 декабря → стало 13–15 декабря");
+    expect(changeValue("None")).toBe("не задано");
+    expect(changeValue("['Казань']")).toBe("Казань");
+    expect(changeValue("2026-12-11")).toBe("11.12.2026");
+  });
+
+  it("ваучер: номер брони, позиции с offer_id, итог и пометка об имитации", () => {
+    const v = render(base).querySelector("[aria-label='Ваучер']")?.textContent ?? "";
+    expect(v).toContain("OST-0001");
+    expect(v).toContain("x1");
+    expect(v).toContain("2 500 ₽");
+    expect(v).toContain("имитирован");
+  });
+
+  it("корзина: предупреждение о бюджете до подтверждения", () => {
+    const r = structuredClone(base);
+    r.stage = "checkout";
+    r.voucher = null;
+    r.plan.spec.budget_rub = 500;
+    const cart = render(r).querySelector("[aria-label='Корзина']")?.textContent ?? "";
+    expect(cart).toContain("больше бюджета");
+    expect(cart).toContain("Подтвердить бронь на 600 ₽ (синтетика) · оплата имитируется");
+  });
+
+  it("TRAP-7: превышение бюджета и кнопка подтверждения помечены по данным корзины", () => {
+    const r = structuredClone(base);
+    r.stage = "checkout";
+    r.voucher = null;
+    r.plan.spec.budget_rub = 500;
+    const note = render(r).querySelector("[aria-label='Корзина'] [role='note']");
+    expect(note?.querySelector(".price")?.textContent).toBe("100 ₽синтетика");
+    r.cart.items = r.cart.items.map((o) => ({ ...o, synthetic: false }));
+    const real = render(r).querySelector("[aria-label='Корзина']");
+    expect(real?.querySelector("button.primary")?.textContent).toBe(
+      "Подтвердить бронь на 600 ₽ · оплата имитируется",
+    );
+    expect(real?.querySelector(".synth")).toBeNull();
+  });
+
+  it("направления: карточки с кнопкой выбора на этапе inspire", () => {
+    const doc = render({ ...base, stage: "inspire", voucher: null });
+    const card = doc.querySelector("[aria-label='Направления'] .card");
+    expect(card?.textContent).toContain("Казань");
+    expect(card?.querySelector("button")?.textContent).toBe("Выбрать");
+  });
+});
