@@ -19,6 +19,7 @@ const reply = (llm: boolean): ChatReply => ({
       children_ages: [],
       pets: false,
       budget_rub: null,
+      hotel_budget_rub: null,
       meal: null,
       refundable: null,
       modes: [],

@@ -42,6 +42,8 @@ class TripSpec(BaseModel):
     children_ages: list[int] = []
     pets: bool = False
     budget_rub: int | None = Field(None, ge=0)
+    # hotel only, all nights; budget_rub is the whole trip
+    hotel_budget_rub: int | None = Field(None, ge=0)
     meal: Meal | None = None
     refundable: bool | None = None
     modes: list[Mode] = []
