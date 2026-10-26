@@ -1,4 +1,4 @@
-import type { ChatReply, Meal, Mode, Stage } from "./contracts";
+import type { ChatReply, Meal, Mode, Priority, Stage } from "./contracts";
 
 // One reply line for the user; the no-model mode is labelled honestly (TRAP-1).
 export function describe(r: ChatReply): string {
@@ -89,3 +89,40 @@ export function changeValue(v: string): string {
   const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
   return date ? `${date[3]}.${date[2]}.${date[1]}` : text;
 }
+
+// Priority names in user words. The same words reach the backend extractor (extract.py,
+// PRIORITIES): each phrase matches only its own priority there.
+export const PRIORITIES: Record<Priority, string> = {
+  price: "цена",
+  cancellation: "отмена",
+  meal: "питание",
+  location: "расположение",
+  travel_time: "время в пути",
+  rating: "рейтинг",
+};
+
+// A chat message that sets the whole priority order, most important first. The agent
+// reads it as an order of importance, not as a filter: no other field changes (S9).
+export function priorityMessage(order: Priority[]): string {
+  return `Мои приоритеты по важности: ${order.map((p) => PRIORITIES[p]).join(", ")}.`;
+}
+
+// Moves the item one place; null when it cannot move.
+export function movePriority(order: Priority[], i: number, by: -1 | 1): Priority[] | null {
+  const j = i + by;
+  if (i < 0 || i >= order.length || j < 0 || j >= order.length) return null;
+  const next = [...order];
+  [next[i], next[j]] = [next[j], next[i]];
+  return next;
+}
+
+// Data sources the product really uses. Add a source here only when the code reads it
+// (research/data-sources.md has the licences). Today: hotels from the OSM snapshot.
+export const SOURCES: { name: string; text: string; url: string; licence: string }[] = [
+  {
+    name: "OpenStreetMap",
+    text: "Часть отелей и их удобства — © участники OpenStreetMap",
+    url: "https://www.openstreetmap.org/copyright",
+    licence: "ODbL",
+  },
+];
