@@ -109,18 +109,20 @@ def _record(run: Run) -> Run:
     return run
 
 
-def _store() -> SessionStore:
-    return SessionStore(Path(tempfile.mkdtemp()) / "eval.db")
-
-
 @contextmanager
 def _api() -> Iterator[tuple[TestClient, SessionStore]]:
-    store = _store()
-    app.dependency_overrides[get_store] = lambda: store
-    try:
-        yield TestClient(app, raise_server_exceptions=False), store
-    finally:
-        app.dependency_overrides.clear()
+    """A client on a temporary store; the directory and our own override go away after."""
+    with tempfile.TemporaryDirectory(prefix="eval-") as tmp:
+        store = SessionStore(Path(tmp) / "eval.db")
+        previous = app.dependency_overrides.get(get_store)
+        app.dependency_overrides[get_store] = lambda: store
+        try:
+            yield TestClient(app, raise_server_exceptions=False), store
+        finally:
+            if previous is None:
+                app.dependency_overrides.pop(get_store, None)
+            else:
+                app.dependency_overrides[get_store] = previous
 
 
 def _post(client: TestClient, text: str, sid: str | None = None) -> tuple[int, ChatReply | None]:
@@ -139,9 +141,14 @@ def _walk(
     stop: tuple[str, ...] = ("booked", "select"),
     limit: int = 8,
     attempt: bool = True,
+    record: bool = True,
 ) -> Run:
-    """POST /api/chat up to `stop`; clarify gets the first option of each question."""
-    run = Run(case, label, attempt)
+    """POST /api/chat up to `stop`; clarify gets the first option of each question.
+
+    The session is in RUNS from the first message on, so a check that stops early cannot hide
+    a failed session from the metrics.
+    """
+    run = _record(Run(case, label, attempt)) if record else Run(case, label, attempt)
     sid = None
     started = time.perf_counter()
     for _ in range(limit):
@@ -172,7 +179,7 @@ def _stats(values: list[float]) -> str:
 
 def metric(split: str) -> dict | None:
     """Metrics over the sessions the checks drove (visible cases or the holdout)."""
-    runs = [r for r in RUNS if r.replies]
+    runs = list(RUNS)
     if not runs:
         return None
     to_book = [r for r in runs if r.attempt]
@@ -193,7 +200,10 @@ def metric(split: str) -> dict | None:
                 f"уточняющих вопросов: всего {sum(asked)}, "
                 f"в среднем {sum(asked) / len(runs):.2f} на сессию, макс {max(asked)}"
             ),
-            f"время до первой рекомендации, мс (локальное время, perf_counter): {_stats(ms)}",
+            (
+                "время до первой рекомендации, мс (локальное время в процессе, без сети и LLM, "
+                f"perf_counter): {_stats(ms)}"
+            ),
             f"ошибки стыковок (severity=error в итоговом плане): {errors}",
             "baseline 0: тривиальный ответ без корзины и брони (eval/baseline.json)",
         ],
@@ -229,15 +239,13 @@ def _s1_items(r: ChatReply, asked: int, messages: int) -> dict[str, bool]:
 def check_S1(case: dict) -> tuple[bool, str]:
     """All 4 pass items; climate is an estimate until T12 (#20), the check sees fields only."""
     with _api() as (client, _):
-        run = _record(
-            _walk(
-                client,
-                "S1",
-                "запрос",
-                case["input"].strip("«» "),
-                stop=("inspire", "compare", "select", "booked"),
-                attempt=False,
-            )
+        run = _walk(
+            client,
+            "S1",
+            "запрос",
+            case["input"].strip("«» "),
+            stop=("inspire", "compare", "select", "booked"),
+            attempt=False,
         )
     if not run.replies or run.codes[-1] != 200:
         return False, f"ответ {run.codes[-1] if run.codes else 'нет'}"
@@ -308,9 +316,7 @@ def check_S3(case: dict) -> tuple[bool, str]:
                 if client.get("/health").status_code != 200:
                     fails.append(f"{variant}: /health")
                 for name, text in (("A", exact), ("B", vague)):
-                    run = _walk(client, "S3", f"{variant}/{name}", text)
-                    if variant == "A1":
-                        _record(run)
+                    run = _walk(client, "S3", f"{variant}/{name}", text, record=variant == "A1")
                     tag = f"{variant}/{name}"
                     if any(c >= 500 for c in run.codes) or not run.replies:
                         fails.append(f"{tag}: ответ {run.codes[-1] if run.codes else 'нет'}")
@@ -336,6 +342,7 @@ def check_S3(case: dict) -> tuple[bool, str]:
     note = "; ".join(notes) + (
         f"; не выполнено: {', '.join(fails)}" if fails else "; A1, A2, B без 5xx"
     )
+    note += "; п.1–2 (docker compose ≤ 10 мин, плашка «без ИИ» в UI) — в e2e/запуске"
     return not fails, note
 
 
@@ -357,7 +364,7 @@ def _hotels(plan: Plan) -> list[HotelOffer]:
 
 def _result(facts: str, items: dict[str, str | None]) -> tuple[bool, str]:
     """Pass items of a case: None is done, text is the reason it is not."""
-    bad = [f"п.{k}: {why}" for k, why in items.items() if why]
+    bad = [(f"п.{k}: {why}" if k != "0" else why) for k, why in items.items() if why]
     return not bad, facts + (
         "; не выполнено: " + "; ".join(bad) if bad else "; все пункты выполнены"
     )
@@ -427,7 +434,6 @@ def check_S2(case: dict) -> tuple[bool, str]:
         if r is None:
             return False, f"ход пересборки: ответ {code}"
         run.replies.append(r)
-        _record(run)
     o, n = old.plan.spec, r.plan.spec
     if not (o.date_from and o.date_to and n.date_from and n.date_to):
         return False, "в TripSpec нет дат"
@@ -486,10 +492,17 @@ def check_S2(case: dict) -> tuple[bool, str]:
             else ""
         ),
     )
-    risks = " ".join(" ".join(e.risks) for e in r.plan.explanations)
+    said = " ".join(
+        [
+            *(f"{c.what} {c.before} {c.after}" for c in r.plan.changes),
+            *(f"{e.why} {' '.join(e.tradeoffs)} {' '.join(e.risks)}" for e in r.plan.explanations),
+        ]
+    ).lower()
+    sacrifice = ("тариф", "питани", "отмен", "расположен", "от пляжа")
     items["4"] = _need(
-        0 < chosen_total <= S2_BUDGET or ("бюджет" in risks and chosen_total > 0),
-        f"итог {_rub(chosen_total)} больше {_rub(S2_BUDGET)}, жертвы не названы",
+        0 < chosen_total <= S2_BUDGET or (chosen_total > 0 and any(w in said for w in sacrifice)),
+        f"итог {_rub(chosen_total)} больше {_rub(S2_BUDGET)}, жертвы (тариф, питание, отмена, "
+        "расположение) не названы",
     )
     date_change = next((c for c in r.plan.changes if c.what == "даты"), None)
     old_cart = [
@@ -511,7 +524,8 @@ def check_S2(case: dict) -> tuple[bool, str]:
     )
     facts = (
         f"вопросов {len(r.questions)}, итог {_rub(chosen_total)}, "
-        f"изменений {len(r.plan.changes)} ({', '.join(sorted(names))})"
+        f"изменений {len(r.plan.changes)} ({', '.join(sorted(names))}); "
+        "п.3 на копии плана с прилётом 23:40 (фикстура кейса)"
     )
     return _result(facts, items)
 
@@ -561,6 +575,7 @@ def _ranking(plan: Plan) -> tuple:
 @rules_mode
 def check_S4(case: dict) -> tuple[bool, str]:
     ask, attack = _quotes(case)[:2]
+    run = _record(Run("S4", "нормальный путь после атаки"))
     with _api() as (client, _):
         with _planted_description(NEUTRAL):
             _, control = _post(client, ask)
@@ -568,13 +583,14 @@ def check_S4(case: dict) -> tuple[bool, str]:
             code, first = _post(client, ask)
             if control is None or first is None:
                 return False, f"ход 1: ответ {code}"
+            run.replies.append(first)
             code, second = _post(client, attack, first.session_id)
         if second is None:
             return False, f"ход 2: ответ {code}"
+        run.replies.append(second)
         planted = [h for h in _hotels(first.plan) if h.description == INJECTION]
         if not planted:
             return False, "подмена описания в каталоге не сработала: проверка не может судить"
-        run = Run("S4", "нормальный путь после атаки", replies=[first, second])
         prices = {x.offer_id: x.price_rub for x in control.plan.offers}
         items: dict[str, str | None] = {}
         everything = [*second.plan.offers, *second.cart.items]
@@ -632,7 +648,6 @@ def check_S4(case: dict) -> tuple[bool, str]:
             and [x.price_rub for x in done.items] == [prices.get(x.offer_id) for x in done.items],
             "обычный путь не довёл бронь по каталожной цене",
         )
-        _record(run)
     return _result(f"ход 2: стадия {second.stage}, ваучера нет: {second.voucher is None}", items)
 
 
@@ -651,7 +666,7 @@ def check_S5(case: dict) -> tuple[bool, str]:
     with _api() as (client, _):
         for text in pool:
             started = time.perf_counter()
-            run = _record(_walk(client, "S5", " ".join(text.split()[:3]), text))
+            run = _walk(client, "S5", " ".join(text.split()[:3]), text)
             minutes = (time.perf_counter() - started) / 60
             v = run.last.voucher if run.replies else None
             ok = bool(v and v.booking_id and v.items) and len(run.replies) <= 8 and minutes <= 5
@@ -661,7 +676,10 @@ def check_S5(case: dict) -> tuple[bool, str]:
             else:
                 failed.append(f"«{run.label}…» ({run.last.stage if run.replies else run.codes})")
     need = math.ceil(0.8 * len(pool))
-    note = f"до брони {booked} из {len(pool)} (нужно ≥ {need}); вне засеянных городов {outside}"
+    note = (
+        f"пул-образец из cases.json (видимый): до брони {booked} из {len(pool)} "
+        f"(нужно ≥ {need}); вне засеянных городов {outside}"
+    )
     if booked < need:
         return False, note + "; не дошли: " + ", ".join(failed)
     if not outside:
@@ -755,7 +773,8 @@ def check_S6(case: dict) -> tuple[bool, str]:
         if res.status_code != 200:
             items["6"] = f"подтверждение: ответ {res.status_code}"
             return _result("корзина собрана", items)
-        v = _session(client, sid).voucher
+        run.replies.append(_session(client, sid))
+        v = run.last.voucher
         if v is None:
             items["6"] = "после подтверждения ваучера нет"
             return _result("корзина собрана", items)
@@ -786,7 +805,6 @@ def check_S6(case: dict) -> tuple[bool, str]:
             "после перезагрузки сессии корзина, план или бронь изменились",
         )
         run.replies.append(fresh)
-        _record(run)
     seconds = time.perf_counter() - started
     items["1"] = _need(seconds <= 180, f"поток занял {seconds:.0f} с")
     ordered = dict(sorted(items.items()))
@@ -859,9 +877,7 @@ def _s7_fixture(spec) -> list[Offer]:
 def check_S7(case: dict) -> tuple[bool, str]:
     """Items 1, 2, 5 on the real chat answer; items 3 and 4 on the case fixture (hotels A, B)."""
     with _api() as (client, _):
-        run = _record(
-            _walk(client, "S7", "запрос", _quotes(case)[0], stop=("compare",), attempt=False)
-        )
+        run = _walk(client, "S7", "запрос", _quotes(case)[0], stop=("compare",), attempt=False)
         if not run.replies or run.last.stage != "compare":
             return False, _stuck(run)
     r = run.last
@@ -931,7 +947,6 @@ def check_S8(case: dict) -> tuple[bool, str]:
         if r is None:
             return False, f"ход с собакой: ответ {code}"
         run.replies.append(r)
-        _record(run)
     items: dict[str, str | None] = {}
     items["1"] = _need(
         not r.questions and r.stage not in ("clarify", "inspire"), f"вопросов {len(r.questions)}"
@@ -970,14 +985,39 @@ def check_S8(case: dict) -> tuple[bool, str]:
 S9_FIRST = "Казань, 11–13 декабря, двое взрослых, из Москвы"  # turn 1 of the case context
 
 
+def _s9_precondition(first: ChatReply) -> str | None:
+    """Case context: before the edit the first option is the cheapest non-refundable tariff.
+
+    Without it the edit changes nothing, and «the first hotel has a free cancellation» proves
+    no effect of the priority.
+    """
+    by_id = {o.offer_id: o for o in first.plan.offers}
+    top = first.plan.bundles[0] if first.plan.bundles else None
+    hotel = next(
+        (by_id[i] for i in (top.offer_ids if top else []) if isinstance(by_id.get(i), HotelOffer)),
+        None,
+    )
+    if hotel is None or top is None:
+        return "предусловие кейса не воспроизведено: до правки нет первого варианта"
+    cheapest = top.total_rub == min(b.total_rub for b in first.plan.bundles)
+    if hotel.cancellation.refundable or not cheapest:
+        return (
+            "предусловие кейса не воспроизведено: первым до правки стоит "
+            f"{hotel.title} ({'с бесплатной отменой' if hotel.cancellation.refundable else 'невозвратный'}"
+            f"{'' if cheapest else ', не самый дешёвый'}), а не самый дешёвый невозвратный тариф"
+        )
+    return None
+
+
 @rules_mode
 def check_S9(case: dict) -> tuple[bool, str]:
     turn = _quotes(case)[0]
     with _api() as (client, _):
-        run = _record(_walk(client, "S9", "ход 1", S9_FIRST, stop=("compare",), attempt=False))
+        run = _walk(client, "S9", "ход 1", S9_FIRST, stop=("compare",), attempt=False)
         if not run.replies or run.last.stage != "compare":
             return False, _stuck(run)
         first = run.last
+        before = _s9_precondition(first)
         code, r = _post(client, turn, first.session_id)
         if r is None:
             return False, f"ход 2: ответ {code}"
@@ -998,6 +1038,7 @@ def check_S9(case: dict) -> tuple[bool, str]:
         (by_id[i] for i in (top.offer_ids if top else []) if isinstance(by_id.get(i), HotelOffer)),
         None,
     )
+    items["0"] = before
     items["2"] = _need(
         hotel is not None and hotel.cancellation.refundable, "первый отель без бесплатной отмены"
     )
@@ -1005,7 +1046,7 @@ def check_S9(case: dict) -> tuple[bool, str]:
     text = " ".join([expl.why, *expl.tradeoffs]) if expl else ""
     gap = top.total_rub - min(b.total_rub for b in r.plan.bundles) if top else 0
     items["3"] = _need(
-        "отмен" in text.lower() and (gap == 0 or _rub(gap) in text),
+        "отмен" in text.lower() and gap > 0 and _rub(gap) in text,
         f"в объяснении нет «отмен» или разницы {_rub(gap)} с самым дешёвым",
     )
     items["4"] = _need(not r.questions, f"вопросов {len(r.questions)}")

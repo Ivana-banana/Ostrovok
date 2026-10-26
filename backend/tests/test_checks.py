@@ -6,10 +6,11 @@ import os
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from api import checks, main
 from api.cart import book, make_cart
-from api.contracts import ChatReply
+from api.contracts import Cancellation, ChatReply
 
 CASES = json.loads((Path(__file__).resolve().parents[2] / "eval/cases.json").read_text("utf-8"))
 BY_ID = {c["id"]: c for c in CASES}
@@ -123,18 +124,77 @@ def test_s8_fails_when_the_dog_is_not_remembered(monkeypatch):
 def test_metric_counts_booked_sessions_questions_and_first_recommendation_time():
     with checks._api() as (client, _):
         exact = checks._quotes(BY_ID["S3"])[0]
-        checks._record(checks._walk(client, "T", "до брони", exact))
-        checks._record(checks._walk(client, "T", "до выбора", exact, stop=("compare",)))
+        checks._walk(client, "T", "до брони", exact)
+        checks._walk(client, "T", "до выбора", exact, stop=("compare",))
+        vague = checks._walk(client, "T", "без места и желания", "привет")  # two questions
+    assert vague.asked == 2
     m = checks.metric("visible")
-    assert m["system"] == 0.5 and m["baseline"] == 0.0
-    assert any(
-        line.startswith("сессий 2, из них идут до брони 2, с ваучером 1") for line in m["details"]
-    )
-    assert any(
-        "время до первой рекомендации" in line and "нет" not in line for line in m["details"]
-    )
-    assert any("ошибки стыковок" in line for line in m["details"])
+    assert m["system"] == 0.67 and m["baseline"] == 0.0
+    lines = m["details"]
+    assert any(x.startswith("сессий 3, из них идут до брони 3, с ваучером 2") for x in lines)
+    assert any(x.startswith("уточняющих вопросов: всего 2,") for x in lines)
+    assert any("время до первой рекомендации" in x and "нет" not in x for x in lines)
+    assert any("ошибки стыковок" in x for x in lines)
 
 
 def test_metric_is_none_without_sessions():
     assert checks.metric("visible") is None
+
+
+def test_a_session_that_fails_early_counts_as_not_booked(monkeypatch):
+    """A check that returns before the end must not hide its session from the share."""
+    real = main.checkout_route
+
+    def broken(req, store):
+        raise HTTPException(status_code=500, detail="checkout is broken")
+
+    monkeypatch.setattr(main, "checkout_route", broken)
+    ok, _ = checks.check_S6(BY_ID["S6"])
+    monkeypatch.setattr(main, "checkout_route", real)
+    assert not ok
+    assert checks.metric("visible")["system"] < 1
+
+
+def test_a_session_without_any_reply_counts_as_not_booked(monkeypatch):
+    def down(req, store):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(main, "chat", down)
+    checks.check_S5(BY_ID["S5"])
+    assert checks.metric("visible")["system"] == 0.0
+
+
+def test_api_context_removes_only_its_own_override_and_its_directory():
+    mine = lambda: None
+    main.app.dependency_overrides[main.get_store] = mine
+    with checks._api() as (_, store):
+        path = store.path
+        assert main.app.dependency_overrides[main.get_store] is not mine
+    assert main.app.dependency_overrides[main.get_store] is mine
+    assert not path.parent.exists()
+    del main.app.dependency_overrides[main.get_store]
+    with checks._api():
+        pass
+    assert main.get_store not in main.app.dependency_overrides
+
+
+def test_s9_precondition_needs_the_cheapest_non_refundable_first_option():
+    with checks._api() as (client, _):
+        first = checks._walk(
+            client, "T", "s9", checks.S9_FIRST, stop=("compare",), record=False
+        ).last
+    cheap = min(first.plan.bundles, key=lambda b: b.total_rub)
+    by_id = {o.offer_id: o for o in first.plan.offers}
+
+    def with_top(refundable: bool) -> ChatReply:
+        offers = []
+        for o in first.plan.offers:
+            if o.offer_id in cheap.offer_ids and o.kind == "hotel":
+                o = o.model_copy(update={"cancellation": Cancellation(refundable=refundable)})
+            offers.append(o)
+        plan = first.plan.model_copy(update={"offers": offers, "bundles": [cheap]})
+        return first.model_copy(update={"plan": plan})
+
+    assert by_id  # the walk found offers
+    assert checks._s9_precondition(with_top(False)) is None
+    assert "предусловие кейса не воспроизведено" in checks._s9_precondition(with_top(True))
