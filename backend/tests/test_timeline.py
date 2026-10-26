@@ -360,6 +360,15 @@ def out_train(reply: ChatReply) -> str:
     )
 
 
+def out_flight(reply: ChatReply) -> str:
+    """The outbound flight: it lands in the morning, the check-in is not far away."""
+    return next(
+        o.offer_id
+        for o in reply.plan.offers
+        if o.kind == "transport" and o.mode == "flight" and o.origin == reply.plan.spec.origin
+    )
+
+
 def early_fix(reply: ChatReply) -> str:
     return next(f for i in reply.plan.issues for f in i.fixes if f.endswith("-early"))
 
@@ -368,8 +377,14 @@ def test_cart_early_check_in_fixes_the_issue(client):
     """S6: the train there makes the arrival warning, the cart buys the early check-in."""
     http, store = client
     r = at_checkout(store)
-    assert not any(f.endswith("-early") for i in r.plan.issues for f in i.fixes)
-    train = add(http, r, out_train(r))
+    # #50: the default plan is the cheapest trip, so it rides the train there. Start from the
+    # flight: no arrival warning; the train brings it (S6).
+    assert out_train(r) in r.plan.selected
+    by_air = add(http, r, out_flight(r))
+    assert out_train(r) not in by_air.plan.selected
+    assert not any("Прибытие" in i.text for i in by_air.plan.issues)
+    assert not any(f.endswith("-early") for i in by_air.plan.issues for f in i.fixes)
+    train = add(http, by_air, out_train(r))
     assert train.plan.issues and any("Прибытие" in i.text for i in train.plan.issues)
     early = early_fix(train)
     now = add(http, train, early)
@@ -385,7 +400,8 @@ def test_cart_replaced_flight_and_hotel_are_what_the_checker_sees(client):
     """The review of #11: a swap in the cart must reach plan.selected and the timeline."""
     http, store = client
     r = at_checkout(store)
-    train = add(http, r, out_train(r))
+    train = add(http, add(http, r, out_flight(r)), out_train(r))
+    assert any("Прибытие" in i.text for i in train.plan.issues)
     flight = next(f for i in train.plan.issues for f in i.fixes if f.startswith("t-mow-kzn-flight"))
     now = add(http, train, flight)
     assert flight in now.plan.selected and out_train(r) not in now.plan.selected
@@ -446,8 +462,9 @@ def test_cart_remove_a_leg_then_add_another_leaves_one_leg_per_slot(client):
     assert slot_count(now) == (1, 1, 1)
     assert train not in now.plan.selected and flight in now.plan.selected
     assert not any(e.offer_id == train for e in now.plan.timeline)
-    assert now.plan.issues == []
-    assert not any("Прибытие" in e.title for e in now.plan.timeline)
+    assert not any("Прибытие" in i.text for i in now.plan.issues)
+    assert not any(e.title == "Прибытие: Казань" for e in now.plan.timeline)
+    assert not any(train in i.fixes for i in now.plan.issues)
 
 
 def test_cart_remove_a_hotel_then_add_another_leaves_one_hotel(client):
