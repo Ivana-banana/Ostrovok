@@ -94,6 +94,9 @@ def osm_hotels() -> dict[str, list[dict]]:
     return json.loads((HERE / "osm_hotels.json").read_text(encoding="utf-8"))["places"]
 
 
+places = catalog.places  # extract.py reads the city names from here
+
+
 def resolve_place(name: str) -> dict | None:
     """Catalogue place for a name as the user wrote it (TRAP-3), else the online geocoder, or None."""
     return catalog.resolve(name) or catalog.lookup_online(name)
