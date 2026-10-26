@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from api import checks, dag, main
+from api import catalog, checks, dag, main
 from api.cart import book, make_cart
 from api.contracts import Cancellation, Change, ChatReply
 
@@ -444,6 +444,13 @@ def test_ten_days_accept_nine_or_ten_nights():
     run = booked_run("Казань на 3 ночи в марте, нас двое")
     assert verdicts(run, {"nights": [3, 4]}) == {"ночей": checks.OK}
     assert verdicts(run, {"nights": [9, 10]}) == {"ночей": checks.VIOLATED}
+
+
+def test_same_name_takes_a_place_from_the_geocoder(geo):
+    """#107: unseen_findings fell with KeyError 'slug' on a city outside catalog.json."""
+    catalog.lookup_online("Блед", geo("Блед"))
+    assert checks._same_name("Блед", ["Блед"])
+    assert not checks._same_name("Блед", ["Москва"])
 
 
 def test_s5_is_red_when_no_city_outside_the_data_is_booked_in_that_city(monkeypatch, tmp_path):

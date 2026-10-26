@@ -82,6 +82,15 @@ def test_trap_6_no_network_unknown_name_gives_none():
     assert hub["name"] == "Москва" and "не нашёл" in note
 
 
+def test_trap_3_geocoder_is_asked_again_without_the_case_ending(geo):
+    """TRAP-3: «в Бледе» — the geocoder knows only «Блед»."""
+    place = catalog.lookup_online("Бледе", geo("Блед"))
+    assert place["name"] == "Блед" and place["slug"]
+    assert (
+        catalog.lookup_online("Старую", geo(catalog._stems("Старую"), "Стара-Загора")) is None
+    )  # not a case of it
+
+
 def test_trap_2_online_place_outside_snapshot():
     """TRAP-2: a place outside the snapshot from the geocoder and one year of climate."""
     days = [f"2025-{m:02d}-15" for m in range(1, 13)]

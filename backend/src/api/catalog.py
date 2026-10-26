@@ -216,10 +216,14 @@ def _monthly(days: list[str], values: list, how=statistics.fmean) -> list[float 
 
 
 def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
-    found = fetch(GEOCODE, {"name": name, "count": 1, "language": "ru", "format": "json"})
-    if not found.get("results"):
+    ask = {"count": 1, "language": "ru", "format": "json"}
+    found = fetch(GEOCODE, {**ask, "name": name}).get("results")
+    if not found and _stems(name) != name:  # «Бледе»: the geocoder knows only «Блед» (TRAP-3)
+        found = fetch(GEOCODE, {**ask, "name": _stems(name)}).get("results")
+        found = [g for g in found or [] if _same_words(norm(name).split(), norm(g["name"]).split())]
+    if not found:
         return None
-    g = found["results"][0]
+    g = found[0]
     lat, lon = round(g["latitude"], 4), round(g["longitude"], 4)
     span = {"latitude": lat, "longitude": lon, "start_date": f"{YEAR}-01-01",
             "end_date": f"{YEAR}-12-31", "timezone": "auto"}  # fmt: skip
@@ -237,7 +241,7 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     country = g.get("country", "")
     levels = [p["level"] for p in places() if p["country"] == country]
     place = {
-        "name": g["name"], "country": country, "cc": g.get("country_code", ""), "lat": lat,
+        "slug": f"geo-{g['id']}", "name": g["name"], "country": country, "cc": g.get("country_code", ""), "lat": lat,
         "lon": lon, "tz": g["timezone"], "elev": g.get("elevation"), "pop": g.get("population") or 0,
         "geonameid": g.get("id"), "hub": False, "main": False, "sea": sea is not None,
         "tags": ["sea"] if sea else [], "aliases": [norm(name)] if norm(name) != norm(g["name"]) else [],
