@@ -5,6 +5,7 @@ description = "Бэкенд решения (пресет web-fullstack)"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "fastapi>=0.115",
+  "tzdata>=2024.1",
   "uvicorn>=0.30",
 ]
 
