@@ -21,11 +21,30 @@ from uuid import uuid4
 
 from api import llm
 from api.cart import CartRefusal, checkout_reply, fill_cart
-from api.contracts import Cart, ChatReply, ChatRequest, Plan, Question, Stage, TripSpec
+from api.contracts import (
+    Cart,
+    ChatReply,
+    ChatRequest,
+    Explanation,
+    HotelOffer,
+    Plan,
+    Question,
+    Stage,
+    TransportOffer,
+    TripSpec,
+)
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract, with_llm
 from api.fixtures import build_timeline, future_date, suggest_destinations
-from api.optimizer import pick_hotel
+from api.optimizer import (
+    _hotel_why,
+    _leg_why,
+    _pool,
+    _risks,
+    _sacrificed,
+    enumerate_trips,
+    pick_hotel,
+)
 from api.store import SessionStore
 
 DEFAULT_NIGHTS = 7
@@ -54,6 +73,38 @@ ORDINAL_RE = re.compile(
     r"|четв[её]рт(?:ый|ая|ое|ую|ого))\b|^\s*([1-4])\s*$"
 )
 ORDINALS = {"перв": 0, "втор": 1, "трет": 2, "четв": 3}
+# S6 (#31): the user picks transport by a mode word or by a row of the transport table.
+# A pick needs a verb or an ordinal with a noun: «хочу только поезда» stays a constraint.
+LEG_PICK_RE = re.compile(
+    r"\b(?:возьм\w*|бер[уиё]\w*|выб\w+|поед\w*|(?:по)?лет(?:им|ите)|полечу|лечу"
+    r"|смен\w*|замен\w*|поменя\w*|переключ\w*|лучше|давай\w*)"
+)
+LEG_NOUN = r"(?:рейс\w*|перел[её]т\w*|поезд\w*)"
+LEG_STEMS = ("перв", "втор", "трет", "четв", "пят", "шест", "седьм", "восьм", "девят")
+LEG_ORDINAL = r"(?:перв|втор|трет|четв[её]рт|пят|шест|седьм|восьм|девят)(?:ый|ой|ий|ая|ое|ую)"
+LEG_NOT_DATE = (
+    r"(?![:.]\d|\s*(?:янв|фев|мар|апр|ма[яй]|июн|июл|авг|сен|окт|ноя|дек"
+    r"|ч\b|час|мин|дн|дне|ноч|раз|чел|взр|дет|₽|руб|тыс))"
+)
+# (ordinal, noun), (noun, digits), (noun, ordinal): the groups are the number and the noun.
+LEG_ROW_RES = (
+    (re.compile(rf"\b({LEG_ORDINAL})\s+({LEG_NOUN})"), 0, 1),
+    (re.compile(rf"\b({LEG_NOUN})\s+(?:№\s*|номер\s+)?(\d{{1,2}})\b{LEG_NOT_DATE}"), 1, 0),
+    (re.compile(rf"\b({LEG_NOUN})\s+({LEG_ORDINAL})"), 1, 0),
+)
+LEG_MODES: dict[str, re.Pattern] = {
+    "train": re.compile(r"\bпоезд\w*|\bж/?д\b|сапсан|ласточк"),
+    "flight": re.compile(r"\bсамол[её]т\w*|\bперел[её]т\w*|\bавиа\w*|(?:по)?лет(?:им|ите)|полечу"),
+    "car": re.compile(r"\bмашин\w*|\bавтомобил\w*|\bна\s+авто\b"),
+}
+LEG_NONE = {
+    "train": "Поездов в предложениях нет.",
+    "flight": "Перелётов в предложениях нет.",
+    "car": "Поездки на машине в предложениях нет.",
+}
+LEG_THERE_RE = re.compile(r"\bтуда\b|\bв\s+одну\s+сторону\b")
+LEG_BACK_RE = re.compile(r"\bобратно\b|\bназад\b|\bобратн\w+")
+LEG_CLAUSE_RE = re.compile(r"[,;]|\bа\b|\bи\b")
 # Assumption text starts with "<label>:"; a stated field removes its assumption.
 LABELS = {
     "month": "когда",
@@ -153,6 +204,146 @@ def _ordinal(text: str) -> int | None:
     return ORDINALS[m.group(1)[:4]] if m.group(1) else int(m.group(2)) - 1
 
 
+LegCommand = tuple[str, str | int, str | None]
+
+
+def _leg_row(clause: str) -> tuple[int, str | None] | None:
+    """(row from 0, mode of the noun or None) of «второй поезд», «рейс 3»: the row counts
+    among the offers of the named mode; «рейс» names no mode."""
+    for rx, num, noun in LEG_ROW_RES:
+        if m := rx.search(clause):
+            n = m.group(num + 1)
+            row = (
+                int(n) - 1 if n.isdigit() else next(i for i, st in enumerate(LEG_STEMS) if st in n)
+            )
+            word = m.group(noun + 1)
+            return row, "train" if word.startswith("поезд") else "flight" if word[
+                :4
+            ] == "перел" else None
+    return None
+
+
+def leg_commands(text: str) -> list[LegCommand]:
+    """Picks of transport in the message: (kind, mode or row, direction or mode filter).
+
+    A «row» command holds the row among the offers of its mode filter (None: the whole table).
+    Empty when the message is not a pick: no verb and no ordinal with a noun, or a negation.
+    """
+    t = text.lower().replace("ё", "е")
+    if NEGATION_RE.search(t) or BOOK_RE.search(t):
+        return []
+    verb = bool(LEG_PICK_RE.search(t))
+    out: list[LegCommand] = []
+    for clause in LEG_CLAUSE_RE.split(t):
+        if row := _leg_row(clause):
+            out.append(("row", row[0], row[1]))
+            continue
+        direction = "there" if LEG_THERE_RE.search(clause) else None
+        direction = "back" if LEG_BACK_RE.search(clause) else direction
+        out += [
+            ("mode", m, direction)
+            for m, p in LEG_MODES.items()
+            if (verb or direction) and p.search(clause)
+        ]
+    return out
+
+
+def _explain(plan: Plan) -> list[Explanation]:
+    """Why of the selected trip, from the facts of the offers as the optimizer writes them.
+
+    The old text names the totals of the old selection, so it must not stay after a switch.
+    """
+    trips = enumerate_trips(plan.offers)
+    chosen = set(plan.selected)
+    trip = next((t for t in trips if set(t.ids) <= chosen), None)
+    if trip is None:
+        return []
+    pool, fits = _pool(plan.spec, trips)
+    hotel = Explanation(
+        offer_id=trip.hotel.offer_id,
+        why=_hotel_why(plan.spec, trip),
+        tradeoffs=_sacrificed(plan.spec, trip, pool),
+        risks=_risks(plan.spec, trip, fits, trips),
+    )
+    return [hotel, *(_leg_why(trip, leg, plan.offers) for leg in trip.legs)]
+
+
+def _cheapest(legs: list[TransportOffer]) -> TransportOffer | None:
+    return min(legs, key=lambda x: (x.price_rub, x.offer_id), default=None)
+
+
+def switch_transport(plan: Plan, text: str) -> tuple[Plan | None, str]:
+    """The plan with the transport the user asked for, or None and the reason ("" if the
+    message is not a pick).
+
+    Only offers of the plan are chosen (TRAP-4). A mode word takes the selected leg of that
+    mode, or else the cheapest one. The hotel stays; its transfers are derived again for the
+    new legs. The car goes both ways, as in the optimizer.
+    """
+    commands = leg_commands(text)
+    if not commands:
+        return None, ""
+    hotel = next(
+        (o for o in plan.offers if isinstance(o, HotelOffer) and o.offer_id in plan.selected), None
+    )
+    if hotel is None:
+        return None, "Сначала выберите отель."
+    table = [o for o in plan.offers if isinstance(o, TransportOffer)]
+    dirs = {
+        "there": [x for x in table if x.destination == hotel.city],
+        "back": [x for x in table if x.origin == hotel.city],
+    }
+    now = {d: next((x for x in xs if x.offer_id in plan.selected), None) for d, xs in dirs.items()}
+    new, touched = dict(now), set()
+    for kind, what, direction in commands:
+        # The spec filtered this mode out of the offers (offers.py): «возьми поезд» then
+        # is a new constraint, and the caller re-plans the trip instead.
+        want = direction if kind == "row" else what  # the mode asked for, if any
+        if want and plan.spec.modes and want not in plan.spec.modes:
+            return None, ""
+        if kind == "row":
+            rows = [x for x in table if direction in (None, x.mode)]
+            if not 0 <= what < len(rows):
+                return None, f"Рейса {what + 1} нет: в таблице их {len(rows)}."
+            d = "there" if rows[what] in dirs["there"] else "back"
+            new[d] = rows[what]
+            touched.add(d)
+            continue
+        found = False
+        for d in [direction] if direction else ["there", "back"]:
+            same = [x for x in dirs[d] if x.mode == what]
+            leg = now[d] if now[d] in same else _cheapest(same)
+            if leg:
+                new[d], found = leg, True
+                touched.add(d)
+        if not found:
+            return None, LEG_NONE[what]
+    # The car goes both ways: the direction the user did not name follows the other one.
+    legs = [x for x in new.values() if x]
+    if len(legs) == 2 and (legs[0].mode == "car") != (legs[1].mode == "car"):
+        loose = [d for d in new if d not in touched]
+        car = new[next(iter(touched))].mode == "car" if len(touched) == 1 else None
+        fit = _cheapest([x for x in dirs[loose[0]] if (x.mode == "car") == car]) if loose else None
+        if fit is None:
+            return None, "Машина едет туда и обратно: смешать её с поездом или рейсом нельзя."
+        new[loose[0]] = fit
+    chosen = [x.offer_id for x in new.values() if x]
+    if chosen == [x.offer_id for x in now.values() if x]:
+        return None, "Этот транспорт уже выбран."
+    by_id = {o.offer_id: o for o in plan.offers}
+    kept = [i for i in plan.selected if not isinstance(by_id.get(i), TransportOffer)]
+    out = plan.model_copy(
+        update={
+            "selected": pick_hotel([*kept, *chosen], plan.offers, hotel.offer_id),
+            "changes": [],
+        }
+    )
+    out.timeline, out.issues = build_timeline(out)
+    out.explanations = _explain(out)
+    titles = [x.title for x in new.values() if x]
+    return out, "Транспорт заменён: " + "; ".join(titles) + "."
+
+
 def _confirmed(text: str) -> bool:
     return bool(CONFIRM_RE.search(text)) and not NEGATION_RE.search(text)
 
@@ -207,9 +398,11 @@ def _text_compare(plan: Plan) -> str:
             f"{i}. {h.title} — {h.stars}★, рейтинг {h.rating}, {h.meal}, {cancel} — "
             f"{_rub(h.price_rub)}"
         )
-    for o in plan.offers:
-        if o.kind == "transport":
-            lines.append(f"{o.title} — {_rub(o.price_rub)}")
+    legs = [o for o in plan.offers if o.kind == "transport"]
+    if legs:
+        lines.append("Транспорт:")
+    for i, o in enumerate(legs, 1):
+        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}")
     chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
     lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:
@@ -217,7 +410,10 @@ def _text_compare(plan: Plan) -> str:
         lines += [f"Риск: {r}." for r in e.risks]
     for c in plan.changes:
         lines.append(f"Изменено {c.what}: {c.before} → {c.after}.")
-    return "\n".join(lines + _tail(spec, "Напишите «беру» или номер отеля."))
+    return "\n".join(
+        lines
+        + _tail(spec, "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».")
+    )
 
 
 def _text_assemble(plan: Plan) -> str:
@@ -230,7 +426,7 @@ def _text_assemble(plan: Plan) -> str:
 
 HINTS: dict[Stage, str] = {
     "select": "Выберите другое направление.",
-    "compare": "Напишите «беру» или номер отеля.",
+    "compare": "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».",
     "assemble": "Напишите «да», чтобы положить план в корзину.",
     "checkout": "Чтобы оформить бронь, напишите «подтверждаю».",
 }
@@ -260,6 +456,23 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # At checkout «подтверждаю» books first: the prices come from the catalogue anyway.
         hint = HINTS.get(old.stage, "Опишите поездку: куда, когда и кто едет.")
         return old.model_copy(update={"reply": f"{REFUSAL} {hint}", "questions": [], "llm": False})
+    # S6 (#31): «возьми поезд», «второй рейс» pick offers of the plan. It goes to no model and is
+    # no constraint: the spec stays, only plan.selected and the timeline change. A message that
+    # also states trip fields or moves the dates («давай в Сочи поездом») is a re-plan, as before.
+    pure = set(extract(message)[0]) <= {"modes"} and not SHIFT_RE.search(t.replace("ё", "е"))
+    if pure and prev and old.stage in ("compare", "assemble", "checkout"):
+        plan, note = switch_transport(old.plan, message)
+        if old.stage == "checkout" and (plan or note):
+            note = "Корзина уже собрана, транспорт в ней не меняю."
+            hint = HINTS["checkout"]
+            return old.model_copy(update={"reply": f"{note} {hint}", "questions": [], "llm": False})
+        if plan or note:
+            body = _text_assemble(plan or old.plan) if old.stage == "assemble" else None
+            body = body or _text_compare((plan or old.plan).model_copy(update={"changes": []}))
+            text = f"{note}\n{body}" if plan else f"{note} {HINTS[old.stage]}"
+            return old.model_copy(
+                update={"plan": plan or old.plan, "reply": text, "questions": [], "llm": False}
+            )
     idx = _ordinal(message)
     deadline = llm.deadline()
     # A service turn («беру», «да», «подтверждаю», a number) goes to no model: a field it
