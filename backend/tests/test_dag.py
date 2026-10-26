@@ -381,6 +381,10 @@ def test_say_shift_too_short_is_refused_and_changes_nothing(store, antalya):
         "хочу вернуться пораньше, вернуться раньше",
         "заселиться позже",
         "а если на несколько дней позже?",
+        # a move without a direction or a change of length is not a new length (review of PR #70)
+        "Сдвинь на 3 дня",
+        "Продли на 2 дня",
+        "Сократи на 2 дня",
     ],
 )
 def test_say_unclear_date_edit_gets_an_explicit_reply(store, antalya, text):

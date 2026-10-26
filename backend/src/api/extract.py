@@ -30,6 +30,9 @@ NUMS = {
     "пятеро": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10,
 }  # fmt: skip
 NUM = rf"(\d{{1,2}}|{'|'.join(NUMS)})"
+EDIT_VERB = (
+    r"(?:перенес|перенос|сдвин|сдвиг|передвин|отлож|отодвин|подвин|продл|удлин|сократ|укороти)"
+)
 TOGETHER = {"вдвоем": 2, "втроем": 3, "вчетвером": 4, "впятером": 5}
 # Places outside the fixture catalogue; T4 (#8) resolves them with the geocoder (TRAP-2).
 PLACES = {
@@ -404,6 +407,8 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
     if "nights" in found:
         return
     starts = rf"\bчерез\s+(?:{NUM}\s*)?(?:дн\w*|день|недел\w*)|\bследующ\w*\s+недел\w*"
+    # «Сдвинь на 3 дня», «Продли на 2 дня»: an edit of the current trip, not a new length (#36)
+    starts += rf"|\b{EDIT_VERB}\w*(?:\s+\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(rf"\b{NUM}\s*ноч\w*", t):
         n = _num(m.group(1))
