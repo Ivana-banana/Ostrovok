@@ -34,7 +34,7 @@ from api.contracts import (
     TripSpec,
 )
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
-from api.extract import MONTH_NAMES, extract, with_llm
+from api.extract import MONTH_NAMES, extract, is_chip_message, with_llm
 from api.fixtures import CATALOG, build_timeline, future_date, suggest_destinations
 from api.optimizer import (
     _hotel_why,
@@ -464,7 +464,7 @@ def _alternatives(spec: TripSpec, skip: list[str]) -> list[str]:
 
 def _no_offers(plan: Plan, text: str) -> tuple[str, list[Question]]:
     """The «choose another» exit of the select stage: 2–3 destinations as the text and buttons."""
-    names = _alternatives(plan.spec, plan.spec.destinations)
+    names = _alternatives(plan.spec, [*plan.spec.destinations, plan.spec.origin])
     if not names:
         return text, []
     plan.destinations = [d for d in suggest_destinations(plan.spec) if d.name in names]
@@ -557,7 +557,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         found["destinations"] = []
     llm_found = (
         None
-        if service or other or not use_llm
+        if service or other or not use_llm or is_chip_message(message)  # chips: S9, #76
         else llm.extract_spec(message, old.plan.spec, deadline)
     )
     if SHIFT_RE.search(t.replace("ё", "е")):
@@ -586,14 +586,20 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return reply("clarify", Plan(spec=spec), _text_clarify(questions), questions=questions)
     spec = assume(spec)
     if not spec.destinations:
-        dests = suggest_destinations(spec)
+        dests = suggest_destinations(spec, 5)  # 5: four are left without the origin
         if other:
             gone = old.plan.spec.destinations
             ranked = suggest_destinations(spec, len(CATALOG))
             shown = [d.name for d in old.plan.destinations] if old.stage == "inspire" else []
             # Without the options already shown, if enough others are left.
-            dests = [d for d in ranked if d.name not in [*gone, *shown]]
-            dests = (dests if len(dests) >= 2 else [d for d in ranked if d.name not in gone])[:3]
+            # The origin is no destination: a stay in the city of departure has no transport (#94).
+            dests = [d for d in ranked if d.name not in [*gone, *shown, spec.origin]]
+            dests = (
+                dests
+                if len(dests) >= 2
+                else [d for d in ranked if d.name not in [*gone, spec.origin]]
+            )[:3]
+        dests = [d for d in dests if d.name != spec.origin][:4]
         plan = Plan(spec=spec, destinations=dests)
         if not other:
             return reply("inspire", plan, _text_inspire(plan))
@@ -621,6 +627,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if why and why != plan.explanations:
             plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)
         text = _text_compare(plan.model_copy(update={"changes": []}))
+        if spec.origin in spec.destinations:
+            text += f" Город вылета {spec.origin} совпадает с направлением: перевозки в плане нет."
         if plan.changes:
             text = "\n".join(["Было → стало:", *describe(plan.changes), text])
         if old.stage == "select" and swapped:

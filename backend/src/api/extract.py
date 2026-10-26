@@ -172,6 +172,17 @@ PRIORITIES = [
     ("rating", r"рейтинг|отзыв|зв[её]зд"),
 ]
 
+# The exact message of the web priority chips (web/src/format.ts, priorityMessage).
+CHIP_NAMES = ("цена", "отмена", "питание", "расположение", "время в пути", "рейтинг")
+CHIP_RE = re.compile(
+    rf"\s*мои приоритеты по важности:\s*(?:{'|'.join(CHIP_NAMES)})(?:,\s*(?:{'|'.join(CHIP_NAMES)}))*\.?\s*"
+)
+
+
+def is_chip_message(text: str) -> bool:
+    """The chip phrase only: rules read all of it, the model has nothing to add (S9)."""
+    return CHIP_RE.fullmatch(text.lower()) is not None
+
 
 def _month(word: str) -> int:
     return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»

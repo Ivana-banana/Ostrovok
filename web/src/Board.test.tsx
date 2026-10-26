@@ -218,4 +218,14 @@ suite("доска поездки", () => {
     expect(sec?.textContent).toContain("Порядок не задан");
     expect(sec?.querySelectorAll("button[aria-label^='Добавить']").length).toBe(6);
   });
+
+  it("S9: на сборке подсказка честно говорит, что сдвиг вернёт к сравнению", () => {
+    const hint = (stage: "compare" | "assemble") => {
+      const r = { ...structuredClone(base), stage, voucher: null };
+      r.plan.spec.priorities = ["price", "cancellation"];
+      return render(r).querySelector("[aria-label='Приоритеты']")?.textContent ?? "";
+    };
+    expect(hint("assemble")).toContain("вернёт вас к сравнению");
+    expect(hint("compare")).not.toContain("вернёт");
+  });
 });
