@@ -6,7 +6,7 @@
 
 Файл проверок проекта (Python) определяет:
     def check_S1(case: dict) -> bool | tuple[bool, str]   — проверка сценария S1;
-    def metric(split: str) -> dict | None                  — {"name", "system", "baseline"}.
+    def metric(split: str) -> dict | None                  — {"name", "system", "baseline"[, "details"]}.
 Сценарий без check_<id> — «не автоматизирован» (не пройден). Baseline — eval/baseline.json
 (тривиальный ответ из probe). Последняя строка — «RESULT: …»: её пишет журнал eval-final.
 Только стандартная библиотека.
@@ -97,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
     if mres:
         metric_txt = f"; {mres['name']}: система {mres['system']} против baseline {mres['baseline']}"
         print(f"Метрика {mres['name']}: система {mres['system']}, baseline {mres['baseline']}")
+        for line in mres.get("details", []):
+            print(f"  - {line}")
         if mres["system"] is not None and mres["baseline"] is not None and mres["system"] <= mres["baseline"]:
             print("ВНИМАНИЕ: система не лучше тривиального ответа")
     else:
