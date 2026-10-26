@@ -163,6 +163,13 @@ def _fares(spec: TripSpec, mode: Mode) -> float:
     return spec.adults + kids
 
 
+def _dates(spec: TripSpec) -> tuple[date, date]:
+    """Check-in and check-out; callers return [] earlier when the spec has no start date."""
+    if spec.date_from is None:
+        raise ValueError("spec.date_from is empty: offers need a start date")
+    return spec.date_from, spec.date_to or spec.date_from + timedelta(days=spec.nights or 1)
+
+
 def _night_factor(d: date) -> float:
     holiday = (d.month == 12 and d.day >= 28) or (d.month == 1 and d.day <= 8)
     return (1.5 if holiday else SEASON[d.month]) * (1.15 if d.weekday() in (4, 5) else 1.0)
@@ -263,8 +270,7 @@ def _hotel(
 ) -> tuple[HotelOffer, list[ExtraOffer]]:
     """One tariff of one hotel plus its add-ons. The user's meal and refund wish win."""
     tz = ZoneInfo(place["tz"])
-    date_in = spec.date_from
-    date_out = spec.date_to or date_in + timedelta(days=spec.nights or 1)
+    date_in, date_out = _dates(spec)
     nights = max(1, (date_out - date_in).days)
     key = base["key"]
     meal = spec.meal if spec.meal in _meals(place, base["stars"]) else _default_meal(place, base)
@@ -367,11 +373,11 @@ def _leg(
 def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[TransportOffer]:
     """There on date_from and back on date_to: flights, trains, and a car if asked for."""
     km = km_between(origin, place)
-    if km < 30:
+    if km < 30 or spec.date_from is None:
         return []
     a, b = origin, place
     ta, tb = ZoneInfo(a["tz"]), ZoneInfo(b["tz"])
-    there, back = spec.date_from, spec.date_to or spec.date_from + timedelta(days=spec.nights or 1)
+    there, back = _dates(spec)
 
     def fare(mode: Mode, base: float, day: date, slot: time) -> float:
         noise = _between(0.92, 1.1, mode, a["name"], b["name"], day, slot)
