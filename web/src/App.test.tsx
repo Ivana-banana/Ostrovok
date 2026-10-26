@@ -286,4 +286,10 @@ suite("приложение", () => {
     expect(link.href).toBe("https://www.openstreetmap.org/copyright");
     expect(foot?.textContent).toContain("синтетические");
   });
+
+  it("TRAP-7: подвал называет оценками команды климат и время в пути", async () => {
+    await mount();
+    const foot = box.querySelector("footer[aria-label='Источники данных']");
+    expect(foot?.textContent).toContain("климат и время в пути — оценки команды");
+  });
 });

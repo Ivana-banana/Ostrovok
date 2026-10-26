@@ -1,6 +1,9 @@
 """Rule extractor and clarification policy (T3, #7): one case per rule, phrases from eval/cases.json."""
 
+import itertools
+import re
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -473,3 +476,21 @@ def test_trap3_city_note_goes_away_when_a_city_is_stated_later():
     r = step(second, "s", "Лучше Казань")
     assert r.plan.spec.destinations == ["Казань"]
     assert not any("каталоге" in a for a in r.plan.spec.assumptions)
+
+
+def _chip_names() -> dict[str, str]:
+    """Priority names as the web chips say them: read from web/src/format.ts, no copy here."""
+    src = (Path(__file__).parents[2] / "web/src/format.ts").read_text(encoding="utf-8")
+    body = src.split("export const PRIORITIES", 1)[1].split("};", 1)[0]
+    return dict(re.findall(r'(\w+):\s*"([^"]+)"', body))
+
+
+def test_s9_chip_phrase_of_every_order_gives_only_priorities():
+    names = _chip_names()
+    assert len(names) == 6
+    for size in range(1, len(names) + 1):
+        for order in itertools.permutations(names, size):
+            phrase = f"Мои приоритеты по важности: {', '.join(names[p] for p in order)}."
+            for has_destination in (False, True):
+                found, _ = extract(phrase, has_destination)
+                assert found == {"priorities": list(order)}, phrase
