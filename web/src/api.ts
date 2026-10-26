@@ -18,11 +18,6 @@ export class ApiError extends Error {
   }
 }
 
-// 404/405: the route is not in this backend build yet.
-export function missingRoute(e: unknown): boolean {
-  return e instanceof ApiError && (e.status === 404 || e.status === 405);
-}
-
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
@@ -40,6 +35,11 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
     clearTimeout(timer);
   }
   if (!r.ok) {
+    // 409: the server explains in Russian why the cart or the checkout stopped.
+    if (r.status === 409) {
+      const detail = await r.json().then((b) => b?.detail, () => null);
+      if (typeof detail === "string") throw new ApiError(409, detail);
+    }
     const text =
       r.status >= 500
         ? "Сервер не смог обработать запрос. Попробуйте ещё раз."
