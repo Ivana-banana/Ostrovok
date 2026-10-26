@@ -9,7 +9,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export TZ=UTC GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export ISSUES_NOW="$(date -d '2026-10-20T12:00:00Z' +%s)"
-unset HACK_MODE TAKEOVER_MIN SKIP_TEST_HOOK
+unset HACK_MODE TAKEOVER_MIN
 FAIL=0 N=0
 ok()   { N=$((N + 1)); echo "ok:   $1"; }
 bad()  { N=$((N + 1)); echo "FAIL: $1"; FAIL=1; }
