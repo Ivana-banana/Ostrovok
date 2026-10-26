@@ -275,6 +275,16 @@ def _switch_city(text: str) -> tuple[int, str] | None:
     return (m.start(), known) if m and known else None
 
 
+def _vetoed_first_word(text: str, t: str, notes: list[str]) -> None:
+    """#109: a capitalized first word before «на 3 дня» / «в мае» that the veto rejects is said,
+    not dropped: «Не нашёл направление «Мамой» в каталоге» (TRAP-2)."""
+    m = re.match(r"\s*([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)", text)
+    if m and FIRST_NEXT.match(t, m.end()):
+        low = t[m.start(1) : m.end(1)]
+        if len(low) >= 3 and (NOT_CITY_START.match(low) or NOT_CITY_END.search(low)):
+            notes.append(f"Не нашёл направление «{m.group(1)}» в каталоге")
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> None:
     """Origin after «из/от», then destinations in text order: known places and capitalized names."""
     for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
@@ -306,6 +316,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
     if first := _first_city(text, t, not hits and not has_destination, None if hits else notes):
         hits.append(first)
+    elif not hits and not has_destination:
+        _vetoed_first_word(text, t, notes)
     dests = []
     for _, name in sorted(hits):
         if name not in dests and name != found.get("origin"):

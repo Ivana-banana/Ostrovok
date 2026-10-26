@@ -117,3 +117,15 @@ def test_trap_2_explicit_pick_is_said_in_the_reply(store):
     assert "Ханой" in picked.reply and name in picked.reply
     hotels = [o for o in picked.plan.offers if isinstance(o, HotelOffer)]
     assert hotels and all(h.city == name for h in hotels)
+
+
+def test_trap_2_vetoed_first_word_is_named_in_inspire(store):
+    """#109: «Мамой на 3 дня» is no city, but the user sees that the word was not understood."""
+    r = say(store, "Мамой на 3 дня, в мае, бюджет 100 тысяч")
+    assert r.stage == "inspire" and r.plan.spec.destinations == []
+    assert "Не нашёл направление «Мамой» в каталоге" in r.reply
+
+
+def test_trap_2_ordinary_first_word_has_no_not_found_line(store):
+    r = say(store, "Отдых на неделю")
+    assert "Не нашёл направление" not in r.reply
