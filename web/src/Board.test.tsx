@@ -163,4 +163,35 @@ suite("доска поездки", () => {
     expect(issue()?.textContent).toContain("Ранний заезд");
     expect(issue()?.querySelector("button")?.textContent).toBe("В корзину");
   });
+
+  it("S9: приоритеты чипами по порядку; на сравнении есть кнопки правки", () => {
+    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    r.plan.spec.priorities = ["price", "cancellation"];
+    const sec = render(r).querySelector("[aria-label='Приоритеты']");
+    const chips = [...(sec?.querySelectorAll(".chip") ?? [])].map((c) => c.querySelector("span")?.textContent);
+    expect(chips).toEqual(["1. цена", "2. отмена"]);
+    const up = sec?.querySelector("button[aria-label='Поднять приоритет цена']") as HTMLButtonElement;
+    expect(up.disabled).toBe(true); // the first one cannot go up
+    expect(sec?.querySelector("button[aria-label='Опустить приоритет цена']")).not.toBeNull();
+    expect(sec?.querySelector("button[aria-label='Добавить приоритет рейтинг']")).not.toBeNull();
+    expect(sec?.querySelector("button[aria-label='Добавить приоритет цена']")).toBeNull();
+  });
+
+  it("S9: после брони чипы видны, но порядок не правится; пустой список скрыт", () => {
+    const r = structuredClone(base); // stage booked
+    r.plan.spec.priorities = ["price", "cancellation"];
+    const sec = render(r).querySelector("[aria-label='Приоритеты']");
+    expect(sec?.textContent).toContain("отмена");
+    expect(sec?.querySelectorAll("button").length).toBe(0);
+    r.plan.spec.priorities = [];
+    expect(render(r).querySelector("[aria-label='Приоритеты']")).toBeNull();
+  });
+
+  it("S9: приоритеты не заданы на сравнении — подсказка и добавление", () => {
+    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    r.plan.spec.priorities = [];
+    const sec = render(r).querySelector("[aria-label='Приоритеты']");
+    expect(sec?.textContent).toContain("Порядок не задан");
+    expect(sec?.querySelectorAll("button[aria-label^='Добавить']").length).toBe(6);
+  });
 });
