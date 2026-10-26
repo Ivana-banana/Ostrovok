@@ -62,7 +62,7 @@ from api.optimizer import (
     dead_end_text,
     enumerate_trips,
     hotel_rows,
-    optimize,
+    pets_possible,
     pick_hotel,
 )
 from api.store import SessionStore
@@ -504,6 +504,27 @@ def _alternatives(spec: TripSpec, skip: list[str]) -> list[str]:
     return [n for n in names if n not in skip][:3]
 
 
+def _hotel_selected(plan: Plan) -> bool:
+    return any(o.kind == "hotel" and o.offer_id in plan.selected for o in plan.offers)
+
+
+def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
+    """No trip takes the pet (#131): the reason, other cities where it can go, no cart.
+
+    The legs that take the pet stay selected, a hotel is picked by the user (a number)."""
+    spec = plan.spec
+    text = dead_end_text(spec, plan.offers)
+    if plan.selected:  # the hotels, as the user must see them to pick one
+        text = _text_compare(plan).split("\nПредлагаю:")[0] + "\n" + text
+    dead = [
+        d.name
+        for d in suggest_destinations(spec, len(CATALOG))
+        if not pets_possible(spec, find_offers(spec, d.name))
+    ]
+    text, questions = _no_offers(plan, text, dead)
+    return ("compare" if plan.selected else "select"), plan, text, questions
+
+
 def _no_offers(plan: Plan, text: str, skip: list[str] | None = None) -> tuple[str, list[Question]]:
     """The «choose another» exit of the select stage: 2–3 destinations as the text and buttons."""
     names = _alternatives(plan.spec, [*plan.spec.destinations, plan.spec.origin, *(skip or [])])
@@ -697,16 +718,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             )
             text, questions = _no_offers(plan, text)
             return reply("select", plan, text, cart, questions=questions)
-        if spec.pets and not plan.selected:  # no hotel or leg takes the pet: say so, no cart (#131)
-            text = f"{dead_end_text(spec, plan.offers)} {HINTS['select']}"
-            # Not the cities where the pet has no trip either.
-            dead = [
-                d.name
-                for d in suggest_destinations(spec, len(CATALOG))
-                if not optimize(spec, find_offers(spec, d.name)).selected
-            ]
-            text, questions = _no_offers(plan, text, dead)
-            return reply("select", plan, text, cart, questions=questions)
+        if not pets_possible(spec, plan.offers):
+            stage, plan, text, questions = _pets_dead_end(plan)
+            return reply(stage, plan, text, cart, questions=questions)
         why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
         if why and why != plan.explanations:
             plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)
@@ -715,7 +729,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             text += f" Город вылета {spec.origin} совпадает с направлением: перевозки в плане нет."
         if plan.changes:
             text = "\n".join(["Было → стало:", *describe(plan.changes), text])
-        if old.stage == "select" and swapped:
+        if old.stage == "select" and swapped and not old.plan.offers:
             # The user named a city that is not in the catalogue and picked another one:
             # the reply says so, the new city never comes silently (#93).
             gone, now = ", ".join(swapped), spec.destinations[0]
@@ -724,6 +738,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
 
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
         hotels = hotel_rows(plan.offers, plan.selected)
+        picks = idx is not None and idx < len(hotels)
+        if not picks and not pets_possible(spec, plan.offers) and not _hotel_selected(plan):
+            stage, plan, text, questions = _pets_dead_end(plan)  # «беру» is no consent (#131)
+            return reply(stage, plan, text, questions=questions)
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
             plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)

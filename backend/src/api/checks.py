@@ -161,8 +161,13 @@ def _walk(
         sid = r.session_id
         if run.first_rec_ms is None and r.stage in ("inspire", "compare"):
             run.first_rec_ms = (time.perf_counter() - started) * 1000
-        dead_end = (
-            r.stage == "select" and r.plan.spec.pets and r.questions and r.questions[0].options
+        # A pets dead end (#131): no hotel is chosen for the user, other cities are offered.
+        dead_end = bool(
+            r.plan.spec.pets
+            and r.stage in ("select", "compare")
+            and r.questions
+            and r.questions[0].options
+            and not any(x.kind == "hotel" for x in _chosen(r.plan))
         )
         if r.stage in stop and not dead_end:
             break

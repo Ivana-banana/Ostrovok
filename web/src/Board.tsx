@@ -304,7 +304,7 @@ function Hotels({ plan, stage, busy, onSend }: {
                   <td>
                     {clock(h.check_in)} / {clock(h.check_out)}
                   </td>
-                  <td>{h.pets_allowed ? "можно" : "нельзя"}</td>
+                  <td>{h.pets_allowed ? "можно" : "нет отметки"}</td>
                   <td>
                     {stage === "compare" && word && !chosen && (
                       <button
