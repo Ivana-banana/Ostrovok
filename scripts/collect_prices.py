@@ -74,7 +74,7 @@ def _groups(text: str) -> dict[str, list[tuple[bool, str]]]:
 def allowed(robots_txt: str, path: str, agent: str = AGENT) -> bool:
     """May `agent` fetch `path` (with the query string)? Its own group if any, else `*`."""
     groups = _groups(robots_txt)
-    specific = [a for a in groups if a != "*" and agent.lower().startswith(a)]
+    specific = [a for a in groups if a not in ("*", "") and agent.lower().startswith(a)]
     rules = groups[max(specific, key=len)] if specific else groups.get("*", [])
     best_len, verdict = -1, True
     for is_allow, pattern in rules:
@@ -264,6 +264,10 @@ def parse_tutu(html: str) -> dict | None:
         if data.get("@type") != "Product":
             continue
         agg = data["offers"]
+        if agg.get("priceCurrency", "RUB") != "RUB":
+            raise ValueError(f"цена в {agg['priceCurrency']}, ждали RUB")
+        if not agg.get("offers"):
+            return None
         return {
             "low_rub": agg["lowPrice"],
             "high_rub": agg["highPrice"],

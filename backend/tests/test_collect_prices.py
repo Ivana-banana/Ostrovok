@@ -129,3 +129,12 @@ def test_fetch_200_without_facts_is_a_refusal_and_not_cached(host, tmp_path):
     with pytest.raises(cp.Refused):
         cp.fetch("x.ru", "/a", cp.parse_101hotels)
     assert not (tmp_path / "cache").exists()
+
+
+def test_tutu_price_not_in_rub_is_an_error():
+    html = (
+        '<script type="application/ld+json">{"@type":"Product","offers":{"@type":"AggregateOffer",'
+        '"lowPrice":10,"highPrice":90,"priceCurrency":"EUR","offers":[]}}</script>'
+    )
+    with pytest.raises(ValueError):
+        cp.parse_tutu(html)
