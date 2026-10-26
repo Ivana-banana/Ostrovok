@@ -128,3 +128,53 @@ def test_unknown_session_is_404(store):
         assert client.get(f"/api/session/{sid}").json()["stage"] == "inspire"
     finally:
         app.dependency_overrides.clear()
+
+
+def _book(store, r):
+    for text in ("беру", "да", "подтверждаю"):
+        r = say(store, text, r.session_id)
+    return r
+
+
+def test_origin_city_is_never_offered_as_destination(store):
+    # #94: «недорого на выходные из Казани»: Kazan is the origin, not a destination
+    assert extract("недорого на выходные из Казани")[0].get("destinations") is None
+    r = say(store, "недорого на выходные из Казани")
+    assert r.stage == "inspire" and r.plan.spec.origin == "Казань"
+    assert r.plan.destinations and "Казань" not in [d.name for d in r.plan.destinations]
+    r = say(store, "1", r.session_id)  # the first offered destination
+    assert r.plan.spec.destinations != ["Казань"]
+    booked = _book(store, r)
+    assert booked.stage == "booked"
+    legs = [i for i in booked.voucher.items if i.kind == "transport"]
+    assert legs and legs[0].origin == "Казань" and legs[-1].destination == "Казань"
+
+
+def test_destination_equal_to_origin_is_said_honestly_before_confirmation(store):
+    r = say(store, "недорого на выходные из Казани")
+    r = say(store, "Казань", r.session_id)
+    assert r.stage == "compare" and r.plan.spec.destinations == ["Казань"]
+    assert "перевозки в плане нет" in r.reply  # no invented transport (TRAP-4)
+    assert not [i for i in r.plan.selected if i.startswith("t-")]
+
+
+def test_other_destination_keeps_two_or_three_options_without_the_origin(store):
+    r = say(store, "на море в ноябре из Сочи")
+    for text in ("другое направление", "другие варианты"):
+        r = say(store, text, r.session_id)
+        names = [d.name for d in r.plan.destinations]
+        assert 2 <= len(names) <= 3 and "Сочи" not in names
+        assert "Сочи" not in r.questions[0].options
+
+
+def test_inspire_keeps_four_options_without_the_origin(store):
+    r = say(store, "недорого на выходные из Казани")
+    names = [d.name for d in r.plan.destinations]
+    assert len(names) == 4 and "Казань" not in names
+
+
+def test_select_exit_does_not_offer_the_origin(store):
+    r = say(store, "Хиврии, 3 ночи с 20 ноября")
+    r = say(store, "летим из Казани", r.session_id)
+    options = r.questions[0].options
+    assert 2 <= len(options) <= 3 and "Казань" not in options

@@ -42,12 +42,54 @@ PLACES = {
     "Армения": "армени", "Минск": "минск", "Баку": "баку", "Ярославль": "ярославл",
     "Суздаль": "суздал", "Новосибирск": "новосибирск", "Владивосток": "владивосток",
 }  # fmt: skip
+
+
+# Nominative ending -> case endings. «Минеральная вода» is not «Минеральные Воды».
+ADJECTIVE_FORMS = {
+    ("ые", "ие"): "(?:ые|ие|ых|их|ым|им|ыми|ими)",
+    ("ый", "ий", "ой"): "(?:ый|ий|ой|ого|его|ому|ему|ом|ем|ым|им)",
+    ("ая", "яя"): "(?:ая|яя|ой|ей|ую|юю)",
+}
+
+
+def _word_re(word: str, first: str | None = None) -> str:
+    """A word of a two-word name in any case: «Великого», «Воды» -> «воду».
+
+    first: a pattern for its first letter («В»); None keeps the lower case letter."""
+    w = word.lower().replace("ё", "е")
+    rest = re.sub(r"[аяыиеийьюуо]+$", "", w) + r"\w*"
+    for tails, forms in ADJECTIVE_FORMS.items():
+        if w.endswith(tails):
+            rest = w[:-2] + forms
+    return (first or rest[0]) + rest[1:]
+
+
 PLACE_RES = [
     (name, re.compile(rf"\b(?:{'|'.join(c['stems'])})\w*")) for name, c in CATALOG.items()
 ] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
 # Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not.
 CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)"))]
-NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск"}
+# Two-word cities of places.json not listed above (TRAP-3): «Великий Новгород в мае». Their
+# words are common («лечение минеральными водами»), so a name counts only with a capital first
+# letter (original text) or right after «в/во/из/до» (lower text).
+AFTER_PREPOSITION = r"(?:(?<=\bв )|(?<=\bво )|(?<=\bиз )|(?<=\bдо ))"
+
+
+def _two_word_places() -> None:
+    for p in places():
+        if " " not in p["name"] or p["name"] in PLACES:
+            continue
+        words = p["name"].split()
+        # the original text may have «ё»; the lower text has none
+        cap = [w[0].upper() + _word_re(w)[1:].replace("е", "[её]") for w in words]
+        cap[1:] = [f"[{w[0]}{w[0].lower()}]{w[1:]}" for w in cap[1:]]
+        CAPITAL_PLACES.append((p["name"], re.compile(r"\b" + r"\s+".join(cap))))
+        low = r"\s+".join(_word_re(w) for w in words)
+        PLACE_RES.append((p["name"], re.compile(AFTER_PREPOSITION + low)))
+
+
+_two_word_places()
+NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой"}
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
 # An unknown capitalized word counts only in main's narrow pattern: «Ухта, 3 ночи»,
 # «Калуга в мае», «Тула на 3 дня». Even then the lists below veto ordinary first words.
@@ -59,10 +101,15 @@ NOT_CITY_START = re.compile(
     r"|нельз|будем|будет|как\b|что\b|где\b|куд|когд|сколько|есть\b|если\b|для\b|мне\b|нам\b"
     r"|мы\b|ну\b|вот\b|так\b|или\b|тепл|хорош|нормал|красив|дешев|дорог|быстр|скоро|срочно"
     r"|лучш|любо|какой|какая|какое|зим|весн|осен|друз|компан|сем[ьъ]|одн|вмест"
-    r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят)"
+    r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят"
+    r"|(?:другой|простой|большой|небольшой|выходной|мой|твой|свой|такой|мамой|папой|подругой"
+    r"|другом|сыном|детьми|внуком|внучкой|коллегами|братом|родителями|подругами|племянником|дедушкой|отцом|дочкой|сестрой|бабушкой|мужем|женой|перенеси|подвинь|сдвинь)\b)"
 )  # fmt: skip
 # Not a city by its ending: verbs («Планируем», «Ищете»), adjectives («Тёплое»), infinitives.
-NOT_CITY_END = re.compile(r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ой|ая|яя|ое|ее|ые|ие)$")
+# «ой» is not here: «Ханой» is a city. The ordinary words in «ой» that can stand before a
+# number («Другой на 3 ночи», «Мамой на 3 дня») are a list of whole words in NOT_CITY_START;
+# «Домой» is in NOT_PLACES.
+NOT_CITY_END = re.compile(r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ая|яя|ое|ее|ые|ие)$")
 CASES = "(?:а|у|е|ом|ем|ой|ы|и|ю|я|ь|ею|ам|ах|ами)"
 CASES_SHORT = "(?:а|у|е|ы)"  # «Рим», «Вена»: a longer ending would make a common word
 # Short stems that are ordinary words in these forms: «мала ли комната» is not «Мале».
@@ -124,6 +171,17 @@ PRIORITIES = [
     ("travel_time", r"в\s+пути|перел[её]т|переезд|\bдорог[аеу]\b"),
     ("rating", r"рейтинг|отзыв|зв[её]зд"),
 ]
+
+# The exact message of the web priority chips (web/src/format.ts, priorityMessage).
+CHIP_NAMES = ("цена", "отмена", "питание", "расположение", "время в пути", "рейтинг")
+CHIP_RE = re.compile(
+    rf"\s*мои приоритеты по важности:\s*(?:{'|'.join(CHIP_NAMES)})(?:,\s*(?:{'|'.join(CHIP_NAMES)}))*\.?\s*"
+)
+
+
+def is_chip_message(text: str) -> bool:
+    """The chip phrase only: rules read all of it, the model has nothing to add (S9)."""
+    return CHIP_RE.fullmatch(text.lower()) is not None
 
 
 def _month(word: str) -> int:
@@ -197,6 +255,37 @@ def _unknown_first_city(
     return m.start(1), _nominative(word)
 
 
+# S5: «тогда Барселона», «лучше Сочи»: a lead word and a bare city, no preposition.
+SWITCH_LEAD = re.compile(
+    r"\s*(?:ну\s+|а\s+)?(?:тогда|лучше|ладно|пусть|давай(?:те)?|может(?:\s+быть)?|а\s+если)\W+"
+    r"(?:(?:в|во|на)\s+)?",
+    re.IGNORECASE,
+)
+
+
+def _switch_city(text: str) -> tuple[int, str] | None:
+    """The bare city right after a lead word: «тогда Барселона», «Лучше Анталию».
+
+    Only a city of places.json counts: «Лучше завтра», «Тогда Дети» name no place. A name
+    outside the catalogue needs a preposition («тогда в Ухту») and is read by the rules below.
+    """
+    lead = SWITCH_LEAD.match(text)
+    m = re.compile(r"[А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)*\b").match(text, lead.end()) if lead else None
+    known = _known(m.group(0)) if m else None
+    return (m.start(), known) if m and known else None
+
+
+def _vetoed_first_word(text: str, t: str, notes: list[str]) -> None:
+    """#109: a first word before «на 3 дня» / «в мае» that the veto rejects leaves a neutral line.
+
+    The word is not quoted: by form «Хотим» and «Иерусалим» look the same (TRAP-2)."""
+    m = re.match(r"\s*([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)", text)
+    if m and FIRST_NEXT.match(t, m.end()):
+        low = t[m.start(1) : m.end(1)]
+        if len(low) >= 3 and (NOT_CITY_START.match(low) or NOT_CITY_END.search(low)):
+            notes.append("направление: не названо — если имели в виду город, напишите «в <город>»")
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> None:
     """Origin after «из/от», then destinations in text order: known places and capitalized names."""
     for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
@@ -223,9 +312,13 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n))
+    if switch := _switch_city(text):
+        hits.append(switch)
     # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
     if first := _first_city(text, t, not hits and not has_destination, None if hits else notes):
         hits.append(first)
+    elif not hits and not has_destination:
+        _vetoed_first_word(text, t, notes)
     dests = []
     for _, name in sorted(hits):
         if name not in dests and name != found.get("origin"):

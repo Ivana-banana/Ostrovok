@@ -23,7 +23,7 @@ __pycache__/
 .vscode/
 .DS_Store
 
-# Личные настройки участника (скилл /tests)
+# Личные настройки участника
 CLAUDE.local.md
 
 # --- preset web-fullstack
