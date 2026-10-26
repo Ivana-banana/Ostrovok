@@ -114,4 +114,31 @@ suite("доска поездки", () => {
     expect(card?.textContent).toContain("Казань");
     expect(card?.querySelector("button")?.textContent).toBe("Выбрать");
   });
+
+  it("таймлайн: события убранной из корзины позиции помечены, после «Вернуть» — обычный вид", () => {
+    const r = structuredClone(base);
+    r.stage = "checkout";
+    r.voucher = null;
+    const full = r.plan.offers.filter((o) => o.offer_id === "t1");
+    r.cart.items = full; // the cart holds t1; h1 was removed but stays in plan.selected
+    r.plan.timeline.push({ at: "2026-12-11T14:00:00+03:00", title: "Заселение", offer_id: "h1" });
+    const items = () => [...render(r).querySelectorAll(".timeline li")];
+    const [arrival, checkin] = items();
+    expect(arrival.textContent).not.toContain("убрано из корзины");
+    expect(checkin.textContent).toContain("Заселение");
+    expect(checkin.textContent).toContain("убрано из корзины");
+    expect(checkin.classList.contains("gone")).toBe(true);
+    // «Вернуть»: the hotel is in the cart again
+    r.cart.items = r.plan.offers.filter((o) => o.offer_id === "t1" || o.offer_id === "h1");
+    for (const li of items()) expect(li.textContent).not.toContain("убрано из корзины");
+  });
+
+  it("таймлайн: до открытия корзины и после брони пометок нет", () => {
+    const r = structuredClone(base);
+    r.cart.items = [];
+    for (const stage of ["assemble", "booked"] as const) {
+      const doc = render({ ...r, stage });
+      expect(doc.querySelector(".timeline")?.textContent).not.toContain("убрано из корзины");
+    }
+  });
 });

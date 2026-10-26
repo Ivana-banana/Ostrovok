@@ -373,22 +373,28 @@ function Changes({ plan }: { plan: Plan }) {
   );
 }
 
-function Timeline({ plan, canAdd, busy, onCart }: {
+function Timeline({ plan, cart, canAdd, busy, onCart }: {
   plan: Plan;
+  cart: Cart;
   canAdd: boolean;
   busy: boolean;
   onCart: BoardProps["onCart"];
 }) {
   if (!plan.timeline.length && !plan.issues.length) return null;
   const offer = (id: string) => plan.offers.find((o) => o.offer_id === id);
+  // The server keeps a removed item in `plan.selected` so it can come back. While the cart is
+  // open, an event of an item that is not in the cart is shown as removed.
+  const inCart = new Set(cart.items.map((o) => o.offer_id));
+  const gone = (id: string | null) => canAdd && id !== null && !inCart.has(id);
   return (
     <section className="card" aria-label="Таймлайн">
       <h2>Таймлайн</h2>
       <p className="muted">Время местное для места события.</p>
       <ol className="timeline">
         {plan.timeline.map((e, i) => (
-          <li key={`${e.at}-${i}`}>
-            <time>{localTime(e.at)}</time> {e.title}
+          <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined}>
+            <time>{localTime(e.at)}</time> <span className="gone-title">{e.title}</span>
+            {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}
           </li>
         ))}
       </ol>
@@ -564,7 +570,7 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
       <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
       <Bundles plan={plan} />
       <Explanations plan={plan} />
-      <Timeline plan={plan} canAdd={stage === "checkout"} busy={busy} onCart={onCart} />
+      <Timeline plan={plan} cart={cart} canAdd={stage === "checkout"} busy={busy} onCart={onCart} />
       {next && (
         <button type="button" className="primary" disabled={busy} onClick={() => onSend(next.text)}>
           {next.label}
