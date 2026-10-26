@@ -251,13 +251,6 @@ def _synthetic_bases(place: dict) -> list[dict]:
     return out
 
 
-def _meals(place: dict, stars: int) -> tuple[Meal, ...]:
-    sea: tuple[Meal, ...] = ("AI",) if place["sea"] else ()
-    if stars <= 3:
-        return ("RO", "BB")
-    return ("RO", "BB", "HB", *sea) if stars == 4 else ("BB", "HB", "FB", *sea)
-
-
 def _default_meal(place: dict, base: dict) -> Meal:
     stars, r = base["stars"], _rand(place["name"], base["key"], "meal")
     if stars <= 2:
@@ -272,19 +265,19 @@ def _default_meal(place: dict, base: dict) -> Meal:
 def _hotel(
     spec: TripSpec, place: dict, base: dict, now: datetime
 ) -> tuple[HotelOffer, list[ExtraOffer]]:
-    """One tariff of one hotel plus its add-ons. The user's meal and refund wish win."""
+    """One tariff of one hotel plus its add-ons.
+
+    The tariff does not read spec.meal or spec.refundable: the re-plan DAG (api/dag.py)
+    answers those edits by re-ranking the same offers, without a new search.
+    """
     tz = ZoneInfo(place["tz"])
     date_in, date_out = _dates(spec)
     nights = max(1, (date_out - date_in).days)
     key = base["key"]
-    meal = spec.meal if spec.meal in _meals(place, base["stars"]) else _default_meal(place, base)
+    meal = _default_meal(place, base)
     # The tariff (price and offer_id) does not depend on the clock; only the cancellation
     # state does: after the deadline a refundable tariff has no free cancellation left.
-    refundable = (
-        spec.refundable
-        if spec.refundable is not None
-        else base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 0.2
-    )
+    refundable = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 0.2
     free_until = None
     if refundable:
         days = (7, 3, 1)[int(_rand(place["name"], key, "deadline") * 3)]
@@ -429,8 +422,9 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
         price = road * (8 / 100 * 62 + 1.0) * cars  # 8 l/100 km at 62 ₽ + tolls
         legs.append(_leg(spec, "car", a, b, datetime.combine(there, time(8, 0), ta), hours, price))
         legs.append(_leg(spec, "car", b, a, datetime.combine(back, time(10, 0), tb), hours, price))
-    wanted = [leg for leg in legs if leg.mode in spec.modes]
-    return wanted or legs
+    wanted = [leg for leg in legs if leg.mode in spec.modes] or legs
+    # There first, then back: the cart lists items in the order of the offers.
+    return sorted(wanted, key=lambda leg: leg.origin != a["name"])
 
 
 def transfer_id(hotel_id: str, leg_id: str) -> str:

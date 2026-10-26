@@ -25,7 +25,6 @@ from api.fixtures import (
     future_date,
     suggest_destinations,
 )
-from api.offers import find_offers
 from api.store import SessionStore
 
 DEFAULT_NIGHTS = 7

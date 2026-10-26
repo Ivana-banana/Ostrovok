@@ -108,10 +108,13 @@ def test_more_guests_cost_more():
     assert all(b.price_rub > a.price_rub for a, b in zip(legs, more, strict=True))
 
 
-def test_meal_and_refund_wishes_shape_the_tariff():
-    hotels = kinds(find_offers(spec(meal="BB", refundable=True), "Казань"), "hotel")
-    assert all(h.meal == "BB" for h in hotels)
-    assert all(h.cancellation.refundable and h.cancellation.free_until for h in hotels)
+def test_meal_and_refund_wishes_do_not_change_the_offers():
+    """The re-plan DAG answers meal and refund edits by re-ranking, without a new search."""
+    plain = find_offers(spec(), "Сочи")
+    assert find_offers(spec(meal="AI", refundable=True), "Сочи") == plain
+    hotels = kinds(plain, "hotel")
+    assert {"AI", "BB"} <= {h.meal for h in hotels}  # a sea place: breakfast and all inclusive
+    assert any(h.cancellation.refundable for h in hotels)
 
 
 def test_passed_cancellation_deadline_is_not_refundable():
@@ -266,12 +269,12 @@ def test_trap_7_real_osm_hotel_has_no_made_up_amenities():
 
 def test_clock_changes_only_the_cancellation_state():
     """The same request gives the same ids and prices before and after a deadline."""
-    s = spec(refundable=True)
+    s = spec()
     early = datetime(2000, 1, 1, tzinfo=ZoneInfo("UTC"))
     late = datetime.combine(s.date_from, datetime.min.time(), ZoneInfo("UTC"))
     a = kinds(find_offers(s, "Казань", now=early), "hotel")
     b = kinds(find_offers(s, "Казань", now=late), "hotel")
     assert [(h.offer_id, h.price_rub) for h in a] == [(h.offer_id, h.price_rub) for h in b]
-    assert all(h.cancellation.refundable for h in a)
+    assert any(h.cancellation.refundable for h in a)
     assert not any(h.cancellation.refundable for h in b)
     assert find_offers(s, "Казань", now=early) == find_offers(s, "Казань", now=early)
