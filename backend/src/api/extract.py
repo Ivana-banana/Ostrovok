@@ -48,10 +48,10 @@ PLACE_RES = [
 # Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not.
 CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)"))]
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск"}
-# First word as a destination (TRAP-2). A city of places.json counts in any case. An unknown
-# capitalized word counts only before a trip word («Иркутск на неделю»), and not if it is an
-# ordinary first word: «Хочу», «Недорого», «Тёплое», «Нет».
-FIRST_NEXT = re.compile(r"\s+(?:в|во|на|с|со|для|до|вдвоем|втроем|вчетвером)\b|\s*,\s*\d")
+# First word as a destination (TRAP-2). A city of places.json counts in any case and form.
+# An unknown capitalized word counts only in main's narrow pattern: «Ухта, 3 ночи»,
+# «Калуга в мае», «Тула на 3 дня». Even then the lists below veto ordinary first words.
+FIRST_NEXT = re.compile(r"\s*,\s*\d|\s+(?:во?\s+" + MONTH + r"|[сн]а?\s+\d)")
 NOT_CITY_START = re.compile(
     r"(?:хоч|хот|ищ|нуж|надо|подск|посов|подбер|подбир|помог|помощ|орган|спланир|планир|собир"
     r"|собер|давай|еду|едем|леч|лет[иеа]|поед|полет|мечт|привет|здравств|добр|отпуск|отел|билет"
@@ -64,6 +64,7 @@ NOT_CITY_START = re.compile(
 # Not a city by its ending: verbs («Планируем», «Ищете»), adjectives («Тёплое»), infinitives.
 NOT_CITY_END = re.compile(r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ой|ая|яя|ое|ее|ые|ие)$")
 CASES = "(?:а|у|е|ом|ем|ой|ы|и|ю|я|ь|ею|ам|ах|ами)"
+CASES_SHORT = "(?:а|у|е|ом)"  # «Рим», «Вена»: a longer ending would make a common word
 CHILD_RE = re.compile(
     rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*)"
 )
@@ -134,21 +135,23 @@ def _known(word: str) -> str | None:
         if " " in n:
             continue
         stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
-        if w == n or re.fullmatch(re.escape(stem) + CASES, w):
+        if w == n or re.fullmatch(re.escape(stem) + (CASES if len(stem) > 3 else CASES_SHORT), w):
             return p["name"]
     return None
 
 
-def _first_city(text: str, t: str) -> tuple[int, str] | None:
-    """The first word of the message as the destination: «Иркутск на неделю…», «Мурманск, …»."""
+def _first_city(text: str, t: str, guess: bool) -> tuple[int, str] | None:
+    """The first word of the message as the destination: «Иркутск на неделю…», «Мурманск, …».
+
+    A known city (places.json) is always taken. An unknown word is taken only if guess is on."""
     m = re.match(r"\s*([А-ЯЁа-яё][а-яё]+(?:-[А-ЯЁа-яё]+)*)", text)
     if not m:
         return None
     word, low = m.group(1), t[m.start(1) : m.end(1)]
     if known := _known(word):
         return m.start(1), known  # a known city may be lower case: «иркутск на неделю»
-    if not FIRST_NEXT.match(t, m.end()):
-        return None  # «Нет», «Спасибо»: no trip word after, not a city
+    if not guess or not FIRST_NEXT.match(t, m.end()):
+        return None  # «Отдых на море», «Нет»: an unknown first word is not guessed
     words_not_city = [low in NOT_PLACES, len(low) < 3, not word[0].isupper(), re.match(MONTH, low)]
     words_not_city.append(low in NUMS)
     if any(words_not_city) or NOT_CITY_START.match(low) or NOT_CITY_END.search(low):
@@ -158,7 +161,7 @@ def _first_city(text: str, t: str) -> tuple[int, str] | None:
     return m.start(1), _nominative(word)
 
 
-def _places(text: str, t: str, found: dict) -> None:
+def _places(text: str, t: str, found: dict, has_destination: bool) -> None:
     """Origin after «из/от», then destinations in text order: known places and capitalized names."""
     for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
         w = re.match(r"[а-яе-]+", t[m.end() :])
@@ -184,7 +187,8 @@ def _places(text: str, t: str, found: dict) -> None:
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n))
-    if first := _first_city(text, t):
+    # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
+    if first := _first_city(text, t, guess=not hits and not has_destination):
         hits.append(first)
     dests = []
     for _, name in sorted(hits):
@@ -329,12 +333,14 @@ def _budget(t: str, found: dict, notes: list[str]) -> None:
             return
 
 
-def extract(text: str) -> tuple[dict, list[str]]:
-    """TripSpec fields stated in one message, plus assumptions made while reading it."""
+def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:
+    """TripSpec fields stated in one message, plus assumptions made while reading it.
+
+    has_destination: the plan has a city already; an unknown first word is then never a city."""
     t = text.lower().replace("ё", "е")  # same length: positions match the original text
     found: dict = {}
     notes: list[str] = []
-    _places(text, t, found)
+    _places(text, t, found, has_destination)
     _dates(t, found, notes)
     _nights(t, found, notes)
     _people(t, found, notes)
