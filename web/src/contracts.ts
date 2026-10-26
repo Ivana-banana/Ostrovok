@@ -17,6 +17,7 @@ export type TripSpec = {
   children_ages: number[];
   pets: boolean;
   budget_rub: number | null;
+  hotel_budget_rub: number | null;
   meal: Meal | null;
   refundable: boolean | null;
   modes: Mode[];
