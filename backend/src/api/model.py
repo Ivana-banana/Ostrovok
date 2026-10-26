@@ -264,8 +264,13 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     deadline = llm.deadline()
     # A service turn («беру», «да», «подтверждаю», a number) goes to no model: a field it
     # adds would re-plan the trip and send the user back to compare.
-    service = old.stage in ("assemble", "checkout") or idx is not None
-    service = service or _confirmed(t) or bool(BOOK_RE.search(t))
+    # The stage decides: «оформи мне отдых на Алтае» on the first turn is a request, not consent.
+    # A new session, clarify and select are never service turns.
+    consent = old.stage in ("compare", "assemble", "checkout") and (
+        _confirmed(t) or bool(BOOK_RE.search(t))
+    )
+    pick = old.stage in ("inspire", "compare") and idx is not None
+    service = prev is not None and (old.stage in ("assemble", "checkout") or consent or pick)
     found, notes = extract(message)
     llm_found = (
         None if service or not use_llm else llm.extract_spec(message, old.plan.spec, deadline)

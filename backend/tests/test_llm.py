@@ -185,6 +185,28 @@ def test_service_turns_go_to_no_model_and_reach_booking(store, fake):
     assert len(fake.calls) == calls and r.voucher is not None
 
 
+@pytest.mark.parametrize(
+    ("text", "place"),
+    [
+        ("Давай махнём куда-нибудь, где тепло, на три ночки", "Сочи"),
+        ("Оформи мне отдых на Алтае", "Алтай"),
+        ("во второй половине ноября куда-нибудь в горы", "Красная Поляна"),
+    ],
+)
+def test_first_turn_is_never_a_service_turn(monkeypatch, store, text, place):
+    """Jury on PR #47: «оформи» on the first turn is a request; the model reads it."""
+    calls = []
+
+    def stub(message, spec, until=None, today=None):
+        calls.append(message)
+        return {"destinations": [place], "wishes": ["отдых"]}
+
+    monkeypatch.setattr(llm, "extract_spec", stub)
+    r = say(store, text)
+    assert calls == [text] and r.llm is True
+    assert r.plan.spec.destinations == [place] and "отдых" in r.plan.spec.wishes
+
+
 def test_llm_work_of_one_turn_has_a_deadline(monkeypatch, store, fake):
     """A slow model: each request waits at most the time left; no explanation after half."""
     clock = [1000.0]
