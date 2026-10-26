@@ -528,3 +528,15 @@ def test_second_half_of_a_month_is_no_hotel_pick(store):
     assert r.stage == "compare"
     r2 = say(store, "во второй половине ноября", r.session_id)
     assert r2.plan.selected == r.plan.selected and r2.stage == "compare"
+
+
+def test_model_answer_cannot_lift_an_earlier_refusal(store, fake):
+    """#113: the refusal of turn 1 holds against a model answer of turn 2 («Анталия» is in Turkey)."""
+    r = say(
+        store, "Едем с ребёнком в ноябре, хотим к морю. В Турции и Египте уже были, не хочется."
+    )
+    assert "исключено: Турция, Египет" in r.plan.spec.assumptions
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["Анталия"]})
+    r = say(store, "подешевле, до 100 тысяч", r.session_id)
+    assert r.plan.spec.destinations == [] and "Анталия" not in [d.name for d in r.plan.destinations]
+    assert "исключено: Турция, Египет" in r.plan.spec.assumptions
