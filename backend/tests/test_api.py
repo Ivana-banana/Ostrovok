@@ -1,5 +1,9 @@
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
+from api.contracts import ChatReply
 from api.main import app
 
 client = TestClient(app)
@@ -11,11 +15,21 @@ def test_health():
         assert client.get(path).json() == {"status": "ok"}
 
 
-def test_predict_follows_contract():
-    r = client.post("/api/predict", json={"text": "пример"})
+def test_chat_follows_contract():
+    r = client.post("/api/chat", json={"message": "хочу к морю"})
     assert r.status_code == 200
-    assert set(r.json()) == {"label", "score", "explanation", "stub"}
+    body = r.json()
+    assert {"session_id", "stage", "reply", "plan", "cart", "llm"} <= set(body)
+    again = client.post("/api/chat", json={"session_id": body["session_id"], "message": "да"})
+    assert again.json()["session_id"] == body["session_id"]
 
 
-def test_predict_rejects_bad_input():
-    assert client.post("/api/predict", json={}).status_code == 422
+def test_chat_rejects_empty_message():
+    assert client.post("/api/chat", json={"message": ""}).status_code == 422
+
+
+def test_contract_fixture_round_trips():
+    # Same fixture as web/src/contracts.test.ts: Python and TS mirrors cannot drift apart.
+    path = Path(__file__).resolve().parents[2] / "tests/fixtures/chat_reply.json"
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+    assert ChatReply.model_validate(fixture).model_dump(mode="json") == fixture

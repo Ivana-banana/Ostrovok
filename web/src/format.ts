@@ -1,7 +1,6 @@
-import type { Prediction } from "./contracts";
+import type { ChatReply } from "./contracts";
 
-// Одна строка результата для пользователя; заглушку подписываем честно.
-export function describe(p: Prediction): string {
-  const base = `${p.label} (${p.score.toFixed(2)}): ${p.explanation}`;
-  return p.stub ? `${base} — демо на заглушке` : base;
+// One reply line for the user; the no-model mode is labelled honestly (TRAP-1).
+export function describe(r: ChatReply): string {
+  return r.llm ? r.reply : `${r.reply} — упрощённый режим без ИИ`;
 }
