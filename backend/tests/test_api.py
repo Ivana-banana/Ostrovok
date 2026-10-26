@@ -11,11 +11,14 @@ def test_health():
         assert client.get(path).json() == {"status": "ok"}
 
 
-def test_predict_follows_contract():
-    r = client.post("/api/predict", json={"text": "пример"})
+def test_chat_follows_contract():
+    r = client.post("/api/chat", json={"message": "хочу к морю"})
     assert r.status_code == 200
-    assert set(r.json()) == {"label", "score", "explanation", "stub"}
+    body = r.json()
+    assert {"session_id", "stage", "reply", "plan", "cart", "llm"} <= set(body)
+    again = client.post("/api/chat", json={"session_id": body["session_id"], "message": "да"})
+    assert again.json()["session_id"] == body["session_id"]
 
 
-def test_predict_rejects_bad_input():
-    assert client.post("/api/predict", json={}).status_code == 422
+def test_chat_rejects_empty_message():
+    assert client.post("/api/chat", json={"message": ""}).status_code == 422

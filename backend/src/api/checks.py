@@ -4,13 +4,13 @@ check_<id сценария>(case) -> bool | (bool, заметка). Без пр�
 metric(split) -> {"name", "system", "baseline"} или None.
 """
 
-from api.contracts import PredictRequest
-from api.model import predict
+from api.contracts import ChatRequest
+from api.model import chat
 
 
 def check_EXAMPLE(case: dict) -> tuple[bool, str]:
-    p = predict(PredictRequest(text=case.get("input", "")))
-    return bool(p.explanation), f"label={p.label}"
+    r = chat(ChatRequest(message=case.get("input", "") or "-"))
+    return bool(r.reply), f"stage={r.stage}"
 
 
 def metric(split: str) -> dict | None:
