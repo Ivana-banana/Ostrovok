@@ -349,21 +349,18 @@ def test_trap3_male_is_still_found_by_its_name(text):
 
 
 @pytest.mark.parametrize(
-    "text, wrong",
+    "text, dests",
     [
-        ("Дела такие: хочу на море в ноябре", "Дели"),
-        ("Себе хочу тёплое море", "Себу"),
-        ("Губы обветрились, хочу на море", "Губа"),
-        ("Бару нашли, теперь отель", "Бар"),
+        ("Дела такие: хочу на море в ноябре", []),
+        ("Себе хочу тёплое море", []),
+        ("Губы обветрились, хочу на море", []),
+        ("Бару нашли, теперь отель", []),
+        ("Кашу не любим, хотим в Италию", ["Италия"]),
     ],
 )
-def test_trap3_case_form_of_a_short_name_at_the_start_is_no_place(text, wrong):
+def test_trap3_case_form_of_a_short_name_at_the_start_is_no_place(text, dests):
     """#102: «Дела» is a word; a short name at the start counts only in its exact form."""
-    assert wrong not in extract(text)[0].get("destinations", [])
-
-
-def test_trap3_start_word_like_a_short_name_does_not_join_a_real_place():
-    assert extract("Кашу не любим, хотим в Италию")[0]["destinations"] == ["Италия"]
+    assert extract(text)[0].get("destinations", []) == dests
 
 
 @pytest.mark.parametrize(
