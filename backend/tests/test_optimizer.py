@@ -22,7 +22,15 @@ from api.contracts import (
 )
 from api.model import chat
 from api.offers import find_offers, transfer_id
-from api.optimizer import DEFAULT_WEIGHTS, bundles, optimize, pick_hotel, rank, weights
+from api.optimizer import (
+    DEFAULT_WEIGHTS,
+    bundles,
+    enumerate_trips,
+    optimize,
+    pick_hotel,
+    rank,
+    weights,
+)
 from api.store import SessionStore
 
 TZ = ZoneInfo("Europe/Moscow")
@@ -369,9 +377,12 @@ RUB_RE = re.compile(r"(\d[\d ]*) ₽")
 
 
 def _allowed_amounts(s, items, out):
-    """Prices, trip totals and parts, their differences, the budget and the overrun."""
+    """Prices, trip totals and parts (of the bundles and of every trip), their differences,
+    the budget and the overrun."""
     by_id = {o.offer_id: o for o in items}
     base = {o.price_rub for o in items}
+    for t in enumerate_trips(items):  # texts name trips that are not in the bundles
+        base |= {t.total, t.road, t.transfer_rub}
     for b in out:
         parts = [by_id[i] for i in b.offer_ids]
         base.add(b.total_rub)
@@ -389,6 +400,9 @@ def _allowed_amounts(s, items, out):
         ("Сочи", {"budget_rub": 1000}),
         ("Казань", {"priorities": ["cancellation", "price"]}),
         ("Анталия", {"children_ages": [5], "budget_rub": 150_000}),
+        ("Сочи", {"budget_rub": 1000, "priorities": ["rating", "price"]}),
+        ("Казань", {"priorities": ["travel_time"], "budget_rub": 20_000}),
+        ("Анталия", {"meal": "AI", "priorities": ["price", "location"]}),
     ],
 )
 def test_trap_4_texts_use_only_offer_facts(place, update):
@@ -681,3 +695,85 @@ def test_slow_leg_line_gives_the_hours_of_the_leg_that_made_it_slow():
     line = next(x for x in first.tradeoffs if "дорога в одну сторону" in x)
     assert "дорога в одну сторону 20 ч" in line
     assert "back-train" in line  # the title of the slow leg
+
+
+def _texts(r):
+    out = [x for e in r.explanations for x in (e.why, *e.tradeoffs, *e.risks)]
+    return out + [t for b in r.bundles for t in b.tradeoffs]
+
+
+@pytest.mark.parametrize(
+    ("best_kw", "other_kw"),
+    [
+        ({"km": None, "rating": None}, {"km": 3.0, "rating": 9.0}),
+        ({"km": 1.0, "rating": 9.0}, {"km": None, "rating": None}),
+        ({"km": None, "rating": 9.0}, {"km": 3.0, "rating": None}),
+        ({"km": None, "rating": None}, {"km": None, "rating": None}),
+    ],
+)
+def test_hotel_without_distance_and_rating_writes_no_absent_fact(best_kw, other_kw):
+    """Contract: distance_center_km and rating may be None; the text then says nothing of them."""
+    a = hotel("a", 10_000, **best_kw)  # the best by price
+    b = hotel("b", 9_000, **other_kw)  # the cheapest hotel, dear transfers
+    c = hotel("c", 14_000, meal="AI", refundable=True, rating=9.5, stars=5, km=0.1)  # comfortable
+    items = offers([a, b, c], FLIGHTS, fares={"a": 500, "b": 3000, "c": 500})
+    for update in ({}, {"priorities": ["rating"]}, {"priorities": ["location"]}):
+        r = optimize(spec(**update), items)
+        assert r.selected and len(r.bundles) >= 2
+        for text in _texts(r):
+            assert "None" not in text, text
+        if r.selected[0] == "h-a":
+            why = r.explanations[0].why
+            assert ("рейтинг" in why) == (best_kw["rating"] is not None)
+            assert ("от центра" in why) == (best_kw["km"] is not None)
+
+
+def test_unknown_rating_or_distance_is_not_called_worse():
+    """A hotel with no rating does not «lose» on rating and does not «win» on distance."""
+    known = hotel("a", 10_000, km=2.0, rating=9.0)
+    blank = hotel("b", 9_000, km=None, rating=None)
+    items = offers([known, blank], FLIGHTS)
+    r = optimize(spec(priorities=["price", "location"]), items)
+    assert r.selected[0] == "h-b"
+    text = " ".join(_texts(r))
+    assert "рейтинг ниже" not in text and "до центра" not in text and "None" not in text
+
+
+def test_switch_transport_why_handles_hotel_without_distance_and_rating():
+    """model._explain calls the optimizer helpers: a hotel with None fields must not break it."""
+    from api.model import switch_transport
+
+    h = hotel("a", 10_000, km=None, rating=None)
+    train = [leg("train", 9000, mode="train", hours=9), leg("tb", 9000, there=False, mode="train")]
+    items = offers([h], [*FLIGHTS, *train])
+    s = spec()
+    r = optimize(s, items)
+    plan = Plan(spec=s, offers=items, bundles=r.bundles, selected=r.selected)
+    new, note = switch_transport(plan, "возьми поезд")
+    assert new is not None, note
+    assert "t-train" in new.selected
+    assert new.explanations
+    for e in new.explanations:
+        assert "None" not in " ".join([e.why, *e.tradeoffs, *e.risks])
+
+
+def test_in_budget_bundle_is_among_the_alternatives_even_when_others_fill_the_list():
+    """Over the budget the «в бюджете» bundle goes first, so MAX_ALTERNATIVES keeps it."""
+    a = hotel("a", 20_000, meal="BB", rating=7.0, km=2.0)  # the smallest overrun: the best
+    b = hotel("b", 18_000, meal="BB", rating=7.0, km=2.0)  # cheapest hotel, dear transfers
+    c = hotel("c", 24_000, meal="BB", rating=9.5, stars=5, km=0.2)  # most comfortable
+    d = hotel("d", 8_000, meal="RO", rating=6.0, km=5.0)  # in the budget, breaks the meal
+    legs = [
+        leg("slow", 3000, hours=5),
+        leg("slowb", 3000, there=False, hours=5),
+        leg("fast", 5000, hours=1.5),
+        leg("fastb", 5000, there=False, hours=1.5),
+    ]
+    items = offers([a, b, c, d], legs, fares={"a": 500, "b": 4000, "c": 500, "d": 500})
+    s = spec(meal="BB", budget_rub=25_000)
+    r = optimize(s, items)
+    labels = [x.label for x in r.bundles]
+    assert r.selected[0] == "h-a" and r.bundles[0].total_rub > 25_000
+    assert labels[1] == "в бюджете", labels
+    assert len(r.bundles) == 1 + 3
+    assert r.bundles[1].total_rub <= 25_000
