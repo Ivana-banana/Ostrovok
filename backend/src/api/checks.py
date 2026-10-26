@@ -741,6 +741,32 @@ def _cart_sane(cart) -> bool:
     return cart.total_rub == sum(x.price_rub for x in cart.items) and len(ids) == len(set(ids))
 
 
+def _default_train_path(client: TestClient, text: str, ids: set[str]) -> str | None:
+    """The default pick is the night train. The bare «возьми поезд» must not break the plan.
+
+    A fresh session: the initial plan already has a timeline, the phrase keeps the pick, and
+    after «беру» `issues` has the 07:10 note with a fix from the offers (#66).
+    """
+    run = _walk(client, "S6", "поезд по умолчанию", text, stop=("compare",), record=False)
+    if not run.replies or run.last.stage != "compare":
+        return "путь по умолчанию: чат не довёл до сравнения"
+    before = run.last.plan
+    if not before.timeline:
+        return "путь по умолчанию: у начального плана на сравнении пустой таймлайн"
+    if not any(o.kind == "transport" and o.mode == "train" for o in _chosen(before)):
+        return None  # the default is not the train in this catalogue: the switch above covers it
+    same = _say(client, run, "возьми поезд")
+    if not same or same.stage != "compare" or same.plan.selected != before.selected:
+        return "путь по умолчанию: «возьми поезд» изменил выбранный план"
+    taken = _say(client, run, "беру")
+    notes = [
+        i for i in (taken.plan.issues if taken else []) if "07:10" in i.text and "14:00" in i.text
+    ]
+    if not taken or taken.stage != "assemble" or not any(f in ids for i in notes for f in i.fixes):
+        return "путь по умолчанию: после «беру» нет пометки о прибытии 07:10 с действием"
+    return None
+
+
 @rules_mode
 def check_S6(case: dict) -> tuple[bool, str]:
     """The jury clicks through the API. UI-only parts (click count, browser console) are in e2e."""
@@ -780,16 +806,20 @@ def check_S6(case: dict) -> tuple[bool, str]:
                 and bool(fixes),
                 "фразы «возьми самолёт» и «возьми поезд» не сменили транспорт или нет пометки "
                 "о прибытии 07:10 при заезде 14:00 с действием из предложений",
-            )
+            ) or _default_train_path(client, _quotes(case)[0], ids)
         else:
             items["3"] = "в предложениях нет поезда"
         for _ in range(8):  # the rest of the way to the cart, as the chat leads
-            if run.last.stage in ("checkout", "booked") or not _say(
-                client, run, ANSWERS[run.last.stage]
+            # select and clarify have no stock answer: the chat did not lead to the cart
+            answer = ANSWERS.get(run.last.stage)
+            if (
+                run.last.stage in ("checkout", "booked")
+                or not answer
+                or not _say(client, run, answer)
             ):
                 break
         if run.last.stage != "checkout":
-            return False, "чат не довёл до корзины"
+            return False, f"чат не довёл до корзины (этап «{run.last.stage}»)"
         r = run.last
         now = _session(client, sid)
         hotel_id = next((x.offer_id for x in now.cart.items if x.kind == "hotel"), None)
@@ -859,7 +889,10 @@ def check_S6(case: dict) -> tuple[bool, str]:
     seconds = time.perf_counter() - started
     items["1"] = _need(seconds <= 180, f"поток занял {seconds:.0f} с")
     ordered = dict(sorted(items.items()))
-    facts = f"итог {_rub(v.total_rub)}, поток {seconds:.1f} с; клики и консоль браузера — в e2e"
+    facts = (
+        f"итог {_rub(v.total_rub)}, поток {seconds:.1f} с; "
+        "в API — данные сравнения; в e2e — таблицы в UI, клики, консоль"
+    )
     return _result(facts, ordered)
 
 

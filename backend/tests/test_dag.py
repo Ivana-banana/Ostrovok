@@ -131,9 +131,10 @@ def test_first_build_runs_all_nodes_without_changes(calls):
     )
     empty = Plan(spec=TripSpec.model_validate({}))
     plan, cart, done = dag.replan(empty, spec, Cart())
-    assert done == ["destination", "offers", "ranking"]
-    assert calls == ["find_offers", "rank"]
-    assert plan.offers and plan.selected and plan.changes == [] and cart.items == []
+    assert done == ["destination", "offers", "ranking", "timeline"]  # #66: the first plan too
+    assert calls == ["find_offers", "rank", "build_timeline"]
+    assert plan.offers and plan.selected and plan.timeline
+    assert plan.changes == [] and cart.items == []
 
 
 def test_chat_shows_before_after_and_replaces_the_cart(store, booked):

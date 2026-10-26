@@ -6,8 +6,7 @@ Nodes, each one feeds the next:
 - offers: find_offers(spec, destination); the search depends on dates, guests, origin.
 - ranking: rank(spec, offers); selected offers and why; budget, meal, refund, wishes.
 - timeline: build_timeline(plan) reads plan.selected and plan.offers, never the spec. It is
-  rebuilt when the selection changed and the old plan had a timeline (the stage machine
-  builds it on "беру").
+  built for the first plan too and rebuilt when the selection changed.
 - cart: the cart confirms one TripSpec (the voucher keeps it), so any trip change empties it.
   The next confirmation refills it with fill_cart, which replaces the items, never appends.
 
@@ -194,12 +193,11 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
     # Invariant: build_timeline reads plan.selected and plan.offers, not the spec (T8, #14).
     # The offer_id of a hotel or a leg carries dates and guests, so the same selected offers
     # mean the same timeline. If the checker starts reading spec fields, rebuild it here.
-    if _chosen(plan) != _chosen(old):
-        if old.timeline:
-            plan.timeline, plan.issues = build_timeline(plan)
-            done.append("timeline")
-        else:
-            plan.timeline, plan.issues = [], []
+    # The timeline is built whenever the selection changed, also for the first plan (#66): the
+    # compare stage shows it before the user says «беру».
+    if _chosen(plan) != _chosen(old) or not plan.timeline:
+        plan.timeline, plan.issues = build_timeline(plan)
+        done.append("timeline")
     new_cart = cart
     if "cart" in dirty and cart.items:
         new_cart = Cart()

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getSession } from "./api";
 import { Board } from "./Board";
 import type { ChatReply, Offer } from "./contracts";
-import { describe } from "./format";
+import { SOURCES, describe } from "./format";
 
 type Msg = { role: "user" | "agent"; text: string };
 type Ui = { messages: Msg[]; removed: Offer[] };
@@ -308,6 +308,19 @@ export function App() {
         ) : (
           <p className="muted empty">Здесь появится доска поездки: варианты, сравнение, план и корзина.</p>
         )}
+        <footer className="sources" aria-label="Источники данных">
+          <span>Данные:</span>
+          {SOURCES.map((s) => (
+            <span key={s.name}>
+              {s.text}, лицензия{" "}
+              <a href={s.url} target="_blank" rel="noreferrer">
+                {s.licence}
+              </a>
+              .
+            </span>
+          ))}
+          <span>Цены и рейсы синтетические, оплата имитируется.</span>
+        </footer>
       </main>
     </div>
   );
