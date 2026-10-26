@@ -57,6 +57,30 @@ suite("доска поездки", () => {
     }
   });
 
+  it("#39: у отеля несколько тарифов — в таблице одна строка, выбранный тариф виден", () => {
+    const r = structuredClone(base);
+    const hotels = r.plan.offers.filter((o) => o.kind === "hotel");
+    const first = hotels[0];
+    if (first.kind !== "hotel") throw new Error("fixture has no hotel");
+    const [low, high] = [
+      { ...first, offer_id: "h-low", meal: "RO" as const, price_rub: 1000 },
+      { ...first, offer_id: "h-high", meal: "AI" as const, price_rub: 2000 },
+    ];
+    const rest = r.plan.offers.filter((o) => o.kind !== "hotel" || o.title !== first.title);
+    r.plan.offers = [low, high, ...rest];
+    const rows = (sel: string[]) => {
+      r.plan.selected = sel;
+      const doc = render(r);
+      return [...doc.querySelectorAll("[aria-label='Сравнение отелей'] tbody tr")].filter((tr) =>
+        tr.textContent?.includes(first.title),
+      );
+    };
+    expect(rows([])).toHaveLength(1); // the first tariff of the hotel is its row
+    expect(rows([])[0].textContent).toContain("без питания");
+    expect(rows(["h-high"])).toHaveLength(1); // the selected tariff is its row
+    expect(rows(["h-high"])[0].textContent).toContain("всё включено");
+  });
+
   it("таблица сравнения отелей: не меньше 5 признаков", () => {
     const head = render(base).querySelector("[aria-label='Сравнение отелей'] thead")?.textContent;
     for (const col of ["Цена за всё", "Отмена", "Питание", "До центра", "Рейтинг", "Звёзды"])

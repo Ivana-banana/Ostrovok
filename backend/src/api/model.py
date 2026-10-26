@@ -43,6 +43,7 @@ from api.optimizer import (
     _risks,
     _sacrificed,
     enumerate_trips,
+    hotel_rows,
     pick_hotel,
 )
 from api.store import SessionStore
@@ -400,7 +401,7 @@ def _text_compare(plan: Plan) -> str:
         ),
         "Отели:",
     ]
-    hotels = [o for o in plan.offers if o.kind == "hotel"]
+    hotels = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
     for i, h in enumerate(hotels, 1):
         cancel = "бесплатная отмена" if h.cancellation.refundable else "невозвратный"
         lines.append(
@@ -551,7 +552,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return reply("compare", plan, text, cart)
 
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
-        hotels = [o for o in plan.offers if o.kind == "hotel"]
+        hotels = hotel_rows(plan.offers, plan.selected)
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
             plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
