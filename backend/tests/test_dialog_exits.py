@@ -48,7 +48,19 @@ def test_switch_lead_names_the_city(text, city):
     assert extract(text, True)[0]["destinations"] == [city]
 
 
-@pytest.mark.parametrize("text", ["тогда да", "тогда беру", "Тогда Подтверждаю", "лучше поезд"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "тогда да",
+        "тогда беру",
+        "Тогда Подтверждаю",
+        "лучше поезд",
+        "Лучше Завтра",
+        "Лучше Вечером",
+        "А если Дети",
+        "Тогда Сначала",
+    ],
+)
 def test_switch_lead_without_a_city_names_none(text):
     assert "destinations" not in extract(text, True)[0]
 
@@ -76,7 +88,7 @@ def test_other_destination_clears_the_city_and_offers_variants(store, stage):
     assert r.plan.spec.destinations == [] and r.stage == "inspire"
     assert r.cart.items == [] and r.voucher is None
     names = [d.name for d in r.plan.destinations]
-    assert 2 <= len(names) <= 4 and "Сочи" not in names
+    assert 2 <= len(names) <= 3 and "Сочи" not in names
     assert set(names) <= set(CATALOG)  # from the catalogue, never invented
     assert r.questions[0].options == names
     picked = say(store, "1", r.session_id)  # a variant by its number leads on
@@ -114,8 +126,50 @@ def test_restart_with_a_new_request_plans_it(store):
     assert r.plan.spec.nights == 4 and r.cart.items == []
 
 
-@pytest.mark.parametrize("text", ["не надо начинать заново", "хочу сначала отель получше"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "не надо начинать заново",
+        "хочу сначала отель получше",
+        "сбрось цену",
+        "сбрось бюджет",
+        "сбрось фильтр по цене",
+        "с нуля не надо",
+        "не хочу с нуля",
+        "новую поездку не надо",
+        "собери с нуля корзину",
+    ],
+)
 def test_restart_words_in_other_sense_change_nothing(store, text):
-    r = to_stage(store, "assemble")
+    r = to_stage(store, "checkout")
     again = say(store, text, r.session_id)
-    assert again.plan.spec.destinations == ["Сочи"] and again.plan.offers
+    assert again.plan.spec.destinations == r.plan.spec.destinations
+    assert again.cart.items == r.cart.items and again.cart.items and again.stage != "clarify"
+
+
+def test_started_over_in_a_word_is_a_replan_not_a_reset(store):
+    r = to_stage(store, "assemble")
+    again = say(store, "поехали сначала в Казань", r.session_id)
+    assert again.stage == "compare" and again.plan.spec.destinations == ["Казань"]
+    assert "Начинаем заново" not in again.reply
+
+
+@pytest.mark.parametrize("text", ["сбрось", "Сбрось всё.", "начни с нуля", "давай заново"])
+def test_restart_phrases(store, text):
+    r = to_stage(store, "assemble")
+    assert say(store, text, r.session_id).stage == "clarify"
+
+
+def test_restart_after_booking_names_the_voucher(store):
+    r = to_stage(store, "booked")
+    again = say(store, "начать заново", r.session_id)
+    assert f"Бронь {r.voucher.booking_id} остаётся оформленной" in again.reply
+
+
+def test_other_variants_on_inspire_are_new(store):
+    first = say(store, "куда-нибудь в ноябре, недорого, двое взрослых")
+    assert first.stage == "inspire"
+    shown = [d.name for d in first.plan.destinations]
+    more = say(store, "покажи другие варианты", first.session_id)
+    names = [d.name for d in more.plan.destinations]
+    assert more.stage == "inspire" and 2 <= len(names) <= 3 and not set(names) & set(shown)

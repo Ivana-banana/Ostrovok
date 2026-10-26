@@ -35,7 +35,7 @@ from api.contracts import (
 )
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract, with_llm
-from api.fixtures import build_timeline, future_date, suggest_destinations
+from api.fixtures import CATALOG, build_timeline, future_date, suggest_destinations
 from api.optimizer import (
     _hotel_why,
     _leg_why,
@@ -79,14 +79,20 @@ NOT_BOOK_RE = re.compile(r"\bне\s+подтверждаю\b")
 # S5 (#90): a way out of any stage. «Начать заново» drops the plan and the cart; «другое
 # направление» drops the city and shows others from the catalogue.
 RESTART_RE = re.compile(
-    r"\b(?:нач(?:ать|ни|ните|н[её]м|инаем)|поехали)\s+"
+    r"\bнач(?:ать|ни|ните|н[её]м|инаем)\s+"
     r"(?:(?:вс[её]|поиск|план|диалог|поездку)\s+)?(?:заново|сначала|с\s+нуля)\b"
-    r"|\b(?:давай(?:те)?|хочу|попробу\w+)\s+(?:вс[её]\s+)?(?:заново|с\s+нуля)\b"
-    r"|\bвс[её]\s+заново\b|\bс\s+нуля\b|\bсбрось(?:те)?\b|\bсброс\b"
+    r"|\b(?:давай(?:те)?|хочу|попробу\w+|поехали)\s+(?:вс[её]\s+)?(?:заново|с\s+нуля)\b"
+    r"|\bвс[её]\s+заново\b"
+    r"|\bсбрось(?:те)?(?:\s+(?:вс[её]|план|поиск|поездку|диалог))?\s*(?:[.!,;]|$)"
     r"|\bнов(?:ый|ую)\s+(?:поиск|запрос|поездк\w*)\b",
     re.IGNORECASE,
 )
-NOT_RESTART_RE = re.compile(r"\bне\s+(?:\w+\s+)?(?:начин\w+|начат\w*|сбрас\w+)")
+# A negation before the phrase («не хочу с нуля») or after it («с нуля не надо»).
+NOT_RESTART_RE = re.compile(
+    r"\bне\s+(?:\w+\s+)?(?:начин\w+|начат\w*|сбрас\w+|с\s+нуля|заново|сначала)"
+    r"|\b(?:с\s+нуля|заново|сначала|поиск\w*|запрос\w*|поездк\w*)\s+(?:\w+\s+)?"
+    r"не\s+(?:надо|нужн\w*|хочу|будем)"
+)
 OTHER_RE = re.compile(
     r"\b(?:друг(?:ое|ой|ую|ие|их)|ино[ейю])\s+(?:направлен\w*|город\w*|мест\w*|стран\w*|курорт\w*)"
     r"|\bне\s+(?:хочу|нравится|подходит)\s+(?:это|этот|эта)\s+(?:направлен|город|мест)"
@@ -486,7 +492,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # The plan, the cart and the voucher go; what is left of the message starts the trip.
         rest = RESTART_RE.sub(" ", message).strip(" ,.!;:-")
         fresh = step(None, sid, rest, use_llm)
-        return fresh.model_copy(update={"reply": f"Начинаем заново. {fresh.reply}"})
+        kept = f" Бронь {prev.voucher.booking_id} остаётся оформленной." if prev.voucher else ""
+        return fresh.model_copy(update={"reply": f"Начинаем заново.{kept} {fresh.reply}"})
     if prev and prev.voucher:
         text = f"Бронь {prev.voucher.booking_id} уже оформлена."
         return prev.model_copy(update={"reply": text, "questions": [], "llm": False})
@@ -581,7 +588,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         dests = suggest_destinations(spec)
         if other:
             gone = old.plan.spec.destinations
-            dests = [d for d in dests if d.name not in gone] or dests
+            ranked = suggest_destinations(spec, len(CATALOG))
+            shown = [d.name for d in old.plan.destinations] if old.stage == "inspire" else []
+            # Without the options already shown, if enough others are left.
+            dests = [d for d in ranked if d.name not in [*gone, *shown]]
+            dests = (dests if len(dests) >= 2 else [d for d in ranked if d.name not in gone])[:3]
         plan = Plan(spec=spec, destinations=dests)
         if not other:
             return reply("inspire", plan, _text_inspire(plan))

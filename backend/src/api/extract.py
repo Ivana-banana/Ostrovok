@@ -203,26 +203,18 @@ SWITCH_LEAD = re.compile(
     r"(?:(?:в|во|на)\s+)?",
     re.IGNORECASE,
 )
-SWITCH_NOT_CITY = re.compile(
-    r"(?:бер[уиё]|подтвержд|оформ|собер|корзин|поезд|рейс|самол|да\b|нет\b)"
-)
 
 
-def _switch_city(text: str, t: str) -> tuple[int, str] | None:
-    """The bare city right after a lead word: «тогда Барселона», «Ну тогда в Ухту»."""
+def _switch_city(text: str) -> tuple[int, str] | None:
+    """The bare city right after a lead word: «тогда Барселона», «Лучше Анталию».
+
+    Only a city of places.json counts: «Лучше завтра», «Тогда Дети» name no place. A name
+    outside the catalogue needs a preposition («тогда в Ухту») and is read by the rules below.
+    """
     lead = SWITCH_LEAD.match(text)
-    if not lead:
-        return None
-    m = re.compile(r"([А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)*)\b").match(text, lead.end())
-    if not m:
-        return None
-    if known := _known(m.group(1)):
-        return lead.end(), known
-    low = t[m.start(1) : m.end(1)]
-    if not m.group(1)[0].isupper() or SWITCH_NOT_CITY.match(low):
-        return None
-    city = _unknown_first_city(text, t, m, m.group(1), low)
-    return (lead.end(), city[1]) if city else None
+    m = re.compile(r"[А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)*\b").match(text, lead.end()) if lead else None
+    known = _known(m.group(0)) if m else None
+    return (m.start(), known) if m and known else None
 
 
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> None:
@@ -251,7 +243,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n))
-    if switch := _switch_city(text, t):
+    if switch := _switch_city(text):
         hits.append(switch)
     # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
     if first := _first_city(text, t, not hits and not has_destination, None if hits else notes):
