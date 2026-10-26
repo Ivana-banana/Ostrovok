@@ -32,10 +32,15 @@ test("S6: запрос → сравнение → план → корзина �
   // Убрать и вернуть позицию: итог пересчитан сервером, без дублей.
   const before = (await cart.getByTestId("cart-total").textContent()) ?? "";
   const rows = await cart.locator("ul.plain").first().locator("li").count();
+  const timeline = page.getByRole("region", { name: "Таймлайн" });
+  await expect(timeline.getByText("убрано из корзины")).toHaveCount(0);
   await cart.getByRole("button", { name: /^Убрать/ }).first().click();
   await expect(cart.getByTestId("cart-total")).not.toHaveText(before);
+  // События убранной позиции остаются в таймлайне, но помечены.
+  await expect(timeline.getByText("убрано из корзины").first()).toBeVisible();
   await cart.getByRole("button", { name: /^Вернуть/ }).click();
   await expect(cart.getByTestId("cart-total")).toHaveText(before);
+  await expect(timeline.getByText("убрано из корзины")).toHaveCount(0);
   await expect(cart.locator("ul.plain").first().locator("li")).toHaveCount(rows);
 
   const confirm = page.getByRole("button", { name: /^Подтвердить бронь/ });
