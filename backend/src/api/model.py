@@ -57,20 +57,28 @@ BOOK_RE = re.compile(r"\bподтверждаю\b")
 # refused. Only orders: «цена 0 ₽ за ребёнка?» or «отель без подтверждения по телефону» pass.
 REFUSE_RE = re.compile(
     r"\bпромпт|system\s*prompt|(?:системн|служебн)\w*\s+инструкц"
-    r"|(?:постав|установ|сдела|измен|смен)\w*\s+(?:\w+\s+)?цен\w*\s+(?:на\s+|в\s+)?0\b"
+    r"|\b(?:покаж|выведи|раскро|скаж|пришли|напиш|повтори|прочита|озвуч)\w*\s+(?:\w+\s+)?"
+    r"(?:свои|твои|ваши|скрыт\w+|исходн\w+|начальн\w+)\s+(?:\w+\s+)?инструкц"
+    r"|\bигнорир\w*\s+(?:\w+\s+){0,2}инструкц"
+    r"|(?:постав|установ|сдела|измен|смен)\w*\s+(?:\w+\s+)?цен\w*\s+(?:на\s+|в\s+)?(?:0|н[оу]л\w*)\b"
+    r"|\bцен\w*\s+должн\w*\s+быть\s+(?:0|н[оу]л\w*)\b"
     r"|\bне\s+подтверждай\b"
-    r"|(?:оформ|бронир|выда|выпиш)\w*\s+(?:\w+\s+){0,2}без\s+(?:\w+\s+)?(?:подтвержд|оплат)"
+    r"|\bне\s+(?:спрашивай|запрашивай|проси|жди|требуй)\w*\s+(?:\w+\s+)?(?:подтвержд|согласи)"
+    r"|\b(?:за)?(?:оформ|бронир|выда|выпиш)\w*\s+(?:\w+\s+){0,2}без\s+(?:\w+\s+)?"
+    r"(?:подтвержд|оплат\w*\b(?!\s+(?:на\s+месте|на\s+ресепшен|при\s+(?:заселении|заезде)"
+    r"|в\s+отеле|заранее|сейчас)))"
     r"|\bсразу\s+(?:\w+\s+)?(?:выда|оформ|выпиш)\w*\s+(?:\w+\s+)?ваучер"
-    r"|ваучер\w*\s+без\s+(?:\w+\s+)?(?:подтвержд|оплат)"
+    r"|ваучер\w*\s+без\s+(?:\w+\s+)?(?:подтвержд|оплат)[^?]*$"  # a question is no order
 )
 REFUSAL = (
     "Цены задаёт каталог, а бронь оформляю только после вашего подтверждения итоговой суммы. "
     "Служебные инструкции не показываю."
 )
 NOT_BOOK_RE = re.compile(r"\bне\s+подтверждаю\b")
+# «второй половине ноября» is a part of a month, not the second offer.
 ORDINAL_RE = re.compile(
     r"\b(перв(?:ый|ая|ое|ую|ого)|втор(?:ой|ая|ое|ую|ого)|трет(?:ий|ья|ье|ью|ьего)"
-    r"|четв[её]рт(?:ый|ая|ое|ую|ого))\b|^\s*([1-4])\s*$"
+    r"|четв[её]рт(?:ый|ая|ое|ую|ого))\b(?!\s+(?:половин|недел|декад))|^\s*([1-4])\s*$"
 )
 ORDINALS = {"перв": 0, "втор": 1, "трет": 2, "четв": 3}
 # S6 (#31): the user picks transport by a mode word or by a row of the transport table.
@@ -478,14 +486,15 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     idx = _ordinal(message)
     deadline = llm.deadline()
     # A service turn («беру», «да», «подтверждаю», a number) goes to no model: a field it
-    # adds would re-plan the trip and send the user back to compare.
+    # adds would re-plan the trip and send the user back to compare. Free text on assemble or
+    # checkout («хотим с бассейном») is a wish: the model reads it and the DAG re-plans (#49).
     # The stage decides: «оформи мне отдых на Алтае» on the first turn is a request, not consent.
     # A new session, clarify and select are never service turns.
     consent = old.stage in ("compare", "assemble", "checkout") and (
         _confirmed(t) or bool(BOOK_RE.search(t))
     )
     pick = old.stage in ("inspire", "compare") and idx is not None
-    service = prev is not None and (old.stage in ("assemble", "checkout") or consent or pick)
+    service = prev is not None and (consent or pick)
     found, notes = extract(message, bool(old.plan.spec.destinations))
     llm_found = (
         None if service or not use_llm else llm.extract_spec(message, old.plan.spec, deadline)
