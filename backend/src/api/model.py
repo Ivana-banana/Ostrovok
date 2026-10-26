@@ -33,17 +33,36 @@ from api.contracts import (
     TransportOffer,
     TripSpec,
 )
-from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
-from api.extract import MONTH_NAMES, extract, is_chip_message, with_llm
+from api.dag import (
+    DATE_EDIT_RE,
+    SHIFT_RE,
+    describe,
+    dirty_nodes,
+    is_shift_note,
+    replan,
+    shift_dates,
+)
+from api.extract import (
+    DATE_KEYS,
+    MONTH_NAMES,
+    excluded_places,
+    extract,
+    is_chip_message,
+    is_excluded,
+    with_llm,
+)
 from api.fixtures import CATALOG, build_timeline, future_date, suggest_destinations
+from api.offers import find_offers, resolve_place
 from api.optimizer import (
     _hotel_why,
     _leg_why,
     _pool,
     _risks,
     _sacrificed,
+    dead_end_text,
     enumerate_trips,
     hotel_rows,
+    pets_possible,
     pick_hotel,
 )
 from api.store import SessionStore
@@ -148,19 +167,46 @@ LABELS = {
     "adults": "взрослых",
     "max_travel_hours": "время в пути",
 }
+# #128: a route through several cities. The plan covers the first city; the rest is named here.
+# #139: cities as candidates («Сочи или Анапа») get the same notice and chips.
+ROUTE = "маршрут"
+CANDIDATES = "варианты"
+ROUTE_RE = re.compile(
+    r"\b(?:потом|затем|далее|оттуда|следом|а\s+после|после\s+(?:этого|того|чего))\b"
+    r"|\s[—–]\s|→|->"
+)
+DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
+MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
+STAY_RE = re.compile(
+    r"\b(?:\d+|од(?:ин|на|ну)|дв(?:а|е|ое)|тр(?:и|ое)|четыре|пять|шесть|семь|восемь|девять|десять)"
+    r"\s*(?:ноч|дн|сут)"
+)
+AHEAD_RE = re.compile(r"\bчерез\s+\S+\s*(?:ноч|дн|сут)")  # «вылет через 3 дня»: no stay length
+OR_RE = re.compile(r"\bили\b")  # cities joined by «или» are candidates, never a route
+# The adults are not named: 2 by default. With a child this becomes a question (#112).
+PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
+# #113: the refused places live in this assumption (TripSpec has no field for them).
+EXCLUDED = "исключено"
 
 
 def _label(assumption: str) -> str:
     return assumption.split(":", 1)[0]
 
 
+def _noted(spec: TripSpec, label: str) -> bool:
+    return any(_label(a) == label for a in spec.assumptions)
+
+
 def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     """Stated fields override the spec; their old assumptions are dropped."""
     data = spec.model_dump()
     stated = {LABELS[k] for k in found if k in LABELS}
+    if "destinations" in found:
+        stated |= {ROUTE, CANDIDATES}  # a new choice of the city ends the route note
     if stated & {"когда", "даты", "длительность"}:
         data["date_to"] = None  # derived from date_from + nights again
-        if "даты" not in stated and any(_label(a) == "даты" for a in data["assumptions"]):
+        assumed = [a for a in data["assumptions"] if _label(a) == "даты" and not is_shift_note(a)]
+        if "даты" not in stated and assumed:  # the dates were guessed, not said; a shift is said
             data["date_from"] = None
             stated.add("даты")
     kept = [a for a in data["assumptions"] if _label(a) not in stated]
@@ -170,13 +216,41 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     return TripSpec.model_validate(data)
 
 
+def refused_before(spec: TripSpec) -> list[str]:
+    """The places the user refused in the earlier messages."""
+    return [
+        p
+        for a in spec.assumptions
+        if _label(a) == EXCLUDED
+        for p in a.split(": ", 1)[1].split(", ")
+    ]
+
+
+def with_refused(spec: TripSpec, refused: list[str]) -> TripSpec:
+    kept = [a for a in spec.assumptions if _label(a) != EXCLUDED]
+    note = [f"{EXCLUDED}: {', '.join(refused)}"] if refused else []
+    return spec.model_copy(update={"assumptions": kept + note})
+
+
+def party_question(spec: TripSpec) -> list[Question]:
+    """A child and no word about the adults: 2 adults stay an assumption, the user can fix it."""
+    if not (spec.children_ages and PARTY_UNKNOWN in spec.assumptions):
+        return []
+    options = ["Один взрослый", "Двое взрослых", "Трое взрослых"]  # no «ребёнок»: age stays
+    return [Question(text="Кто едет с ребёнком — сколько взрослых?", options=options)]
+
+
 def blocking_questions(spec: TripSpec) -> list[Question]:
     """At most 2 questions, only when the message names neither a place nor a wish.
 
     A place or a wish is enough to move on: the rest becomes assumptions named in the reply.
+    One exception (#112): a child, no word about the adults and a fixed place. The guest count
+    sets the price and the booking, so it is asked, not assumed. Without a place the question
+    only goes next to the options (party_question), it never replaces them.
     """
+    party = party_question(spec) if spec.destinations else []
     if spec.destinations or spec.wishes:
-        return []
+        return party
     out = []
     if not spec.month and not spec.date_from:
         m = date.today().month
@@ -213,12 +287,60 @@ def assume(spec: TripSpec) -> TripSpec:
     data["month"] = data["month"] or data["date_from"].month
     data["date_to"] = data["date_to"] or data["date_from"] + timedelta(days=data["nights"])
     if not data["origin"]:
-        data["origin"] = "Москва"
+        data["origin"] = DEFAULT_ORIGIN
         note("откуда", "Москва (город вылета не назван)")
     if data["budget_rub"] is None:
         cheap = "недорого" in data["wishes"]
         note("бюджет", "не задан — сначала дешёвые" if cheap else "не задан — разные цены")
     return TripSpec.model_validate(data)
+
+
+def is_route(message: str, destinations: list[str]) -> bool:
+    """#128: several cities named as a route («потом в Казань», two cities each with nights).
+
+    «Сочи или Анапа» are candidates, not a route: see severals().
+    """
+    low = message.lower().replace("ё", "е")
+    if len(destinations) < 2 or OR_RE.search(low):
+        return False
+    stays = STAY_RE.findall(AHEAD_RE.sub(" ", low))
+    return bool(ROUTE_RE.search(low)) or len(stays) > 1
+
+
+def severals(message: str, destinations: list[str]) -> str | None:
+    """ROUTE or CANDIDATES when the message names several cities; the plan covers the first."""
+    if len(destinations) < 2:
+        return None
+    return ROUTE if is_route(message, destinations) else CANDIDATES
+
+
+def route_note(destinations: list[str], kind: str = ROUTE) -> str:
+    rest = ", ".join(destinations[1:])
+    if kind == CANDIDATES:
+        return f"{CANDIDATES}: в плане сначала {destinations[0]}, ещё: {rest}"
+    return f"{ROUTE}: в плане только {destinations[0]}, не вошло: {rest}"
+
+
+def route_reply(destinations: list[str], kind: str = ROUTE) -> tuple[str, list[Question]]:
+    """The notice and the chips «План: город»; a city without offers (out of the data) gets none."""
+    first = destinations[0]
+    if kind == CANDIDATES:
+        tail = destinations[1:]
+        chips = [d for d in tail[: MAX_CANDIDATES - 1] if resolve_place(d) is not None]
+        text = f"Сравниваю сначала {first}."
+        if chips:
+            text += f" {', '.join(chips)} — {'кнопкой' if len(chips) == 1 else 'кнопками'} ниже."
+        if left := [d for d in tail if d not in chips]:
+            text += f" Не вошло: {', '.join(left)}."
+        questions = [Question(text="Что планировать?", options=[f"План: {d}" for d in chips])]
+        return text, questions if chips else []
+    rest = ", ".join(destinations[1:])
+    text = (
+        f"В плане только: {first}. Поездку {' → '.join(destinations)} "
+        f"как один план я пока не собираю. Не вошло: {rest}. Выберите, что планировать."
+    )
+    options = [f"План: {d}" for d in destinations if resolve_place(d) is not None]
+    return text, [Question(text="Что планировать?", options=options)] if len(options) > 1 else []
 
 
 def _cap(s: str) -> str:
@@ -424,17 +546,20 @@ def _text_compare(plan: Plan) -> str:
         "Отели:",
     ]
     hotels = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
+    pet = spec.pets
     for i, h in enumerate(hotels, 1):
         cancel = "бесплатная отмена" if h.cancellation.refundable else "невозвратный"
         lines.append(
             f"{i}. {h.title} — {h.stars}★, рейтинг {h.rating}, {h.meal}, {cancel} — "
             f"{_rub(h.price_rub)}"
+            + (" · нет отметки о животных" if pet and not h.pets_allowed else "")
         )
     legs = [o for o in plan.offers if o.kind == "transport"]
     if legs:
         lines.append("Транспорт:")
     for i, o in enumerate(legs, 1):
-        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}")
+        no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
+        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}{no_pet}")
     chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
     lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:
@@ -457,17 +582,41 @@ def _text_assemble(plan: Plan) -> str:
 
 
 def _alternatives(spec: TripSpec, skip: list[str]) -> list[str]:
-    """Up to 3 destination names from the catalogue (code, never invented), without `skip`."""
-    names = [d.name for d in suggest_destinations(spec) if d.name not in skip]
-    return names[:3]
+    """Up to 3 destination names from the catalogue (code, never invented), without `skip`
+    and without the places the user refused."""
+    names = [d.name for d in suggest_destinations(spec, 4, refused_before(spec))]
+    return [n for n in names if n not in skip][:3]
 
 
-def _no_offers(plan: Plan, text: str) -> tuple[str, list[Question]]:
+def _hotel_selected(plan: Plan) -> bool:
+    return any(o.kind == "hotel" and o.offer_id in plan.selected for o in plan.offers)
+
+
+def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
+    """No trip takes the pet (#131): the reason, other cities where it can go, no cart.
+
+    The legs that take the pet stay selected, a hotel is picked by the user (a number)."""
+    spec = plan.spec
+    text = dead_end_text(spec, plan.offers)
+    if plan.selected:  # the hotels, as the user must see them to pick one
+        text = _text_compare(plan).split("\nПредлагаю:")[0] + "\n" + text
+    dead = [
+        d.name
+        for d in suggest_destinations(spec, len(CATALOG))
+        if not pets_possible(spec, find_offers(spec, d.name))
+    ]
+    text, questions = _no_offers(plan, text, dead)
+    return ("compare" if plan.selected else "select"), plan, text, questions
+
+
+def _no_offers(plan: Plan, text: str, skip: list[str] | None = None) -> tuple[str, list[Question]]:
     """The «choose another» exit of the select stage: 2–3 destinations as the text and buttons."""
-    names = _alternatives(plan.spec, [*plan.spec.destinations, plan.spec.origin])
+    names = _alternatives(plan.spec, [*plan.spec.destinations, plan.spec.origin, *(skip or [])])
     if not names:
         return text, []
-    plan.destinations = [d for d in suggest_destinations(plan.spec) if d.name in names]
+    plan.destinations = [
+        d for d in suggest_destinations(plan.spec, 4, refused_before(plan.spec)) if d.name in names
+    ]
     options = f" Например: {', '.join(names)}."
     return text + options, [Question(text="Куда поедем вместо этого?", options=names)]
 
@@ -544,6 +693,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     pick = old.stage in ("inspire", "compare") and idx is not None
     service = prev is not None and (consent or pick)
     found, notes = extract(message, bool(old.plan.spec.destinations))
+    new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
     other = (
         prev is not None
@@ -551,6 +701,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         and bool(
             OTHER_RE.search(low)
             or (OTHER_VARIANTS_RE.search(low) and old.stage in ("inspire", "select"))
+            or any(is_excluded(d, new_refused) for d in old.plan.spec.destinations)
         )
     )
     if other:
@@ -563,19 +714,42 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if SHIFT_RE.search(t.replace("ё", "е")):
         found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
         if llm_found:
-            llm_found.pop("nights", None)
+            # The rules read the shift (which end, how far); the model must not add other dates.
+            for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
+                llm_found.pop(k, None)
     if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
-        notes.append("взрослых: 2 (состав не назван)")
+        notes.append(PARTY_UNKNOWN)
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
+    # The departure city is no destination (#139): «Москва — Питер — Казань» starts in Москва.
+    named_here = found.get("destinations", [])
+    start = found.get("origin") or old.plan.spec.origin or DEFAULT_ORIGIN
+    if len(named_here) > 1 and start in named_here:
+        found["destinations"] = [d for d in named_here if d != start]
     spec = merge(old.plan.spec, found, notes)
     used = False  # the LLM output changed this reply
     if llm_found:
-        with_model = with_llm(found, llm_found)
+        with_model = with_llm(found, llm_found, [*refused_before(old.plan.spec), *new_refused])
         spec_model = merge(old.plan.spec, with_model, notes)
         if spec_model != spec:
             found, spec, used = with_model, spec_model, True
     swapped = [d for d in old.plan.spec.destinations if d not in spec.destinations]
+    # A refusal holds for the next turns; a place named later (even a city of that country) ends it.
+    named = found.get("destinations", [])
+    refused = [
+        r
+        for r in dict.fromkeys([*refused_before(old.plan.spec), *new_refused])
+        if not any(is_excluded(d, [r]) for d in named)
+    ]
+    spec = with_refused(spec, refused)
+    route = severals(message, found.get("destinations", []))
+    if route:  # the lost city stays visible (#128, #139)
+        spec = spec.model_copy(
+            update={"assumptions": [*spec.assumptions, route_note(spec.destinations, route)]}
+        )
+    elif old.stage not in ("compare", "assemble", "checkout"):
+        # A route of an earlier message: the notice comes with the first plan (after a question)
+        route = next((k for k in (ROUTE, CANDIDATES) if _noted(spec, k)), None)
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
         return ChatReply(
@@ -586,10 +760,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return reply("clarify", Plan(spec=spec), _text_clarify(questions), questions=questions)
     spec = assume(spec)
     if not spec.destinations:
-        dests = suggest_destinations(spec, 5)  # 5: four are left without the origin
+        dests = suggest_destinations(spec, 5, refused)  # 5: four are left without the origin
         if other:
             gone = old.plan.spec.destinations
-            ranked = suggest_destinations(spec, len(CATALOG))
+            ranked = suggest_destinations(spec, len(CATALOG), refused)
             shown = [d.name for d in old.plan.destinations] if old.stage == "inspire" else []
             # Without the options already shown, if enough others are left.
             # The origin is no destination: a stay in the city of departure has no transport (#94).
@@ -602,14 +776,32 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         dests = [d for d in dests if d.name != spec.origin][:4]
         plan = Plan(spec=spec, destinations=dests)
         if not other:
-            return reply("inspire", plan, _text_inspire(plan))
+            return reply("inspire", plan, _text_inspire(plan), questions=party_question(spec))
         gone_text = f"Убираю «{', '.join(gone)}» из плана, корзину очищаю. " if gone else ""
         question = Question(text="Куда поедем?", options=[d.name for d in dests])
         text = gone_text + _text_inspire(plan)
-        return reply("inspire", plan, text, Cart(), questions=[question])
+        return reply("inspire", plan, text, Cart(), questions=[question, *party_question(spec)])
 
+    dated = bool(old.plan.spec.date_from and old.plan.spec.date_to)
+    te = t.replace("ё", "е")
+    if not found and prev and dated and not SHIFT_RE.search(te) and DATE_EDIT_RE.search(te):
+        # The message asks to move the dates but says how far or which way in no known words (S2).
+        s = old.plan.spec
+        text = (
+            f"Не понял, что изменить в датах. Сейчас {s.date_from:%d.%m}–{s.date_to:%d.%m}. "
+            "Напишите, например: «на два дня позже», «обратно на день раньше» "
+            "или «с 20 ноября на 5 ночей»."
+        )
+        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     if "date_from" not in found:
-        spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
+        try:
+            spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
+        except ValueError as e:
+            text = (
+                f"{e} Из этого сообщения ничего не применено. "
+                f"Сейчас {spec.date_from:%d.%m}–{spec.date_to:%d.%m}. {HINTS.get(old.stage, '')}"
+            )
+            return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     if dirty_nodes(old.plan.spec, spec) or not plan.offers:
@@ -623,6 +815,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             )
             text, questions = _no_offers(plan, text)
             return reply("select", plan, text, cart, questions=questions)
+        if not pets_possible(spec, plan.offers):
+            stage, plan, text, questions = _pets_dead_end(plan)
+            return reply(stage, plan, text, cart, questions=questions)
         why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
         if why and why != plan.explanations:
             plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)
@@ -631,15 +826,23 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             text += f" Город вылета {spec.origin} совпадает с направлением: перевозки в плане нет."
         if plan.changes:
             text = "\n".join(["Было → стало:", *describe(plan.changes), text])
-        if old.stage == "select" and swapped:
+        if old.stage == "select" and swapped and not old.plan.offers:
             # The user named a city that is not in the catalogue and picked another one:
             # the reply says so, the new city never comes silently (#93).
             gone, now = ", ".join(swapped), spec.destinations[0]
             text = f"«{gone}» нет в каталоге. По вашему выбору — {now}.\n{text}"
-        return reply("compare", plan, text, cart)
+        questions = party_question(spec)
+        if route:
+            notice, chips = route_reply(spec.destinations, route)
+            return reply("compare", plan, f"{notice}\n{text}", cart, questions=[*chips, *questions])
+        return reply("compare", plan, text, cart, questions=questions)
 
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
         hotels = hotel_rows(plan.offers, plan.selected)
+        picks = idx is not None and idx < len(hotels)
+        if not picks and not pets_possible(spec, plan.offers) and not _hotel_selected(plan):
+            stage, plan, text, questions = _pets_dead_end(plan)  # «беру» is no consent (#131)
+            return reply(stage, plan, text, questions=questions)
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
             plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
