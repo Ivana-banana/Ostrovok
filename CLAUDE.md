@@ -95,7 +95,7 @@
 
 | | сборка (по умолчанию) | финал |
 |---|---|---|
-| Тесты | агент гоняет `make check` перед PR; Stop-хук не даёт закончить с красными | только человек по просьбе «полный прогон»; `finish.sh` — только `make lint` |
+| Тесты | агент гоняет `make check` перед PR; `finish.sh` не создаёт PR с красными | только человек по просьбе «полный прогон»; `finish.sh` — только `make lint` |
 | `reviewer` | каждый PR | метка `contract`, формат данных, diff > 300 строк |
 | `docs/decisions.md` | ведётся, строка ≤ 200 символов | только решения о модели, формате, контракте |
 | Новые md | отчётов и планов в md нет — отчёт в чат | запрещены хуком, кроме README |
@@ -167,9 +167,8 @@
 скилл `/orchestrate`: свои задачи → worktree → `builder` → `reviewer` → `finish.sh`.
 Общего оркестратора нет. Перед демо — `silent-failure-hunter` (тихие ошибки).
 
-Модель по умолчанию — `.claude/settings.json` (`model`, `effortLevel`). Режим тестов
-участника — скилл `/tests` (строка `Tests:` в `CLAUDE.local.md`, вне git): `off` и `ask`
-выключают Stop-хук тестов; `finish.sh` всё равно гоняет `make check`.
+Модель по умолчанию — `.claude/settings.json` (`model`, `effortLevel`). Разовый прогон
+`make check` с кратким итогом — скилл `/tests`. В конце хода тесты не запускаются.
 
 Часть участников работает в Codex. Его правила — `AGENTS.md`: те же задачи, роли и хуки.
 Слой Codex (`.codex/agents/`, `.agents/skills/`) генерирует `python3 scripts/codex-sync.py`

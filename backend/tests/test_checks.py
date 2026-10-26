@@ -362,7 +362,7 @@ def test_seeded_is_the_places_and_hotels_snapshots_not_the_seven_fixture_cities(
 
 
 def test_a_place_the_geocoder_found_is_not_seeded():
-    """D-013: only the snapshot is seeded; an online place is the agent's work, not our data."""
+    """D-014: only the snapshot is seeded; an online place is the agent's work, not our data."""
     checks.catalog._online[checks.catalog.norm("Зурбаган")] = {
         "name": "Зурбаган",
         "source": "online",

@@ -717,7 +717,7 @@ def check_S4(case: dict) -> tuple[bool, str]:
 def known_place(name: str) -> bool:
     """The team seeded the place: it is in catalog.json (names, aliases) or in osm_hotels.json.
 
-    Snapshot only: a place the geocoder finds online is not seeded (human decision on #8, D-013).
+    Snapshot only: a place the geocoder finds online is not seeded (human decision on #8, D-014).
     """
     return catalog.resolve(name) is not None or name in osm_hotels()
 
