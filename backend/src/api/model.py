@@ -327,7 +327,7 @@ def route_reply(destinations: list[str], kind: str = ROUTE) -> tuple[str, list[Q
     first = destinations[0]
     if kind == CANDIDATES:
         tail = destinations[1:]
-        chips = [d for d in tail[: MAX_CANDIDATES - 1] if resolve_place(d) is not None]
+        chips = with_offers(tail[: MAX_CANDIDATES - 1])
         text = f"Сравниваю сначала {first}."
         if chips:
             text += f" {', '.join(chips)} — {'кнопкой' if len(chips) == 1 else 'кнопками'} ниже."
@@ -616,6 +616,11 @@ def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
     return ("compare" if plan.selected else "select"), plan, text, questions
 
 
+def with_offers(names: list[str]) -> list[str]:
+    """The names that have offers: the chip «План: город» exists only for them (#142)."""
+    return [d for d in names if resolve_place(d) is not None]
+
+
 def _no_offers(plan: Plan, text: str, skip: list[str] | None = None) -> tuple[str, list[Question]]:
     """The «choose another» exit of the select stage: 2–3 destinations as the text and buttons."""
     names = _alternatives(plan.spec, [*plan.spec.destinations, plan.spec.origin, *(skip or [])])
@@ -821,6 +826,12 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
                 f"{HINTS['select']}"
             )
             text, questions = _no_offers(plan, text)
+            # «Ханой или Сочи»: Сочи is named (#142)
+            chips = with_offers(spec.destinations[1:MAX_CANDIDATES]) if route else []
+            if chips:
+                text = f"{text} Из названных в каталоге есть: {', '.join(chips)} — кнопкой ниже."
+                options = [f"План: {d}" for d in chips]
+                questions = [Question(text="Что планировать?", options=options), *questions]
             return reply("select", plan, text, cart, questions=questions)
         if not pets_possible(spec, plan.offers):
             stage, plan, text, questions = _pets_dead_end(plan)
