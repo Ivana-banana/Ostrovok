@@ -2,7 +2,9 @@
 // Dates and times are ISO 8601 strings (date "2026-11-08", time "14:00:00", zoned "...+03:00").
 export type Stage = "clarify" | "inspire" | "select" | "compare" | "assemble" | "checkout" | "booked";
 export type Meal = "RO" | "BB" | "HB" | "FB" | "AI";
-export type Mode = "flight" | "train" | "bus" | "car";
+export type Mode = "flight" | "train" | "car";
+export type Priority = "price" | "cancellation" | "meal" | "location" | "travel_time" | "rating";
+export type Amenity = "family" | "kids_club" | "wheelchair" | "elevator" | "beach" | "parking";
 
 export type TripSpec = {
   origin: string | null;
@@ -20,6 +22,7 @@ export type TripSpec = {
   modes: Mode[];
   max_travel_hours: number | null;
   wishes: string[];
+  priorities: Priority[];
   assumptions: string[];
 };
 
@@ -45,6 +48,7 @@ export type HotelOffer = Priced & {
   check_in: string;
   check_out: string;
   pets_allowed: boolean;
+  amenities: Amenity[];
   description: string;
 };
 
@@ -56,6 +60,7 @@ export type TransportOffer = Priced & {
   depart_at: string;
   arrive_at: string;
   changes: number;
+  pets_allowed: boolean;
 };
 
 export type TransferOffer = Priced & { kind: "transfer"; depart_at: string; arrive_at: string };
@@ -75,6 +80,7 @@ export type Destination = {
   travel_hours: number;
   tradeoffs: string[];
   violates: string[];
+  risks: string[];
 };
 
 export type Explanation = { offer_id: string; why: string; tradeoffs: string[]; risks: string[] };
@@ -84,10 +90,20 @@ export type TimelineIssue = { severity: "warn" | "error"; text: string; fixes: s
 export type Change = { what: string; before: string; after: string };
 export type Question = { text: string; options: string[] };
 
+export type Bundle = {
+  bundle_id: string;
+  label: string;
+  offer_ids: string[];
+  total_rub: number;
+  travel_hours: number;
+  tradeoffs: string[];
+};
+
 export type Plan = {
   spec: TripSpec;
   destinations: Destination[];
   offers: Offer[];
+  bundles: Bundle[];
   selected: string[];
   explanations: Explanation[];
   timeline: TimelineEvent[];
