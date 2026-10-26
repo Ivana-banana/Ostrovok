@@ -21,7 +21,7 @@ const sample: ChatReply = {
       "children_ages": [],
       "pets": false,
       "budget_rub": 50000,
-      "hotel_budget_rub": null,
+      "hotel_budget_rub": 40000,
       "meal": "BB",
       "refundable": true,
       "modes": ["train"],
