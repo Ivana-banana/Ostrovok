@@ -1,0 +1,16 @@
+.git
+.claude
+.codex
+.agents
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+web/dist
+web/test-results
+web/playwright-report
+data
+eval
+.env
+.env.*
