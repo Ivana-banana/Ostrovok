@@ -349,3 +349,73 @@ def test_cart_remove_hotel_keeps_the_timeline_and_the_return_restores_it(client)
     assert hotel in mid.plan.selected and mid.plan.timeline == r.plan.timeline
     back = add(http, mid, hotel)
     assert back.plan.selected.count(hotel) == 1
+
+
+def cart_remove(client, r, offer_id):
+    res = client.post(
+        "/api/cart", json={"session_id": r.session_id, "action": "remove", "offer_id": offer_id}
+    )
+    assert res.status_code == 200, res.text
+    return ChatReply.model_validate(client.get(f"/api/session/{r.session_id}").json())
+
+
+def slot_count(reply: ChatReply):
+    by_id = {o.offer_id: o for o in reply.plan.offers}
+    chosen = [by_id[i] for i in reply.plan.selected]
+    origin = reply.plan.spec.origin
+    return (
+        sum(o.kind == "hotel" for o in chosen),
+        sum(o.kind == "transport" and o.destination != origin for o in chosen),
+        sum(o.kind == "transport" and o.destination == origin for o in chosen),
+    )
+
+
+def test_cart_remove_a_leg_then_add_another_leaves_one_leg_per_slot(client):
+    """Review of #42: a leg removed earlier must not stay in the timeline."""
+    http, store = client
+    r = at_checkout(store)
+    train = next(i for i in r.plan.selected if i.startswith("t-") and "train" in i)
+    flight = next(f for f in r.plan.issues[0].fixes if f.startswith("t-"))
+    mid = cart_remove(http, r, train)
+    now = add(http, mid, flight)
+    assert slot_count(now) == (1, 1, 1)
+    assert train not in now.plan.selected and flight in now.plan.selected
+    assert not any(e.offer_id == train for e in now.plan.timeline)
+    assert now.plan.issues == []
+    assert not any("Прибытие" in e.title for e in now.plan.timeline)
+
+
+def test_cart_remove_a_hotel_then_add_another_leaves_one_hotel(client):
+    http, store = client
+    r = at_checkout(store)
+    old = next(i for i in r.plan.selected if i.startswith("h-"))
+    other = next(o for o in r.plan.offers if o.kind == "hotel" and o.offer_id != old)
+    mid = cart_remove(http, r, old)
+    now = add(http, mid, other.offer_id)
+    assert slot_count(now) == (1, 1, 1)
+    assert old not in now.plan.selected and other.offer_id in now.plan.selected
+    old_title = old_hotel_title(r, old)
+    assert not any(e.offer_id == old or old_title in e.title for e in now.plan.timeline)
+    assert any(other.title in e.title for e in now.plan.timeline)
+    # the add-ons of the old hotel are gone from the selection too
+    assert not any(i.startswith(old) for i in now.plan.selected)
+
+
+def test_return_flight_after_midnight_gets_both_night_transfer_and_long_wait():
+    """A flight at 03:00 the day after check-out: the night transfer and the wait both show."""
+    plan = trip("Анталия", date(2026, 11, 10), date(2026, 11, 17))
+    hotel, _, back = parts(plan)
+    tr = next(o for o in plan.offers if o.offer_id == transfer_id(hotel.offer_id, back.offer_id))
+    ride = tr.arrive_at - tr.depart_at
+    istanbul = ZoneInfo("Europe/Istanbul")
+    depart = datetime(2026, 11, 18, 3, 0, tzinfo=istanbul)
+    late = back.model_copy(update={"depart_at": depart, "arrive_at": depart + timedelta(hours=4)})
+    start = depart - timedelta(hours=2) - ride
+    moved = tr.model_copy(update={"depart_at": start, "arrive_at": start + ride})
+    plan = replace(plan, late, moved)
+    _, issues = build_timeline(plan)
+    texts = [i.text for i in issues]
+    assert [i.severity for i in issues] == ["warn", "warn"]
+    assert "Ночной трансфер" in texts[0] and "ждать" in texts[1]
+    assert_fixes_exist(plan, issues)
+    assert issues[1].fixes[0].endswith("-late")

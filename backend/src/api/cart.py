@@ -78,16 +78,27 @@ def sync_plan(plan: Plan, old: Cart, new: Cart) -> Plan:
     """The plan after a cart edit: the selection follows the cart, the timeline is rebuilt.
 
     Without it a replaced hotel or flight stays in `plan.selected`, and the checker (TRAP-5)
-    checks the old one. A bought add-on enters the selection and fixes its timeline issue.
-    A plain removal of a hotel or a leg keeps it selected: the user may return it.
+    checks the old one. An added item replaces every selected item of its slot, with their
+    add-ons, even one the user removed earlier. A removed add-on leaves the selection. A plain
+    removal of a hotel or a leg keeps it selected: the user may return it.
     """
+    by_id = {o.offer_id: o for o in plan.offers}
     before = {o.offer_id for o in old.items}
     after = {o.offer_id for o in new.items}
-    kinds = {o.offer_id: o.kind for o in old.items}
-    added = [o.offer_id for o in new.items if o.offer_id not in before]
-    gone = {i for i in before - after if added or kinds[i] == "extra"}
+    added = [o for o in new.items if o.offer_id not in before]
+    slots = {_slot(o, plan.spec) for o in added}
+    gone = {i for i in before - after if by_id.get(i) and by_id[i].kind == "extra"}
+    for i in plan.selected:
+        o = by_id.get(i)
+        if o and o.kind != "extra" and _slot(o, plan.spec) in slots:
+            gone.add(i)
+    gone |= {
+        o.offer_id
+        for o in by_id.values()
+        if o.kind == "extra" and o.for_offer_id in gone and o.offer_id not in after
+    }
     kept = [i for i in plan.selected if i not in gone]
-    selected = kept + [i for i in added if i not in kept]
+    selected = kept + [o.offer_id for o in added if o.offer_id not in kept]
     if selected == plan.selected:
         return plan
     plan = plan.model_copy(update={"selected": selected})

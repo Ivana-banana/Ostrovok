@@ -97,6 +97,11 @@ class _Trip:
         self.out = next((x for x in self.legs if x.destination == city), None)
         self.back = next((x for x in self.legs if x.origin == city), None)
 
+    def room(self) -> tuple[HotelOffer, ZoneInfo]:
+        """The hotel and its zone. Callers check the hotel first; no hidden server zone."""
+        assert self.hotel is not None and self.tz is not None
+        return self.hotel, self.tz
+
     def extra(self, tag: str) -> ExtraOffer | None:
         h = self.hotel
         return next(
@@ -122,7 +127,7 @@ class _Trip:
 
     def ready(self) -> datetime:
         """The earliest moment the room is ours."""
-        h, tz = self.hotel, self.tz
+        h, tz = self.room()
         if self.has("prev"):
             return _local(h.date_in - timedelta(days=1), h.check_in, tz)
         early = _title_time(self.extra("early")) if self.has("early") else None
@@ -130,9 +135,9 @@ class _Trip:
 
     def leave_by(self) -> datetime:
         """The moment the room must be free."""
-        h = self.hotel
+        h, tz = self.room()
         late = _title_time(self.extra("late")) if self.has("late") else None
-        return _local(h.date_out, max(late or h.check_out, h.check_out), self.tz)
+        return _local(h.date_out, max(late or h.check_out, h.check_out), tz)
 
     def transfer(self, leg: TransportOffer) -> TransferOffer | None:
         if not self.hotel or leg.mode == "car":
@@ -142,7 +147,7 @@ class _Trip:
 
     def stay_day(self, dt: datetime):
         """The calendar day of the stay: the small hours still belong to the day before."""
-        local = dt.astimezone(self.tz)
+        local = dt.astimezone(self.room()[1])
         if local.timetz().replace(tzinfo=None) < NIGHT_TO:
             return local.date() - timedelta(days=1)
         return local.date()
@@ -174,7 +179,7 @@ def _fixes(t: _Trip, tags: tuple[str, ...], leg: TransportOffer, check, fixes: b
 
 def _arrival_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[TimelineIssue]:
     """Issues between the arrival of `leg` and the check-in."""
-    h, tz = t.hotel, t.tz
+    h, tz = t.room()
     tr = t.transfer(leg)
     verb = VERBS[leg.mode][1].lower()
     arrive = leg.arrive_at.astimezone(tz)
@@ -209,7 +214,8 @@ def _arrival_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[T
     wait = _utc(ready) - at_hotel
     shown = at_hotel.astimezone(tz)
     night = _night(shown)
-    night_tr = tr is not None and _night(tr.depart_at.astimezone(tz))
+    tr_start = tr.depart_at.astimezone(tz) if tr else None
+    night_tr = tr_start is not None and _night(tr_start)
     if wait > EARLY_WAIT:
         text = (
             f"{VERBS[leg.mode][1]} в {_hm(arrive)}, в отель вы приедете в {_hm(shown)}, "
@@ -222,8 +228,8 @@ def _arrival_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[T
         return [TimelineIssue(severity="warn", text=text, fixes=fix_ids)]
     if night or night_tr:
         parts = [f"{VERBS[leg.mode][1]} в {_hm(arrive)}"]
-        if night_tr:
-            parts.append(f"ночной трансфер в {_hm(tr.depart_at.astimezone(tz))}")
+        if tr_start is not None and night_tr:
+            parts.append(f"ночной трансфер в {_hm(tr_start)}")
         parts.append(f"в отель вы приедете в {_hm(shown)}")
         text = (
             f"{', '.join(parts)} — поздний заезд, после {NIGHT_FROM:%H:%M} стойка может не "
@@ -241,7 +247,7 @@ def _alt(t: _Trip, leg: TransportOffer, check, fixes: bool, clean: bool = True) 
 
 def _return_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[TimelineIssue]:
     """Issues between the check-out and the departure of `leg`."""
-    h, tz = t.hotel, t.tz
+    h, tz = t.room()
     tr = t.transfer(leg)
     depart = _utc(leg.depart_at)
     verb = VERBS[leg.mode][0].lower()
@@ -274,13 +280,14 @@ def _return_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[Ti
     leave = _utc(tr.depart_at) if tr else depart - margin
     out = t.leave_by()
     gap = leave - _utc(out)
+    found: list[TimelineIssue] = []
     if tr and _night(tr.depart_at.astimezone(tz)):
         text = (
             f"Ночной трансфер в {hub}: выезд из отеля в {_hm(tr.depart_at.astimezone(tz))}. "
             "Подтвердите его заранее."
         )
-        return [TimelineIssue(severity="warn", text=text, fixes=alt())]
-    if gap > LATE_WAIT:
+        found.append(TimelineIssue(severity="warn", text=text, fixes=alt()))
+    if gap > LATE_WAIT:  # a night transfer can come with a long wait after the check-out
         text = (
             f"Выезд из отеля в {_hm(out)}, а в {hub or 'пункт отправления'} нужно выехать только "
             f"в {_hm(leave.astimezone(tz))}: ждать {_span(gap)}. "
@@ -288,8 +295,8 @@ def _return_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[Ti
         )
         late = t.available("late")
         ids = ([late.offer_id] if late else []) if fixes else []
-        return [TimelineIssue(severity="warn", text=text, fixes=ids + alt())]
-    return []
+        found.append(TimelineIssue(severity="warn", text=text, fixes=ids + alt()))
+    return found
 
 
 def _leg_issues(t: _Trip) -> list[TimelineIssue]:
@@ -308,14 +315,12 @@ def _leg_issues(t: _Trip) -> list[TimelineIssue]:
 
 def _leg_events(leg: TransportOffer, t: _Trip) -> list[TimelineEvent]:
     start, end = VERBS[leg.mode]
-    depart = (
-        leg.depart_at.astimezone(t.tz) if leg is t.back else _at_place(leg.depart_at, leg.origin)
-    )
-    arrive = (
-        leg.arrive_at.astimezone(t.tz)
-        if leg is t.out
-        else _at_place(leg.arrive_at, leg.destination)
-    )
+    depart = _at_place(leg.depart_at, leg.origin)
+    arrive = _at_place(leg.arrive_at, leg.destination)
+    if t.hotel and leg is t.back:
+        depart = leg.depart_at.astimezone(t.room()[1])
+    if t.hotel and leg is t.out:
+        arrive = leg.arrive_at.astimezone(t.room()[1])
     return [
         TimelineEvent(
             at=depart, title=f"{start}: {leg.origin} → {leg.destination}", offer_id=leg.offer_id
@@ -328,8 +333,8 @@ def _events(t: _Trip) -> list[TimelineEvent]:
     events: list[TimelineEvent] = []
     for leg in t.legs:
         events += _leg_events(leg, t)
-    h, tz = t.hotel, t.tz
-    if h:
+    if t.hotel:
+        h, tz = t.room()
         ready = t.ready()
         tr_in = t.transfer(t.out) if t.out else None
         if tr_in:
