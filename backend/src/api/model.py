@@ -16,10 +16,10 @@ from datetime import date, timedelta
 from uuid import uuid4
 
 from api.contracts import Cart, ChatReply, ChatRequest, Plan, Question, Stage, TripSpec
+from api.extract import MONTH_NAMES, extract
 from api.fixtures import (
     book,
     build_timeline,
-    extract,
     fill_cart,
     find_offers,
     future_date,
@@ -30,10 +30,6 @@ from api.fixtures import (
 from api.store import SessionStore
 
 DEFAULT_NIGHTS = 7
-MONTH_NAMES = [
-    "январь", "февраль", "март", "апрель", "май", "июнь",
-    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
-]  # fmt: skip
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
@@ -54,6 +50,7 @@ LABELS = {
     "budget_rub": "бюджет",
     "children_ages": "возраст ребёнка",
     "adults": "взрослых",
+    "max_travel_hours": "время в пути",
 }
 TRIP_FIELDS = {
     "destinations", "date_from", "date_to", "nights", "adults", "children_ages",
@@ -82,16 +79,18 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
 
 
 def blocking_questions(spec: TripSpec) -> list[Question]:
-    """At most 2 questions without which there is no safe assumption.
+    """At most 2 questions, only when the message names neither a place nor a wish.
 
-    TODO(T3, #7): the clarification policy may move to the extractor module.
+    A place or a wish is enough to move on: the rest becomes assumptions named in the reply.
     """
+    if spec.destinations or spec.wishes:
+        return []
     out = []
     if not spec.month and not spec.date_from:
         m = date.today().month
         options = [MONTH_NAMES[(m + i) % 12] for i in range(3)] + ["пока не знаю"]
         out.append(Question(text="Когда хотите поехать?", options=options))
-    if spec.budget_rub is None and "недорого" not in spec.wishes and not spec.destinations:
+    if spec.budget_rub is None:
         options = ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽", "не важно"]
         out.append(Question(text="Какой бюджет на всю поездку?", options=options))
     return out
@@ -242,6 +241,8 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
         llm=False,
     )
     found, notes = extract(message)
+    if prev is None and "adults" not in found:
+        notes.append("взрослых: 2 (состав не назван)")
     idx = _ordinal(message)
     if old.stage == "inspire" and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]

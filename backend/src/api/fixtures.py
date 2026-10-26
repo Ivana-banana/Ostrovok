@@ -5,7 +5,6 @@ All prices are synthetic (TRAP-7). November climate and flight hours are team es
 without a source; the reply labels them as an estimate.
 """
 
-import re
 from datetime import UTC, date, datetime, time, timedelta, timezone
 
 from api.contracts import (
@@ -23,7 +22,7 @@ from api.contracts import (
     TripSpec,
     Voucher,
 )
-from api.guards import MONTHS, check_arrival_vs_checkin, rule_extract
+from api.guards import check_arrival_vs_checkin
 
 ORIGIN_TZ = timezone(timedelta(hours=3))  # Moscow; the only origin in the fixture
 
@@ -59,14 +58,6 @@ CATALOG: dict[str, dict] = {row[0]: dict(zip(_KEYS, row[1:], strict=True)) for r
 # Estimate, not from a source: below this the sea counts as cold for swimming.
 # It sits between catalogue values on purpose (Antalya 22, Sochi 16).
 WARM_WATER_C = 21.5
-ORIGINS = {"москв": "Москва", "петербург": "Санкт-Петербург", "питер": "Санкт-Петербург"}
-WORD_NUMBERS = {"двое": 2, "вдвоем": 2, "вдвоём": 2, "трое": 3, "втроем": 3, "четверо": 4}
-
-
-def _month_of(word: str) -> int | None:
-    if word in ("май", "мая"):
-        return 5
-    return next((n for stem, n in MONTHS.items() if stem != "ма" and word.startswith(stem)), None)
 
 
 def future_date(month: int, day: int, today: date | None = None) -> date:
@@ -74,67 +65,6 @@ def future_date(month: int, day: int, today: date | None = None) -> date:
     today = today or date.today()
     d = date(today.year, month, day)
     return d if d >= today else date(today.year + 1, month, day)
-
-
-def extract(text: str) -> tuple[dict, list[str]]:
-    """TripSpec fields stated in one message, plus assumptions made while reading it.
-
-    TODO(T3, #7): replace with the full rule extractor (T11 adds the LLM one).
-    """
-    raw = rule_extract(text)
-    t = text.lower()
-    found: dict = {}
-    notes: list[str] = []
-    m = re.search(rf"\bиз\s+({'|'.join(ORIGINS)})\w*", t)
-    if m:
-        found["origin"] = ORIGINS[m.group(1)]
-        t = t.replace(m.group(0), " ")  # the origin is not a destination
-    dests = [n for n, c in CATALOG.items() if any(re.search(rf"\b{s}", t) for s in c["stems"])]
-    # TODO(T4, #8): a city outside the catalogue is kept as written; the geocoder resolves it.
-    other = re.search(r"\b[вВ]о?\s+([А-ЯЁ][а-яё-]+)", text)
-    if dests or other:
-        found["destinations"] = dests[:1] or [other.group(1)]
-    if raw["month"]:
-        found["month"] = raw["month"]
-    m = re.search(r"\bс\s+(\d{1,2})\s+([а-я]+)", t)
-    if m and (month := _month_of(m.group(2))):
-        found["month"] = month
-        try:
-            found["date_from"] = future_date(month, int(m.group(1)))
-        except ValueError:
-            notes.append(f"даты: «{m.group(1)} {m.group(2)}» нет в календаре, даты подобраны")
-    m = re.search(r"\b(\d{1,2})\s*ноч\w*", t)
-    if m and int(m.group(1)) >= 1:
-        found["nights"] = int(m.group(1))
-    elif m:
-        notes.append(f"длительность: «{m.group(0)}» не бывает, взята длительность по умолчанию")
-    elif re.search(r"\bнедел", t):
-        found["nights"] = 7
-    m = re.search(r"\b(\d)\s*взросл\w*", t)
-    word = next((n for w, n in WORD_NUMBERS.items() if re.search(rf"\b{w}\b", t)), None)
-    if m and int(m.group(1)) < 1:
-        notes.append(f"взрослых: «{m.group(0)}» не бывает, состав прежний")
-    elif m or word:
-        found["adults"] = int(m.group(1)) if m else word
-    if raw["budget_rub"]:
-        found["budget_rub"] = raw["budget_rub"]
-    if raw["kids"]:
-        ages = [int(a) for a in re.findall(r"\b(\d{1,2})\s*(?:лет|год)", t)]
-        if not ages:
-            ages = [7]
-            notes.append("возраст ребёнка: 7 лет (возраст не назван)")
-        found["children_ages"] = ages
-    if raw["pets"]:
-        found["pets"] = True
-    if re.search(r"завтрак", t):
-        found["meal"] = "BB"
-    wishes = [w for w, on in (("море", raw["sea"]), ("недорого", raw["cheap"])) if on]
-    if re.search(r"без\s+(?:долг|длинн)\w*\s+перел", t):
-        found["max_travel_hours"] = 5.0
-        wishes.append("без долгих перелётов")
-    if wishes:
-        found["wishes"] = wishes
-    return found, notes
 
 
 def _guests(spec: TripSpec) -> int:
