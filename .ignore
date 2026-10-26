@@ -1,0 +1,2 @@
+# ripgrep (Grep/Glob агента) не заходит в запечатанный holdout.
+eval/holdout*
