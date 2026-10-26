@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from uuid import uuid4
 
 from api.contracts import Cart, ChatReply, ChatRequest, Plan, Question, Stage, TripSpec
-from api.dag import describe, dirty_nodes, replan, shift_dates
+from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract
 from api.fixtures import (
     book,
@@ -235,6 +235,8 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
         llm=False,
     )
     found, notes = extract(message)
+    if SHIFT_RE.search(message.lower().replace("ё", "е")):
+        found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
     if prev is None and "adults" not in found:
         notes.append("взрослых: 2 (состав не назван)")
     idx = _ordinal(message)

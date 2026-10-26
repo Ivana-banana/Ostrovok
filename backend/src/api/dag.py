@@ -83,6 +83,7 @@ PRIORITIES = {
 
 
 # «на два дня позже», «на неделю раньше»: a shift of the current dates, not a duration.
+# model.step drops the nights the extractor reads from «неделю» when this matches.
 SHIFT_RE = re.compile(rf"\bна\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)\s+(позже|раньше)")
 MANUAL_WHY = "вы выбрали этот отель сами"
 
@@ -132,7 +133,8 @@ def _keep_pick(old: Plan, plan: Plan) -> Change | None:
     """Keeps the hotel the user picked over the ranking («беру первый»).
 
     The pick is manual when the old ranking chose another hotel. It is dropped only when the
-    hotel is gone or the edit changed a hotel requirement it fails; the Change says why.
+    hotel is gone, the edit changed a hotel requirement it fails, or a lowered budget fits the
+    ranked set but not the pick; the Change says why.
     """
     picked, ranked = _hotel_of(old), _hotel_of(plan)
     if not picked or not ranked or ranked.title == picked.title:
@@ -140,6 +142,7 @@ def _keep_pick(old: Plan, plan: Plan) -> Change | None:
     if picked.offer_id in rank(old.spec, old.offers)[0]:
         return None  # the ranking chose it, not the user
     same, spec = _same_hotel(picked, plan.offers), plan.spec
+    budget = spec.budget_rub if spec.budget_rub != old.spec.budget_rub else None
     if not same:
         why = "его нет в новых предложениях"
     elif spec.meal != old.spec.meal and spec.meal and same.meal != spec.meal:
@@ -150,6 +153,10 @@ def _keep_pick(old: Plan, plan: Plan) -> Change | None:
         and same.cancellation.refundable != spec.refundable
     ):
         why = f"в нём {_refundable(same.cancellation.refundable)}"
+    elif budget is not None and (
+        _total(plan) <= budget < _total(plan) - ranked.price_rub + same.price_rub
+    ):  # the ranked set fits the new budget, the set with the pick does not
+        why = "дороже бюджета"
     else:
         ids = {o.offer_id for o in plan.offers if isinstance(o, HotelOffer)}
         plan.selected = [same.offer_id] + [i for i in plan.selected if i not in ids]

@@ -245,3 +245,26 @@ def test_replan_says_why_the_picked_hotel_changed(store, picked):
     lost = next(c for c in r.plan.changes if c.what == "ваш выбор")
     assert lost.before == _hotel(picked).title and "всё включено" in lost.after
     assert "ваш выбор: " in r.reply
+
+
+@pytest.mark.parametrize(("text", "days"), [("а на неделю позже?", 7), ("на две недели позже", 14)])
+def test_week_shift_keeps_the_nights(store, text, days):
+    r = say(store, SOCHI)
+    old = r.plan.spec
+    assert old.date_from and old.date_to and old.nights == 3
+    r = say(store, text, r.session_id)
+    spec = r.plan.spec
+    assert spec.nights == 3 and spec.date_from and spec.date_to
+    assert spec.date_from == old.date_from + timedelta(days=days)
+    assert (spec.date_to - spec.date_from).days == 3
+
+
+def test_lower_budget_drops_a_pick_that_no_longer_fits(store):
+    r = say(store, "Сочи, 3 ночи с 20 ноября, двое взрослых, бюджет 58 000 руб")
+    r = say(store, "беру третий", r.session_id)
+    assert r.stage == "assemble" and "Семейный" in _hotel(r).title
+    r = say(store, "а бюджет 55000 руб", r.session_id)
+    assert "Комфорт" in _hotel(r).title
+    lost = next(c for c in r.plan.changes if c.what == "ваш выбор")
+    assert "Семейный" in lost.before and lost.after.endswith("дороже бюджета")
+    assert "дороже бюджета" in r.reply
