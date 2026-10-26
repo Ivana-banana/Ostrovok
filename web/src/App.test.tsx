@@ -47,6 +47,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// A cart edit is followed by a session read (the plan may change), so the last call is a GET.
+function lastCartCall() {
+  return calls.filter((c) => c.key === "POST /api/cart").at(-1);
+}
+
 async function flush() {
   for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 0)));
 }
@@ -116,15 +121,44 @@ suite("приложение", () => {
     };
     await mount();
     await click("Убрать");
-    expect(calls.at(-1)).toMatchObject({
+    expect(lastCartCall()).toMatchObject({
       key: "POST /api/cart",
       body: { session_id: "s1", action: "remove", offer_id: tr1.offer_id },
     });
     expect(box.querySelector("[data-testid='cart-total']")?.textContent).toContain("0 ₽");
     await click("Вернуть");
-    expect(calls.at(-1)?.body).toMatchObject({ action: "add", offer_id: tr1.offer_id });
+    expect(lastCartCall()?.body).toMatchObject({ action: "add", offer_id: tr1.offer_id });
     expect(box.querySelector("[data-testid='cart-total']")?.textContent).toContain("600 ₽");
     expect(box.querySelectorAll("[aria-label='Корзина'] li").length).toBe(1);
+  });
+
+  it("корзина: «Вернуть» отель возвращает и его услуги", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const hotel = checkoutStage.plan.offers.find((o) => o.kind === "hotel")!;
+    const extra = checkoutStage.plan.offers.find((o) => o.kind === "extra")!;
+    const items = [hotel, extra];
+    const full = { items, total_rub: hotel.price_rub + extra.price_rub };
+    const session = { ...structuredClone(checkoutStage), cart: full };
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: session });
+    let inCart = items;
+    routes["POST /api/cart"] = (b) => {
+      const { action, offer_id } = b as { action: string; offer_id: string };
+      const offer = items.find((o) => o.offer_id === offer_id)!;
+      inCart = action === "add" ? [...inCart, offer] : [];
+      return { status: 200, body: { items: inCart, total_rub: inCart.reduce((n, o) => n + o.price_rub, 0) } };
+    };
+    await mount();
+    await click("Убрать");
+    expect(box.querySelectorAll("button[aria-label^='Вернуть']").length).toBe(1);
+    await click("Вернуть");
+    const added = calls.filter((c) => c.key === "POST /api/cart").map((c) => c.body);
+    expect(added.slice(1)).toEqual([
+      { session_id: "s1", action: "add", offer_id: hotel.offer_id },
+      { session_id: "s1", action: "add", offer_id: extra.offer_id },
+    ]);
+    expect(box.querySelector("[data-testid='cart-total']")?.textContent).toContain(
+      String(full.total_rub).replace(/\B(?=(\d{3})+(?!\d))/g, " "),
+    );
   });
 
   it("подтверждение: отправляет итог, который видел пользователь, и показывает ваучер", async () => {

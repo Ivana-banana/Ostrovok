@@ -24,7 +24,9 @@ from api.contracts import (
     TripSpec,
     Voucher,
 )
+from api.offers import transfer_id
 from api.store import SessionStore
+from api.timeline import build_timeline
 
 
 def _rub(n: int) -> str:
@@ -69,8 +71,62 @@ def edit_cart(plan: Plan, cart: Cart, action: str, offer_id: str) -> Cart:
             # Extras belong to the old item; they do not follow the new one.
             if o.offer_id != offer.offer_id:
                 items = [x for x in items if x.kind != "extra" or x.for_offer_id != o.offer_id]
-            return make_cart(items)
-    return make_cart(items + [offer])
+            break
+    else:
+        items.append(offer)
+    return make_cart(_with_transfers(plan, items, offer))
+
+
+def _with_transfers(plan: Plan, items: list[Offer], added: Offer) -> list[Offer]:
+    """A transfer links one hotel and one leg: a new hotel or leg replaces the transfers of the
+    old one with its own, so the cart and the timeline (TRAP-5) describe the same trip."""
+    if added.kind not in ("hotel", "transport"):
+        return items
+    by_id = {o.offer_id: o for o in plan.offers}
+    hotels = [o for o in items if o.kind == "hotel"]
+    legs = [o for o in items if o.kind == "transport"]
+    valid = {transfer_id(h.offer_id, x.offer_id) for h in hotels for x in legs}
+    items = [o for o in items if o.kind != "transfer" or o.offer_id in valid]
+    new_pairs = [(h, x) for h in hotels for x in legs if added.offer_id in (h.offer_id, x.offer_id)]
+    have = {o.offer_id for o in items}
+    for h, x in new_pairs:
+        t = by_id.get(transfer_id(h.offer_id, x.offer_id))
+        if t is not None and t.offer_id not in have:
+            items.append(t)
+    order = {o.offer_id: i for i, o in enumerate(plan.offers)}
+    return sorted(items, key=lambda o: order.get(o.offer_id, len(order)))
+
+
+def sync_plan(plan: Plan, old: Cart, new: Cart) -> Plan:
+    """The plan after a cart edit: the selection follows the cart, the timeline is rebuilt.
+
+    Without it a replaced hotel or flight stays in `plan.selected`, and the checker (TRAP-5)
+    checks the old one. An added item replaces every selected item of its slot, with their
+    add-ons, even one the user removed earlier. A removed add-on or transfer leaves the selection; a new hotel or leg brings its transfers. A plain
+    removal of a hotel or a leg keeps it selected: the user may return it.
+    """
+    by_id = {o.offer_id: o for o in plan.offers}
+    before = {o.offer_id for o in old.items}
+    after = {o.offer_id for o in new.items}
+    added = [o for o in new.items if o.offer_id not in before]
+    slots = {_slot(o, plan.spec) for o in added}
+    gone = {i for i in before - after if by_id.get(i) and by_id[i].kind in ("extra", "transfer")}
+    for i in plan.selected:
+        o = by_id.get(i)
+        if o and o.kind != "extra" and _slot(o, plan.spec) in slots:
+            gone.add(i)
+    gone |= {
+        o.offer_id
+        for o in by_id.values()
+        if o.kind == "extra" and o.for_offer_id in gone and o.offer_id not in after
+    }
+    kept = [i for i in plan.selected if i not in gone]
+    selected = kept + [o.offer_id for o in added if o.offer_id not in kept]
+    if selected == plan.selected:
+        return plan
+    plan = plan.model_copy(update={"selected": selected})
+    plan.timeline, plan.issues = build_timeline(plan)
+    return plan
 
 
 def book(spec: TripSpec, cart: Cart) -> Voucher:
@@ -147,7 +203,8 @@ def cart_route(req: CartAction, store: SessionStore) -> Cart:
         reply = _known(prev)
         _guard_cart_open(reply)
         cart = edit_cart(reply.plan, reply.cart, req.action, req.offer_id)
-        return reply.model_copy(update={"cart": cart})
+        plan = sync_plan(reply.plan, reply.cart, cart)
+        return reply.model_copy(update={"cart": cart, "plan": plan})
 
     try:
         return store.update(req.session_id, change).cart
