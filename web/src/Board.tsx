@@ -6,6 +6,7 @@ import type {
   HotelOffer,
   Offer,
   Plan,
+  Priority,
   Stage,
   TransportOffer,
   TripSpec,
@@ -22,7 +23,10 @@ import {
   hours,
   localDate,
   localTime,
+  movePriority,
   ordinal,
+  PRIORITIES,
+  priorityMessage,
   rub,
 } from "./format";
 
@@ -108,6 +112,76 @@ function SpecSummary({ spec }: { spec: TripSpec }) {
   );
 }
 
+// The order of importance as chips. A move sends one chat message: the agent changes only
+// the priorities and ranks the options again (S9). After the cart is built the order is fixed.
+function PriorityChips({ order, stage, busy, onSend }: {
+  order: Priority[];
+  stage: Stage;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
+  const editable = stage === "compare" || stage === "assemble";
+  const absent = (Object.keys(PRIORITIES) as Priority[]).filter((p) => !order.includes(p));
+  if (!order.length && !editable) return null;
+  return (
+    <section className="card" aria-label="Приоритеты">
+      <h2>Что для вас важнее</h2>
+      {order.length > 0 ? (
+        <ol className="chips">
+          {order.map((p, i) => (
+            <li key={p} className="chip">
+              <span>
+                {i + 1}. {PRIORITIES[p]}
+              </span>
+              {editable && (
+                <>
+                  <button
+                    type="button"
+                    disabled={busy || i === 0}
+                    aria-label={`Поднять приоритет ${PRIORITIES[p]}`}
+                    onClick={() => onSend(priorityMessage(movePriority(order, i, -1)!))}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || i === order.length - 1}
+                    aria-label={`Опустить приоритет ${PRIORITIES[p]}`}
+                    onClick={() => onSend(priorityMessage(movePriority(order, i, 1)!))}
+                  >
+                    ↓
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="muted">Порядок не задан: агент считает по умолчанию, цена важнее остального.</p>
+      )}
+      {editable && absent.length > 0 && (
+        <p className="chips-add">
+          <span className="muted">Добавить:</span>
+          {absent.map((p) => (
+            <button
+              key={p}
+              type="button"
+              disabled={busy}
+              aria-label={`Добавить приоритет ${PRIORITIES[p]}`}
+              onClick={() => onSend(priorityMessage([...order, p]))}
+            >
+              + {PRIORITIES[p]}
+            </button>
+          ))}
+        </p>
+      )}
+      {editable && order.length > 0 && (
+        <p className="muted">Первый приоритет важнее всех. Сдвиньте чип: агент пересчитает порядок вариантов.</p>
+      )}
+    </section>
+  );
+}
+
 function Destinations({ plan, stage, busy, onSend }: {
   plan: Plan;
   stage: Stage;
@@ -158,13 +232,28 @@ function Destinations({ plan, stage, busy, onSend }: {
   );
 }
 
+// One row per hotel, as in the chat: the selected tariff of the hotel, else its first one.
+// The backend orders the tariffs of a hotel best first for the spec (optimizer.hotel_rows).
+function hotelRows(plan: Plan): HotelOffer[] {
+  const rows = new Map<string, HotelOffer>();
+  for (const o of plan.offers) {
+    if (o.kind !== "hotel") continue;
+    const key = `${o.title}|${o.city}`;
+    const row = rows.get(key);
+    if (!row || (plan.selected.includes(o.offer_id) && !plan.selected.includes(row.offer_id))) {
+      rows.set(key, o);
+    }
+  }
+  return [...rows.values()];
+}
+
 function Hotels({ plan, stage, busy, onSend }: {
   plan: Plan;
   stage: Stage;
   busy: boolean;
   onSend: (t: string) => void;
 }) {
-  const hotels = plan.offers.filter((o): o is HotelOffer => o.kind === "hotel");
+  const hotels = hotelRows(plan);
   if (!hotels.length) return null;
   return (
     <section aria-label="Сравнение отелей">
@@ -235,7 +324,13 @@ function Hotels({ plan, stage, busy, onSend }: {
   );
 }
 
-function Transport({ plan }: { plan: Plan }) {
+// The backend picks a leg by the row number of this table ("возьми рейс 2", S6).
+function Transport({ plan, stage, busy, onSend }: {
+  plan: Plan;
+  stage: Stage;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
   const legs = plan.offers.filter((o): o is TransportOffer => o.kind === "transport");
   if (!legs.length) return null;
   return (
@@ -245,6 +340,7 @@ function Transport({ plan }: { plan: Plan }) {
         <table>
           <thead>
             <tr>
+              <th>№</th>
               <th>Рейс</th>
               <th>Тип</th>
               <th>Отправление</th>
@@ -252,13 +348,15 @@ function Transport({ plan }: { plan: Plan }) {
               <th>В пути</th>
               <th>Пересадки</th>
               <th>Цена</th>
+              <th />
             </tr>
           </thead>
           <tbody>
-            {legs.map((t) => {
+            {legs.map((t, i) => {
               const chosen = plan.selected.includes(t.offer_id);
               return (
                 <tr key={t.offer_id} className={chosen ? "chosen" : undefined}>
+                  <td>{i + 1}</td>
                   <td>
                     {t.title}
                     {chosen && <span className="tag">выбран</span>}
@@ -274,6 +372,18 @@ function Transport({ plan }: { plan: Plan }) {
                   <td>{t.changes || "нет"}</td>
                   <td>
                     <Price value={t.price_rub} synthetic={t.synthetic} />
+                  </td>
+                  <td>
+                    {(stage === "compare" || stage === "assemble") && !chosen && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        aria-label={`Выбрать рейс ${i + 1}: ${t.title}`}
+                        onClick={() => onSend(`возьми рейс ${i + 1}`)}
+                      >
+                        Выбрать
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -352,31 +462,46 @@ function Changes({ plan }: { plan: Plan }) {
   );
 }
 
-function Timeline({ plan, canAdd, busy, onCart }: {
+function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
   plan: Plan;
+  cart: Cart;
+  marked: boolean; // the cart is final or open: an item outside it is shown as removed
   canAdd: boolean;
   busy: boolean;
   onCart: BoardProps["onCart"];
 }) {
   if (!plan.timeline.length && !plan.issues.length) return null;
   const offer = (id: string) => plan.offers.find((o) => o.offer_id === id);
+  // The server keeps a removed item in `plan.selected` so it can come back, and the timeline
+  // still has its events. Once the cart exists, an event of an item outside it is «removed».
+  const inCart = new Set(cart.items.map((o) => o.offer_id));
+  const gone = (id: string | null) => marked && id !== null && !inCart.has(id);
+  // A fix for a removed item (an add-on of a removed hotel) is useless: the server refuses it.
+  const dead = (id: string) => {
+    const o = offer(id);
+    return marked && o?.kind === "extra" && o.for_offer_id !== null && gone(o.for_offer_id);
+  };
   return (
     <section className="card" aria-label="Таймлайн">
       <h2>Таймлайн</h2>
       <p className="muted">Время местное для места события.</p>
       <ol className="timeline">
         {plan.timeline.map((e, i) => (
-          <li key={`${e.at}-${i}`}>
-            <time>{localTime(e.at)}</time> {e.title}
+          <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined}>
+            <time>{localTime(e.at)}</time> <span className="gone-title">{e.title}</span>
+            {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}
           </li>
         ))}
       </ol>
-      {plan.issues.map((issue, i) => (
+      {plan.issues.map((issue, i) => {
+        const fixes = issue.fixes.filter((id) => !dead(id));
+        if (issue.fixes.length > 0 && fixes.length === 0) return null; // only for a removed item
+        return (
         <div key={i} className={`issue ${issue.severity}`} role="note">
           <b>{issue.severity === "error" ? "Ошибка стыковки" : "Внимание"}:</b> {issue.text}
-          {issue.fixes.length > 0 && (
+          {fixes.length > 0 && (
             <ul>
-              {issue.fixes.map((id) => {
+              {fixes.map((id) => {
                 const o = offer(id);
                 return (
                   <li key={id}>
@@ -398,7 +523,8 @@ function Timeline({ plan, canAdd, busy, onCart }: {
             </ul>
           )}
         </div>
-      ))}
+        );
+      })}
     </section>
   );
 }
@@ -535,15 +661,23 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
       )}
       {voucher && <VoucherView voucher={voucher} />}
       <SpecSummary spec={plan.spec} />
+      <PriorityChips order={plan.spec.priorities} stage={stage} busy={busy} onSend={onSend} />
       <Changes plan={plan} />
       {plan.destinations.length > 0 && (
         <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />
       )}
       <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
-      <Transport plan={plan} />
+      <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
       <Bundles plan={plan} />
       <Explanations plan={plan} />
-      <Timeline plan={plan} canAdd={stage === "checkout"} busy={busy} onCart={onCart} />
+      <Timeline
+        plan={plan}
+        cart={cart}
+        marked={stage === "checkout" || stage === "booked"}
+        canAdd={stage === "checkout"}
+        busy={busy}
+        onCart={onCart}
+      />
       {next && (
         <button type="button" className="primary" disabled={busy} onClick={() => onSend(next.text)}>
           {next.label}

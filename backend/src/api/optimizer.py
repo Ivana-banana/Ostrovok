@@ -116,8 +116,14 @@ class Trip:
         return sum(t.price_rub for t in self.transfers)
 
     @property
+    def slow_leg(self) -> TransportOffer | None:
+        """The longest leg when it is longer than LONG_LEG_H; it is the reason for `slow`."""
+        longest = max(self.legs, key=_leg_hours, default=None)
+        return longest if longest and _leg_hours(longest) > LONG_LEG_H else None
+
+    @property
     def slow(self) -> bool:
-        return any(_leg_hours(x) > LONG_LEG_H for x in self.legs)
+        return self.slow_leg is not None
 
     @property
     def hours(self) -> float:
@@ -166,13 +172,16 @@ def _diff(d: int) -> str:
 
 
 def weights(spec: TripSpec) -> dict[Priority, float]:
-    """Order -> weights: the i-th priority weighs 1/(i+1), the rest keep half the default."""
+    """Order -> weights: the i-th priority weighs 1/(i+1), the rest keep half the default.
+
+    «недорого» in wishes without priorities gives the price weights; it is not a named priority.
+    """
     order = list(dict.fromkeys(spec.priorities))
     if not order and "недорого" in spec.wishes:
         order = ["price"]
     if not order:
         return dict(DEFAULT_WEIGHTS)
-    w = {c: DEFAULT_WEIGHTS[c] / 2 for c in CRITERIA}
+    w: dict[Priority, float] = {c: DEFAULT_WEIGHTS[c] / 2 for c in CRITERIA}
     for i, p in enumerate(order):
         w[p] = 1 / (i + 1)
     s = sum(w.values())
@@ -269,8 +278,8 @@ def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
     if any(t.over == 0 for t in pool):
         pool = [t for t in pool if t.over == 0]
     _score(pool, weights(spec))
-    # The price weight must not send the user on a long train when a faster trip exists; a user
-    # who put the price first has chosen.
+    # The price weight must not send the user on a long train when a faster trip exists; only a
+    # user who named the price first has chosen. «недорого» in wishes does not lift it (D-009).
     demote = spec.priorities[:1] != ["price"] and any(not t.slow for t in pool)
     if any(t.over for t in pool):
         # nothing fits the budget: smallest overrun
@@ -294,8 +303,8 @@ def _alternatives(best: Trip, pool: list[Trip], trips: list[Trip]) -> list[tuple
         ("самый комфортный", min(pool, key=lambda t: t.comfort_key), None),
     ]
     in_budget = sorted((t for t in trips if t.over == 0), key=lambda t: (len(t.rules), t.key))
-    if best.over and in_budget:
-        kinds.append(("в бюджете", in_budget[0], True))
+    if best.over and in_budget:  # first: MAX_ALTERNATIVES must not push it out
+        kinds.insert(0, ("в бюджете", in_budget[0], True))
     out: list[tuple[str, Trip]] = []
     seen = {tuple(best.ids)}
     for label, t, ok in kinds:
@@ -317,7 +326,7 @@ def _versus(t: Trip, best: Trip) -> list[str]:
     out = []
     if t.total > best.total:
         out.append(_diff(t.total - best.total) + " за всю поездку")
-    if (h.rating or 0) < (b.rating or 0):
+    if h.rating is not None and b.rating is not None and h.rating < b.rating:
         out.append(f"рейтинг {h.rating} вместо {b.rating}")
     if b.cancellation.refundable and not h.cancellation.refundable:
         out.append("невозвратный тариф")
@@ -325,8 +334,9 @@ def _versus(t: Trip, best: Trip) -> list[str]:
         out.append(f"питание: {MEAL_TEXT[h.meal]} вместо {MEAL_TEXT[b.meal]}")
     if t.hours > best.hours:
         out.append(f"дорога {_h(t.hours)} вместо {_h(best.hours)}")
-    if (h.distance_center_km or 0) > (b.distance_center_km or 0):
-        out.append(f"до центра {h.distance_center_km:g} км вместо {b.distance_center_km:g} км")
+    hd, bd = h.distance_center_km, b.distance_center_km
+    if hd is not None and bd is not None and hd > bd:
+        out.append(f"до центра {hd:g} км вместо {bd:g} км")
     if t.transfer_rub > best.transfer_rub:
         line = f"трансферы {_rub(t.transfer_rub)} вместо {_rub(best.transfer_rub)}"
         if h.price_rub < b.price_rub and t.total >= best.total:
@@ -335,7 +345,7 @@ def _versus(t: Trip, best: Trip) -> list[str]:
     return out + [f"нарушает: {r}" for r in t.rules]
 
 
-def _hotel_why(spec: TripSpec, t: Trip) -> str:
+def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
     h = t.hotel
     facts = [f"{h.stars}★"] if h.stars else []
     if h.rating is not None:
@@ -357,8 +367,19 @@ def _hotel_why(spec: TripSpec, t: Trip) -> str:
     if order:
         why += "; ваш порядок важности: " + " → ".join(PRIORITY_TEXT[p] for p in order)
     elif "недорого" in spec.wishes:
-        why += "; важнее всего цена («недорого»)"
+        cheapest = min(pool, key=lambda x: (x.total, x.key))
+        if cheapest.total >= t.total:
+            why += "; важнее всего цена («недорого»)"
+        else:
+            why += "; цена важна («недорого»), самый дешёвый вариант ниже"
+            if cheapest.slow_leg:  # hours only when the road is the reason
+                why += f": дорога {_h(_leg_hours(cheapest.slow_leg))}"
     return why
+
+
+def _less(a: float | None, b: float | None) -> bool:
+    """a < b when both are known; an absent value neither wins nor loses."""
+    return a is not None and b is not None and a < b
 
 
 def _wins_on(p: Priority, t: Trip, other: Trip) -> bool:
@@ -368,9 +389,9 @@ def _wins_on(p: Priority, t: Trip, other: Trip) -> bool:
         "price": t.total < other.total,
         "cancellation": a.cancellation.refundable and not b.cancellation.refundable,
         "meal": MEAL_LEVEL[a.meal] > MEAL_LEVEL[b.meal],
-        "location": (a.distance_center_km or 0) < (b.distance_center_km or 0),
+        "location": _less(a.distance_center_km, b.distance_center_km),
         "travel_time": t.hours < other.hours,
-        "rating": (a.rating or 0) > (b.rating or 0),
+        "rating": _less(b.rating, a.rating),
     }[p]
 
 
@@ -386,8 +407,11 @@ def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
         first = spec.priorities[0] if spec.priorities else None
         if first and first != "price" and _wins_on(first, t, cheapest):
             line += f" — плата за приоритет «{PRIORITY_TEXT[first]}»"  # the user put it above price
-        if cheapest.slow and not t.slow:
-            line += f"; у самого дешёвого дорога в одну сторону {_h(cheapest.hours)}"
+        if cheapest.slow_leg and not t.slow:
+            line += (
+                f"; у самого дешёвого дорога в одну сторону {_h(_leg_hours(cheapest.slow_leg))} "
+                f"({cheapest.slow_leg.title})"
+            )
         out.append(line)
     if not h.cancellation.refundable:
         refund = [x for x in pool if x.hotel.cancellation.refundable]
@@ -398,7 +422,7 @@ def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
                 f"{_diff(r.total - t.total)}"
             )
     top = min(pool, key=lambda x: (-(x.hotel.rating or 0), x.total, x.key))
-    if (top.hotel.rating or 0) > (h.rating or 0):
+    if _less(h.rating, top.hotel.rating):
         out.append(f"рейтинг ниже, чем у варианта {top.hotel.title} ({top.hotel.rating})")
     fast = min(pool, key=lambda x: (x.hours, x.total, x.key))
     if fast.hours < t.hours:
@@ -483,7 +507,7 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
     explanations = [
         Explanation(
             offer_id=best.hotel.offer_id,
-            why=_hotel_why(spec, best),
+            why=_hotel_why(spec, best, pool),
             tradeoffs=sacrificed,
             risks=_risks(spec, best, fits, trips),
         )
@@ -520,3 +544,51 @@ def pick_hotel(selected: list[str], offers: list[Offer], hotel_id: str) -> list[
         o.offer_id for o in chosen if isinstance(o, ExtraOffer) and o.for_offer_id == hotel_id
     ]
     return [hotel_id, *(x.offer_id for x in legs), *transfers, *extras]
+
+
+def order_tariffs(spec: TripSpec, offers: list[Offer]) -> list[Offer]:
+    """The offers with the tariffs of each hotel ordered best first for this spec.
+
+    The best tariff of a hotel is the one in its best trip: trips of the pool first, in pool
+    order, then the rest by broken rules, overrun and price. Hotels keep their order, the
+    other offers stay where they are. So the first tariff of a hotel is its row in the
+    comparison (hotel_rows), for the chat and the board alike.
+    """
+    trips = enumerate_trips(offers)
+    if not trips:
+        return offers
+    pool, _ = _pool(spec, trips)
+    chosen = {id(t) for t in pool}
+    rest = sorted(
+        (t for t in trips if id(t) not in chosen),
+        key=lambda t: (len(t.rules), t.over, t.total, t.key),
+    )
+    place: dict[str, int] = {}
+    for i, t in enumerate([*pool, *rest]):
+        place.setdefault(t.hotel.offer_id, i)
+    slots: dict[tuple[str, str], list[int]] = {}
+    for i, o in enumerate(offers):
+        if isinstance(o, HotelOffer):
+            slots.setdefault((o.title, o.city), []).append(i)
+    out = list(offers)
+    for at in slots.values():
+        group = sorted(
+            (offers[i] for i in at), key=lambda h: (place.get(h.offer_id, len(place)), h.offer_id)
+        )
+        for i, h in zip(at, group, strict=True):
+            out[i] = h
+    return out
+
+
+def hotel_rows(offers: list[Offer], selected: list[str]) -> list[HotelOffer]:
+    """One row per hotel: its selected tariff, else its first (best) tariff (order_tariffs).
+
+    The chat, «беру второй» and the board (web/src/Board.tsx) use the same rule.
+    """
+    rows: dict[tuple[str, str], HotelOffer] = {}
+    for o in offers:
+        if isinstance(o, HotelOffer):
+            key = (o.title, o.city)
+            if key not in rows or (o.offer_id in selected and rows[key].offer_id not in selected):
+                rows[key] = o
+    return list(rows.values())

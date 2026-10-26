@@ -7,7 +7,7 @@ import pytest
 from api import dag
 from api.contracts import Cart, ChatRequest, Plan, TripSpec
 from api.model import chat
-from api.optimizer import enumerate_trips
+from api.optimizer import enumerate_trips, hotel_rows
 from api.store import SessionStore
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч, нужен завтрак"
@@ -71,14 +71,18 @@ def test_meal_change_reranks_without_a_new_search(booked, calls):
     plan, cart, done = dag.replan(booked.plan, spec, booked.cart)
     assert done == ["ranking", "timeline", "cart"] and cart.items == []
     assert "find_offers" not in calls
-    assert plan.offers == booked.plan.offers  # transport and hotels are kept
+    # transport and hotels are kept, the tariffs of a hotel are only ordered again
+    assert sorted(plan.offers, key=lambda o: o.offer_id) == sorted(
+        booked.plan.offers, key=lambda o: o.offer_id
+    )
     hotel = next(o for o in plan.offers if o.offer_id in plan.selected and o.kind == "hotel")
     assert hotel.meal == "AI"
     assert any(c.what == "питание" for c in plan.changes)
 
 
 def test_same_selection_keeps_the_timeline(booked, calls):
-    spec = booked.plan.spec.model_copy(update={"refundable": True})
+    # refundable=True would pick the free-cancellation tariff of the hotel: another selection.
+    spec = booked.plan.spec.model_copy(update={"refundable": False})
     plan, cart, done = dag.replan(booked.plan, spec, booked.cart)
     assert done == ["ranking", "cart"] and cart.items == []
     assert calls == ["rank"]
@@ -131,9 +135,10 @@ def test_first_build_runs_all_nodes_without_changes(calls):
     )
     empty = Plan(spec=TripSpec.model_validate({}))
     plan, cart, done = dag.replan(empty, spec, Cart())
-    assert done == ["destination", "offers", "ranking"]
-    assert calls == ["find_offers", "rank"]
-    assert plan.offers and plan.selected and plan.changes == [] and cart.items == []
+    assert done == ["destination", "offers", "ranking", "timeline"]  # #66: the first plan too
+    assert calls == ["find_offers", "rank", "build_timeline"]
+    assert plan.offers and plan.selected and plan.timeline
+    assert plan.changes == [] and cart.items == []
 
 
 def test_chat_shows_before_after_and_replaces_the_cart(store, booked):
@@ -219,10 +224,10 @@ def test_shift_dates_moves_the_current_dates(text, days):
 
 @pytest.fixture
 def picked(store):
-    """Session where the user picked the first hotel over the ranked one."""
+    """Session where the user picked the second hotel over the ranked one."""
     r = say(store, SOCHI)
     ranked = r.plan.selected[0]
-    r = say(store, "первый", r.session_id)
+    r = say(store, "второй", r.session_id)
     assert r.stage == "assemble" and r.plan.selected[0] != ranked
     return r
 
@@ -263,7 +268,7 @@ def test_week_shift_keeps_the_nights(store, text, days):
 def test_lower_budget_drops_a_pick_that_no_longer_fits(store):
     # The budget comes from the offers, not from fixture prices: providers are synthetic (T5).
     r = say(store, "Сочи, 3 ночи с 20 ноября, двое взрослых")
-    hotels = [o for o in r.plan.offers if o.kind == "hotel"][:4]
+    hotels = hotel_rows(r.plan.offers, r.plan.selected)[:4]  # a row per hotel, as in the chat
     cheapest = min(h.price_rub for h in hotels)
     i = next(
         i
@@ -283,3 +288,40 @@ def test_lower_budget_drops_a_pick_that_no_longer_fits(store):
     lost = next(c for c in r.plan.changes if c.what == "ваш выбор")
     assert pick.title == lost.before and lost.after.endswith("дороже бюджета")
     assert "дороже бюджета" in r.reply
+
+
+def _pick_third(store):
+    """The user picked the third hotel of the table; returns the reply and the hotel."""
+    r = say(store, SOCHI)
+    r = say(store, "третий", r.session_id)
+    assert (
+        r.stage == "assemble" and r.plan.selected[0] not in dag.rank(r.plan.spec, r.plan.offers)[0]
+    )
+    return r, _hotel(r)
+
+
+def test_picked_hotel_gets_the_tariff_of_the_new_spec(store):
+    """#39: the user picked a hotel, not a tariff; a refund wish re-picks its tariff."""
+    r, pick = _pick_third(store)
+    assert not pick.cancellation.refundable
+    ranked = dag.rank(r.plan.spec, r.plan.offers)[0][0]
+    r = say(store, "а нужна бесплатная отмена", r.session_id)
+    hotel = _hotel(r)
+    assert hotel.title == pick.title and hotel.offer_id != pick.offer_id  # the user's hotel
+    assert hotel.cancellation.refundable and hotel.meal == pick.meal
+    assert hotel.offer_id != ranked and r.plan.explanations[0].why == dag.MANUAL_WHY
+    # the row of the table is the tariff of the plan
+    assert hotel_rows(r.plan.offers, r.plan.selected)[2].offer_id == hotel.offer_id
+
+
+def test_date_shift_keeps_the_tariff_terms_of_the_picked_hotel(store):
+    r, pick = _pick_third(store)
+    r = say(store, "а нужна бесплатная отмена", r.session_id)
+    before = _hotel(r)
+    r = say(store, "а 4 ночи", r.session_id)  # new offers: the same hotel and the same terms
+    hotel = _hotel(r)
+    assert hotel.title == pick.title and hotel.offer_id != before.offer_id
+    assert (hotel.meal, hotel.cancellation.refundable) == (
+        before.meal,
+        before.cancellation.refundable,
+    )

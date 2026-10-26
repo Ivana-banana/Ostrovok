@@ -6,7 +6,7 @@ import pytest
 
 from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import chat
+from api.model import chat, step
 from api.store import SessionStore
 
 S3A = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч за всё, нужен завтрак."
@@ -205,3 +205,271 @@ def test_start_offset_is_not_a_duration(text, days):
         assert found["date_from"] == date.today() + timedelta(days=days)
     else:
         assert found["date_from"].weekday() == 0 and any(n.startswith("даты:") for n in notes)
+
+
+@pytest.mark.parametrize(
+    "text,city",
+    [
+        ("Иркутск на неделю в декабре, бюджетно, из Москвы", "Иркутск"),
+        ("Калининград в мае, на 5 дней", "Калининград"),
+        ("Мурманск, северное сияние", "Мурманск"),
+        ("Пермь на выходные", "Пермь"),
+        ("Омск с ребёнком, на 4 дня", "Омск"),
+    ],
+)
+def test_trap2_city_as_first_word_is_the_destination(text, city):
+    found, _ = extract(text)
+    assert found["destinations"] == [city]
+
+
+def test_trap2_first_word_city_keeps_origin_and_other_fields():
+    found, _ = extract("Иркутск на неделю в декабре, бюджетно, из Москвы")
+    assert found["origin"] == "Москва" and found["destinations"] == ["Иркутск"]
+    assert (found["month"], found["nights"]) == (12, 7)
+    assert "недорого" in found["wishes"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "иркутск на неделю в декабре",
+        "Иркутска на неделю в декабре",
+        "хочу в иркутск на неделю",
+        "Хочу в Иркутске на неделю",
+        "Из Москвы в Иркутск на неделю",
+    ],
+)
+def test_trap3_spelling_and_case_of_a_city_give_one_name(text):
+    found, _ = extract(text)
+    assert found["destinations"] == ["Иркутск"]
+
+
+def test_trap3_origin_in_genitive_is_normalised_and_not_a_destination():
+    found, _ = extract("Из Иркутска в Сочи на неделю")
+    assert found["origin"] == "Иркутск" and found["destinations"] == ["Сочи"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Тёплое море в ноябре, недорого, с ребёнком",
+        "Хочу на море на неделю",
+        "Недорого в ноябре",
+        "Хочу в декабре, на 5 дней",
+        "Подскажи отель на неделю",
+        "Ищу, на 3 ночи",
+        "Привет",
+        "Бюджетно, на выходные",
+    ],
+)
+def test_trap2_ordinary_first_word_is_not_a_destination(text):
+    found, _ = extract(text)
+    assert "destinations" not in found
+
+
+@pytest.mark.parametrize(
+    "text", ["Нет", "Нет, спасибо", "Спасибо", "Зима, горы, на неделю", "Один, на неделю"]
+)
+def test_trap2_chat_reply_or_season_is_not_a_destination(text):
+    assert "destinations" not in extract(text)[0]
+
+
+def test_trap2_chat_with_first_word_city_does_not_go_to_inspire(tmp_path):
+    text = "Иркутск на неделю в декабре, бюджетно, из Москвы"
+    r = chat(ChatRequest(message=text), SessionStore(tmp_path / "s.db"))
+    assert r.stage != "inspire"
+    assert r.plan.spec.destinations == ["Иркутск"]
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Отдых на море с детьми в ноябре", []),
+        ("Мама с ребёнком в декабре, на море", []),
+        ("Неделю на море в ноябре, недорого", []),
+        ("Бюджет до 100 тысяч", []),
+        ("Перенеси на неделю позже", []),
+        ("Только с завтраком", []),
+        ("Вылет в пятницу", []),
+        ("Неделя в Италии", ["Италия"]),
+        ("Музеи в Петербурге", ["Санкт-Петербург"]),
+        ("Шопинг в Стамбуле", ["Стамбул"]),
+    ],
+)
+def test_trap2_unknown_first_word_is_never_guessed_from_a_stop_list(text, expected):
+    found, _ = extract(text)
+    assert found.get("destinations", []) == expected
+
+
+@pytest.mark.parametrize("text", ["Работа в декабре", "Отдых в ноябре"])
+def test_trap2_first_word_pattern_needs_no_plan_destination(text):
+    assert "destinations" not in extract(text, has_destination=True)[0]
+
+
+@pytest.mark.parametrize(
+    "follow",
+    [
+        "Перенеси на неделю позже",
+        "Только с завтраком",
+        "Вылет в пятницу",
+        "Бюджет до 100 тысяч",
+        "Работа в декабре",
+    ],
+)
+def test_trap2_followup_message_keeps_the_destination_of_the_plan(follow):
+    first = step(None, "s", "Сочи на неделю в декабре")
+    r = step(first, "s", follow)
+    assert r.plan.spec.destinations == ["Сочи"] and r.stage != "select"
+
+
+# --- #68: tail of the PR #62 review (TRAP-3: spelling and case of a place) ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Хочу в малом отеле у моря, в ноябре",
+        "Хочу в малом отеле",
+        "Номер в малом корпусе, на неделю",
+        "Мала ли комната",
+        "Номера малы, нужен побольше",
+    ],
+)
+@pytest.mark.parametrize("has_destination", [False, True])
+def test_trap3_ordinary_adjective_is_not_the_place_male(text, has_destination):
+    assert "Мале" not in extract(text, has_destination)[0].get("destinations", [])
+
+
+@pytest.mark.parametrize("text", ["Мале на 10 ночей", "Хочу в Мале", "хочу в мале на неделю"])
+def test_trap3_male_is_still_found_by_its_name(text):
+    assert extract(text)[0]["destinations"] == ["Мале"]
+
+
+def test_trap3_small_hotel_after_a_plan_keeps_the_city():
+    first = step(None, "s", "Сочи на неделю в декабре")
+    r = step(first, "s", "Хочу в малом отеле")
+    assert r.plan.spec.destinations == ["Сочи"]
+
+
+def test_trap3_small_hotel_in_the_first_message_does_not_go_to_male():
+    r = step(None, "s", "Хочу в малом отеле у моря, в ноябре")
+    assert r.plan.spec.destinations != ["Мале"]
+
+
+@pytest.mark.parametrize(
+    "text, origin, destination",
+    [
+        ("Из Тулы в Сочи", "Тула", "Сочи"),
+        ("Из Уфы в Казань на неделю", "Уфа", "Казань"),
+        ("Из Вены в Прагу", "Вена", "Прага"),
+        ("из тулы в сочи", "Тула", "Сочи"),
+    ],
+)
+def test_trap3_genitive_in_y_gives_the_nominative_origin(text, origin, destination):
+    found, _ = extract(text)
+    assert found["origin"] == origin and found["destinations"] == [destination]
+
+
+@pytest.mark.parametrize("text", ["В Аляске на неделю", "Хочу в Аляску на неделю"])
+def test_trap3_alaska_keeps_its_nominative_form(text):
+    assert extract(text)[0]["destinations"] == ["Аляска"]
+
+
+@pytest.mark.parametrize(
+    "text, city",
+    [
+        ("В Омске на неделю", "Омск"),
+        ("Хочу в Иркутске", "Иркутск"),
+        ("Едем в Калининграде", "Калининград"),
+    ],
+)
+def test_trap3_masculine_cities_in_sk_still_lose_their_ending(text, city):
+    assert extract(text)[0]["destinations"] == [city]
+
+
+@pytest.mark.parametrize(
+    "word, city",
+    [
+        ("Новокузнецке", "Новокузнецк"),
+        ("Донецке", "Донецк"),
+        ("Полоцке", "Полоцк"),
+        ("Норильске", "Норильск"),
+        ("Брянске", "Брянск"),
+        ("Аляске", "Аляска"),
+    ],
+)
+def test_trap3_unknown_city_outside_the_catalogue_gets_the_right_nominative(word, city):
+    assert extract(f"Хочу в {word} на неделю")[0]["destinations"] == [city]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Владимир, добрый день, хочу на море",
+        "Владимир, привет! Хочу на море",
+        "Владимир, здравствуйте, хочу в ноябре на море",
+    ],
+)
+def test_trap3_name_with_a_greeting_is_an_address(text):
+    assert "destinations" not in extract(text)[0]
+
+
+@pytest.mark.parametrize("has_destination", [False, True])
+def test_trap3_name_with_comma_is_an_address_not_the_city_vladimir(has_destination):
+    found, _ = extract("Владимир, хочу на море в ноябре", has_destination)
+    assert "destinations" not in found
+
+
+def test_trap3_name_with_comma_in_the_first_message_goes_to_inspire():
+    r = step(None, "s", "Владимир, хочу на море в ноябре")
+    assert r.stage == "inspire" and r.plan.spec.destinations == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Владимир на выходные", "Владимир на неделю", "Владимир, 3 ночи", "Во Владимир на неделю"],
+)
+def test_trap3_vladimir_as_a_city_still_works(text):
+    assert extract(text)[0]["destinations"] == ["Владимир"]
+
+
+@pytest.mark.parametrize("text", ["Ухта, 3 ночи", "Выборг, 3 ночи"])
+def test_trap3_unknown_city_in_a_plan_gets_an_honest_note(text):
+    found, notes = extract(text, has_destination=True)
+    assert "destinations" not in found
+    assert any(n.startswith("направление:") and "нет в каталоге" in n for n in notes)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Бюджет, 50 тысяч", "Работа в декабре", "Взрослых, 3", "Отпуск, 3 ночи",
+        "Перенеси на 2 дня позже", "Сократи на 2 ночи", "Продли на 2 дня", "Поменяй на 3 ночи",
+        "Только на 3 ночи", "Тогда на 3 ночи", "Номер на 3 ночи", "Отложи на 2 недели",
+        "Окей, 3 ночи", "Ок, 3 ночи", "Ухта на 3 дня", "Поездка на 5 дней",
+    ],
+)  # fmt: skip
+def test_trap3_ordinary_first_word_in_a_plan_gets_no_city_note(text):
+    assert not any("каталоге" in n for n in extract(text, has_destination=True)[1])
+
+
+def test_trap3_unknown_city_without_a_plan_is_the_destination_and_has_no_note():
+    found, notes = extract("Ухта, 3 ночи")
+    assert found["destinations"] == ["Ухта"] and not any("каталоге" in n for n in notes)
+
+
+def test_trap3_unknown_city_after_a_plan_says_so_and_changes_only_the_nights():
+    first = step(None, "s", "Сочи на неделю в декабре")
+    r = step(first, "s", "Ухта, 3 ночи")
+    spec = r.plan.spec
+    assert spec.destinations == ["Сочи"] and spec.nights == 3
+    assert any("Ухта" in a and "нет в каталоге" in a for a in spec.assumptions)
+    assert "Ухта" in r.reply
+
+
+def test_trap3_city_note_goes_away_when_a_city_is_stated_later():
+    first = step(None, "s", "Сочи на неделю в декабре")
+    second = step(first, "s", "Ухта, 3 ночи")
+    r = step(second, "s", "Лучше Казань")
+    assert r.plan.spec.destinations == ["Казань"]
+    assert not any("каталоге" in a for a in r.plan.spec.assumptions)

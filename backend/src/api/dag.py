@@ -6,8 +6,7 @@ Nodes, each one feeds the next:
 - offers: find_offers(spec, destination); the search depends on dates, guests, origin.
 - ranking: rank(spec, offers); selected offers and why; budget, meal, refund, wishes.
 - timeline: build_timeline(plan) reads plan.selected and plan.offers, never the spec. It is
-  rebuilt when the selection changed and the old plan had a timeline (the stage machine
-  builds it on "беру").
+  built for the first plan too and rebuilt when the selection changed.
 - cart: the cart confirms one TripSpec (the voucher keeps it), so any trip change empties it.
   The next confirmation refills it with fill_cart, which replaces the items, never appends.
 
@@ -22,7 +21,7 @@ from datetime import timedelta
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
 from api.extract import MONTH_NAMES, NUM, NUMS
 from api.fixtures import find_offers, rank
-from api.optimizer import bundles, pick_hotel
+from api.optimizer import bundles, order_tariffs, pick_hotel
 from api.timeline import build_timeline
 
 NODES = ("destination", "offers", "ranking", "timeline", "cart")
@@ -125,11 +124,19 @@ def _hotel_of(plan: Plan) -> HotelOffer | None:
 
 
 def _same_hotel(h: HotelOffer, offers: list[Offer]) -> HotelOffer | None:
-    """The same hotel among new offers: the same offer, else the same title for other dates."""
-    hotels = [o for o in offers if isinstance(o, HotelOffer)]
-    return next((o for o in hotels if o.offer_id == h.offer_id), None) or next(
-        (o for o in hotels if (o.title, o.city) == (h.title, h.city)), None
-    )
+    """The same hotel among the new offers, with a tariff for the new spec.
+
+    The offers are kept (the spec edit is about meal, refund or budget): the best tariff of
+    the hotel for the new spec, the first one in the order of order_tariffs. The offers are
+    new (other dates): the tariff with the same meal and cancellation, else the best one.
+    """
+    group = [
+        o for o in offers if isinstance(o, HotelOffer) and (o.title, o.city) == (h.title, h.city)
+    ]
+    if not group or any(o.offer_id == h.offer_id for o in group):
+        return group[0] if group else None
+    same = (h.meal, h.cancellation.refundable)
+    return next((o for o in group if (o.meal, o.cancellation.refundable) == same), group[0])
 
 
 def _keep_pick(old: Plan, plan: Plan) -> Change | None:
@@ -187,6 +194,7 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
         plan.offers = find_offers(spec, spec.destinations[0])
         done.append("offers")
     if "ranking" in dirty:
+        plan.offers = order_tariffs(spec, plan.offers)  # the best tariff of a hotel goes first
         plan.selected, plan.explanations = rank(spec, plan.offers)
         plan.bundles = bundles(spec, plan.offers)  # whole-trip options (T7, #13)
         lost = _keep_pick(old, plan) if old.offers else None
@@ -194,12 +202,11 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
     # Invariant: build_timeline reads plan.selected and plan.offers, not the spec (T8, #14).
     # The offer_id of a hotel or a leg carries dates and guests, so the same selected offers
     # mean the same timeline. If the checker starts reading spec fields, rebuild it here.
-    if _chosen(plan) != _chosen(old):
-        if old.timeline:
-            plan.timeline, plan.issues = build_timeline(plan)
-            done.append("timeline")
-        else:
-            plan.timeline, plan.issues = [], []
+    # The timeline is built whenever the selection changed, also for the first plan (#66): the
+    # compare stage shows it before the user says «беру».
+    if _chosen(plan) != _chosen(old) or not plan.timeline:
+        plan.timeline, plan.issues = build_timeline(plan)
+        done.append("timeline")
     new_cart = cart
     if "cart" in dirty and cart.items:
         new_cart = Cart()

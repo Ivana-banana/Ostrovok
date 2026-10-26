@@ -1,10 +1,13 @@
-"""Offer providers (T5, #9): hotels, tariffs, transport, transfers and add-ons for any place.
+"""Offer providers (T5, #9): hotels with 2-4 tariffs, transport, transfers and add-ons.
 
 - Places: the catalogue snapshot (api/catalog.py: centre, IANA zone, price level, distance
   to airport and station). offers_for_place works for any coordinates (TRAP-2); a name
   outside the snapshot goes to the online geocoder, [] when it finds nothing.
 - Hotels: osm_hotels.json (OpenStreetMap snapshot) when it has the city, else synthetic
   hotels around the centre. Every tariff (price, meal, cancellation) is synthetic.
+- Tariffs: every hotel sells 2-4 tariffs (meal RO/BB or BB/HB/AI x free cancellation or not),
+  each its own HotelOffer with its own id, transfers and add-ons. They do not read
+  spec.meal or spec.refundable; the optimizer picks the tariff.
 - Transport: flight, train or car from the great-circle distance, fixed local time slots.
 - Transfers: hub -> hotel after each arrival, hotel -> hub before each return, per hotel.
 - Add-ons: early check-in, late check-out and the night before, per hotel.
@@ -228,77 +231,96 @@ def _default_meal(place: dict, base: dict) -> Meal:
     return "AI" if place["sea"] else "BB"
 
 
+def _meals(place: dict, base: dict) -> list[Meal]:
+    """Two meal plans of a hotel: the default one and the next to it.
+
+    A cheap hotel sells RO and BB. A hotel with HB or AI by default sells BB and that plan.
+    """
+    default = _default_meal(place, base)
+    return ["RO", "BB"] if default in ("RO", "BB") else ["BB", default]
+
+
 def _hotel(
     spec: TripSpec, place: dict, base: dict, now: datetime
-) -> tuple[HotelOffer, list[ExtraOffer]]:
-    """One tariff of one hotel plus its add-ons.
+) -> list[tuple[HotelOffer, list[ExtraOffer]]]:
+    """2-4 tariffs of one hotel (meal x cancellation), each with its add-ons.
 
-    The tariff does not read spec.meal or spec.refundable: the re-plan DAG (api/dag.py)
-    answers those edits by re-ranking the same offers, without a new search.
+    A hotel with a free-cancellation rate that is still open sells both rates for each meal
+    plan; any other hotel sells only the non-refundable one. The tariffs do not read spec.meal or
+    spec.refundable: the re-plan DAG (api/dag.py) answers those edits by re-ranking the
+    same offers, without a new search. The optimizer treats every tariff as its own hotel.
     """
     tz = ZoneInfo(place["tz"])
     date_in, date_out = _dates(spec)
     nights = max(1, (date_out - date_in).days)
     key = base["key"]
-    meal = _default_meal(place, base)
-    # The tariff (price and offer_id) does not depend on the clock; only the cancellation
-    # state does: after the deadline a refundable tariff has no free cancellation left.
-    refundable = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 0.2
+    # A tariff (price and offer_id) does not depend on the clock. The free-cancellation rate
+    # exists only until its deadline: after it the hotel sells the non-refundable rate alone,
+    # so no two tariffs of a hotel share (meal, refundable).
+    refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 0.2
     free_until = None
-    if refundable:
+    if refundable_rate:
         days = (7, 3, 1)[int(_rand(place["name"], key, "deadline") * 3)]
         free_until = datetime.combine(date_in - timedelta(days=days), time(12, 0), tz)
-    cancellation = (
-        Cancellation(refundable=True, free_until=free_until)
-        if free_until and free_until > now
-        else Cancellation(refundable=False)
-    )
+    has_refundable = free_until is not None and free_until > now
     room = place["level"] * STAR_FACTOR[base["stars"]] * _room_factor(spec)
     jitter = _between(0.9, 1.12, place["name"], key, date_in, nights, _guests_tag(spec))
     people = spec.adults + 0.5 * sum(a >= 2 for a in spec.children_ages)
-    meal_night = MEAL_RUB[meal] * place["level"] / 5000 * people
     rooms = [room * _night_factor(date_in + timedelta(days=k)) * jitter for k in range(nights)]
-    tariff = 1.0 if refundable else 0.9
-    offer_id = (
-        f"h-{place['slug']}-{key}-{meal}{'r' if refundable else 'n'}-"
-        f"{date_in:%Y%m%d}-{nights}n-{_guests_tag(spec)}"
-    )
-    hotel = HotelOffer(
-        offer_id=offer_id,
-        title=base["title"],
-        city=place["name"],
-        tz=place["tz"],
-        date_in=date_in,
-        date_out=date_out,
-        adults=spec.adults,
-        children_ages=spec.children_ages,
-        price_rub=_rub((sum(rooms) + meal_night * nights) * tariff),
-        stars=base["stars"],
-        rating=base["rating"],
-        meal=meal,
-        cancellation=cancellation,
-        distance_center_km=base["km"],
-        lat=base["lat"],
-        lon=base["lon"],
-        pets_allowed=base["pets"],
-        amenities=base["amenities"],
-        description=base["note"],
-    )
     night = sum(rooms) / nights
     before = date_in - timedelta(days=1)
-    extras = [
-        (f"{offer_id}-early", f"Ранний заезд с 06:00 — {base['title']}", 0.5 * night),
-        (f"{offer_id}-late", f"Поздний выезд до 18:00 — {base['title']}", 0.4 * night),
-        (
-            f"{offer_id}-prev",
-            f"Ночь накануне, {before:%d.%m} — {base['title']}",
-            (room * _night_factor(before) * jitter + meal_night) * tariff,
-        ),
-    ]
-    return hotel, [
-        ExtraOffer(offer_id=i, title=t, for_offer_id=offer_id, price_rub=_rub(p))
-        for i, t, p in extras
-    ]
+    out = []
+    for meal in _meals(place, base):
+        meal_night = MEAL_RUB[meal] * place["level"] / 5000 * people
+        for refundable in (True, False) if has_refundable else (False,):
+            cancellation = Cancellation(
+                refundable=refundable, free_until=free_until if refundable else None
+            )
+            tariff = 1.0 if refundable else 0.9
+            offer_id = (
+                f"h-{place['slug']}-{key}-{meal}{'r' if refundable else 'n'}-"
+                f"{date_in:%Y%m%d}-{nights}n-{_guests_tag(spec)}"
+            )
+            hotel = HotelOffer(
+                offer_id=offer_id,
+                title=base["title"],
+                city=place["name"],
+                tz=place["tz"],
+                date_in=date_in,
+                date_out=date_out,
+                adults=spec.adults,
+                children_ages=spec.children_ages,
+                price_rub=_rub((sum(rooms) + meal_night * nights) * tariff),
+                stars=base["stars"],
+                rating=base["rating"],
+                meal=meal,
+                cancellation=cancellation,
+                distance_center_km=base["km"],
+                lat=base["lat"],
+                lon=base["lon"],
+                pets_allowed=base["pets"],
+                amenities=base["amenities"],
+                description=base["note"],
+            )
+            extras = [
+                (f"{offer_id}-early", f"Ранний заезд с 06:00 — {base['title']}", 0.5 * night),
+                (f"{offer_id}-late", f"Поздний выезд до 18:00 — {base['title']}", 0.4 * night),
+                (
+                    f"{offer_id}-prev",
+                    f"Ночь накануне, {before:%d.%m} — {base['title']}",
+                    (room * _night_factor(before) * jitter + meal_night) * tariff,
+                ),
+            ]
+            out.append(
+                (
+                    hotel,
+                    [
+                        ExtraOffer(offer_id=i, title=t, for_offer_id=offer_id, price_rub=_rub(p))
+                        for i, t, p in extras
+                    ],
+                )
+            )
+    return out
 
 
 def _flight_hours(km: float) -> float:
@@ -450,7 +472,7 @@ def offers_for_place(
     now = now or datetime.now(UTC)  # only the cancellation state depends on it
     osm = _osm_bases(place)
     bases = osm if len(osm) >= 3 else _synthetic_bases(place)
-    pairs = [_hotel(spec, place, b, now) for b in bases]
+    pairs = [pair for b in bases for pair in _hotel(spec, place, b, now)]
     hotels = [h for h, _ in pairs]
     legs = transport_offers(spec, _complete(origin), place) if origin else []
     transfers = transfer_offers(spec, place, hotels, legs)

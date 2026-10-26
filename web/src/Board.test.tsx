@@ -7,6 +7,9 @@ import { changeValue, localTime } from "./format";
 
 const base = fixture as unknown as ChatReply;
 const noop = () => {};
+// The fixture cart holds only the transfer; the hotel is outside it, so its fixes are hidden.
+const hotelBought = structuredClone(base);
+hotelBought.cart.items = [...base.cart.items, ...base.plan.offers.filter((o) => o.offer_id === "h1")];
 
 function render(r: ChatReply): Document {
   const html = renderToStaticMarkup(
@@ -17,7 +20,7 @@ function render(r: ChatReply): Document {
 
 suite("доска поездки", () => {
   it("TRAP-7: у каждой синтетической цены есть пометка «синтетика»", () => {
-    const doc = render(base);
+    const doc = render(hotelBought);
     const prices = [...doc.querySelectorAll(".price")];
     // hotel, transport, destination, bundle, fix in the issue, cart item + total, voucher item + total
     expect(prices.length).toBeGreaterThanOrEqual(9);
@@ -45,13 +48,37 @@ suite("доска поездки", () => {
     process.env.TZ = "America/New_York";
     try {
       expect(localTime("2026-12-11T07:10:00+03:00")).toBe("11.12 07:10");
-      const text = render(base).querySelector("[aria-label='Таймлайн']")?.textContent ?? "";
+      const text = render(hotelBought).querySelector("[aria-label='Таймлайн']")?.textContent ?? "";
       expect(text).toContain("11.12 07:10");
       expect(text).toContain("прибытие 07:10 раньше заезда 14:00");
       expect(text).toContain("Ранний заезд"); // the fix offer is shown by its offer_id
     } finally {
       process.env.TZ = tz;
     }
+  });
+
+  it("#39: у отеля несколько тарифов — в таблице одна строка, выбранный тариф виден", () => {
+    const r = structuredClone(base);
+    const hotels = r.plan.offers.filter((o) => o.kind === "hotel");
+    const first = hotels[0];
+    if (first.kind !== "hotel") throw new Error("fixture has no hotel");
+    const [low, high] = [
+      { ...first, offer_id: "h-low", meal: "RO" as const, price_rub: 1000 },
+      { ...first, offer_id: "h-high", meal: "AI" as const, price_rub: 2000 },
+    ];
+    const rest = r.plan.offers.filter((o) => o.kind !== "hotel" || o.title !== first.title);
+    r.plan.offers = [low, high, ...rest];
+    const rows = (sel: string[]) => {
+      r.plan.selected = sel;
+      const doc = render(r);
+      return [...doc.querySelectorAll("[aria-label='Сравнение отелей'] tbody tr")].filter((tr) =>
+        tr.textContent?.includes(first.title),
+      );
+    };
+    expect(rows([])).toHaveLength(1); // the first tariff of the hotel is its row
+    expect(rows([])[0].textContent).toContain("без питания");
+    expect(rows(["h-high"])).toHaveLength(1); // the selected tariff is its row
+    expect(rows(["h-high"])[0].textContent).toContain("всё включено");
   });
 
   it("таблица сравнения отелей: не меньше 5 признаков", () => {
@@ -113,5 +140,82 @@ suite("доска поездки", () => {
     const card = doc.querySelector("[aria-label='Направления'] .card");
     expect(card?.textContent).toContain("Казань");
     expect(card?.querySelector("button")?.textContent).toBe("Выбрать");
+  });
+
+  it("таймлайн: события убранной из корзины позиции помечены, после «Вернуть» — обычный вид", () => {
+    const r = structuredClone(base);
+    r.stage = "checkout";
+    r.voucher = null;
+    const full = r.plan.offers.filter((o) => o.offer_id === "t1");
+    r.cart.items = full; // the cart holds t1; h1 was removed but stays in plan.selected
+    r.plan.timeline.push({ at: "2026-12-11T14:00:00+03:00", title: "Заселение", offer_id: "h1" });
+    const items = () => [...render(r).querySelectorAll(".timeline li")];
+    const [arrival, checkin] = items();
+    expect(arrival.textContent).not.toContain("убрано из корзины");
+    expect(checkin.textContent).toContain("Заселение");
+    expect(checkin.textContent).toContain("убрано из корзины");
+    expect(checkin.classList.contains("gone")).toBe(true);
+    // «Вернуть»: the hotel is in the cart again
+    r.cart.items = r.plan.offers.filter((o) => o.offer_id === "t1" || o.offer_id === "h1");
+    for (const li of items()) expect(li.textContent).not.toContain("убрано из корзины");
+  });
+
+  it("таймлайн: после брони помечены события позиций, которых нет в купленной корзине", () => {
+    const r = structuredClone(base); // stage booked
+    r.plan.timeline.push({ at: "2026-12-11T14:00:00+03:00", title: "Заселение", offer_id: "h1" });
+    r.cart.items = r.plan.offers.filter((o) => o.offer_id === "t1"); // only the train was bought
+    const [arrival, checkin] = [...render(r).querySelectorAll(".timeline li")];
+    expect(arrival.textContent).not.toContain("убрано из корзины");
+    expect(checkin.textContent).toContain("убрано из корзины");
+  });
+
+  it("таймлайн: пока корзины нет (assemble), пометок нет", () => {
+    const r = structuredClone(base);
+    r.cart.items = [];
+    const doc = render({ ...r, stage: "assemble", voucher: null });
+    expect(doc.querySelector(".timeline")?.textContent).not.toContain("убрано из корзины");
+  });
+
+  it("таймлайн: доп. услуга убранного отеля не предлагается, услуга имеющегося — да", () => {
+    const r = structuredClone(base);
+    r.stage = "checkout";
+    r.voucher = null;
+    const issue = () => render(r).querySelector("[aria-label='Таймлайн'] .issue");
+    r.cart.items = r.plan.offers.filter((o) => o.offer_id === "t1"); // hotel removed
+    expect(issue()).toBeNull();
+    r.cart.items = r.plan.offers.filter((o) => o.offer_id === "t1" || o.offer_id === "h1");
+    expect(issue()?.textContent).toContain("Ранний заезд");
+    expect(issue()?.querySelector("button")?.textContent).toBe("В корзину");
+  });
+
+  it("S9: приоритеты чипами по порядку; на сравнении есть кнопки правки", () => {
+    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    r.plan.spec.priorities = ["price", "cancellation"];
+    const sec = render(r).querySelector("[aria-label='Приоритеты']");
+    const chips = [...(sec?.querySelectorAll(".chip") ?? [])].map((c) => c.querySelector("span")?.textContent);
+    expect(chips).toEqual(["1. цена", "2. отмена"]);
+    const up = sec?.querySelector("button[aria-label='Поднять приоритет цена']") as HTMLButtonElement;
+    expect(up.disabled).toBe(true); // the first one cannot go up
+    expect(sec?.querySelector("button[aria-label='Опустить приоритет цена']")).not.toBeNull();
+    expect(sec?.querySelector("button[aria-label='Добавить приоритет рейтинг']")).not.toBeNull();
+    expect(sec?.querySelector("button[aria-label='Добавить приоритет цена']")).toBeNull();
+  });
+
+  it("S9: после брони чипы видны, но порядок не правится; пустой список скрыт", () => {
+    const r = structuredClone(base); // stage booked
+    r.plan.spec.priorities = ["price", "cancellation"];
+    const sec = render(r).querySelector("[aria-label='Приоритеты']");
+    expect(sec?.textContent).toContain("отмена");
+    expect(sec?.querySelectorAll("button").length).toBe(0);
+    r.plan.spec.priorities = [];
+    expect(render(r).querySelector("[aria-label='Приоритеты']")).toBeNull();
+  });
+
+  it("S9: приоритеты не заданы на сравнении — подсказка и добавление", () => {
+    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    r.plan.spec.priorities = [];
+    const sec = render(r).querySelector("[aria-label='Приоритеты']");
+    expect(sec?.textContent).toContain("Порядок не задан");
+    expect(sec?.querySelectorAll("button[aria-label^='Добавить']").length).toBe(6);
   });
 });

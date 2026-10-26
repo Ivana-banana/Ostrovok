@@ -202,6 +202,29 @@ suite("приложение", () => {
     expect(calls.at(-1)?.body).toMatchObject({ message: "беру первый" });
   });
 
+  it("выбор транспорта на этапе сравнения — сообщение агенту «возьми рейс N»", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };
+    compare.plan.selected = [];
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: compare });
+    routes["POST /api/chat"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const table = box.querySelector("[aria-label='Сравнение транспорта']");
+    const pick = [...(table?.querySelectorAll("button") ?? [])][0] as HTMLButtonElement;
+    expect(pick.getAttribute("aria-label")).toContain("Выбрать рейс 1");
+    await act(async () => pick.click());
+    await flush();
+    expect(calls.at(-1)?.body).toMatchObject({ message: "возьми рейс 1" });
+  });
+
+  it("выбранный рейс и этап корзины — без кнопки выбора транспорта", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const table = box.querySelector("[aria-label='Сравнение транспорта']");
+    expect(table?.querySelectorAll("button").length).toBe(0);
+  });
+
   it("хранилище браузера бросает ошибку — приложение работает, ответ показан", async () => {
     const boom = () => {
       throw new DOMException("blocked", "SecurityError");
@@ -232,5 +255,35 @@ suite("приложение", () => {
     expect(box.querySelector("[role='alert']")).toBeNull();
     expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
     expect(box.querySelector("[aria-label='Корзина']")?.textContent).not.toContain("Вернуть");
+  });
+
+  it("S9: сдвиг чипа отправляет агенту сообщение с полным порядком приоритетов", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };
+    compare.plan.spec.priorities = ["price", "cancellation"];
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: compare });
+    const after = structuredClone(compare);
+    after.plan.spec.priorities = ["cancellation", "price"];
+    routes["POST /api/chat"] = () => ({ status: 200, body: after });
+    await mount();
+    const down = box.querySelector("button[aria-label='Опустить приоритет цена']") as HTMLButtonElement;
+    await act(async () => down.click());
+    await flush();
+    expect(calls.at(-1)).toMatchObject({
+      key: "POST /api/chat",
+      body: { session_id: "s1", message: "Мои приоритеты по важности: отмена, цена." },
+    });
+    const chips = [...box.querySelectorAll("[aria-label='Приоритеты'] .chip span")].map((c) => c.textContent);
+    expect(chips).toEqual(["1. отмена", "2. цена"]);
+  });
+
+  it("подвал: атрибуция OpenStreetMap (ODbL) видна и без поездки", async () => {
+    await mount();
+    const foot = box.querySelector("footer[aria-label='Источники данных']");
+    expect(foot?.textContent).toContain("© участники OpenStreetMap");
+    const link = foot?.querySelector("a") as HTMLAnchorElement;
+    expect(link.textContent).toBe("ODbL");
+    expect(link.href).toBe("https://www.openstreetmap.org/copyright");
+    expect(foot?.textContent).toContain("синтетические");
   });
 });
