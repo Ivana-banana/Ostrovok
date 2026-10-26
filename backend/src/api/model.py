@@ -21,12 +21,12 @@ from api.fixtures import (
     build_timeline,
     extract,
     fill_cart,
-    find_offers,
     future_date,
     plan_changes,
     rank,
     suggest_destinations,
 )
+from api.offers import find_offers
 from api.store import SessionStore
 
 DEFAULT_NIGHTS = 7

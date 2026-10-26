@@ -6,26 +6,23 @@ without a source; the reply labels them as an estimate.
 """
 
 import re
-from datetime import UTC, date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 from api.contracts import (
-    Cancellation,
     Cart,
     Change,
     Destination,
     Explanation,
-    HotelOffer,
     Offer,
     Plan,
     TimelineEvent,
     TimelineIssue,
-    TransportOffer,
     TripSpec,
     Voucher,
 )
 from api.guards import MONTHS, check_arrival_vs_checkin, rule_extract
-
-ORIGIN_TZ = timezone(timedelta(hours=3))  # Moscow; the only origin in the fixture
+from api.offers import find_offers
 
 # TODO(T12, #20): climate from Open-Meteo and travel hours from the catalogue (T4, #8).
 # name -> slug, country, lat, lon, IANA tz, UTC offset, stems, sea, hours from Moscow,
@@ -137,83 +134,6 @@ def extract(text: str) -> tuple[dict, list[str]]:
     return found, notes
 
 
-def _guests(spec: TripSpec) -> int:
-    return spec.adults + len(spec.children_ages)
-
-
-def _hotels(spec: TripSpec, name: str) -> list[HotelOffer]:
-    c = CATALOG[name]
-    tz = timezone(timedelta(hours=c["utc"]))
-    night = c["night"] * (spec.adults + 0.5 * len(spec.children_ages)) / 2
-    tiers = [  # suffix, title, price factor, stars, rating, meal, refundable, km to centre
-        ("eco", "Эконом", 0.75, 3, 7.9, "RO", False, 3.5),
-        ("cmf", "Комфорт", 1.0, 4, 8.6, "BB", True, 1.2),
-        ("fam", "Семейный", 1.6, 5, 9.1, "AI" if c["sea"] else "HB", True, 0.4),
-    ]
-    out = []
-    for i, (suf, title, k, stars, rating, meal, refundable, km) in enumerate(tiers):
-        free_until = datetime.combine(spec.date_from - timedelta(days=3), time(12, 0), tz)
-        out.append(
-            HotelOffer(
-                offer_id=f"h-{c['slug']}-{suf}-{spec.date_from:%Y%m%d}-{spec.nights}",
-                title=f"Отель «{title}», {name}",
-                city=name,
-                tz=c["tz"],
-                date_in=spec.date_from,
-                date_out=spec.date_to,
-                adults=spec.adults,
-                children_ages=spec.children_ages,
-                price_rub=int(round(night * k * spec.nights, -2)),
-                stars=stars,
-                rating=rating,
-                meal=meal,
-                cancellation=Cancellation(
-                    refundable=refundable, free_until=free_until if refundable else None
-                ),
-                distance_center_km=km,
-                lat=c["lat"] + 0.01 * i,
-                lon=c["lon"] + 0.01 * i,
-                pets_allowed=i == 1,
-            )
-        )
-    return out
-
-
-def _flight(spec: TripSpec, name: str, back: bool, day: date, hh: int, k: float) -> TransportOffer:
-    c = CATALOG[name]
-    dest_tz = timezone(timedelta(hours=c["utc"]))
-    from_tz, to_tz = (dest_tz, ORIGIN_TZ) if back else (ORIGIN_TZ, dest_tz)
-    depart = datetime.combine(day, time(hh, 0), from_tz)
-    origin, dest = (name, spec.origin) if back else (spec.origin, name)
-    return TransportOffer(
-        offer_id=f"t-{c['slug']}-{'back' if back else 'out'}-{day:%Y%m%d}-{hh:02d}",
-        title=f"Перелёт {origin} → {dest}, {depart:%d.%m %H:%M}",
-        mode="flight",
-        origin=origin,
-        destination=dest,
-        depart_at=depart,
-        arrive_at=(depart + timedelta(hours=c["hours"])).astimezone(to_tz),
-        price_rub=int(round(c["hours"] * 4200 * k, -2)) * _guests(spec),
-    )
-
-
-def find_offers(spec: TripSpec, name: str) -> list[Offer]:
-    """Hotels and flights for one destination and the spec dates.
-
-    TODO(T5, #9): replace with providers (OSM hotels + synthetic tariffs, transport, transfers).
-    """
-    if name not in CATALOG:  # TODO(T4, #8): geocoder for cities outside the snapshot
-        return []
-    offers: list[Offer] = list(_hotels(spec, name))
-    if spec.origin and spec.origin != name:
-        offers += [
-            _flight(spec, name, False, spec.date_from, 6, 0.85),
-            _flight(spec, name, False, spec.date_from, 13, 1.0),
-            _flight(spec, name, True, spec.date_to, 15, 1.0),
-        ]
-    return offers
-
-
 def _min_price(offers: list[Offer], pred) -> int:
     return min((o.price_rub for o in offers if pred(o)), default=0)
 
@@ -320,7 +240,7 @@ def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]
                 TimelineEvent(at=o.arrive_at, title=f"Прилёт: {o.destination}", offer_id=o.offer_id)
             )
     if hotel:
-        tz = timezone(timedelta(hours=CATALOG[hotel.city]["utc"]))
+        tz = ZoneInfo(hotel.tz)  # the hotel may be outside CATALOG (T5, #9)
         check_in = datetime.combine(hotel.date_in, hotel.check_in, tz)
         events.append(
             TimelineEvent(at=check_in, title=f"Заселение: {hotel.title}", offer_id=hotel.offer_id)

@@ -1,0 +1,62 @@
+{
+ "_source": "© участники OpenStreetMap, ODbL 1.0 (https://www.openstreetmap.org/copyright). Overpass API, данные на 2026-10-26T16:29:00Z: tourism=hotel в 4 км от центра; оставлены теги name, name:ru, stars, wheelchair. Цены, питание и отмена к этим объектам — синтетика.",
+ "places": {
+  "Казань": [
+   {
+    "type": "node",
+    "id": 702352946,
+    "lat": 55.793839,
+    "lon": 49.149547,
+    "tags": {
+     "name": "Корстон",
+     "name:ru": "Корстон",
+     "stars": "5"
+    }
+   },
+   {
+    "type": "node",
+    "id": 702352432,
+    "lat": 55.787819,
+    "lon": 49.119586,
+    "tags": {
+     "name": "Шаляпин Палас Отель",
+     "stars": "4"
+    }
+   },
+   {
+    "type": "node",
+    "id": 4026238730,
+    "lat": 55.791823,
+    "lon": 49.109652,
+    "tags": {
+     "name": "DoubleTree",
+     "stars": "4",
+     "wheelchair": "yes"
+    }
+   },
+   {
+    "type": "node",
+    "id": 7875144951,
+    "lat": 55.790563,
+    "lon": 49.113402,
+    "tags": {
+     "name": "Островский",
+     "name:ru": "Островский",
+     "stars": "3"
+    }
+   },
+   {
+    "type": "node",
+    "id": 8342005126,
+    "lat": 55.78966,
+    "lon": 49.106713,
+    "tags": {
+     "name": "Kazantel",
+     "name:ru": "Казантель",
+     "stars": "2",
+     "wheelchair": "no"
+    }
+   }
+  ]
+ }
+}
