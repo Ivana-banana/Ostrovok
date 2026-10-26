@@ -658,6 +658,7 @@ COUNTRY_ALIASES = {
     "Нидерланды": ["голландия"],
     "ЮАР": ["южная африка"],
     "Чехия": ["чехию"],
+    "Египет": ["египт"],  # a fleeting vowel: «в Египте», «из Египта»
 }
 # Russian places without a passenger railway to the rest of the network (team list).
 NO_RAIL = {"Петропавловск-Камчатский", "Южно-Сахалинск", "Магадан", "Якутск", "Норильск",
