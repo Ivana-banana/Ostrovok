@@ -473,3 +473,71 @@ def test_trap3_city_note_goes_away_when_a_city_is_stated_later():
     r = step(second, "s", "Лучше Казань")
     assert r.plan.spec.destinations == ["Казань"]
     assert not any("каталоге" in a for a in r.plan.spec.assumptions)
+
+
+# --- #73: replanning verbs and common nouns are not a first-word city (TRAP-3) ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сдвинь на 3 дня",
+        "Перенеси на 2 дня позже",
+        "Поменяй на 4 дня",
+        "Замени на 3 дня",
+        "Добавь на 2 дня",
+        "Убери на 1 день",
+        "Отдых в ноябре",
+        "Поездка в декабре",
+        "Отпуск в мае",
+        "Тур в июне",
+        "Море в ноябре",
+        "Давай на 5 дней",
+        "Покажи в мае",
+    ],
+)
+def test_trap3_verb_or_common_noun_at_the_start_is_not_a_city(text):
+    assert "destinations" not in extract(text)[0]
+
+
+@pytest.mark.parametrize("word", ["Сдвинь", "Перенеси", "Отдых"])
+def test_trap3_verb_at_the_start_gives_no_unknown_destination_reply(word):
+    r = step(None, "s", f"{word} на 3 дня")
+    assert r.plan.spec.destinations == []
+
+
+def test_trap3_rebuild_verb_after_inspiration_keeps_no_fake_city():
+    first = step(None, "s", "Отдых в ноябре")
+    assert first.plan.spec.destinations == []
+
+
+@pytest.mark.parametrize(
+    "text, city",
+    [
+        ("Иркутск на неделю в декабре", "Иркутск"),
+        ("Калининград в мае", "Калининград"),
+        ("Мурманск, северное сияние", "Мурманск"),
+        ("Ухта, 3 ночи", "Ухта"),
+        ("Калуга в мае", "Калуга"),
+    ],
+)
+def test_trap3_real_first_word_city_survives_the_veto(text, city):
+    assert extract(text)[0]["destinations"] == [city]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Владимир! Хочу на море в ноябре",
+        "Владимир!  Подбери отель на море",
+        "Владимир! Привет, нужен отель",
+    ],
+)
+@pytest.mark.parametrize("has_destination", [False, True])
+def test_trap3_name_with_exclamation_is_an_address(text, has_destination):
+    assert "destinations" not in extract(text, has_destination)[0]
+
+
+@pytest.mark.parametrize("text", ["Владимир! 3 ночи", "Владимир на неделю"])
+def test_trap3_vladimir_without_a_request_verb_is_still_the_city(text):
+    assert extract(text)[0]["destinations"] == ["Владимир"]
