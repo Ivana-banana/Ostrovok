@@ -117,3 +117,31 @@ def test_trap_2_explicit_pick_is_said_in_the_reply(store):
     assert "Кандалакша" in picked.reply and name in picked.reply
     hotels = [o for o in picked.plan.offers if isinstance(o, HotelOffer)]
     assert hotels and all(h.city == name for h in hotels)
+
+
+NO_DEST = "направление: не названо — если имели в виду город, напишите «в <город>»"
+
+
+def test_trap_2_vetoed_first_word_gives_neutral_line_in_inspire(store):
+    """#109: «Мамой на 3 дня» is no city; the reply says so without quoting the word."""
+    r = say(store, "Мамой на 3 дня, в мае, бюджет 100 тысяч")
+    assert r.stage == "inspire" and r.plan.spec.destinations == []
+    assert NO_DEST in r.reply and "«Мамой»" not in r.reply
+
+
+def test_trap_2_ordinary_phrase_is_not_quoted(store):
+    r = say(store, "Хочу на 3 дня в мае, бюджет 100 тысяч")
+    assert "«Хочу»" not in r.reply and "Не нашёл направление" not in r.reply
+
+
+def test_trap_2_named_town_has_no_neutral_line(store):
+    assert NO_DEST not in extract("Тихвин на 3 дня в мае")[1]
+    assert extract("Тихвин на 3 дня в мае")[0]["destinations"] == ["Тихвин"]
+
+
+def test_trap_2_neutral_line_goes_when_destination_is_chosen(store):
+    r = say(store, "Мамой на 3 дня, в мае, бюджет 100 тысяч")
+    assert NO_DEST in r.plan.spec.assumptions
+    picked = say(store, "1", r.session_id)
+    assert picked.plan.spec.destinations
+    assert not any(a.startswith("направление: не названо") for a in picked.plan.spec.assumptions)
