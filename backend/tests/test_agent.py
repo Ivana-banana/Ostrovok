@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.contracts import ChatRequest
-from api.fixtures import extract
+from api.extract import extract
 from api.main import app, get_store
 from api.model import chat
 from api.store import SessionStore
