@@ -59,7 +59,7 @@ NOT_CITY_START = re.compile(
     r"|нельз|будем|будет|как\b|что\b|где\b|куд|когд|сколько|есть\b|если\b|для\b|мне\b|нам\b"
     r"|мы\b|ну\b|вот\b|так\b|или\b|тепл|хорош|нормал|красив|дешев|дорог|быстр|скоро|срочно"
     r"|лучш|любо|какой|какая|какое|зим|весн|осен|друз|компан|сем[ьъ]|одн|вмест"
-    r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее)"
+    r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят)"
 )  # fmt: skip
 # Not a city by its ending: verbs («Планируем», «Ищете»), adjectives («Тёплое»), infinitives.
 NOT_CITY_END = re.compile(r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ой|ая|яя|ое|ее|ые|ие)$")
@@ -67,14 +67,17 @@ CASES = "(?:а|у|е|ом|ем|ой|ы|и|ю|я|ь|ею|ам|ах|ами)"
 CASES_SHORT = "(?:а|у|е|ы)"  # «Рим», «Вена»: a longer ending would make a common word
 # Short stems that are ordinary words in these forms: «мала ли комната» is not «Мале».
 NOT_SHORT_FORMS = {"мала", "малы", "бака"}
-# A city that is also a person name: «Владимир, хочу на море» is an address, not the city.
+# A city that is also a person name (checked against all places.json; update it when the
+# catalogue grows): «Владимир, хочу на море» is an address, not the city.
 # Only a request verb after the comma makes it an address: «Владимир, 3 ночи» is the city.
 PERSON_CITIES = {"Владимир"}
 ADDRESS_NEXT = re.compile(
-    r"\s*,\s*(?:хоч|хот|подскаж|помог|подбер|найд|посовет|скаж|слуш|мне\b|нам\b|мы\b|ищ|нуж)"
+    r"\s*,\s*(?:хоч|хот|подскаж|помог|подбер|найд|посовет|скаж|слуш|мне\b|нам\b|мы\b|ищ|нуж"
+    r"|добр|привет|здравств)"
 )
-# A length right after an unknown first word in a plan: «Ухта, 3 ночи», «Ухта на 3 дня».
-LENGTH_NEXT = re.compile(r"\s*,\s*\d+\s*(?:ноч|дн|недел)|\s+на\s+\d+\s*(?:ноч|дн|недел)")
+# A length after a comma behind an unknown first word in a plan: «Ухта, 3 ночи». The form
+# «<word> на 3 дня» is a rebuild command («Перенеси на 2 дня позже»), never a note.
+LENGTH_NEXT = re.compile(r"\s*,\s*\d+\s*(?:ноч|дн|недел)")
 CHILD_RE = re.compile(
     rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*)"
 )
@@ -242,7 +245,7 @@ def _capital(text: str, pos: int) -> str | None:
 def _nominative(word: str) -> str:
     """Unknown names: «Грузию» -> «Грузия», «Иркутске» -> «Иркутск», «Аляске» -> «Аляска»."""
     word = re.sub(r"и[ию]$", "ия", word)
-    if re.search(r"[аеёиоуыэюя](?:ск|цк|зк)[еу]$", word):
+    if re.search(r"[аеёиоуыэюя]ск[еу]$", word):
         return word[:-1] + "а"  # «Аляске» -> «Аляска»; «Иркутске» has a consonant before «ск»
     return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
 

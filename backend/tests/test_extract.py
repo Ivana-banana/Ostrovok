@@ -387,6 +387,33 @@ def test_trap3_masculine_cities_in_sk_still_lose_their_ending(text, city):
     assert extract(text)[0]["destinations"] == [city]
 
 
+@pytest.mark.parametrize(
+    "word, city",
+    [
+        ("Новокузнецке", "Новокузнецк"),
+        ("Донецке", "Донецк"),
+        ("Полоцке", "Полоцк"),
+        ("Норильске", "Норильск"),
+        ("Брянске", "Брянск"),
+        ("Аляске", "Аляска"),
+    ],
+)
+def test_trap3_unknown_city_outside_the_catalogue_gets_the_right_nominative(word, city):
+    assert extract(f"Хочу в {word} на неделю")[0]["destinations"] == [city]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Владимир, добрый день, хочу на море",
+        "Владимир, привет! Хочу на море",
+        "Владимир, здравствуйте, хочу в ноябре на море",
+    ],
+)
+def test_trap3_name_with_a_greeting_is_an_address(text):
+    assert "destinations" not in extract(text)[0]
+
+
 @pytest.mark.parametrize("has_destination", [False, True])
 def test_trap3_name_with_comma_is_an_address_not_the_city_vladimir(has_destination):
     found, _ = extract("Владимир, хочу на море в ноябре", has_destination)
@@ -406,7 +433,7 @@ def test_trap3_vladimir_as_a_city_still_works(text):
     assert extract(text)[0]["destinations"] == ["Владимир"]
 
 
-@pytest.mark.parametrize("text", ["Ухта, 3 ночи", "Выборг, 3 ночи", "Ухта на 3 дня"])
+@pytest.mark.parametrize("text", ["Ухта, 3 ночи", "Выборг, 3 ночи"])
 def test_trap3_unknown_city_in_a_plan_gets_an_honest_note(text):
     found, notes = extract(text, has_destination=True)
     assert "destinations" not in found
@@ -414,8 +441,14 @@ def test_trap3_unknown_city_in_a_plan_gets_an_honest_note(text):
 
 
 @pytest.mark.parametrize(
-    "text", ["Бюджет, 50 тысяч", "Работа в декабре", "Взрослых, 3", "Отпуск, 3 ночи"]
-)
+    "text",
+    [
+        "Бюджет, 50 тысяч", "Работа в декабре", "Взрослых, 3", "Отпуск, 3 ночи",
+        "Перенеси на 2 дня позже", "Сократи на 2 ночи", "Продли на 2 дня", "Поменяй на 3 ночи",
+        "Только на 3 ночи", "Тогда на 3 ночи", "Номер на 3 ночи", "Отложи на 2 недели",
+        "Окей, 3 ночи", "Ок, 3 ночи", "Ухта на 3 дня", "Поездка на 5 дней",
+    ],
+)  # fmt: skip
 def test_trap3_ordinary_first_word_in_a_plan_gets_no_city_note(text):
     assert not any("каталоге" in n for n in extract(text, has_destination=True)[1])
 
