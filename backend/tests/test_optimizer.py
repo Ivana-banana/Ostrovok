@@ -617,28 +617,46 @@ def test_trade_off_names_the_priority_only_when_the_first_option_wins_on_it():
     assert "плата за приоритет «отмена»" in " ".join(first.tradeoffs)
 
 
-def test_cheap_in_wishes_without_priorities_acts_like_price_first():
-    """#53: «недорого» only in wishes keeps the overnight train, as priorities [price] does."""
+def _ural():
     day = date(2026, 12, 11)
-    base = TripSpec(
+    s = TripSpec(
         origin="Москва",
         destinations=["Екатеринбург"],
         date_from=day,
         date_to=day + timedelta(days=2),
         nights=2,
     )
-    items = find_offers(base, "Екатеринбург")
-    by_id = {o.offer_id: o for o in items}
+    items = find_offers(s, "Екатеринбург")
+    return s, items, {o.offer_id: o for o in items}
+
+
+def test_cheap_in_wishes_keeps_the_long_train_down_and_a_price_priority_lifts_it():
+    """#53, D-009: «недорого» is a wish; only an explicit price priority sends the user by train."""
+    base, items, by_id = _ural()
 
     def modes(s):
         return {by_id[i].mode for i in rank(s, items)[0] if by_id[i].kind == "transport"}
 
-    assert modes(base) == {"flight"}  # no preference: the long train does not go first
-    by_priority = base.model_copy(update={"priorities": ["price"]})
-    by_wish = base.model_copy(update={"wishes": ["недорого"]})
-    assert modes(by_priority) == {"train"}
-    assert modes(by_wish) == modes(by_priority)
-    assert rank(by_wish, items)[0] == rank(by_priority, items)[0]
+    assert any(o.kind == "transport" and o.mode == "flight" for o in items)
+    assert modes(base.model_copy(update={"wishes": ["недорого"]})) == {"flight"}
+    assert modes(base.model_copy(update={"priorities": ["price"]})) == {"train"}
+
+
+def test_why_for_cheap_wish_names_the_cheaper_option_with_its_road_hours():
+    """#53: not «важнее всего цена» when the first package is not the cheapest (TRAP-4)."""
+    s, items, _ = _ural()
+    s = s.model_copy(update={"wishes": ["недорого"]})
+    why = rank(s, items)[1][0].why
+    assert "важнее всего цена" not in why
+    assert "цена важна («недорого»), самый дешёвый вариант ниже: дорога " in why
+    trains = [o for o in items if o.kind == "transport" and o.mode == "train"]
+    hours = {f"{round((o.arrive_at - o.depart_at).total_seconds() / 3600, 1):g} ч" for o in trains}
+    assert any(why.endswith(f"дорога {h}") for h in hours)
+
+
+def test_why_for_cheap_wish_keeps_the_old_text_when_the_first_package_is_the_cheapest():
+    first = rank(spec(wishes=["недорого"]), offers([hotel("a", 10_000)], FLIGHTS))[1][0]
+    assert first.why.endswith("важнее всего цена («недорого»)")
 
 
 def test_slow_leg_line_gives_the_hours_of_the_leg_that_made_it_slow():

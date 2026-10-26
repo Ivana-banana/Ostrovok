@@ -171,17 +171,14 @@ def _diff(d: int) -> str:
     return f"дороже на {_rub(d)}" if d > 0 else f"дешевле на {_rub(-d)}" if d else "по той же цене"
 
 
-def _order(spec: TripSpec) -> list[Priority]:
-    """The priorities of the user; «недорого» in wishes without priorities means [price]."""
+def weights(spec: TripSpec) -> dict[Priority, float]:
+    """Order -> weights: the i-th priority weighs 1/(i+1), the rest keep half the default.
+
+    «недорого» in wishes without priorities gives the price weights; it is not a named priority.
+    """
     order = list(dict.fromkeys(spec.priorities))
     if not order and "недорого" in spec.wishes:
         order = ["price"]
-    return order
-
-
-def weights(spec: TripSpec) -> dict[Priority, float]:
-    """Order -> weights: the i-th priority weighs 1/(i+1), the rest keep half the default."""
-    order = _order(spec)
     if not order:
         return dict(DEFAULT_WEIGHTS)
     w = {c: DEFAULT_WEIGHTS[c] / 2 for c in CRITERIA}
@@ -281,9 +278,9 @@ def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
     if any(t.over == 0 for t in pool):
         pool = [t for t in pool if t.over == 0]
     _score(pool, weights(spec))
-    # The price weight must not send the user on a long train when a faster trip exists; a user
-    # who put the price first has chosen.
-    demote = _order(spec)[:1] != ["price"] and any(not t.slow for t in pool)
+    # The price weight must not send the user on a long train when a faster trip exists; only a
+    # user who named the price first has chosen. «недорого» in wishes does not lift it (D-009).
+    demote = spec.priorities[:1] != ["price"] and any(not t.slow for t in pool)
     if any(t.over for t in pool):
         # nothing fits the budget: smallest overrun
         pool.sort(key=lambda t: (t.over, demote and t.slow, *t.key))
@@ -347,7 +344,7 @@ def _versus(t: Trip, best: Trip) -> list[str]:
     return out + [f"нарушает: {r}" for r in t.rules]
 
 
-def _hotel_why(spec: TripSpec, t: Trip) -> str:
+def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
     h = t.hotel
     facts = [f"{h.stars}★"] if h.stars else []
     if h.rating is not None:
@@ -369,7 +366,13 @@ def _hotel_why(spec: TripSpec, t: Trip) -> str:
     if order:
         why += "; ваш порядок важности: " + " → ".join(PRIORITY_TEXT[p] for p in order)
     elif "недорого" in spec.wishes:
-        why += "; важнее всего цена («недорого»)"
+        cheapest = min(pool, key=lambda x: (x.total, x.key))
+        if cheapest.total >= t.total:
+            why += "; важнее всего цена («недорого»)"
+        else:
+            why += "; цена важна («недорого»), самый дешёвый вариант ниже"
+            if cheapest.legs:
+                why += f": дорога {_h(max(_leg_hours(x) for x in cheapest.legs))}"
     return why
 
 
@@ -498,7 +501,7 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
     explanations = [
         Explanation(
             offer_id=best.hotel.offer_id,
-            why=_hotel_why(spec, best),
+            why=_hotel_why(spec, best, pool),
             tradeoffs=sacrificed,
             risks=_risks(spec, best, fits, trips),
         )
