@@ -101,7 +101,10 @@ def check_S3(case: dict) -> tuple[bool, str]:
     Rule mode: llm=False, the UI adds «упрощённый режим без ИИ» (web/src/format.ts).
     A2 equals A1 until the LLM client exists (T11, #19): the key is not read yet.
     """
-    exact, vague = re.findall(r"«([^»]+)»", case["input"])
+    quotes = re.findall(r"«([^»]+)»", case["input"])
+    if len(quotes) != 2:
+        return False, f"ожидал 2 запроса в «», нашёл {len(quotes)}: формат input изменился"
+    exact, vague = quotes
     store = _store()
     app.dependency_overrides[get_store] = lambda: store
     saved = os.environ.get("LLM_API_KEY")

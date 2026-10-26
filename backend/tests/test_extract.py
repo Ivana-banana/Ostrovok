@@ -21,7 +21,8 @@ def test_s3a_exact_request_parses_every_field():
     found, notes = extract(S3A)
     assert found["destinations"] == ["Сочи"] and md(found["date_from"]) == (11, 20)
     assert found["nights"] == 3 and found["adults"] == 2
-    assert found["budget_rub"] == 40_000 and found["meal"] == "BB" and notes == []
+    assert found["budget_rub"] == 40_000 and found["meal"] == "BB"
+    assert notes == ["бюджет: 40 000 ₽ на всю поездку (сказано про отель)"]
 
 
 def test_s6_day_range_gives_dates_and_nights():
@@ -162,6 +163,45 @@ def test_s3b_vague_request_goes_ahead_and_names_assumptions(tmp_path):
 def test_s3a_chat_asks_nothing_and_compares(tmp_path):
     r = chat(ChatRequest(message=S3A), SessionStore(tmp_path / "s.db"))
     assert r.stage == "compare" and r.questions == []
-    assert not any(
-        a.startswith(("даты:", "длительность:", "бюджет:")) for a in r.plan.spec.assumptions
-    )
+    assert not any(a.startswith(("даты:", "длительность:")) for a in r.plan.spec.assumptions)
+    assert "сказано про отель" in r.reply
+
+
+def test_march_is_not_may():
+    found, _ = extract("Сочи с 10 по 15 марта, двое")
+    assert md(found["date_from"]) == (3, 10) and md(found["date_to"]) == (3, 15)
+
+
+def test_lower_floor_is_not_nizhny_novgorod():
+    found, _ = extract("номер на нижнем этаже, маме тяжело ходить, Сочи")
+    assert found["destinations"] == ["Сочи"]
+
+
+def test_trip_word_is_not_a_train():
+    assert "modes" not in extract("Поездка в Сочи в ноябре")[0]
+
+
+def test_negated_mode_is_dropped():
+    assert extract("не хочу лететь, только поезд")[0]["modes"] == ["train"]
+
+
+def test_centre_is_location_not_price():
+    found, _ = extract("Отель в центре Анталии, важно чтобы был завтрак")
+    assert found["priorities"] == ["location", "meal"]
+
+
+def test_no_priority_named_keeps_old_priorities():
+    assert "priorities" not in extract("не важно")[0]
+
+
+@pytest.mark.parametrize(
+    "text,days",
+    [("Казань через 3 дня, двое", 3), ("Казань на следующей неделе, двое", None)],
+)
+def test_start_offset_is_not_a_duration(text, days):
+    found, notes = extract(text)
+    assert "nights" not in found and found["date_from"] > date.today()
+    if days:
+        assert found["date_from"] == date.today() + timedelta(days=days)
+    else:
+        assert found["date_from"].weekday() == 0 and any(n.startswith("даты:") for n in notes)

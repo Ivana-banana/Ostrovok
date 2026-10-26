@@ -31,7 +31,7 @@ NUM = rf"(\d{{1,2}}|{'|'.join(NUMS)})"
 TOGETHER = {"вдвоем": 2, "втроем": 3, "вчетвером": 4, "впятером": 5}
 # Places outside the fixture catalogue; T4 (#8) resolves them with the geocoder (TRAP-2).
 PLACES = {
-    "Москва": "москв", "Нижний Новгород": "нижн", "Тбилиси": "тбилис", "Батуми": "батум",
+    "Москва": "москв", "Нижний Новгород": r"нижн\w*\s+новгород", "Тбилиси": "тбилис", "Батуми": "батум",
     "Грузия": "грузи", "Стамбул": "стамбул", "Екатеринбург": "екатеринбург",
     "Кисловодск": "кисловодск", "Пятигорск": "пятигорск", "Алтай": "алта[йяе]",
     "Байкал": "байкал", "Карелия": "карели", "Мурманск": "мурманск", "Абхазия": "абхази",
@@ -43,6 +43,8 @@ PLACES = {
 PLACE_RES = [
     (name, re.compile(rf"\b(?:{'|'.join(c['stems'])})\w*")) for name, c in CATALOG.items()
 ] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
+# Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not.
+CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)"))]
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск"}
 CHILD_RE = re.compile(
     rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*)"
@@ -64,9 +66,9 @@ MEALS = [
     (r"завтрак", "BB"),
 ]
 MODES = [
-    ("train", r"поезд|\bж/?д\b|сапсан|ласточк"),
+    ("train", r"\bпоезд(?!к)|\bж/?д\b|сапсан|ласточк"),
     ("car", r"\bна\s+(?:сво\w+\s+)?(?:машин|авто)"),
-    ("flight", r"(?<!без )(?<!не )\b(?:самол[её]т|летим|лететь|полетим|рейс)"),
+    ("flight", r"\b(?:самол[её]т|летим|лететь|полетим|рейс)"),
 ]
 WISHES = [
     ("море", r"\bмор[еяю]\b|\bморск|пляж|купат"),
@@ -84,7 +86,7 @@ WISHES = [
 PRIORITY_RE = re.compile(r"\b(?:важн\w*|главн\w*|приоритет\w*|в первую очередь|прежде всего)")
 PRIORITIES = [
     ("cancellation", r"отмен|возврат"),
-    ("price", r"\bцен|деш[её]в|недорог|стоимост"),
+    ("price", r"\bцен(?!тр)|деш[её]в|недорог|стоимост"),
     ("meal", r"питани|завтрак|вс[её]\s+включ"),
     ("location", r"центр|располож|\bрядом|\bблиз"),
     ("travel_time", r"в\s+пути|перел[её]т|переезд|\bдорог[аеу]\b"),
@@ -93,21 +95,23 @@ PRIORITIES = [
 
 
 def _month(word: str) -> int:
-    return 5 if word.startswith("ма") else next(n for s, n in MONTHS.items() if word.startswith(s))
+    return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»
 
 
 def _num(word: str) -> int:
     return int(word) if word.isdigit() else NUMS[word]
 
 
-def _place_at(t: str, pos: int) -> str | None:
-    return next((name for name, rx in PLACE_RES if rx.match(t, pos)), None)
+def _place_at(text: str, t: str, pos: int) -> str | None:
+    return next((name for name, rx in PLACE_RES if rx.match(t, pos)), None) or next(
+        (name for name, rx in CAPITAL_PLACES if rx.match(text, pos)), None
+    )
 
 
 def _places(text: str, t: str, found: dict) -> None:
     """Origin after «из/от», then destinations in text order: known places and capitalized names."""
     for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
-        if name := _place_at(t, m.end()) or _capital(text, m.end()):
+        if name := _place_at(text, t, m.end()) or _capital(text, m.end()):
             break
     else:
         m = None
@@ -117,12 +121,13 @@ def _places(text: str, t: str, found: dict) -> None:
         end = len(t) if end < 0 else end
         t = t[: m.start()] + " " * (end - m.start()) + t[end:]  # the origin is not a destination
     hits = [(m.start(), name) for name, rx in PLACE_RES for m in rx.finditer(t)]
+    hits += [(m.start(), name) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
     for m in re.finditer(r"(?:^|[\s,(])(?:[вВ]о?|[нН]а)\s+(?=[А-ЯЁ])", text):
-        free = t[m.end()] != " " and not _place_at(t, m.end())  # " ": the origin span
+        free = t[m.end()] != " " and not _place_at(text, t, m.end())  # " ": the origin span
         if free and (name := _capital(text, m.end())):
             hits.append((m.end(), name))
     first = r"^\s*([А-ЯЁ][а-яё-]+)(?=\s*,\s*\d|\s+(?:во?\s+" + MONTH + r"|[сн]а?\s+\d))"
-    if (m := re.match(first, text)) and not _place_at(t, m.start(1)):
+    if (m := re.match(first, text)) and not _place_at(text, t, m.start(1)):
         hits.append((m.start(1), m.group(1)))
     dests = []
     for _, name in sorted(hits):
@@ -161,9 +166,19 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
     elif m := re.search(rf"\b{d}\s+{MONTH}", t):
         (d1, m1), d2, m2 = m.groups(), None, None
     else:
+        today = date.today()
         if m := re.search(r"\b(сегодня|завтра|послезавтра)\b", t):
             days = {"сегодня": 0, "завтра": 1, "послезавтра": 2}[m.group(1)]
-            found["date_from"] = date.today() + timedelta(days=days)
+            found["date_from"] = today + timedelta(days=days)
+        elif m := re.search(rf"\bчерез\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)", t):
+            n = _num(m.group(1)) if m.group(1) else 1
+            found["date_from"] = today + timedelta(
+                days=n * (7 if m.group(2).startswith("нед") else 1)
+            )
+        elif re.search(r"\bследующ\w*\s+недел", t):
+            found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
+            notes.append(f"даты: с понедельника {found['date_from']:%d.%m} («на следующей неделе»)")
+        if "date_from" in found:
             found["month"] = found["date_from"].month
         return
     said = (two or one or m).group(0)
@@ -190,6 +205,8 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
     """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на выходные» (пятница–воскресенье)."""
     if "nights" in found:
         return
+    starts = rf"\bчерез\s+(?:{NUM}\s*)?(?:дн\w*|день|недел\w*)|\bследующ\w*\s+недел\w*"
+    t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(rf"\b{NUM}\s*ноч\w*", t):
         n = _num(m.group(1))
         if n >= 1:
@@ -237,11 +254,16 @@ def _people(t: str, found: dict, notes: list[str]) -> None:
         found["adults"] = max(total - len(ages), 1)
 
 
-def _budget(t: str) -> int | None:
+def _budget(t: str, found: dict, notes: list[str]) -> None:
+    """The first sum in the message; said about the hotel, it still counts for the whole trip."""
     for pattern, k in BUDGET_RES:
         if m := re.search(pattern, t):
-            return int(float(m.group(1).replace(" ", "").replace(",", ".")) * k)
-    return None
+            found["budget_rub"] = int(float(m.group(1).replace(" ", "").replace(",", ".")) * k)
+            if re.search(r"отел\w*\s+(?:\S+\s+){0,2}$", t[: m.start()]):
+                # TODO(T7, #13): a hotel-only budget; TripSpec has one budget for the trip.
+                rub = f"{found['budget_rub']:,}".replace(",", " ")
+                notes.append(f"бюджет: {rub} ₽ на всю поездку (сказано про отель)")
+            return
 
 
 def extract(text: str) -> tuple[dict, list[str]]:
@@ -253,13 +275,16 @@ def extract(text: str) -> tuple[dict, list[str]]:
     _dates(t, found, notes)
     _nights(t, found, notes)
     _people(t, found, notes)
-    if (budget := _budget(t)) is not None:
-        found["budget_rub"] = budget
+    _budget(t, found, notes)
     if re.search(r"собак|кошк|\bкот\b|\bпес\b|питом", t):
         found["pets"] = True
     if meal := next((v for p, v in MEALS if re.search(p, t)), None):
         found["meal"] = meal
-    if modes := [mode for mode, p in MODES if re.search(p, t)]:
+    negated = re.compile(r"\b(?:не|без)\s+(?:\w+\s+)?$")  # «не хочу лететь», «не на машине»
+    modes = [
+        m for m, p in MODES if any(not negated.search(t[: x.start()]) for x in re.finditer(p, t))
+    ]
+    if modes:
         found["modes"] = modes
     wishes = [w for w, p in WISHES if re.search(p, t)]
     hours = r"\s*(?:ч\b|час\w*)\s+(?:в\s+пути|лет\w*|перел\w*|езд\w*|дорог\w*)"
@@ -273,7 +298,8 @@ def extract(text: str) -> tuple[dict, list[str]]:
         notes.append("время в пути: до 3 ч («недалеко»)")
     if PRIORITY_RE.search(t):
         hits = sorted((m.start(), p) for p, rx in PRIORITIES if (m := re.search(rx, t)))
-        found["priorities"] = [p for _, p in hits]
+        if hits:
+            found["priorities"] = [p for _, p in hits]
     if "cancellation" not in found.get("priorities", []):
         if re.search(r"невозвратн", t):
             found["refundable"] = False
