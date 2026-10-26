@@ -45,7 +45,9 @@ PARTY = [
     ("Сочи в ноябре, нас 6 человек", 6, 0),
     ("Сочи в ноябре, на 4 человека", 4, 0),
     ("Сочи в ноябре, один взрослый", 1, 0),
-    ("Сочи в ноябре, на троих, с ребёнком 4 года", 2, 1),
+    ("Сочи в ноябре, нас трое, с ребёнком 4 года", 2, 1),
+    ("Сочи в ноябре, с мамой и дочкой 5 лет", 2, 1),
+    ("Сочи в ноябре, с подругой и сыном 5 лет", 2, 1),
     ("Сочи в ноябре, одна с ребёнком 4 года", 1, 1),
     ("Сочи в ноябре, нас двое с дочкой 5 лет", 1, 1),
     ("Сочи в ноябре, втроём с собакой", 3, 0),
@@ -151,3 +153,40 @@ def test_no_child_no_party_question(store):
     r = say(store, "Сочи в ноябре, бюджет 50 тысяч")
     assert not any("едет" in q.text for q in r.questions)
     assert NOT_NAMED in r.plan.spec.assumptions
+
+
+def test_na_dvoih_with_a_child_is_unknown():
+    # «на двоих с ребёнком» may count the child or not: not adults=1, the agent asks.
+    found, _ = extract("Сочи в ноябре, на двоих с ребёнком 3 года")
+    assert "adults" not in found
+
+
+def test_i_with_a_child_is_unknown():
+    for text in ["Я с ребёнком в Сочи", "Я и двое детей в Сочи"]:
+        assert "adults" not in extract(text)[0]
+
+
+# The headline request has no place yet: the party question must not replace the options.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Тёплое море в ноябре, недорого, с ребёнком",
+        "Хочу на море с ребёнком 3 лет в июле",
+        "Куда поехать с ребёнком на майские, бюджет 100 тысяч",
+    ],
+)
+def test_child_without_a_place_still_gets_destinations(store, text):
+    r = say(store, text)
+    assert r.stage == "inspire" and len(r.plan.destinations) > 0
+    assert NOT_NAMED in r.plan.spec.assumptions  # the default stays visible
+    assert any("едет" in q.text for q in r.questions)  # asked next to the options
+
+
+def test_party_question_follows_to_the_comparison(store):
+    first = say(store, "Тёплое море в ноябре, недорого, с ребёнком")
+    second = say(store, first.plan.destinations[0].name, first.session_id)
+    assert second.stage == "compare"
+    assert any("едет" in q.text for q in second.questions)
+    third = say(store, "Двое взрослых", first.session_id)
+    assert third.plan.spec.adults == 2 and third.plan.spec.children_ages == [7]
+    assert not any("едет" in q.text for q in third.questions)

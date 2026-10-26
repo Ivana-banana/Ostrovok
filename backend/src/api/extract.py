@@ -149,7 +149,8 @@ GROUP_RE = re.compile(
 )
 # With a child, these words say there are two adults at least («едем», «с мужем», «семьёй»).
 PAIR_RE = re.compile(
-    r"\bс\s+(?:мужем|женой|супруг\w*|парнем|мужчиной)\b|\b(?:мы|нас|нам|наш\w*)\b"
+    r"\bс\s+(?:мужем|женой|супруг\w*|парнем|мужчиной|мамой|папой|подругой|другом|сестрой"
+    r"|братом|бабушкой|дедушкой)\b|\b(?:мы|нас|нам|наш\w*)\b"
     r"|\bсемь(?:я|е|и|ей|ю)\b|\bсемейн\w*|\b(?:едем|летим|поедем|полетим|хотим|планируем"
     r"|собираемся|отдыхаем)\b"
 )
@@ -671,7 +672,7 @@ def _people(t: str, found: dict, notes: list[str]) -> None:
     elif m := re.search(rf"\bнас\s+(?:будет\s+)?{NUM}\b|\b({'|'.join(TOGETHER)})\b", t):
         total = _num(m.group(1)) if m.group(1) else TOGETHER[m.group(2)]
         found["adults"] = max(total - len(ages), 1)
-    elif m := GROUP_RE.search(t):
+    elif not ages and (m := GROUP_RE.search(t)):  # «на двоих с ребёнком»: the child may count
         total = GROUP[m.group(1)] if m.group(1) else _num(m.group(2))
         found["adults"] = max(total - len(ages), 1)
     elif SOLO_OTHER.search(t) or any(

@@ -197,17 +197,23 @@ def with_refused(spec: TripSpec, refused: list[str]) -> TripSpec:
     return spec.model_copy(update={"assumptions": kept + note})
 
 
+def party_question(spec: TripSpec) -> list[Question]:
+    """A child and no word about the adults: 2 adults stay an assumption, the user can fix it."""
+    if not (spec.children_ages and PARTY_UNKNOWN in spec.assumptions):
+        return []
+    options = ["Один взрослый", "Двое взрослых", "Трое взрослых"]  # no «ребёнок»: age stays
+    return [Question(text="Кто едет с ребёнком — сколько взрослых?", options=options)]
+
+
 def blocking_questions(spec: TripSpec) -> list[Question]:
     """At most 2 questions, only when the message names neither a place nor a wish.
 
     A place or a wish is enough to move on: the rest becomes assumptions named in the reply.
-    One exception (#112): a child and no word about the adults. The guest count sets the
-    price and the booking, so it is asked, not assumed.
+    One exception (#112): a child, no word about the adults and a fixed place. The guest count
+    sets the price and the booking, so it is asked, not assumed. Without a place the question
+    only goes next to the options (party_question), it never replaces them.
     """
-    party = []
-    if spec.children_ages and PARTY_UNKNOWN in spec.assumptions:
-        options = ["Один взрослый", "Двое взрослых", "Трое взрослых"]  # no «ребёнок»: age stays
-        party.append(Question(text="Кто едет с ребёнком — сколько взрослых?", options=options))
+    party = party_question(spec) if spec.destinations else []
     if spec.destinations or spec.wishes:
         return party
     out = []
@@ -218,7 +224,7 @@ def blocking_questions(spec: TripSpec) -> list[Question]:
     if spec.budget_rub is None:
         options = ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽", "не важно"]
         out.append(Question(text="Какой бюджет на всю поездку?", options=options))
-    return (party + out)[:2]
+    return out
 
 
 def assume(spec: TripSpec) -> TripSpec:
@@ -648,11 +654,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         dests = [d for d in dests if d.name != spec.origin][:4]
         plan = Plan(spec=spec, destinations=dests)
         if not other:
-            return reply("inspire", plan, _text_inspire(plan))
+            return reply("inspire", plan, _text_inspire(plan), questions=party_question(spec))
         gone_text = f"Убираю «{', '.join(gone)}» из плана, корзину очищаю. " if gone else ""
         question = Question(text="Куда поедем?", options=[d.name for d in dests])
         text = gone_text + _text_inspire(plan)
-        return reply("inspire", plan, text, Cart(), questions=[question])
+        return reply("inspire", plan, text, Cart(), questions=[question, *party_question(spec)])
 
     if "date_from" not in found:
         spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
@@ -682,7 +688,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             # the reply says so, the new city never comes silently (#93).
             gone, now = ", ".join(swapped), spec.destinations[0]
             text = f"«{gone}» нет в каталоге. По вашему выбору — {now}.\n{text}"
-        return reply("compare", plan, text, cart)
+        return reply("compare", plan, text, cart, questions=party_question(spec))
 
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
         hotels = hotel_rows(plan.offers, plan.selected)
