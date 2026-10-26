@@ -168,3 +168,28 @@ def test_why_after_a_switch_matches_the_new_total(store):
     first = other.plan.explanations[0]
     assert first.offer_id in other.plan.selected
     assert {e.offer_id for e in other.plan.explanations[1:]} == {x.offer_id for x in legs(other)}
+
+
+KAZAN = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."
+
+
+def test_initial_plan_at_compare_has_a_timeline(store):
+    """#66: the jury saw an empty timeline until the first transport switch."""
+    r = say(store, SOCHI)
+    assert r.stage == "compare" and r.plan.timeline
+    assert [e.at for e in r.plan.timeline] == sorted(e.at for e in r.plan.timeline)
+    r = say(store, "беру", r.session_id)
+    assert r.stage == "assemble" and r.plan.timeline
+
+
+def test_bare_train_phrase_on_the_default_pick_keeps_the_plan_and_the_note(store):
+    """#66: the default pick is the night train. «возьми поезд» changes nothing; «беру» keeps 07:10."""
+    r = say(store, KAZAN)
+    assert r.stage == "compare" and [x.mode for x in legs(r)] == ["train", "train"]
+    first = r
+    r = say(store, "возьми поезд", r.session_id)
+    assert r.stage == "compare" and "уже выбран" in r.reply
+    assert r.plan.selected == first.plan.selected and r.plan.timeline == first.plan.timeline
+    r = say(store, "беру", r.session_id)
+    assert r.stage == "assemble"
+    assert any("07:10" in i.text and "14:00" in i.text for i in r.plan.issues)
