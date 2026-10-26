@@ -128,6 +128,31 @@ LENGTH_NEXT = re.compile(r"\s*,\s*\d+\s*(?:ноч|дн|недел)")
 CHILD_RE = re.compile(
     rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*)"
 )
+# #112: the party. A number word names a person only in a few forms; «одна ночь», «один из
+# вариантов», «один и тот же отель» are not a party. A solo word needs a stop, a preposition
+# or a verb of the trip after it (or a verb of the trip before it).
+SOLO_RE = re.compile(r"\b(?:один|одна|одной)\b")
+SOLO_NEXT = re.compile(
+    r"\s*(?:$|[,.;:!?)—–-]|(?:с|со|в|во|на|к|по|без|за|до|для|хочу|еду|поеду|лечу|полечу"
+    r"|планирую|собираюсь|путешествую|отдыхаю)\b)"
+)
+SOLO_PREV = re.compile(
+    r"\b(?:я|еду|поеду|лечу|полечу|ехать|лететь|поехать|слетать|съездить|отдохнуть|отдыхать"
+    r"|путешествовать|воспитываю)\s+$"
+)
+SOLO_OTHER = re.compile(r"\bв\s+одиноч\w+|\b(?:на|для)\s+одного\b|\bсоло\b")
+GROUP = {"двоих": 2, "троих": 3, "четверых": 4, "пятерых": 5, "шестерых": 6}
+# «на троих» (not «на троих суток»), «нас 6 человек», «на 4 человека».
+GROUP_RE = re.compile(
+    rf"\b(?:на|для)\s+({'|'.join(GROUP)})\b(?!\s+(?:сут|ноч|дн|день|недел))"
+    rf"|\b(?:на|для|из)\s+{NUM}\s+человек"
+)
+# With a child, these words say there are two adults at least («едем», «с мужем», «семьёй»).
+PAIR_RE = re.compile(
+    r"\bс\s+(?:мужем|женой|супруг\w*|парнем|мужчиной)\b|\b(?:мы|нас|нам|наш\w*)\b"
+    r"|\bсемь(?:я|е|и|ей|ю)\b|\bсемейн\w*|\b(?:едем|летим|поедем|полетим|хотим|планируем"
+    r"|собираемся|отдыхаем)\b"
+)
 AGES_RE = re.compile(r"\D{0,12}?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)")
 BUDGET_RES = [  # (pattern, multiplier); «к» counts only right after the number: «150к»
     (r"\b(\d+(?:[.,]\d+)?)\s*(?:млн|миллион)", 1_000_000),
@@ -641,9 +666,21 @@ def _people(t: str, found: dict, notes: list[str]) -> None:
             notes.append(f"взрослых: «{m.group(0)}» не бывает, состав прежний")
         else:
             found["adults"] = _num(m.group(1))
-    elif m := re.search(rf"\bнас\s+{NUM}\b|\b({'|'.join(TOGETHER)})\b", t):
+    elif (m := GROUP_RE.search(t)) and m.group(1) and re.match(r"\s*взросл", t[m.end() :]):
+        found["adults"] = GROUP[m.group(1)]  # «на троих взрослых»: all three are adults
+    elif m := re.search(rf"\bнас\s+(?:будет\s+)?{NUM}\b|\b({'|'.join(TOGETHER)})\b", t):
         total = _num(m.group(1)) if m.group(1) else TOGETHER[m.group(2)]
         found["adults"] = max(total - len(ages), 1)
+    elif m := GROUP_RE.search(t):
+        total = GROUP[m.group(1)] if m.group(1) else _num(m.group(2))
+        found["adults"] = max(total - len(ages), 1)
+    elif SOLO_OTHER.search(t) or any(
+        SOLO_NEXT.match(t, m.end()) or SOLO_PREV.search(t[: m.start()]) for m in SOLO_RE.finditer(t)
+    ):
+        found["adults"] = 1
+    elif ages and (m := PAIR_RE.search(t)):
+        found["adults"] = 2
+        notes.append(f"взрослых: 2 (по слову «{m.group(0)}»)")
 
 
 def _budget(t: str, found: dict, notes: list[str]) -> None:

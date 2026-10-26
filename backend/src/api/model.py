@@ -155,6 +155,8 @@ LABELS = {
     "adults": "взрослых",
     "max_travel_hours": "время в пути",
 }
+# The adults are not named: 2 by default. With a child this becomes a question (#112).
+PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
 # #113: the refused places live in this assumption (TripSpec has no field for them).
 EXCLUDED = "исключено"
 
@@ -199,9 +201,15 @@ def blocking_questions(spec: TripSpec) -> list[Question]:
     """At most 2 questions, only when the message names neither a place nor a wish.
 
     A place or a wish is enough to move on: the rest becomes assumptions named in the reply.
+    One exception (#112): a child and no word about the adults. The guest count sets the
+    price and the booking, so it is asked, not assumed.
     """
+    party = []
+    if spec.children_ages and PARTY_UNKNOWN in spec.assumptions:
+        options = ["Один взрослый", "Двое взрослых", "Трое взрослых"]  # no «ребёнок»: age stays
+        party.append(Question(text="Кто едет с ребёнком — сколько взрослых?", options=options))
     if spec.destinations or spec.wishes:
-        return []
+        return party
     out = []
     if not spec.month and not spec.date_from:
         m = date.today().month
@@ -210,7 +218,7 @@ def blocking_questions(spec: TripSpec) -> list[Question]:
     if spec.budget_rub is None:
         options = ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽", "не важно"]
         out.append(Question(text="Какой бюджет на всю поездку?", options=options))
-    return out
+    return (party + out)[:2]
 
 
 def assume(spec: TripSpec) -> TripSpec:
@@ -595,7 +603,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if llm_found:
             llm_found.pop("nights", None)
     if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
-        notes.append("взрослых: 2 (состав не назван)")
+        notes.append(PARTY_UNKNOWN)
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
     spec = merge(old.plan.spec, found, notes)
