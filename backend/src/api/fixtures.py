@@ -35,7 +35,7 @@ _ROWS = [
 CATALOG: dict[str, dict] = {row[0]: dict(zip(_KEYS, row[1:], strict=True)) for row in _ROWS}
 
 # Estimate, not from a source: below this the sea counts as cold for swimming.
-# It sits between catalogue values on purpose (Antalya 22, Sochi 16).
+# It sits between catalogue values on purpose (November sea: Antalya 23.6, Sochi 17.1).
 WARM_WATER_C = 21.5
 
 

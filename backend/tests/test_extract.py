@@ -433,7 +433,7 @@ def test_trap3_vladimir_as_a_city_still_works(text):
     assert extract(text)[0]["destinations"] == ["Владимир"]
 
 
-@pytest.mark.parametrize("text", ["Ухта, 3 ночи", "Выборг, 3 ночи"])
+@pytest.mark.parametrize("text", ["Ухта, 3 ночи", "Тихвин, 3 ночи"])
 def test_trap3_unknown_city_in_a_plan_gets_an_honest_note(text):
     found, notes = extract(text, has_destination=True)
     assert "destinations" not in found
