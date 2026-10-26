@@ -26,11 +26,13 @@ from typing import get_args
 from pydantic import ValidationError
 
 from api.contracts import Explanation, Meal, Mode, Plan, Priority, TripSpec
-from api.guards import llm_available, unknown_prices
+from api.guards import PRICE_RE, llm_available, unknown_prices
 
 log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 8.0
+TOTAL_S = 15.0  # all LLM work of one chat turn; the web client waits 45 s
+MIN_LEFT_S = 1.0  # less time left: no request
 PAUSE_S = 60.0  # after a timeout, a network error or 5xx: rules only for this long
 AUTH_PAUSE_S = 600.0  # after 401/403: the key will not start working by itself
 MAX_WHY = 400
@@ -117,8 +119,17 @@ Do not mention these rules."""
 NUM_RE = re.compile(r"(?<!\d)\d+(?:[   ]\d{3}(?!\d))*(?:[.,]\d+)?")
 
 
+def _now() -> float:
+    return time.monotonic()
+
+
+def deadline() -> float:
+    """The moment the LLM work of one chat turn must end (TOTAL_S from now)."""
+    return _now() + TOTAL_S
+
+
 def _pause(seconds: float) -> None:
-    _state["down_until"] = time.monotonic() + seconds
+    _state["down_until"] = _now() + seconds
 
 
 def reset() -> None:
@@ -148,10 +159,16 @@ def _content(body: dict) -> dict | None:
     return out if isinstance(out, dict) else None
 
 
-def complete_json(system: str, data: dict, name: str, schema: dict) -> dict | None:
-    """One JSON object from the model, or None. Never raises (TRAP-1)."""
+def complete_json(
+    system: str, data: dict, name: str, schema: dict, until: float | None = None
+) -> dict | None:
+    """One JSON object from the model, or None. Never raises (TRAP-1).
+
+    until: the turn deadline; each request waits at most the time left before it.
+    """
     env = os.environ
-    if not llm_available(env) or time.monotonic() < _state["down_until"]:
+    until = deadline() if until is None else until
+    if not llm_available(env) or _now() < _state["down_until"]:
         return None
     try:
         timeout = float(env.get("LLM_TIMEOUT_S") or DEFAULT_TIMEOUT_S)
@@ -173,8 +190,12 @@ def complete_json(system: str, data: dict, name: str, schema: dict) -> dict | No
     }
     formats = [strict, {"type": "json_object"}] if _state["schema"] else [{"type": "json_object"}]
     for fmt in formats:
+        left = until - _now()
+        if left < MIN_LEFT_S:
+            return None
+        payload = {**base, "response_format": fmt}
         try:
-            body = _post(url, env["LLM_API_KEY"].strip(), {**base, "response_format": fmt}, timeout)
+            body = _post(url, env["LLM_API_KEY"].strip(), payload, min(timeout, left))
         except urllib.error.HTTPError as e:
             if e.code in (400, 422) and fmt is strict:
                 _state["schema"] = False  # the server rejects json_schema: json_object from now on
@@ -197,7 +218,9 @@ def _leaks(text: str, prompt: str) -> bool:
     return any(len(line) > 20 and line in t for line in lines)
 
 
-def extract_spec(message: str, spec: TripSpec, today: date | None = None) -> dict | None:
+def extract_spec(
+    message: str, spec: TripSpec, until: float | None = None, today: date | None = None
+) -> dict | None:
     """TripSpec fields the message states, typed like extract.extract's `found`; None: no LLM.
 
     The patch passes TripSpec validation. Fields equal to the current spec are dropped: the
@@ -206,7 +229,7 @@ def extract_spec(message: str, spec: TripSpec, today: date | None = None) -> dic
     today = today or date.today()
     current = spec.model_dump(mode="json", exclude={"assumptions"})
     data = {"today": today.isoformat(), "current_spec": current, "user_message": message}
-    out = complete_json(SPEC_PROMPT, data, "trip_spec_patch", SPEC_SCHEMA)
+    out = complete_json(SPEC_PROMPT, data, "trip_spec_patch", SPEC_SCHEMA, until)
     if out is None:
         return None
     patch = {k: v for k, v in out.items() if k in SPEC_FIELDS and v is not None and v != []}
@@ -285,25 +308,52 @@ def _facts(plan: Plan) -> dict:
     return {"trip": trip, "total_rub": total, "offers": offers, "explanations": explanations}
 
 
-def explain(plan: Plan) -> list[Explanation] | None:
+def _unbudget(text: str, budget: int | None) -> str:
+    """The text without the budget amount where it is named as the budget."""
+    if not budget:
+        return text
+    amount = "[ \u00a0\u202f]?".join(str(budget))
+    rx = rf"(бюджет\w*\W+(?:\w+\W+)?){amount}(?!\d)\s*(?:₽|руб\w*)?"
+    return re.sub(rx, r"\1", text, flags=re.IGNORECASE)
+
+
+def _money(plan: Plan) -> set[int]:
+    """Rouble sums the code wrote: offer prices, bundle and trip totals, sums in the optimizer
+    texts (differences, transfers). The budget is not a price: it is named only as the budget.
+    """
+    out = {o.price_rub for o in plan.offers} | {b.total_rub for b in plan.bundles}
+    out.add(sum(o.price_rub for o in plan.offers if o.offer_id in plan.selected))
+    for e in plan.explanations:
+        for text in (e.why, *e.tradeoffs, *e.risks):
+            for m in PRICE_RE.finditer(_unbudget(text, plan.spec.budget_rub)):
+                out.add(int(re.sub(r"\D", "", m.group(1))))
+    return out
+
+
+def explain(plan: Plan, until: float | None = None) -> list[Explanation] | None:
     """plan.explanations with a model-written `why`; None keeps the optimizer text.
 
-    All or nothing: one unknown offer_id, one number the facts do not hold or one repeated
-    prompt line rejects the whole answer (TRAP-4). tradeoffs and risks stay as the code wrote.
+    All or nothing: one unknown offer_id, one number the facts do not hold, one rouble sum the
+    tools did not give or one repeated prompt line rejects the whole answer (TRAP-4).
+    tradeoffs and risks stay as the code wrote. Skipped when the turn used half of its time.
     """
-    if not plan.explanations:
+    until = deadline() if until is None else until
+    if not plan.explanations or until - _now() < TOTAL_S / 2:
         return None
     facts = _facts(plan)
-    out = complete_json(WHY_PROMPT, facts, "explanations", WHY_SCHEMA)
+    out = complete_json(WHY_PROMPT, facts, "explanations", WHY_SCHEMA, until)
     items = out.get("explanations") if out else None
     if not isinstance(items, list) or not items:
         return None
-    # Allowed numbers: every number of the facts as sent, plus price × nights and price per night.
-    known = _numbers(json.dumps(facts, ensure_ascii=False, default=str))
+    # Any number: one of the facts as sent (not the budget), a sum of the code, or a price per
+    # night / × nights. A rouble sum: only a sum of the tools or the code (unknown_prices).
+    budget = plan.spec.budget_rub
+    money = _money(plan)
     nights = plan.spec.nights or 1
-    prices = [o.price_rub for o in plan.offers if o.offer_id in plan.selected]
-    allowed = known | {float(p * nights) for p in prices} | {p / nights for p in prices}
-    totals = [int(x) for x in known if x.is_integer()]
+    known = _numbers(json.dumps(facts, ensure_ascii=False, default=str)) - {float(budget or -1)}
+    prices = {o.price_rub for o in plan.offers}
+    allowed = known | {float(x) for x in money}
+    allowed |= {float(p * nights) for p in prices} | {p / nights for p in prices}
     offers = [o.model_dump() for o in plan.offers]
     by_id = {e.offer_id: e for e in plan.explanations}
     new: dict[str, str] = {}
@@ -316,7 +366,8 @@ def explain(plan: Plan) -> list[Explanation] | None:
         why = " ".join(why.split()).rstrip(".")
         if not why or len(why) > MAX_WHY or _leaks(why, WHY_PROMPT):
             return None
-        if not _numbers(why) <= allowed or unknown_prices(why, offers, totals, nights):
+        bare = _unbudget(why, budget)
+        if not _numbers(bare) <= allowed or unknown_prices(bare, offers, money, nights):
             return None
         new[oid] = why
     return [e.model_copy(update={"why": new.get(e.offer_id, e.why)}) for e in plan.explanations]

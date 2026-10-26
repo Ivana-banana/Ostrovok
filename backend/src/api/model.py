@@ -34,10 +34,15 @@ CONFIRM_RE = re.compile(
 )
 NEGATION_RE = re.compile(r"\b(нет|не)\b")
 BOOK_RE = re.compile(r"\bподтверждаю\b")
-# S4: requests to change a price, skip the confirmation or show the prompt are refused.
+# S4: orders to set a price, to book without the confirmation or to show the prompt are
+# refused. Only orders: «цена 0 ₽ за ребёнка?» or «отель без подтверждения по телефону» pass.
 REFUSE_RE = re.compile(
-    r"системн\w*\s+(?:промпт|инструкц|сообщен)|\bпромпт|system\s*prompt"
-    r"|\bцен\w*\s+(?:на\s+|в\s+)?0\b|не\s+подтверждай|без\s+подтвержд|выда\w*\s+(?:\w+\s+)?ваучер"
+    r"\bпромпт|system\s*prompt|(?:системн|служебн)\w*\s+инструкц"
+    r"|(?:постав|установ|сдела|измен|смен)\w*\s+(?:\w+\s+)?цен\w*\s+(?:на\s+|в\s+)?0\b"
+    r"|\bне\s+подтверждай\b"
+    r"|(?:оформ|бронир|выда|выпиш)\w*\s+(?:\w+\s+){0,2}без\s+(?:\w+\s+)?(?:подтвержд|оплат)"
+    r"|\bсразу\s+(?:\w+\s+)?(?:выда|оформ|выпиш)\w*\s+(?:\w+\s+)?ваучер"
+    r"|ваучер\w*\s+без\s+(?:\w+\s+)?(?:подтвержд|оплат)"
 )
 REFUSAL = (
     "Цены задаёт каталог, а бронь оформляю только после вашего подтверждения итоговой суммы. "
@@ -248,22 +253,38 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         cart=Cart(),
         llm=False,
     )
-    if REFUSE_RE.search(message.lower().replace("ё", "е")):
+    t = message.lower()
+    booking = old.stage == "checkout" and BOOK_RE.search(t) and not NOT_BOOK_RE.search(t)
+    if REFUSE_RE.search(t.replace("ё", "е")) and not booking:
         # The message goes to no model and changes nothing: the plan and the cart stay.
+        # At checkout «подтверждаю» books first: the prices come from the catalogue anyway.
         hint = HINTS.get(old.stage, "Опишите поездку: куда, когда и кто едет.")
         return old.model_copy(update={"reply": f"{REFUSAL} {hint}", "questions": [], "llm": False})
-    found, notes = extract(message)
-    used = False  # the LLM output went into this reply
-    if use_llm and (llm_found := llm.extract_spec(message, old.plan.spec)) is not None:
-        found, used = with_llm(found, llm_found), True
-    if SHIFT_RE.search(message.lower().replace("ё", "е")):
-        found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
-    if prev is None and "adults" not in found:
-        notes.append("взрослых: 2 (состав не назван)")
     idx = _ordinal(message)
+    deadline = llm.deadline()
+    # A service turn («беру», «да», «подтверждаю», a number) goes to no model: a field it
+    # adds would re-plan the trip and send the user back to compare.
+    service = old.stage in ("assemble", "checkout") or idx is not None
+    service = service or _confirmed(t) or bool(BOOK_RE.search(t))
+    found, notes = extract(message)
+    llm_found = (
+        None if service or not use_llm else llm.extract_spec(message, old.plan.spec, deadline)
+    )
+    if SHIFT_RE.search(t.replace("ё", "е")):
+        found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
+        if llm_found:
+            llm_found.pop("nights", None)
+    if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
+        notes.append("взрослых: 2 (состав не назван)")
     if old.stage == "inspire" and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
     spec = merge(old.plan.spec, found, notes)
+    used = False  # the LLM output changed this reply
+    if llm_found:
+        with_model = with_llm(found, llm_found)
+        spec_model = merge(old.plan.spec, with_model, notes)
+        if spec_model != spec:
+            found, spec, used = with_model, spec_model, True
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
         return ChatReply(
@@ -291,14 +312,14 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
                 f"{HINTS['select']}"
             )
             return reply("select", plan, text, cart)
-        if use_llm and "ranking" in done and (why := llm.explain(plan)):
+        why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
+        if why and why != plan.explanations:
             plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)
         text = _text_compare(plan.model_copy(update={"changes": []}))
         if plan.changes:
             text = "\n".join(["Было → стало:", *describe(plan.changes), text])
         return reply("compare", plan, text, cart)
 
-    t = message.lower()
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
         hotels = [o for o in plan.offers if o.kind == "hotel"]
         if idx is not None and idx < len(hotels):
@@ -313,7 +334,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             f"(синтетика, оплата имитируется). {HINTS['checkout']}"
         )
         return reply("checkout", plan, text, cart)
-    if old.stage == "checkout" and BOOK_RE.search(t) and not NOT_BOOK_RE.search(t):
+    if booking:
         try:  # the same rules as POST /api/checkout; the user saw the stored cart total
             return checkout_reply(old, old.cart.total_rub).model_copy(update={"llm": used})
         except CartRefusal as e:
