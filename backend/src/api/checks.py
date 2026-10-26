@@ -750,7 +750,7 @@ def check_S5(case: dict) -> tuple[bool, str]:
         return False, note + f"; б) нет файла пула {UNSEEN_FILE.name}"
     named = [r for r in results if r["outside"]]
     kept = [r for r in named if r["kept"]]
-    note += f"; б) вне данных: бронь в названном городе {len(kept)} из {len(named)}"
+    note += f"; б) вне исходных 101 городов (e3e5119): бронь в названном городе {len(kept)} из {len(named)}"
     if booked < need:
         return False, note
     if not kept:
@@ -943,7 +943,7 @@ def unseen_metric(_case: dict | None = None) -> dict:
         "(режим правил, без LLM, без сети; "
         f"бронь не в тот город {wrong_city}, не считается; с нарушением {violated}; "
         f"часть ограничений не проверить по данным: {unknown}; "
-        f"вне данных (seeded_places.json, osm_hotels.json): бронь в названном городе "
+        f"вне исходных 101 городов (e3e5119; seeded_places.json, osm_hotels.json): бронь в названном городе "
         f"{sum(r['kept'] for r in named)} из {len(named)}; "
         f"пул eval/{UNSEEN_FILE.name}, на нём агента не настраивали)"
     )
