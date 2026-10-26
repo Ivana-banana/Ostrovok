@@ -60,9 +60,14 @@ def edit_cart(plan: Plan, cart: Cart, action: str, offer_id: str) -> Cart:
         gone = {offer_id} | {
             o.offer_id for o in cart.items if o.kind == "extra" and o.for_offer_id == offer_id
         }
-        return make_cart([o for o in cart.items if o.offer_id not in gone])
+        items = [o for o in cart.items if o.offer_id not in gone]
+        if offer.kind in ("hotel", "transport"):
+            items = _drop_orphan_transfers(items)
+        return make_cart(items)
     if offer.kind == "extra" and all(o.offer_id != offer.for_offer_id for o in cart.items):
         raise CartRefusal(409, "Услуга относится к позиции, которой нет в корзине.")
+    if offer.kind == "transfer" and offer.offer_id not in _pair_ids(cart.items):
+        raise CartRefusal(409, "Трансфер относится к отелю и рейсу, которых нет в корзине.")
     slot = _slot(offer, plan.spec)
     items = list(cart.items)
     for i, o in enumerate(items):
@@ -77,21 +82,43 @@ def edit_cart(plan: Plan, cart: Cart, action: str, offer_id: str) -> Cart:
     return make_cart(_with_transfers(plan, items, offer))
 
 
+def _pair_ids(items: list[Offer]) -> set[str]:
+    """Ids of the transfers whose hotel and leg are both in `items`. A transfer has no field
+    for them, so the pair is found by the id hash (`transfer_id`)."""
+    hotels = [o for o in items if o.kind == "hotel"]
+    legs = [o for o in items if o.kind == "transport"]
+    return {transfer_id(h.offer_id, x.offer_id) for h in hotels for x in legs}
+
+
+def _drop_orphan_transfers(items: list[Offer]) -> list[Offer]:
+    """Keep a transfer only while its hotel and its leg are both in the cart."""
+    valid = _pair_ids(items)
+    return [o for o in items if o.kind != "transfer" or o.offer_id in valid]
+
+
 def _with_transfers(plan: Plan, items: list[Offer], added: Offer) -> list[Offer]:
     """A transfer links one hotel and one leg: a new hotel or leg replaces the transfers of the
-    old one with its own, so the cart and the timeline (TRAP-5) describe the same trip."""
+    old one with its own, so the cart and the timeline (TRAP-5) describe the same trip.
+
+    A hotel or leg the user returns (still in `plan.selected`) brings back only the transfers
+    that are still selected: the ones dropped with it. A transfer the user removed on its own
+    left the selection and stays out; the user can add it back."""
     if added.kind not in ("hotel", "transport"):
         return items
     by_id = {o.offer_id: o for o in plan.offers}
+    items = _drop_orphan_transfers(items)
     hotels = [o for o in items if o.kind == "hotel"]
     legs = [o for o in items if o.kind == "transport"]
-    valid = {transfer_id(h.offer_id, x.offer_id) for h in hotels for x in legs}
-    items = [o for o in items if o.kind != "transfer" or o.offer_id in valid]
     new_pairs = [(h, x) for h in hotels for x in legs if added.offer_id in (h.offer_id, x.offer_id)]
+    returned = added.offer_id in plan.selected
     have = {o.offer_id for o in items}
     for h, x in new_pairs:
         t = by_id.get(transfer_id(h.offer_id, x.offer_id))
-        if t is not None and t.offer_id not in have:
+        if (
+            t is not None
+            and t.offer_id not in have
+            and (not returned or t.offer_id in plan.selected)
+        ):
             items.append(t)
     order = {o.offer_id: i for i, o in enumerate(plan.offers)}
     return sorted(items, key=lambda o: order.get(o.offer_id, len(order)))
@@ -102,15 +129,23 @@ def sync_plan(plan: Plan, old: Cart, new: Cart) -> Plan:
 
     Without it a replaced hotel or flight stays in `plan.selected`, and the checker (TRAP-5)
     checks the old one. An added item replaces every selected item of its slot, with their
-    add-ons, even one the user removed earlier. A removed add-on or transfer leaves the selection; a new hotel or leg brings its transfers. A plain
-    removal of a hotel or a leg keeps it selected: the user may return it.
+    add-ons, even one the user removed earlier. An add-on or a transfer the user removed leaves
+    the selection; a new hotel or leg brings its transfers. A plain removal of a hotel or a leg
+    keeps it selected, with its transfers: they leave the cart and the total, and come back with
+    it. A transfer of a replaced hotel or leg leaves the selection with it.
     """
     by_id = {o.offer_id: o for o in plan.offers}
     before = {o.offer_id for o in old.items}
     after = {o.offer_id for o in new.items}
     added = [o for o in new.items if o.offer_id not in before]
     slots = {_slot(o, plan.spec) for o in added}
-    gone = {i for i in before - after if by_id.get(i) and by_id[i].kind in ("extra", "transfer")}
+    pairs = _pair_ids(new.items)
+    gone = {
+        i
+        for i in before - after
+        if by_id.get(i)
+        and (by_id[i].kind == "extra" or (by_id[i].kind == "transfer" and i in pairs))
+    }
     for i in plan.selected:
         o = by_id.get(i)
         if o and o.kind != "extra" and _slot(o, plan.spec) in slots:
@@ -122,6 +157,11 @@ def sync_plan(plan: Plan, old: Cart, new: Cart) -> Plan:
     }
     kept = [i for i in plan.selected if i not in gone]
     selected = kept + [o.offer_id for o in added if o.offer_id not in kept]
+    chosen = [by_id[i] for i in selected if i in by_id]
+    live = _pair_ids(chosen)
+    selected = [
+        i for i in selected if by_id.get(i) is None or by_id[i].kind != "transfer" or i in live
+    ]
     if selected == plan.selected:
         return plan
     plan = plan.model_copy(update={"selected": selected})

@@ -79,13 +79,104 @@ def test_transport_replaces_per_direction(at_checkout):
 
 def test_remove_and_add_back_restores_total(client, at_checkout):
     r = at_checkout
-    gone = r.cart.items[0]
+    gone = next(o for o in r.cart.items if o.kind == "transport")
+    transfers = [o for o in r.cart.items if o.kind == "transfer"]
+    assert transfers
     less = cart_post(client, r, "remove", gone.offer_id).json()
-    assert less["total_rub"] == r.cart.total_rub - gone.price_rub
+    # The transfer of the removed leg leaves with it; the one of the other leg stays.
+    left = {o["offer_id"] for o in less["items"]}
+    assert gone.offer_id not in left and 0 < len(left & {t.offer_id for t in transfers}) < len(
+        transfers
+    )
+    assert less["total_rub"] == sum(o["price_rub"] for o in less["items"])
+    assert less["total_rub"] < r.cart.total_rub - gone.price_rub
     back = cart_post(client, r, "add", gone.offer_id).json()
     assert back["total_rub"] == sum(o["price_rub"] for o in back["items"])
     assert {o["offer_id"] for o in back["items"]} == {o.offer_id for o in r.cart.items}
     assert len(back["items"]) == len(r.cart.items)
+    assert back["total_rub"] == r.cart.total_rub
+
+
+def _checkout(client, r, total):
+    return client.post(
+        "/api/checkout", json={"session_id": r.session_id, "confirm_total_rub": total}
+    )
+
+
+def test_remove_hotel_removes_its_transfers_from_cart_total_and_voucher(client, at_checkout):
+    """Review of #42: no transfer without a hotel in the total and in the voucher."""
+    r = at_checkout
+    hotel = next(o for o in r.cart.items if o.kind == "hotel")
+    transfers = [o for o in r.cart.items if o.kind == "transfer"]
+    assert transfers
+    cart = cart_post(client, r, "remove", hotel.offer_id).json()
+    kinds = [o["kind"] for o in cart["items"]]
+    assert "hotel" not in kinds and "transfer" not in kinds
+    assert cart["total_rub"] == sum(o.price_rub for o in r.cart.items if o.kind == "transport")
+    stale = _checkout(client, r, r.cart.total_rub)  # the total the user saw before is refused
+    assert stale.status_code == 409
+    done = _checkout(client, r, cart["total_rub"])
+    assert done.status_code == 200, done.text
+    voucher = done.json()
+    assert not {"hotel", "transfer"} & {o["kind"] for o in voucher["items"]}
+    assert voucher["total_rub"] == cart["total_rub"]
+
+
+def test_returned_hotel_brings_its_transfers_back(client, at_checkout):
+    r = at_checkout
+    hotel = next(o for o in r.cart.items if o.kind == "hotel")
+    cart_post(client, r, "remove", hotel.offer_id)
+    back = cart_post(client, r, "add", hotel.offer_id).json()
+    assert {o["offer_id"] for o in back["items"]} == {o.offer_id for o in r.cart.items}
+    assert back["total_rub"] == r.cart.total_rub
+    done = _checkout(client, r, back["total_rub"]).json()
+    assert [o["kind"] for o in done["items"]].count("transfer") == 2
+
+
+def test_transfer_without_its_hotel_cannot_be_added_and_never_reaches_the_voucher(
+    client, at_checkout
+):
+    """Review of #45: remove transfer, remove hotel, add transfer -> 409, no orphan."""
+    r = at_checkout
+    hotel = next(o for o in r.cart.items if o.kind == "hotel")
+    transfer = next(o for o in r.cart.items if o.kind == "transfer")
+    cart_post(client, r, "remove", transfer.offer_id)
+    less = cart_post(client, r, "remove", hotel.offer_id).json()
+    res = cart_post(client, r, "add", transfer.offer_id)
+    assert res.status_code == 409
+    assert "корзине" in res.json()["detail"]
+    done = _checkout(client, r, less["total_rub"])
+    assert done.status_code == 200, done.text
+    assert not {"hotel", "transfer"} & {o["kind"] for o in done.json()["items"]}
+
+
+def test_returned_hotel_does_not_bring_back_a_transfer_removed_on_its_own(client, at_checkout):
+    r = at_checkout
+    hotel = next(o for o in r.cart.items if o.kind == "hotel")
+    transfers = [o for o in r.cart.items if o.kind == "transfer"]
+    alone, kept = transfers[0], transfers[1]
+    cart_post(client, r, "remove", alone.offer_id)
+    cart_post(client, r, "remove", hotel.offer_id)
+    back = cart_post(client, r, "add", hotel.offer_id).json()
+    ids = {o["offer_id"] for o in back["items"]}
+    assert hotel.offer_id in ids and kept.offer_id in ids and alone.offer_id not in ids
+    # The user can add it back by hand: its hotel and leg are in the cart again.
+    again = cart_post(client, r, "add", alone.offer_id)
+    assert again.status_code == 200
+    assert {o["offer_id"] for o in again.json()["items"]} == {o.offer_id for o in r.cart.items}
+
+
+def test_remove_both_legs_leaves_no_transfers_and_return_of_one_restores_its_own(
+    client, at_checkout
+):
+    r = at_checkout
+    legs = [o for o in r.cart.items if o.kind == "transport"]
+    for leg in legs:
+        cart = cart_post(client, r, "remove", leg.offer_id).json()
+    assert [o["kind"] for o in cart["items"]] == ["hotel"]
+    cart = cart_post(client, r, "add", legs[0].offer_id).json()
+    assert [o["kind"] for o in cart["items"]].count("transfer") == 1
+    assert cart["total_rub"] == sum(o["price_rub"] for o in cart["items"])
 
 
 def test_trap_4_offer_outside_the_plan_is_rejected(client, at_checkout):
