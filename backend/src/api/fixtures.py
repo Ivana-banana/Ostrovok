@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 
 from api.contracts import (
     Destination,
-    Explanation,
     Offer,
     Plan,
     TimelineEvent,
@@ -19,6 +18,7 @@ from api.contracts import (
 )
 from api.guards import check_arrival_vs_checkin
 from api.offers import find_offers
+from api.optimizer import rank  # noqa: F401  T7 (#13): the seam is the optimizer now
 
 # TODO(T12, #20): climate from Open-Meteo and travel hours from the catalogue (T4, #8).
 # name -> slug, country, lat, lon, IANA tz, UTC offset, stems, sea, hours from Moscow,
@@ -108,45 +108,6 @@ def suggest_destinations(spec: TripSpec) -> list[Destination]:
         )
     out.sort(key=lambda d: (bool(d.violates), d.est_total_rub))
     return out[:4]
-
-
-def rank(spec: TripSpec, offers: list[Offer]) -> tuple[list[str], list[Explanation]]:
-    """Selected offer ids (hotel, flight there, flight back) and why.
-
-    TODO(T7, #13): replace with the optimizer (user weights, "what was sacrificed").
-    """
-    hotels = sorted(
-        (o for o in offers if o.kind == "hotel" and (not spec.meal or o.meal == spec.meal)),
-        key=lambda o: o.price_rub,
-    ) or sorted((o for o in offers if o.kind == "hotel"), key=lambda o: o.price_rub)
-    out = sorted(
-        (o for o in offers if o.kind == "transport" and o.origin == spec.origin),
-        key=lambda o: o.price_rub,
-    )
-    back = [o for o in offers if o.kind == "transport" and o.destination == spec.origin]
-    legs = out[:1] + back[:1]
-    road = sum(o.price_rub for o in legs)
-    fits = [h for h in hotels if not spec.budget_rub or h.price_rub + road <= spec.budget_rub]
-    if not hotels:
-        return [], []
-    if "недорого" in spec.wishes or not fits:
-        hotel = (fits or hotels)[0]
-    else:
-        hotel = max(fits, key=lambda h: h.rating or 0)
-    risks = []
-    if spec.budget_rub and hotel.price_rub + road > spec.budget_rub:
-        risks.append("не укладывается в бюджет даже в самом дешёвом варианте")
-    best = max(hotels, key=lambda h: h.rating or 0)
-    tradeoffs = (
-        [f"рейтинг ниже, чем у варианта {best.title} ({best.rating})"] if hotel is not best else []
-    )
-    why = (
-        f"{hotel.stars}★, рейтинг {hotel.rating}, питание {hotel.meal}, "
-        f"{'бесплатная отмена' if hotel.cancellation.refundable else 'невозвратный тариф'}"
-    )
-    expl = [Explanation(offer_id=hotel.offer_id, why=why, tradeoffs=tradeoffs, risks=risks)]
-    expl += [Explanation(offer_id=o.offer_id, why="самый дешёвый рейс") for o in legs]
-    return [hotel.offer_id] + [o.offer_id for o in legs], expl
 
 
 def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]]:
