@@ -26,6 +26,7 @@ const sample: ChatReply = {
       "modes": ["train"],
       "max_travel_hours": null,
       "wishes": ["центр"],
+      "priorities": ["price", "cancellation"],
       "assumptions": ["выезд из Москвы"]
     },
     "destinations": [
@@ -41,7 +42,8 @@ const sample: ChatReply = {
         "water_c": null,
         "travel_hours": 12.0,
         "tradeoffs": ["ночь в поезде"],
-        "violates": []
+        "violates": [],
+        "risks": ["гололёд в декабре"]
       }
     ],
     "offers": [
@@ -67,6 +69,7 @@ const sample: ChatReply = {
         "check_in": "14:00:00",
         "check_out": "12:00:00",
         "pets_allowed": false,
+        "amenities": ["elevator"],
         "description": "У набережной."
       },
       {
@@ -80,7 +83,8 @@ const sample: ChatReply = {
         "arrive_at": "2026-12-11T07:10:00+03:00",
         "changes": 0,
         "price_rub": 9800,
-        "synthetic": true
+        "synthetic": true,
+        "pets_allowed": false
       },
       {
         "kind": "transfer",
@@ -98,6 +102,16 @@ const sample: ChatReply = {
         "for_offer_id": "h1",
         "price_rub": 2500,
         "synthetic": true
+      }
+    ],
+    "bundles": [
+      {
+        "bundle_id": "b1",
+        "label": "оптимум",
+        "offer_ids": ["h1", "t1", "tr1"],
+        "total_rub": 30000,
+        "travel_hours": 12.0,
+        "tradeoffs": ["ночь в поезде"]
       }
     ],
     "selected": ["h1", "t1"],
@@ -154,6 +168,7 @@ const sample: ChatReply = {
       "modes": [],
       "max_travel_hours": 5.0,
       "wishes": [],
+      "priorities": [],
       "assumptions": []
     },
     "total_rub": 2500,
