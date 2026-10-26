@@ -505,3 +505,113 @@ def test_pick_hotel_swaps_the_hotel_part_and_keeps_the_legs():
     assert set(new[3:]) == want  # no transfer or add-on of hotel A is left
     with pytest.raises(TypeError):
         pick_hotel(old, items, "t-out")
+
+
+S9_FIRST = "Казань, 11–13 декабря, двое взрослых, из Москвы"
+
+
+def _first_hotel(reply):
+    by_id = {o.offer_id: o for o in reply.plan.offers}
+    top = reply.plan.bundles[0]
+    return top, next(by_id[i] for i in top.offer_ids if isinstance(by_id[i], HotelOffer))
+
+
+def test_default_order_puts_the_cheapest_trip_first():
+    """#50: nothing said about priorities -> the cheapest whole trip is the first option."""
+    cheap = hotel("cheap", 10_000, rating=7.0)
+    refund = hotel("refund", 11_800, refundable=True, rating=7.5)
+    star = hotel("star", 25_000, rating=9.6, stars=5)
+    items = offers([cheap, refund, star], FLIGHTS)
+    for s in (spec(), spec(wishes=["недорого"])):
+        assert hotel_of(s, items) == cheap
+    assert hotel_of(spec(priorities=["cancellation", "price"]), items) == refund
+
+
+def test_s9_edit_priorities_changes_the_first_option(store, monkeypatch):
+    """S9 (eval/cases.json, check_S9): the first option is the cheapest non-refundable one;
+    «мне важнее бесплатная отмена» moves only the priorities and puts a refundable tariff first,
+    the text names the priority and the price of the trade-off."""
+    for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    r = say(store, S9_FIRST)
+    while r.stage == "clarify":
+        r = say(store, " ".join(q.options[0] for q in r.questions if q.options), r.session_id)
+    assert r.stage == "compare"
+    top, first = _first_hotel(r)
+    assert top.total_rub == min(b.total_rub for b in r.plan.bundles)
+    assert not first.cancellation.refundable
+
+    after = say(store, "Мне важнее бесплатная отмена, чем цена.", r.session_id)
+    spec_after, spec_before = after.plan.spec, r.plan.spec
+    assert spec_after.priorities[:1] == ["cancellation"] and spec_after.refundable is None
+    assert spec_after.model_dump(exclude={"priorities"}) == spec_before.model_dump(
+        exclude={"priorities"}
+    )
+    assert after.questions == []
+    top, hotel_after = _first_hotel(after)
+    assert hotel_after.cancellation.refundable
+    expl = next(e for e in after.plan.explanations if e.offer_id == hotel_after.offer_id)
+    text = " ".join([expl.why, *expl.tradeoffs])
+    gap = top.total_rub - min(b.total_rub for b in after.plan.bundles)
+    assert gap > 0 and "отмен" in text.lower() and f"{gap:,} ₽".replace(",", " ") in text
+    assert "плата за приоритет «отмена»" in text
+
+
+@pytest.mark.parametrize(
+    "city,nights,priorities",
+    [("Екатеринбург", 2, []), ("Краснодар", 3, []), ("Екатеринбург", 2, ["cancellation"])],
+)
+def test_a_leg_longer_than_one_night_does_not_go_first_when_a_flight_exists(
+    city, nights, priorities
+):
+    """#50 review: the price weight must not send the user on a 20+ hour train by default."""
+    day = date(2026, 12, 11)
+    s = TripSpec(
+        origin="Москва",
+        destinations=[city],
+        date_from=day,
+        date_to=day + timedelta(days=nights),
+        nights=nights,
+        priorities=priorities,
+    )
+    items = find_offers(s, city)
+    by_id = {o.offer_id: o for o in items}
+    assert any(o.kind == "transport" and o.mode == "flight" for o in items)
+    selected, _ = rank(s, items)
+    modes = [by_id[i].mode for i in selected if by_id[i].kind == "transport"]
+    assert modes and set(modes) == {"flight"}
+
+
+def test_the_overnight_train_may_go_first_and_a_named_price_priority_is_kept():
+    kazan = TripSpec(
+        origin="Москва",
+        destinations=["Казань"],
+        date_from=date(2026, 12, 11),
+        date_to=date(2026, 12, 13),
+        nights=2,
+    )
+    items = find_offers(kazan, "Казань")
+    by_id = {o.offer_id: o for o in items}
+    assert {by_id[i].mode for i in rank(kazan, items)[0] if by_id[i].kind == "transport"} == {
+        "train"
+    }
+    ural = kazan.model_copy(update={"destinations": ["Екатеринбург"], "priorities": ["price"]})
+    items = find_offers(ural, "Екатеринбург")
+    by_id = {o.offer_id: o for o in items}
+    legs = [by_id[i] for i in rank(ural, items)[0] if by_id[i].kind == "transport"]
+    assert {x.mode for x in legs} == {"train"}  # the user put the price first: their choice
+
+
+def test_trade_off_names_the_priority_only_when_the_first_option_wins_on_it():
+    """#50 review: the price gap from a faster leg is not the price of «отмена»."""
+    cheap = hotel("cheap", 10_000, refundable=True, rating=7.0)
+    pricey = hotel("pricey", 14_000, refundable=True, rating=9.0)
+    items = offers([cheap, pricey], FLIGHTS)
+    s = spec(priorities=["cancellation", "rating"])
+    first = rank(s, items)[1][0]
+    assert first.offer_id == "h-pricey"
+    assert "плата за приоритет" not in " ".join(first.tradeoffs)  # both are refundable
+    plain = hotel("plain", 10_000, rating=7.0)
+    items = offers([plain, hotel("refund", 11_800, refundable=True, rating=7.5)], FLIGHTS)
+    first = rank(spec(priorities=["cancellation", "price"]), items)[1][0]
+    assert "плата за приоритет «отмена»" in " ".join(first.tradeoffs)

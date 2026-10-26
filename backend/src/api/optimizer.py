@@ -45,14 +45,15 @@ CRITERIA: tuple[Priority, ...] = (
     "travel_time",
     "rating",
 )
-# Team estimate without a source: price matters most when the user said nothing.
+# Team estimate without a source: the user said nothing, so the cheapest whole trip goes first
+# (price dominates, the rest only break near-ties). A priority the user names beats price (S9).
 DEFAULT_WEIGHTS: dict[Priority, float] = {
-    "price": 0.35,
-    "rating": 0.2,
-    "travel_time": 0.15,
-    "cancellation": 0.1,
-    "meal": 0.1,
-    "location": 0.1,
+    "price": 0.85,
+    "rating": 0.04,
+    "travel_time": 0.03,
+    "cancellation": 0.03,
+    "meal": 0.03,
+    "location": 0.02,
 }
 MEAL_LEVEL = {"RO": 0, "BB": 1, "HB": 2, "FB": 3, "AI": 4}
 MEAL_TEXT = {
@@ -72,6 +73,9 @@ PRIORITY_TEXT = {
     "rating": "рейтинг",
 }
 MAX_ALTERNATIVES = 3
+# Team estimate without a source (D-009): a leg longer than one night on the road does not go
+# first while a trip without such a leg exists.
+LONG_LEG_H = 13.0
 
 
 class Ranked(NamedTuple):
@@ -110,6 +114,10 @@ class Trip:
     @property
     def transfer_rub(self) -> int:
         return sum(t.price_rub for t in self.transfers)
+
+    @property
+    def slow(self) -> bool:
+        return any(_leg_hours(x) > LONG_LEG_H for x in self.legs)
 
     @property
     def hours(self) -> float:
@@ -261,10 +269,14 @@ def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
     if any(t.over == 0 for t in pool):
         pool = [t for t in pool if t.over == 0]
     _score(pool, weights(spec))
+    # The price weight must not send the user on a long train when a faster trip exists; a user
+    # who put the price first has chosen.
+    demote = spec.priorities[:1] != ["price"] and any(not t.slow for t in pool)
     if any(t.over for t in pool):
-        pool.sort(key=lambda t: (t.over, *t.key))  # nothing fits the budget: smallest overrun
+        # nothing fits the budget: smallest overrun
+        pool.sort(key=lambda t: (t.over, demote and t.slow, *t.key))
     else:
-        pool.sort(key=lambda t: t.key)
+        pool.sort(key=lambda t: (demote and t.slow, *t.key))
     return pool, fewest == 0 and not pool[0].over
 
 
@@ -349,15 +361,34 @@ def _hotel_why(spec: TripSpec, t: Trip) -> str:
     return why
 
 
-def _sacrificed(t: Trip, pool: list[Trip]) -> list[str]:
+def _wins_on(p: Priority, t: Trip, other: Trip) -> bool:
+    """Whether trip t is better than the other trip on the criterion p, from offer fields."""
+    a, b = t.hotel, other.hotel
+    return {
+        "price": t.total < other.total,
+        "cancellation": a.cancellation.refundable and not b.cancellation.refundable,
+        "meal": MEAL_LEVEL[a.meal] > MEAL_LEVEL[b.meal],
+        "location": (a.distance_center_km or 0) < (b.distance_center_km or 0),
+        "travel_time": t.hours < other.hours,
+        "rating": (a.rating or 0) > (b.rating or 0),
+    }[p]
+
+
+def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
     """What the best trip gives up against the other candidates, from offer fields."""
     h, out = t.hotel, []
     cheapest = min(pool, key=lambda x: (x.total, x.key))
     if cheapest.total < t.total:
-        out.append(
+        line = (
             f"дороже самого дешёвого варианта на {_rub(t.total - cheapest.total)} "
             f"({cheapest.hotel.title}, {_rub(cheapest.total)})"
         )
+        first = spec.priorities[0] if spec.priorities else None
+        if first and first != "price" and _wins_on(first, t, cheapest):
+            line += f" — плата за приоритет «{PRIORITY_TEXT[first]}»"  # the user put it above price
+        if cheapest.slow and not t.slow:
+            line += f"; у самого дешёвого дорога в одну сторону {_h(cheapest.hours)}"
+        out.append(line)
     if not h.cancellation.refundable:
         refund = [x for x in pool if x.hotel.cancellation.refundable]
         if refund:
@@ -448,7 +479,7 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
         return Ranked([], [], [])
     pool, fits = _pool(spec, trips)
     best = pool[0]
-    sacrificed = _sacrificed(best, pool)
+    sacrificed = _sacrificed(spec, best, pool)
     explanations = [
         Explanation(
             offer_id=best.hotel.offer_id,
