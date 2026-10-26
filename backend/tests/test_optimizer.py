@@ -22,7 +22,15 @@ from api.contracts import (
 )
 from api.model import chat
 from api.offers import find_offers, transfer_id
-from api.optimizer import DEFAULT_WEIGHTS, bundles, optimize, pick_hotel, rank, weights
+from api.optimizer import (
+    DEFAULT_WEIGHTS,
+    bundles,
+    enumerate_trips,
+    optimize,
+    pick_hotel,
+    rank,
+    weights,
+)
 from api.store import SessionStore
 
 TZ = ZoneInfo("Europe/Moscow")
@@ -377,6 +385,7 @@ def _allowed_amounts(s, items, out):
         base.add(b.total_rub)
         base.add(sum(o.price_rub for o in parts if o.kind == "transport"))
         base.add(sum(o.price_rub for o in parts if o.kind == "transfer"))
+    base |= {t.total for t in enumerate_trips(items)}  # the texts compare trips of the pool
     if s.budget_rub is not None:
         base |= {s.budget_rub} | {t - s.budget_rub for t in base if t > s.budget_rub}
     return base | {abs(a - b) for a, b in combinations(base, 2)}

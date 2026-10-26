@@ -78,7 +78,8 @@ def test_meal_change_reranks_without_a_new_search(booked, calls):
 
 
 def test_same_selection_keeps_the_timeline(booked, calls):
-    spec = booked.plan.spec.model_copy(update={"refundable": True})
+    # refundable=True would pick the free-cancellation tariff of the hotel: another selection.
+    spec = booked.plan.spec.model_copy(update={"refundable": False})
     plan, cart, done = dag.replan(booked.plan, spec, booked.cart)
     assert done == ["ranking", "cart"] and cart.items == []
     assert calls == ["rank"]
@@ -219,10 +220,13 @@ def test_shift_dates_moves_the_current_dates(text, days):
 
 @pytest.fixture
 def picked(store):
-    """Session where the user picked the first hotel over the ranked one."""
+    """Session where the user picked the first row of another hotel over the ranked one."""
     r = say(store, SOCHI)
     ranked = r.plan.selected[0]
-    r = say(store, "первый", r.session_id)
+    hotels = [o for o in r.plan.offers if o.kind == "hotel"]
+    title = next(h.title for h in hotels if h.offer_id == ranked)
+    row = next(i for i, h in enumerate(hotels) if h.title != title)  # a hotel has several tariffs
+    r = say(store, ("первый", "второй", "третий", "четвёртый")[row], r.session_id)
     assert r.stage == "assemble" and r.plan.selected[0] != ranked
     return r
 
@@ -265,11 +269,8 @@ def test_lower_budget_drops_a_pick_that_no_longer_fits(store):
     r = say(store, "Сочи, 3 ночи с 20 ноября, двое взрослых")
     hotels = [o for o in r.plan.offers if o.kind == "hotel"][:4]
     cheapest = min(h.price_rub for h in hotels)
-    i = next(
-        i
-        for i, h in enumerate(hotels)
-        if h.offer_id not in r.plan.selected and h.price_rub > cheapest
-    )
+    chosen = _hotel(r).title  # a hotel has several tariffs: the pick is another hotel
+    i = next(i for i, h in enumerate(hotels) if h.title != chosen and h.price_rub > cheapest)
     r = say(store, "беру " + ("первый", "второй", "третий", "четвёртый")[i], r.session_id)
     pick = _hotel(r)
     assert r.stage == "assemble" and pick.offer_id not in dag.rank(r.plan.spec, r.plan.offers)[0]

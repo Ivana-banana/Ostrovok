@@ -117,6 +117,75 @@ def test_meal_and_refund_wishes_do_not_change_the_offers():
     assert any(h.cancellation.refundable for h in hotels)
 
 
+def hotel_tariffs(items) -> dict[str, list]:
+    """Hotel tariffs by hotel title."""
+    out: dict[str, list] = {}
+    for h in kinds(items, "hotel"):
+        out.setdefault(h.title, []).append(h)
+    return out
+
+
+@pytest.mark.parametrize("place", ["Сочи", "Казань", "Анапа", "Рим"])
+def test_every_hotel_has_two_to_four_tariffs_with_meal_and_cancellation(place):
+    """#39: a hotel sells RO or BB (HB, AI at the sea), with and without free cancellation."""
+    items = find_offers(spec(), place)
+    by_title = hotel_tariffs(items)
+    assert len(by_title) >= 3
+    for tariffs in by_title.values():
+        assert 2 <= len(tariffs) <= 4
+        assert len({(t.meal, t.cancellation.refundable) for t in tariffs}) == len(tariffs)
+        assert len({t.offer_id for t in tariffs}) == len(tariffs)
+        assert len({t.meal for t in tariffs}) == 2
+        # one hotel, one room: the same facts, only the tariff differs
+        assert len({(t.stars, t.rating, t.distance_center_km, t.date_in) for t in tariffs}) == 1
+    assert any(t.cancellation.refundable for ts in by_title.values() for t in ts)
+    assert any(not t.cancellation.refundable for ts in by_title.values() for t in ts)
+    assert any(t.meal == "BB" for ts in by_title.values() for t in ts)
+    assert any(t.meal == "RO" for ts in by_title.values() for t in ts)
+
+
+def test_tariff_prices_follow_meal_and_cancellation():
+    """Same hotel: a meal plan with more food costs more; free cancellation costs more."""
+    for tariffs in hotel_tariffs(find_offers(spec(), "Сочи")).values():
+        by_key = {(t.meal, t.cancellation.refundable): t.price_rub for t in tariffs}
+        for (meal, refundable), price in by_key.items():
+            if refundable:
+                assert price > by_key[(meal, False)]
+        plain = sorted((p, m) for (m, r), p in by_key.items() if not r)
+        assert plain[0][1] in ("RO", "BB")  # the cheapest rate has the lightest meal plan
+
+
+def test_tariffs_are_the_same_in_every_process():
+    """Determinism: ids and prices are pinned, so a seed that depends on the process
+    (hash(), random) fails here."""
+    s = spec(date_from=date(2026, 12, 11), date_to=date(2026, 12, 14))
+    hotels = kinds(find_offers(s, "Сочи"), "hotel")
+    first = [(h.offer_id, h.price_rub) for h in hotels[:2]]
+    assert first == [
+        ("h-aer-s0-ROn-20261211-3n-2a", 10_700),
+        ("h-aer-s0-BBn-20261211-3n-2a", 14_500),
+    ]
+    assert hotels == kinds(find_offers(s, "Сочи"), "hotel")
+
+
+def test_s3_breakfast_within_the_budget_picks_a_breakfast_tariff():
+    """S3-A: «до 40 000, нужен завтрак» — a tariff with breakfast, the plan in the budget.
+    The offers are the same as without the wishes; the ranking picks the tariff."""
+    plain = spec(destinations=["Сочи"], date_from=date(2026, 11, 20), date_to=date(2026, 11, 23))
+    wishes = plain.model_copy(update={"meal": "BB", "budget_rub": 40_000})
+    items = find_offers(wishes, "Сочи")
+    assert items == find_offers(plain, "Сочи")
+    selected, _ = rank(wishes, items)
+    by_id = {o.offer_id: o for o in items}
+    hotel = next(by_id[i] for i in selected if by_id[i].kind == "hotel")
+    assert hotel.meal in ("BB", "HB", "FB", "AI")
+    assert sum(by_id[i].price_rub for i in selected) <= 40_000
+    refundable = plain.model_copy(update={"refundable": True})
+    selected, _ = rank(refundable, items)
+    hotel = next(by_id[i] for i in selected if by_id[i].kind == "hotel")
+    assert hotel.cancellation.refundable
+
+
 def test_passed_cancellation_deadline_is_not_refundable():
     today = date.today()
     s = spec(date_from=today, date_to=today + timedelta(days=1), refundable=True)
