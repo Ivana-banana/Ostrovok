@@ -164,10 +164,17 @@ def test_s2_fails_when_the_lost_cancellation_is_not_named(monkeypatch):
     assert not ok and "п.4: жертва не названа" in note
 
 
-def test_s5_fails_when_no_query_gets_offers(monkeypatch):
+def recorded_answers(monkeypatch, tmp_path):
+    """S5: a file of recorded geocoder answers exists, so part b is checked, not skipped."""
+    (tmp_path / "answers.json").write_text('{"answers": {}}', "utf-8")
+    monkeypatch.setattr(checks, "GEOCODER_FILE", tmp_path / "answers.json")
+
+
+def test_s5_fails_when_no_query_gets_offers(monkeypatch, tmp_path):
+    recorded_answers(monkeypatch, tmp_path)
     rewrite(monkeypatch, lambda r: r.model_copy(update={"stage": "select", "voucher": None}))
     ok, note = checks.check_S5(BY_ID["S5"])
-    assert not ok and "до брони 0" in note
+    assert not ok and "до брони 0" in note and "не проверено" not in note
 
 
 def test_s6_fails_without_the_simulated_payment_mark(monkeypatch):
@@ -439,17 +446,17 @@ def test_ten_days_accept_nine_or_ten_nights():
     assert verdicts(run, {"nights": [9, 10]}) == {"ночей": checks.VIOLATED}
 
 
-def test_s5_is_red_when_no_city_outside_the_data_is_booked_in_that_city(monkeypatch):
+def test_s5_is_red_when_no_city_outside_the_data_is_booked_in_that_city(monkeypatch, tmp_path):
     """#92: the honest state of the product today. Part b of S5 is not softened."""
+    recorded_answers(monkeypatch, tmp_path)
     monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [result(kept=False)])
     ok, note = checks.check_S5(BY_ID["S5"])
     assert not ok and "до брони 10 из 10" in note
-    assert "бронь в названном городе 0 из 1" in note
+    assert "бронь в названном городе 0 из 1" in note and "нужна хотя бы одна" in note
 
 
 def test_s5_is_green_with_one_booking_in_the_named_city_outside_the_data(monkeypatch, tmp_path):
-    (tmp_path / "answers.json").write_text('{"answers": {}}', "utf-8")
-    monkeypatch.setattr(checks, "GEOCODER_FILE", tmp_path / "answers.json")
+    recorded_answers(monkeypatch, tmp_path)
     monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [result(), result(kept=False)])
     ok, note = checks.check_S5(BY_ID["S5"])
     assert ok and "бронь в названном городе 1 из 2" in note
@@ -463,11 +470,12 @@ def test_s5_b_is_not_checked_without_recorded_geocoder_answers(monkeypatch, tmp_
     assert not ok and "не проверено" in note
 
 
-def test_s5_is_red_when_the_sample_pool_misses_even_with_a_good_unseen_pool(monkeypatch):
+def test_s5_is_red_when_the_sample_pool_misses_even_with_a_good_unseen_pool(monkeypatch, tmp_path):
+    recorded_answers(monkeypatch, tmp_path)
     monkeypatch.setattr(checks, "_unseen_results", lambda _c=None: [result()])
     rewrite(monkeypatch, lambda r: r.model_copy(update={"stage": "select", "voucher": None}))
-    ok, _ = checks.check_S5(BY_ID["S5"])
-    assert not ok
+    ok, note = checks.check_S5(BY_ID["S5"])
+    assert not ok and "до брони 0" in note and "не проверено" not in note
 
 
 def test_s5_is_red_without_the_unseen_pool_file(monkeypatch, tmp_path):

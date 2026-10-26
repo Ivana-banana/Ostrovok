@@ -102,17 +102,22 @@ def test_trap_2_online_place_outside_snapshot():
     assert resolve_place("Зурбаган") is place  # cached in the process
 
 
-def test_trap_6_a_network_error_is_not_remembered():
-    """TRAP-6: one timeout on the demo must not make the city unknown until a restart."""
+def test_trap_6_a_network_error_is_remembered_for_a_minute_only(monkeypatch):
+    """TRAP-6: offline, one wait per city a minute; one timeout does not make it unknown until a restart."""
+    calls = []
 
     def timeout(url: str, params: dict) -> dict:
+        calls.append(url)
         raise TimeoutError
 
     def nothing(url: str, params: dict) -> dict:
         return {"results": []}
 
+    now = 1000.0
+    monkeypatch.setattr(catalog.time, "monotonic", lambda: now)
     assert catalog.lookup_online("Зурбаган", timeout) is None
-    assert "зурбаган" not in catalog._online
+    assert catalog.lookup_online("Зурбаган", timeout) is None and len(calls) == 1
+    now += catalog.FAILED_S
     assert catalog.lookup_online("Зурбаган", nothing) is None and "зурбаган" in catalog._online
 
 

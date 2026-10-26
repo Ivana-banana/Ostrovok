@@ -790,7 +790,7 @@ EXPECT_KEYS = {
 def _same_name(value: str, names: list[str]) -> bool:
     """A name as the offers write it is one of the names the user may mean.
 
-    Same place in places.json (aliases, case endings), or the same full normalised name.
+    Same place in catalog.json (aliases, case endings), or the same full normalised name.
     No prefix guess: Самара is not Самарканд.
     """
     mine = resolve_place(value)
@@ -824,7 +824,7 @@ def _over_budget_with_note(reply: ChatReply, budget: int, total: int) -> bool:
 def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
     """(constraint, OK | VIOLATED | UNKNOWN, why) for the final plan of a booked session.
 
-    Every verdict comes from the voucher and from data the system has: places.json, the
+    Every verdict comes from the voucher and from data the system has: catalog.json, the
     November climate of the catalogue, the offers. No data - UNKNOWN, never OK.
     """
     unknown = set(expect) - EXPECT_KEYS
@@ -879,15 +879,15 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
         dest = next((c for n, c in fixtures.CATALOG.items() if _same_name(first.city, [n])), None)
         month = first.date_in.month  # the month of the booking, not the one asked for
         if place is None:
-            out.append(("тёплое море", UNKNOWN, "города нет в places.json"))
+            out.append(("тёплое море", UNKNOWN, "города нет в catalog.json и у геокодера"))
         elif not place["sea"]:
-            put("тёплое море", False, f"{first.city}: моря нет (places.json)")
+            put("тёплое море", False, f"{first.city}: моря нет (catalog.json)")
         elif month == 11 and dest and dest["nov"][1] is not None:
             put("тёплое море", dest["nov"][1] >= WARM_WATER_C, f"вода {dest['nov'][1]} °C")
         else:
             out.append(("тёплое море", UNKNOWN, "море есть, температуры в этом месяце нет"))
     if expect.get("ski"):
-        out.append(("лыжи", UNKNOWN, "в places.json нет признака лыжного курорта"))
+        out.append(("лыжи", UNKNOWN, "проверка лыж по catalog.json не сделана (#111)"))
     if expect.get("cheap_without_sum"):
         out.append(("«недорого»", UNKNOWN, "сумма не названа, порога нет"))
     return out

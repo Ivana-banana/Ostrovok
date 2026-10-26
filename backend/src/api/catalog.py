@@ -12,6 +12,7 @@ import json
 import math
 import re
 import statistics
+import time
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -28,6 +29,7 @@ ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 MARINE = "https://marine-api.open-meteo.com/v1/marine"
 YEAR = "2025"  # one year of climate for a place outside the snapshot
 TIMEOUT_S = 4
+FAILED_S = 60  # after a network error the geocoder is not asked again for this long
 SEA_KM = 30  # as in scripts/build_catalog.py
 AIRPORT_KM = 200
 FUZZY = 0.85  # «Антлия» -> «Анталия», but «Малага» is not «Мале»
@@ -40,6 +42,7 @@ CASES = {"", "а", "я", "у", "ю", "е", "и", "ы", "ой", "ей", "ом", "
 PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _online: dict[str, dict | None] = {}
+_failed: dict[str, float] = {}  # name -> time.monotonic() of the last network error
 
 
 @cache
@@ -265,10 +268,13 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
     if key in disk:
         _online[key] = disk[key]
         return disk[key]
+    if time.monotonic() - _failed.get(key, -FAILED_S) < FAILED_S:
+        return None  # offline demo: one timeout per city a minute, not one per call
     try:
         place = _online_place(name.strip(), fetch or _get)
     except Exception:  # noqa: BLE001  TRAP-6: no network, a timeout or a strange answer
-        return None  # not cached: the next call asks again
+        _failed[key] = time.monotonic()
+        return None  # not in _online: after FAILED_S the geocoder is asked again
     _online[key] = place
     if place is not None:
         try:
