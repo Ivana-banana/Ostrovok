@@ -11,6 +11,7 @@ import re
 from datetime import date, timedelta
 
 from api.fixtures import CATALOG, future_date
+from api.offers import places
 
 MONTHS = {
     "январ": 1, "феврал": 2, "март": 3, "апрел": 4, "ма": 5, "июн": 6,
@@ -47,6 +48,22 @@ PLACE_RES = [
 # Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not.
 CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)"))]
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск"}
+# First word as a destination (TRAP-2). A city of places.json counts in any case. An unknown
+# capitalized word counts only before a trip word («Иркутск на неделю»), and not if it is an
+# ordinary first word: «Хочу», «Недорого», «Тёплое», «Нет».
+FIRST_NEXT = re.compile(r"\s+(?:в|во|на|с|со|для|до|вдвоем|втроем|вчетвером)\b|\s*,\s*\d")
+NOT_CITY_START = re.compile(
+    r"(?:хоч|хот|ищ|нуж|надо|подск|посов|подбер|подбир|помог|помощ|орган|спланир|планир|собир"
+    r"|собер|давай|еду|едем|леч|лет[иеа]|поед|полет|мечт|привет|здравств|добр|отпуск|отел|билет"
+    r"|тур\b|туры|турист|поезд|подум|интерес|сделай|создай|найд|покаж|расскаж|предлож|можн"
+    r"|нельз|будем|будет|как\b|что\b|где\b|куд|когд|сколько|есть\b|если\b|для\b|мне\b|нам\b"
+    r"|мы\b|ну\b|вот\b|так\b|или\b|тепл|хорош|нормал|красив|дешев|дорог|быстр|скоро|срочно"
+    r"|лучш|любо|какой|какая|какое|зим|весн|осен|друз|компан|сем[ьъ]|одн|вмест"
+    r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее)"
+)  # fmt: skip
+# Not a city by its ending: verbs («Планируем», «Ищете»), adjectives («Тёплое»), infinitives.
+NOT_CITY_END = re.compile(r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ой|ая|яя|ое|ее|ые|ие)$")
+CASES = "(?:а|у|е|ом|ем|ой|ы|и|ю|я|ь|ею|ам|ах|ами)"
 CHILD_RE = re.compile(
     rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*)"
 )
@@ -109,10 +126,43 @@ def _place_at(text: str, t: str, pos: int) -> str | None:
     )
 
 
+def _known(word: str) -> str | None:
+    """«Иркутске», «иркутска» -> «Иркутск» (TRAP-3): one-word names of places.json, any case."""
+    w = word.lower().replace("ё", "е")
+    for p in places():
+        n = p["name"].lower().replace("ё", "е")
+        if " " in n:
+            continue
+        stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
+        if w == n or re.fullmatch(re.escape(stem) + CASES, w):
+            return p["name"]
+    return None
+
+
+def _first_city(text: str, t: str) -> tuple[int, str] | None:
+    """The first word of the message as the destination: «Иркутск на неделю…», «Мурманск, …»."""
+    m = re.match(r"\s*([А-ЯЁа-яё][а-яё]+(?:-[А-ЯЁа-яё]+)*)", text)
+    if not m:
+        return None
+    word, low = m.group(1), t[m.start(1) : m.end(1)]
+    if known := _known(word):
+        return m.start(1), known  # a known city may be lower case: «иркутск на неделю»
+    if not FIRST_NEXT.match(t, m.end()):
+        return None  # «Нет», «Спасибо»: no trip word after, not a city
+    words_not_city = [low in NOT_PLACES, len(low) < 3, not word[0].isupper(), re.match(MONTH, low)]
+    words_not_city.append(low in NUMS)
+    if any(words_not_city) or NOT_CITY_START.match(low) or NOT_CITY_END.search(low):
+        return None
+    if any(re.search(p, low) for _, p in WISHES) or _place_at(text, t, m.start(1)):
+        return None  # a wish word, or a place the other rules find anyway
+    return m.start(1), _nominative(word)
+
+
 def _places(text: str, t: str, found: dict) -> None:
     """Origin after «из/от», then destinations in text order: known places and capitalized names."""
     for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
-        if name := _place_at(text, t, m.end()) or _capital(text, m.end()):
+        w = re.match(r"[а-яе-]+", t[m.end() :])
+        if name := _place_at(text, t, m.end()) or _capital(text, m.end()) or (w and _known(w[0])):
             break
     else:
         m = None
@@ -127,9 +177,15 @@ def _places(text: str, t: str, found: dict) -> None:
         free = t[m.end()] != " " and not _place_at(text, t, m.end())  # " ": the origin span
         if free and (name := _capital(text, m.end())):
             hits.append((m.end(), name))
-    first = r"^\s*([А-ЯЁ][а-яё-]+)(?=\s*,\s*\d|\s+(?:во?\s+" + MONTH + r"|[сн]а?\s+\d))"
-    if (m := re.match(first, text)) and not _place_at(text, t, m.start(1)):
-        hits.append((m.start(1), m.group(1)))
+    for m in re.finditer(r"(?:^|[\s,(])(?:во?|на)\s+([а-яе-]+)", t):  # «в иркутск», «в Иркутске»
+        if (
+            t[m.start(1)] != " "
+            and not _place_at(text, t, m.start(1))
+            and (n := _known(m.group(1)))
+        ):
+            hits.append((m.start(1), n))
+    if first := _first_city(text, t):
+        hits.append(first)
     dests = []
     for _, name in sorted(hits):
         if name not in dests and name != found.get("origin"):
@@ -143,7 +199,13 @@ def _capital(text: str, pos: int) -> str | None:
     m = re.match(r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*", text[pos:])
     if not m or m.group(0).lower() in NOT_PLACES or re.match(MONTH, m.group(0).lower()):
         return None
-    return re.sub(r"и[ию]$", "ия", m.group(0))
+    return _known(m.group(0)) or _nominative(m.group(0))
+
+
+def _nominative(word: str) -> str:
+    """Unknown names: «Грузию» -> «Грузия», «Иркутске» -> «Иркутск», «Калининграда» -> «Калининград»."""
+    word = re.sub(r"и[ию]$", "ия", word)
+    return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
 
 
 def _dates(t: str, found: dict, notes: list[str]) -> None:
