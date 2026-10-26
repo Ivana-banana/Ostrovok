@@ -628,7 +628,8 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
         return
     starts = rf"\bчерез\s+(?:{NUM}\s*)?(?:дн\w*|день|недел\w*)|\bследующ\w*\s+недел\w*"
     # «Сдвинь на 3 дня», «Продли на 2 дня»: an edit of the current trip, not a new length (#36)
-    starts += rf"|\b{EDIT_VERB}\w*(?:\s+\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
+    # «Сократить расходы на 3 дня» names a cost, not the trip: the object word is no edit
+    starts += rf"|\b{EDIT_VERB}\w*(?:\s+(?!расход|бюджет|затрат|цен)\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(rf"\b{NUM}\s*ноч\w*", t):
         n = _num(m.group(1))
@@ -640,6 +641,15 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
         n = _num(m.group(1))
         found["nights"] = max(n - 1, 1)
         notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
+    elif m := re.search(rf"\b{NUM}\s*сут\w*", t):
+        found["nights"] = _num(m.group(1))
+        notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
+    elif m := re.search(r"\bна\s+сутки\b", t):
+        found["nights"] = 1
+        notes.append(f"длительность: 1 ноч. («{m.group(0)}»)")
+    elif m := re.search(r"\bна\s+пар[уы]\s+(?:дн\w*|день|суток)", t):
+        found["nights"] = 2
+        notes.append(f"длительность: 2 ноч. («{m.group(0)}»)")
     elif m := re.search(rf"\b(?:{NUM}\s+)?недел", t):
         found["nights"] = 7 * (_num(m.group(1)) if m.group(1) else 1)
     elif re.search(r"\bвыходн", t):
