@@ -38,7 +38,7 @@ FIELD_NODE = {
     "wishes": "ranking",
     "priorities": "ranking",
 }
-# Change.what -> label for the reply text.
+# Key of a change group -> Change.what, the label the user sees.
 LABELS = {
     "destinations": "направление",
     "origin": "откуда",
@@ -55,7 +55,7 @@ LABELS = {
     "priorities": "что важнее",
     "hotel": "отель",
     "transport": "дорога",
-    "total_rub": "итого",
+    "total_rub": "итог",
     "issues": "стыковки",
     "cart": "корзина",
 }
@@ -146,7 +146,7 @@ def _refundable(v: bool | None) -> str:
     return {True: "бесплатная отмена", False: "невозвратный тариф", None: "не важно"}[v]
 
 
-SPEC_VIEWS = {  # Change.what -> TripSpec as text
+SPEC_VIEWS = {  # LABELS key -> TripSpec as text
     "destinations": lambda s: ", ".join(s.destinations) or "не выбрано",
     "origin": lambda s: s.origin or "не задано",
     "dates": _dates,
@@ -211,7 +211,7 @@ def changes(old: Plan, new: Plan, old_cart: Cart, new_cart: Cart) -> list[Change
         pairs.append(("issues", _issues(old), _issues(new)))
     if old_cart.items:
         pairs.append(("cart", _cart(old_cart), _cart(new_cart)))
-    return [Change(what=w, before=a, after=b) for w, a, b in pairs if a != b]
+    return [Change(what=LABELS[w], before=a, after=b) for w, a, b in pairs if a != b]
 
 
 def _total(plan: Plan) -> int:
@@ -220,4 +220,4 @@ def _total(plan: Plan) -> int:
 
 def describe(changes: list[Change]) -> list[str]:
     """Reply lines for the user: "label: before → after"."""
-    return [f"{LABELS.get(c.what, c.what)}: {c.before} → {c.after}" for c in changes]
+    return [f"{c.what}: {c.before} → {c.after}" for c in changes]

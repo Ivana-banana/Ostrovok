@@ -61,7 +61,7 @@ def calls(monkeypatch):
     ],
 )
 def test_dirty_nodes_start_at_the_first_node_that_reads_the_field(update, nodes):
-    spec = TripSpec(destinations=["Сочи"], origin="Москва", meal="BB")
+    spec = TripSpec.model_validate({"destinations": ["Сочи"], "origin": "Москва", "meal": "BB"})
     assert dag.dirty_nodes(spec, spec.model_copy(update=update)) == nodes
 
 
@@ -73,7 +73,7 @@ def test_meal_change_reranks_without_a_new_search(booked, calls):
     assert plan.offers == booked.plan.offers  # transport and hotels are kept
     hotel = next(o for o in plan.offers if o.offer_id in plan.selected and o.kind == "hotel")
     assert hotel.meal == "AI"
-    assert any(c.what == "meal" for c in plan.changes)
+    assert any(c.what == "питание" for c in plan.changes)
 
 
 def test_same_selection_keeps_the_timeline(booked, calls):
@@ -99,10 +99,10 @@ def test_date_shift_searches_again_for_the_same_destination(booked, calls):
     assert plan.spec.destinations == old.destinations
     assert all(h.date_in == spec.date_from for h in plan.offers if h.kind == "hotel")
     assert not {o.offer_id for o in plan.offers} & set(booked.plan.selected)
-    dates = next(c for c in plan.changes if c.what == "dates")
+    dates = next(c for c in plan.changes if c.what == "даты")
     assert dates.before.startswith(f"{old.date_from:%d.%m}")
     assert dates.after.startswith(f"{spec.date_from:%d.%m}")
-    assert "month" not in {c.what for c in plan.changes}
+    assert "месяц" not in {c.what for c in plan.changes}
 
 
 def test_destination_change_runs_every_node(booked, calls):
@@ -119,14 +119,17 @@ def test_no_change_recomputes_nothing(booked, calls):
 
 
 def test_first_build_runs_all_nodes_without_changes(calls):
-    spec = TripSpec(
-        destinations=["Сочи"],
-        origin="Москва",
-        date_from=date(2030, 11, 20),
-        date_to=date(2030, 11, 23),
-        nights=3,
+    spec = TripSpec.model_validate(
+        {
+            "destinations": ["Сочи"],
+            "origin": "Москва",
+            "date_from": date(2030, 11, 20),
+            "date_to": date(2030, 11, 23),
+            "nights": 3,
+        }
     )
-    plan, cart, done = dag.replan(Plan(spec=TripSpec()), spec, Cart())
+    empty = Plan(spec=TripSpec.model_validate({}))
+    plan, cart, done = dag.replan(empty, spec, Cart())
     assert done == ["destination", "offers", "ranking"]
     assert calls == ["find_offers", "rank"]
     assert plan.offers and plan.selected and plan.changes == [] and cart.items == []
@@ -136,7 +139,7 @@ def test_chat_shows_before_after_and_replaces_the_cart(store, booked):
     r = say(store, "а 4 ночи", booked.session_id)
     assert r.stage == "compare" and r.cart.items == []
     assert "Было → стало:" in r.reply and "корзина: " in r.reply
-    assert any(c.what == "cart" and c.after.startswith("пусто") for c in r.plan.changes)
+    assert any(c.what == "корзина" and c.after.startswith("пусто") for c in r.plan.changes)
     for text in ("беру", "да"):
         r = say(store, text, r.session_id)
     assert r.stage == "checkout"
