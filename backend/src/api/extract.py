@@ -125,6 +125,17 @@ PRIORITIES = [
     ("rating", r"рейтинг|отзыв|зв[её]зд"),
 ]
 
+# The exact message of the web priority chips (web/src/format.ts, priorityMessage).
+CHIP_NAMES = ("цена", "отмена", "питание", "расположение", "время в пути", "рейтинг")
+CHIP_RE = re.compile(
+    rf"\s*мои приоритеты по важности:\s*(?:{'|'.join(CHIP_NAMES)})(?:,\s*(?:{'|'.join(CHIP_NAMES)}))*\.?\s*"
+)
+
+
+def is_chip_message(text: str) -> bool:
+    """The chip phrase only: rules read all of it, the model has nothing to add (S9)."""
+    return CHIP_RE.fullmatch(text.lower()) is not None
+
 
 def _month(word: str) -> int:
     return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»
@@ -446,12 +457,9 @@ def with_llm(found: dict, llm_found: dict | None) -> dict:
     """Rule fields win; the LLM adds the fields rules missed and its wishes (T11, #15).
 
     Dates are one group: if rules read any date field, the LLM dates are not mixed in.
-    A turn where rules read only `priorities` takes nothing from the LLM.
     """
     if not llm_found:
         return found
-    if found.keys() == {"priorities"}:
-        return found  # a priority reorder (S9) is never turned into a filter by the model
     out = dict(found)
     for k, v in llm_found.items():
         if k == "wishes":

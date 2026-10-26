@@ -34,7 +34,7 @@ from api.contracts import (
     TripSpec,
 )
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
-from api.extract import MONTH_NAMES, extract, with_llm
+from api.extract import MONTH_NAMES, extract, is_chip_message, with_llm
 from api.fixtures import CATALOG, build_timeline, future_date, suggest_destinations
 from api.optimizer import (
     _hotel_why,
@@ -557,7 +557,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         found["destinations"] = []
     llm_found = (
         None
-        if service or other or not use_llm
+        if service or other or not use_llm or is_chip_message(message)  # chips: S9, #76
         else llm.extract_spec(message, old.plan.spec, deadline)
     )
     if SHIFT_RE.search(t.replace("ё", "е")):

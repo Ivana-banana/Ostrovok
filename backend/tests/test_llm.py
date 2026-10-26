@@ -255,22 +255,39 @@ def test_rules_win_over_the_llm_and_dates_stay_one_group():
     assert with_llm(found, None) == found
 
 
-def test_s9_priority_reorder_takes_no_other_field_from_the_llm(store, fake):
-    """The model adds «отмена» as a filter and «питание» as a meal: a reorder ignores both."""
+def test_s9_chip_phrase_goes_to_no_model(store, fake):
+    """A chip click is an order, not a filter: no LLM call, no field from it."""
     r = say(store, SOCHI)
     before = r.plan.spec
-    fake.spec = lambda p: answer(
-        {**NULLS, "refundable": True, "meal": "AI", "wishes": ["бассейн"], "pets": True}
-    )
+
+    def reads():  # calls that read the text into a spec; explanations are another call
+        return [c for c in fake.calls if c["messages"][0]["content"] == llm.SPEC_PROMPT]
+
+    calls = len(reads())
+    fake.spec = lambda p: answer({**NULLS, "refundable": True, "meal": "AI", "pets": True})
     r = say(store, "Мои приоритеты по важности: отмена, питание, цена.", r.session_id)
     spec = r.plan.spec
     assert spec.priorities == ["cancellation", "meal", "price"]
     assert (spec.refundable, spec.meal, spec.pets) == (before.refundable, before.meal, before.pets)
-    assert spec.wishes == before.wishes and r.llm is False
-    out = with_llm({"priorities": ["price"]}, {"refundable": True, "meal": "AI"})
-    assert out == {"priorities": ["price"]}
-    mixed = with_llm({"priorities": ["price"], "budget_rub": 1}, {"refundable": True})
-    assert mixed["refundable"] is True  # other fields in the message: the usual merge
+    assert len(reads()) == calls and r.llm is False
+
+
+@pytest.mark.parametrize(
+    "text, field, value",
+    [
+        ("Для меня главное рейтинг, и чтобы можно было с животными", "pets", True),
+        ("Главное — бесплатная отмена и чтобы был бассейн", "wishes", ["бассейн"]),
+        ("Главное — бесплатная отмена и чтобы был бассейн", "refundable", True),
+        ("Важнее цена, и с питанием", "meal", "AI"),
+    ],
+)
+def test_s9_free_text_with_priorities_keeps_the_llm_fields(store, fake, text, field, value):
+    """Rules read only `priorities` here, but the message has more: the model fields stay."""
+    r = say(store, SOCHI)
+    fake.spec = lambda p: answer({**NULLS, field: value})
+    r = say(store, text, r.session_id)
+    assert getattr(r.plan.spec, field) == value or value[0] in getattr(r.plan.spec, field)
+    assert r.llm is True
 
 
 def test_llm_patch_is_validated(fake):
@@ -312,7 +329,7 @@ def test_s4_injection_is_refused_without_the_llm(store, fake):
     first = say(store, KGD)
     calls = len(fake.calls)
     r = say(store, ATTACK, first.session_id)
-    assert len(fake.calls) == calls and r.llm is False
+    assert len(reads()) == calls and r.llm is False
     assert r.reply.startswith(REFUSAL) and r.stage == first.stage and r.voucher is None
     assert r.plan == first.plan and r.cart == first.cart
     for prompt in (llm.SPEC_PROMPT, llm.WHY_PROMPT):
