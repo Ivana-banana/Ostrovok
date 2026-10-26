@@ -344,10 +344,59 @@ def test_manual_pick_comes_from_the_stored_ranking_not_a_second_rank(store, monk
     assert len(specs) == 1 and specs[0] == r.plan.spec  # no rank() of the old spec
 
 
-def test_pick_of_the_ranked_hotel_is_no_manual_pick(store):
-    """The user took the hotel the ranking showed first: a new ranking may change it."""
+def test_best_labels_match_the_optimizer(store):
+    """_ranked_hotel finds the best bundle by label; an optimizer label change must break here."""
+    plan = say(store, SOCHI).plan
+    tight = plan.spec.model_copy(update={"budget_rub": 100})  # nothing fits: the other label
+    fits = dag.bundles(plan.spec, plan.offers)[0].label
+    over = dag.bundles(tight, plan.offers)[0].label
+    assert fits.startswith(dag.BEST_LABELS[0]) and over.startswith(dag.BEST_LABELS[1])
+
+
+def _with_bundles(r, user_first):
+    """The plan of a session where the user picked a hotel, bundles built by hand: the best
+    bundle (another hotel) and the user's own («ваш выбор»), in the order asked."""
+    plan = r.plan
+    best = plan.bundles[0].model_copy(update={"label": dag.BEST_LABELS[0]})
+    own = plan.bundles[0].model_copy(
+        update={"label": "ваш выбор: " + _hotel(r).title, "offer_ids": plan.selected}
+    )
+    assert best.offer_ids != own.offer_ids
+    return plan.model_copy(update={"bundles": [own, best] if user_first else [best, own]})
+
+
+@pytest.mark.parametrize("user_first", [True, False])
+def test_manual_pick_survives_a_replan_whatever_the_bundle_order(store, user_first):
+    r, pick = _pick_third(store)
+    plan = _with_bundles(r, user_first)
+    assert dag._ranked_hotel(plan).title != pick.title
+    spec = plan.spec.model_copy(update={"refundable": True})
+    new, _, _ = dag.replan(plan, spec, r.cart)
+    hotel = _hotel(r.model_copy(update={"plan": new}))
+    assert hotel.title == pick.title and hotel.cancellation.refundable
+    assert new.explanations[0].why == dag.MANUAL_WHY
+
+
+def test_ranked_hotel_picked_is_replaced_by_the_new_ranking(store):
+    """Picking the top-ranked hotel is no manual pick: after a spec edit the ranking decides."""
     r = say(store, SOCHI)
     ranked = _hotel(r)
     r = say(store, "беру", r.session_id)
     assert _hotel(r).title == ranked.title
     assert dag._ranked_hotel(r.plan).title == ranked.title
+    r = say(store, "а можно всё включено", r.session_id)
+    assert r.plan.selected == dag.rank(r.plan.spec, r.plan.offers)[0]
+    assert r.plan.explanations[0].why != dag.MANUAL_WHY
+    assert "ваш выбор" not in {c.what for c in r.plan.changes}
+
+
+def test_manual_pick_stays_when_nothing_fits_the_budget(store):
+    """The ranked set is over the new budget too: the pick is not blamed for it (#34 review)."""
+    r, pick = _pick_third(store)
+    r = say(store, "а бюджет 1000 руб", r.session_id)
+    ranked_total = sum(
+        o.price_rub for o in r.plan.offers if o.offer_id in dag.rank(r.plan.spec, r.plan.offers)[0]
+    )
+    assert ranked_total > 1000  # nothing fits
+    assert _hotel(r).title == pick.title and r.plan.explanations[0].why == dag.MANUAL_WHY
+    assert "ваш выбор" not in {c.what for c in r.plan.changes}

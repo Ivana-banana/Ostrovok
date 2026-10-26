@@ -139,23 +139,32 @@ def _same_hotel(h: HotelOffer, offers: list[Offer]) -> HotelOffer | None:
     return next((o for o in group if (o.meal, o.cancellation.refundable) == same), group[0])
 
 
+# Labels of the best bundle in optimizer.optimize; a test keeps them in step.
+BEST_LABELS = ("лучший по вашим приоритетам", "ближе всего к условиям")
+
+
 def _ranked_hotel(plan: Plan) -> HotelOffer | None:
-    """The hotel of the best set the ranking showed: the first bundle, stored with the plan."""
-    ids = set(plan.bundles[0].offer_ids) if plan.bundles else set()
+    """The hotel of the best set the ranking showed, read from the stored bundles.
+
+    The best bundle is found by its label, not by its place: a bundle of the user's own trip
+    may stand before it. Without such a label the first bundle stands for the ranking.
+    """
+    best = next((b for b in plan.bundles if b.label.startswith(BEST_LABELS)), None)
+    best = best or (plan.bundles[0] if plan.bundles else None)
+    ids = set(best.offer_ids) if best else set()
     return next((o for o in plan.offers if isinstance(o, HotelOffer) and o.offer_id in ids), None)
 
 
 def _keep_pick(old: Plan, plan: Plan) -> Change | None:
     """Keeps the hotel the user picked over the ranking («беру первый»).
 
-    The pick is manual when the old plan selects another hotel than its first bundle, the
+    The pick is manual when the old plan selects another hotel than its best bundle, the
     ranking the user saw. The bundles are stored, so no second rank() of the old spec runs
-    here. It is dropped only when the
-    hotel is gone, the edit changed a hotel requirement it fails, or a lowered budget fits the
-    ranked set but not the pick; the Change says why.
+    here. It is dropped only when the hotel is gone, the edit changed a hotel requirement it
+    fails, or a lowered budget fits the ranked set but not the pick; the Change says why.
     """
     picked, ranked = _hotel_of(old), _hotel_of(plan)
-    if not picked or not ranked or ranked.title == picked.title:
+    if not picked or not ranked or (ranked.title, ranked.city) == (picked.title, picked.city):
         return None
     shown = _ranked_hotel(old)
     if not shown or (shown.title, shown.city) == (picked.title, picked.city):
