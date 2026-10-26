@@ -464,7 +464,7 @@ def _alternatives(spec: TripSpec, skip: list[str]) -> list[str]:
 
 def _no_offers(plan: Plan, text: str) -> tuple[str, list[Question]]:
     """The «choose another» exit of the select stage: 2–3 destinations as the text and buttons."""
-    names = _alternatives(plan.spec, plan.spec.destinations)
+    names = _alternatives(plan.spec, [*plan.spec.destinations, plan.spec.origin])
     if not names:
         return text, []
     plan.destinations = [d for d in suggest_destinations(plan.spec) if d.name in names]
@@ -585,16 +585,20 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return reply("clarify", Plan(spec=spec), _text_clarify(questions), questions=questions)
     spec = assume(spec)
     if not spec.destinations:
-        dests = suggest_destinations(spec)
+        dests = suggest_destinations(spec, 5)  # 5: four are left without the origin
         if other:
             gone = old.plan.spec.destinations
             ranked = suggest_destinations(spec, len(CATALOG))
             shown = [d.name for d in old.plan.destinations] if old.stage == "inspire" else []
             # Without the options already shown, if enough others are left.
-            dests = [d for d in ranked if d.name not in [*gone, *shown]]
-            dests = (dests if len(dests) >= 2 else [d for d in ranked if d.name not in gone])[:3]
-        # The origin is no destination: a stay in the city of departure has no transport (#94).
-        dests = [d for d in dests if d.name != spec.origin]
+            # The origin is no destination: a stay in the city of departure has no transport (#94).
+            dests = [d for d in ranked if d.name not in [*gone, *shown, spec.origin]]
+            dests = (
+                dests
+                if len(dests) >= 2
+                else [d for d in ranked if d.name not in [*gone, spec.origin]]
+            )[:3]
+        dests = [d for d in dests if d.name != spec.origin][:4]
         plan = Plan(spec=spec, destinations=dests)
         if not other:
             return reply("inspire", plan, _text_inspire(plan))
