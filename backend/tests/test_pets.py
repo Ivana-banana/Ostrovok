@@ -103,3 +103,50 @@ def test_a_click_after_the_flight_only_dead_end_has_no_catalogue_phrase(store):
     other = say(store, r.questions[0].options[0], r.session_id)
     assert NO_CATALOG not in other.reply and other.stage == "compare"
     assert all(o.pets_allowed for o in chosen(other) if o.kind in ("hotel", "transport"))
+
+
+# --- #136: the tails of the #131 review ---
+
+
+@pytest.mark.parametrize("word", ["с котом", "с кошкой", "с псом", "с собакой"])
+def test_pet_word_forms_set_the_pet_flag(store, word):
+    r = say(store, f"Сочи {word} на выходные 12–14 декабря, из Москвы, двое взрослых")
+    assert r.plan.spec.pets
+
+
+@pytest.mark.parametrize("pick", ["5", "пятый", "беру пятый"])
+def test_the_fifth_hotel_is_picked_by_number(store, pick):
+    r = say(store, "Казань на выходные 12–14 декабря, из Москвы, двое взрослых")
+    picked = say(store, pick, r.session_id)
+    assert picked.stage == "assemble"
+    assert any(o.kind == "hotel" and o.title.startswith("Казантель") for o in chosen(picked))
+
+
+def test_no_second_dead_end_after_the_select_dead_end(store):
+    r = say(store, "Тбилиси, 5 ночей с 14 ноября, двое взрослых, из Москвы, с собакой")
+    assert r.stage == "select"
+    again = say(store, "беру", r.session_id)
+    assert again.questions and "Казань" not in again.questions[0].options
+    assert "Казань" not in again.reply
+
+
+def test_the_dead_end_reply_shows_what_changed(store):
+    r = say(store, "Казань на выходные 12–14 декабря, из Москвы, двое взрослых")
+    dog = say(store, "с нами едет собака", r.session_id)
+    assert dog.reply.startswith("Было → стало:")
+    assert "нет отметки о приёме животных" in dog.reply
+
+
+def test_the_dead_end_text_agrees_in_case(store):
+    r = say(store, KAZAN_DOG)
+    assert "в «Казань»" not in r.reply and "в данных 5 отелей" not in r.reply
+    assert "Ни у одного из 5 отелей" in r.reply
+
+
+def test_simulator_dead_end_rule_ignores_the_catalogue_phrase(store):
+    from api.checks import _is_pets_dead_end
+
+    dead = say(store, KAZAN_DOG)
+    assert _is_pets_dead_end(dead)
+    unknown = dead.model_copy(update={"reply": "Направления «Х» пока нет в каталоге."})
+    assert not _is_pets_dead_end(unknown)
