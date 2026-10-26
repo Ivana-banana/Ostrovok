@@ -30,6 +30,11 @@ type Priced = { offer_id: string; title: string; price_rub: number; synthetic: b
 export type HotelOffer = Priced & {
   kind: "hotel";
   city: string;
+  tz: string;
+  date_in: string;
+  date_out: string;
+  adults: number;
+  children_ages: number[];
   stars: number | null;
   rating: number | null;
   meal: Meal;
@@ -64,15 +69,20 @@ export type Destination = {
   lon: number;
   why: string;
   est_total_rub: number;
+  synthetic: boolean;
   air_c: number | null;
   water_c: number | null;
   travel_hours: number;
   tradeoffs: string[];
+  violates: string[];
 };
 
 export type Explanation = { offer_id: string; why: string; tradeoffs: string[]; risks: string[] };
 export type TimelineEvent = { at: string; title: string; offer_id: string | null };
 export type TimelineIssue = { severity: "warn" | "error"; text: string; fixes: string[] };
+
+export type Change = { what: string; before: string; after: string };
+export type Question = { text: string; options: string[] };
 
 export type Plan = {
   spec: TripSpec;
@@ -82,7 +92,7 @@ export type Plan = {
   explanations: Explanation[];
   timeline: TimelineEvent[];
   issues: TimelineIssue[];
-  changes: string[];
+  changes: Change[];
 };
 
 export type Cart = { items: Offer[]; total_rub: number };
@@ -90,6 +100,7 @@ export type Cart = { items: Offer[]; total_rub: number };
 export type Voucher = {
   booking_id: string;
   items: Offer[];
+  spec: TripSpec;
   total_rub: number;
   created_at: string;
   simulated: true;
@@ -101,7 +112,7 @@ export type ChatReply = {
   session_id: string;
   stage: Stage;
   reply: string;
-  questions: string[];
+  questions: Question[];
   plan: Plan;
   cart: Cart;
   voucher: Voucher | null;

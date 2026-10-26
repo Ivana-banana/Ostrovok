@@ -13,7 +13,7 @@ with a time zone, local to the place of the event. Only providers write prices a
 A change is a separate PR labelled contract; web/src/contracts.ts changes in the same PR.
 """
 
-from datetime import date, datetime, time
+from datetime import date, time
 from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, Field
@@ -54,7 +54,12 @@ class HotelOffer(BaseModel):
     offer_id: str
     title: str
     city: str
-    price_rub: int = Field(ge=0)
+    tz: str  # IANA zone of the hotel, e.g. Europe/Moscow
+    date_in: date
+    date_out: date
+    adults: int = Field(ge=1)
+    children_ages: list[int] = []
+    price_rub: int = Field(gt=0)
     synthetic: bool = True
     stars: int | None = None
     rating: float | None = None
@@ -79,7 +84,7 @@ class TransportOffer(BaseModel):
     depart_at: AwareDatetime
     arrive_at: AwareDatetime
     changes: int = 0
-    price_rub: int = Field(ge=0)
+    price_rub: int = Field(gt=0)
     synthetic: bool = True
 
 
@@ -89,7 +94,7 @@ class TransferOffer(BaseModel):
     title: str
     depart_at: AwareDatetime
     arrive_at: AwareDatetime
-    price_rub: int = Field(ge=0)
+    price_rub: int = Field(gt=0)
     synthetic: bool = True
 
 
@@ -115,11 +120,13 @@ class Destination(BaseModel):
     lat: float
     lon: float
     why: str
-    est_total_rub: int  # whole-trip estimate; synthetic
+    est_total_rub: int  # whole-trip estimate
+    synthetic: bool = True
     air_c: float | None = None  # climate of the travel month
     water_c: float | None = None
     travel_hours: float
     tradeoffs: list[str] = []
+    violates: list[str] = []  # user requirements this option breaks, e.g. flight over 5 h
 
 
 class Explanation(BaseModel):
@@ -141,6 +148,19 @@ class TimelineIssue(BaseModel):
     fixes: list[str] = []  # offer_id of add-ons or replacements that fix the issue
 
 
+class Change(BaseModel):
+    """One before -> after line of a re-plan; the DAG code fills it, not the LLM (TRAP-4)."""
+
+    what: str
+    before: str
+    after: str
+
+
+class Question(BaseModel):
+    text: str
+    options: list[str] = []  # quick answers for buttons; empty: free text
+
+
 class Plan(BaseModel):
     spec: TripSpec
     destinations: list[Destination] = []
@@ -149,7 +169,7 @@ class Plan(BaseModel):
     explanations: list[Explanation] = []
     timeline: list[TimelineEvent] = []
     issues: list[TimelineIssue] = []
-    changes: list[str] = []  # before -> after lines after a re-plan
+    changes: list[Change] = []  # after a re-plan
 
 
 class Cart(BaseModel):
@@ -160,8 +180,9 @@ class Cart(BaseModel):
 class Voucher(BaseModel):
     booking_id: str
     items: list[Offer]
+    spec: TripSpec  # dates and guests of the booking
     total_rub: int
-    created_at: datetime
+    created_at: AwareDatetime
     simulated: Literal[True] = True  # payment is simulated
 
 
@@ -174,7 +195,7 @@ class ChatReply(BaseModel):
     session_id: str
     stage: Stage
     reply: str
-    questions: list[str] = []  # blocking clarifications only; at most 2
+    questions: list[Question] = []  # blocking clarifications only; at most 2
     plan: Plan
     cart: Cart
     voucher: Voucher | None = None
