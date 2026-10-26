@@ -202,6 +202,29 @@ suite("приложение", () => {
     expect(calls.at(-1)?.body).toMatchObject({ message: "беру первый" });
   });
 
+  it("выбор транспорта на этапе сравнения — сообщение агенту «возьми рейс N»", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };
+    compare.plan.selected = [];
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: compare });
+    routes["POST /api/chat"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const table = box.querySelector("[aria-label='Сравнение транспорта']");
+    const pick = [...(table?.querySelectorAll("button") ?? [])][0] as HTMLButtonElement;
+    expect(pick.getAttribute("aria-label")).toContain("Выбрать рейс 1");
+    await act(async () => pick.click());
+    await flush();
+    expect(calls.at(-1)?.body).toMatchObject({ message: "возьми рейс 1" });
+  });
+
+  it("выбранный рейс и этап корзины — без кнопки выбора транспорта", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const table = box.querySelector("[aria-label='Сравнение транспорта']");
+    expect(table?.querySelectorAll("button").length).toBe(0);
+  });
+
   it("хранилище браузера бросает ошибку — приложение работает, ответ показан", async () => {
     const boom = () => {
       throw new DOMException("blocked", "SecurityError");
