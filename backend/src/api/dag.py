@@ -90,19 +90,25 @@ SHIFT_RE = re.compile(
     rf"\bна\s+(?:(?P<n>{NUM}|пар[уы])\s+)?(?P<unit>дн\w*|день|сут\w*|недел\w*|ноч\w*)"
     r"\s+(?P<way>позже|раньше)"
 )
-# A word that says which end of the trip moves; no word -> both ends move.
-END_CUE = r"\b(?:обратн|верн|домой|выезд|выселя|выселен|выписа|отъезд|уед|уезж|уех|улет|возвращ)"
+# A word that says which end of the trip moves; no word -> both ends move. Departure verbs
+# («улетим», «уедем», «выезд из Москвы», «отъезд») mean leaving home, so they are no cue.
+END_CUE = r"\b(?:обратн|верн|домой|выезд\s+из\s+отел|выселя|выселен|выписа|возврат|возвращ)"
 START_CUE = r"\b(?:засел|заезд|заех|заезж|приезд|приед|приеха|прилет|вылет|начал|старт)"
 # A request to move the dates that SHIFT_RE does not read: no amount, no direction or an odd word.
-_MOVE = r"(?:перенес\w*|перенос\w*|сдвин\w*|сдвиг\w*|передвин\w*|отлож\w*|подвин\w*|поменя\w*|измени\w*)"
+# «поездк…» names the date only with a move verb: «измени бюджет поездки» is no date edit.
+_MOVE = r"(?:перенес\w*|перенос\w*|сдвин\w*|сдвиг\w*|передвин\w*|отлож\w*|подвин\w*)"
+_WEAK_MOVE = r"(?:поменя\w*|измени\w*)"
 _DATE_WORD = (
     r"(?:дат\w*|поездк\w*|вылет\w*|отпуск\w*|заезд\w*|выезд\w*|заселени\w*|возвращени\w*|обратн\w*)"
 )
+_WEAK_DATE_WORD = r"(?:дат\w*|заезд\w*|заселени\w*|возвращени\w*|возврат\w*)"
 _UNIT = r"(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
 DATE_EDIT_RE = re.compile(
     rf"\b{_MOVE}\b[^.!?]*?\b(?:{_DATE_WORD}|на\s+\w+\s+{_UNIT})"
+    rf"|\b{_WEAK_MOVE}\b[^.!?]*?\b(?:{_WEAK_DATE_WORD}|на\s+\w+\s+{_UNIT})"
     rf"|\bна\s+\w+\s+{_UNIT}\s+(?:позже|раньше)"
-    rf"|(?:{START_CUE}|{END_CUE})\w*[^.!?]*\b(?:позже|раньше)\b"
+    # «вылет позже 10 утра» is a time of day, not a date
+    rf"|(?:{START_CUE}|{END_CUE})\w*[^.!?]*\b(?:позже|раньше)\b(?!\s+(?:\d|чем|в\s+\d))"
 )
 MANUAL_WHY = "вы выбрали этот отель сами"
 # What the user sees about a shift; the kinds are the ends that moved.
@@ -116,13 +122,20 @@ def is_shift_note(assumption: str) -> bool:
     return bool(SHIFT_NOTE_RE.match(assumption))
 
 
-def _which_end(text: str, m: re.Match, lo: int, hi: int) -> str:
-    """ "start", "end" or "both" for the shift phrase m; lo..hi bounds the clause around it."""
+def _which_end(text: str, m: re.Match, lo: int, hi: int, places: list[str]) -> str:
+    """ "start", "end" or "both" for the shift phrase m; lo..hi bounds the clause around it.
+
+    places: the destinations of the trip; «вылет из Сочи» from there is the flight back.
+    """
     before = re.split(r"[.,;!?]|\sа\s|\sи\s", text[lo : m.start()])[-1]
     after = re.split(r"[.,;!?]|\sа\s|\sи\s", text[m.end() : hi])[0]
     for part in (before, after):
         if re.search(END_CUE, part):  # «вылет обратно» is the return
             return "end"
+        if f := re.search(r"вылет\w*\s+из\s+(\w+)", part):
+            stems = [p.lower().replace("ё", "е")[:4] for p in places]
+            if f.group(1)[:4] in stems:
+                return "end"
         if re.search(START_CUE, part):
             return "start"
     return "both"
@@ -158,7 +171,7 @@ def shift_dates(spec: TripSpec, text: str) -> TripSpec:
         days *= 1 if m.group("way") == "позже" else -1
         lo = found[i - 1].end() if i else 0
         hi = found[i + 1].start() if i + 1 < len(found) else len(t)
-        kind = _which_end(t, m, lo, hi)
+        kind = _which_end(t, m, lo, hi, spec.destinations)
         total[kind] += days
         start += timedelta(days=days) if kind != "end" else timedelta(0)
         end += timedelta(days=days) if kind != "start" else timedelta(0)

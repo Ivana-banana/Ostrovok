@@ -555,7 +555,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         try:
             spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
         except ValueError as e:
-            text = f"{e} Сейчас {spec.date_from:%d.%m}–{spec.date_to:%d.%m}. {HINTS.get(old.stage, '')}"
+            text = (
+                f"{e} Из этого сообщения ничего не применено. "
+                f"Сейчас {spec.date_from:%d.%m}–{spec.date_to:%d.%m}. {HINTS.get(old.stage, '')}"
+            )
             return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
