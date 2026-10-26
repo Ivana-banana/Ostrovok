@@ -276,13 +276,14 @@ def _switch_city(text: str) -> tuple[int, str] | None:
 
 
 def _vetoed_first_word(text: str, t: str, notes: list[str]) -> None:
-    """#109: a capitalized first word before «на 3 дня» / «в мае» that the veto rejects is said,
-    not dropped: «Не нашёл направление «Мамой» в каталоге» (TRAP-2)."""
+    """#109: a first word before «на 3 дня» / «в мае» that the veto rejects leaves a neutral line.
+
+    The word is not quoted: by form «Хотим» and «Иерусалим» look the same (TRAP-2)."""
     m = re.match(r"\s*([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)", text)
     if m and FIRST_NEXT.match(t, m.end()):
         low = t[m.start(1) : m.end(1)]
         if len(low) >= 3 and (NOT_CITY_START.match(low) or NOT_CITY_END.search(low)):
-            notes.append(f"Не нашёл направление «{m.group(1)}» в каталоге")
+            notes.append("направление: не названо — если имели в виду город, напишите «в <город>»")
 
 
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> None:
