@@ -1,0 +1,563 @@
+import type {
+  Bundle,
+  Cart,
+  ChatReply,
+  Destination,
+  HotelOffer,
+  Offer,
+  Plan,
+  Stage,
+  TransportOffer,
+  TripSpec,
+  Voucher,
+} from "./contracts";
+import {
+  MEALS,
+  MODES,
+  STAGES,
+  changeValue,
+  clock,
+  duration,
+  fieldLabel,
+  hours,
+  localDate,
+  localTime,
+  ordinal,
+  rub,
+} from "./format";
+
+export type BoardProps = {
+  reply: ChatReply;
+  busy: boolean;
+  removed: Offer[]; // items removed from the cart in this session, to put back
+  onSend: (text: string) => void;
+  onCart: (action: "add" | "remove", offerId: string) => void;
+  onCheckout: () => void;
+};
+
+// Every price carries the "синтетика" label when the data is mock (TRAP-7).
+export function Price({ value, synthetic = true }: { value: number; synthetic?: boolean }) {
+  return (
+    <span className="price">
+      {rub(value)}
+      {synthetic && <span className="synth">синтетика</span>}
+    </span>
+  );
+}
+
+const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
+
+function StageBar({ stage }: { stage: Stage }) {
+  const at = STAGES.findIndex((s) => s.id === stage);
+  return (
+    <ol className="stages" aria-label="Этапы поездки">
+      {STAGES.map((s, i) => (
+        <li
+          key={s.id}
+          className={i === at ? "now" : i < at ? "done" : undefined}
+          aria-current={i === at ? "step" : undefined}
+        >
+          {s.label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function guests(spec: TripSpec): string {
+  const kids = spec.children_ages.length
+    ? `, дети: ${spec.children_ages.map((a) => `${a} лет`).join(", ")}`
+    : "";
+  return `${spec.adults} взр.${kids}`;
+}
+
+function SpecSummary({ spec }: { spec: TripSpec }) {
+  const rows: [string, string][] = [];
+  if (spec.origin) rows.push(["Откуда", spec.origin]);
+  if (spec.destinations.length) rows.push(["Куда", spec.destinations.join(", ")]);
+  if (spec.date_from)
+    rows.push(["Даты", `${localDate(spec.date_from)} – ${localDate(spec.date_to)}`]);
+  if (spec.nights) rows.push(["Ночей", String(spec.nights)]);
+  rows.push(["Гости", guests(spec)]);
+  if (spec.pets) rows.push(["Питомец", "да"]);
+  if (spec.budget_rub !== null) rows.push(["Бюджет", rub(spec.budget_rub)]);
+  if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
+  if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);
+  return (
+    <section className="card" aria-label="Параметры поездки">
+      <h2>Поездка</h2>
+      <dl className="spec">
+        {rows.map(([k, v]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {spec.assumptions.length > 0 && (
+        <div className="assumptions">
+          <h3>Допущения агента</h3>
+          <ul>
+            {spec.assumptions.map((a) => (
+              <li key={a}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Destinations({ plan, stage, busy, onSend }: {
+  plan: Plan;
+  stage: Stage;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
+  return (
+    <section aria-label="Направления">
+      <h2>Направления</h2>
+      <div className="cards">
+        {plan.destinations.map((d: Destination, i) => {
+          const word = ordinal(i);
+          return (
+            <article key={d.name} className="card dest">
+              <h3>
+                {d.name} <small>{d.country}</small>
+              </h3>
+              <p>{d.why}</p>
+              <p>
+                от <Price value={d.est_total_rub} synthetic={d.synthetic} /> на всех
+              </p>
+              <p className="muted">
+                в пути {hours(d.travel_hours)}
+                {d.air_c !== null && `, воздух ${d.air_c} °C`}
+                {d.water_c !== null && `, вода ${d.water_c} °C`}
+                {(d.air_c !== null || d.water_c !== null) && " (оценка)"}
+              </p>
+              {d.tradeoffs.length > 0 && <p className="muted">Минусы: {d.tradeoffs.join("; ")}</p>}
+              {d.violates.length > 0 && (
+                <p className="bad">Нарушает требования: {d.violates.join("; ")}</p>
+              )}
+              {d.risks.length > 0 && <p className="warn">Риски: {d.risks.join("; ")}</p>}
+              {stage === "inspire" && word && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Выбрать направление ${d.name}`}
+                  onClick={() => onSend(`${word}: ${d.name}`)}
+                >
+                  Выбрать
+                </button>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function Hotels({ plan, stage, busy, onSend }: {
+  plan: Plan;
+  stage: Stage;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
+  const hotels = plan.offers.filter((o): o is HotelOffer => o.kind === "hotel");
+  if (!hotels.length) return null;
+  return (
+    <section aria-label="Сравнение отелей">
+      <h2>Сравнение отелей</h2>
+      <div className="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Отель</th>
+              <th>Цена за всё</th>
+              <th>Звёзды</th>
+              <th>Рейтинг</th>
+              <th>Питание</th>
+              <th>Отмена</th>
+              <th>До центра</th>
+              <th>Заезд / выезд</th>
+              <th>Питомцы</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {hotels.map((h, i) => {
+              const chosen = plan.selected.includes(h.offer_id);
+              const word = ordinal(i);
+              return (
+                <tr key={h.offer_id} className={chosen ? "chosen" : undefined}>
+                  <td>
+                    {h.title}
+                    {chosen && <span className="tag">выбран</span>}
+                  </td>
+                  <td>
+                    <Price value={h.price_rub} synthetic={h.synthetic} />
+                  </td>
+                  <td>{h.stars !== null ? `${h.stars}★` : "—"}</td>
+                  <td>{h.rating ?? "—"}</td>
+                  <td>{MEALS[h.meal]}</td>
+                  <td>
+                    {h.cancellation.refundable
+                      ? h.cancellation.free_until
+                        ? `бесплатно до ${localTime(h.cancellation.free_until)}`
+                        : "бесплатная"
+                      : "невозвратный"}
+                  </td>
+                  <td>{h.distance_center_km !== null ? `${h.distance_center_km} км` : "—"}</td>
+                  <td>
+                    {clock(h.check_in)} / {clock(h.check_out)}
+                  </td>
+                  <td>{h.pets_allowed ? "можно" : "нельзя"}</td>
+                  <td>
+                    {stage === "compare" && word && !chosen && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        aria-label={`Выбрать ${h.title}`}
+                        onClick={() => onSend(`беру ${word}`)}
+                      >
+                        Выбрать
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function Transport({ plan }: { plan: Plan }) {
+  const legs = plan.offers.filter((o): o is TransportOffer => o.kind === "transport");
+  if (!legs.length) return null;
+  return (
+    <section aria-label="Сравнение транспорта">
+      <h2>Сравнение транспорта</h2>
+      <div className="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Рейс</th>
+              <th>Тип</th>
+              <th>Отправление</th>
+              <th>Прибытие</th>
+              <th>В пути</th>
+              <th>Пересадки</th>
+              <th>Цена</th>
+            </tr>
+          </thead>
+          <tbody>
+            {legs.map((t) => {
+              const chosen = plan.selected.includes(t.offer_id);
+              return (
+                <tr key={t.offer_id} className={chosen ? "chosen" : undefined}>
+                  <td>
+                    {t.title}
+                    {chosen && <span className="tag">выбран</span>}
+                  </td>
+                  <td>{MODES[t.mode]}</td>
+                  <td>
+                    {localTime(t.depart_at)} <small>{t.origin}</small>
+                  </td>
+                  <td>
+                    {localTime(t.arrive_at)} <small>{t.destination}</small>
+                  </td>
+                  <td>{duration(t.depart_at, t.arrive_at)}</td>
+                  <td>{t.changes || "нет"}</td>
+                  <td>
+                    <Price value={t.price_rub} synthetic={t.synthetic} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted">Время местное для пункта отправления и прибытия.</p>
+    </section>
+  );
+}
+
+function Bundles({ plan }: { plan: Plan }) {
+  if (!plan.bundles.length) return null;
+  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? id;
+  const synthetic = (b: Bundle) =>
+    isSynthetic(plan.offers.filter((o) => b.offer_ids.includes(o.offer_id)));
+  return (
+    <section aria-label="Варианты поездки целиком">
+      <h2>Варианты поездки целиком</h2>
+      <div className="cards">
+        {plan.bundles.map((b) => (
+          <article key={b.bundle_id} className="card">
+            <h3>{b.label}</h3>
+            <p>
+              <Price value={b.total_rub} synthetic={synthetic(b)} />, в пути {hours(b.travel_hours)}
+            </p>
+            <ul>
+              {b.offer_ids.map((id) => (
+                <li key={id}>{title(id)}</li>
+              ))}
+            </ul>
+            {b.tradeoffs.length > 0 && <p className="muted">Минусы: {b.tradeoffs.join("; ")}</p>}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function Explanations({ plan }: { plan: Plan }) {
+  if (!plan.explanations.length) return null;
+  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? id;
+  return (
+    <section className="card" aria-label="Почему этот выбор">
+      <h2>Почему этот выбор</h2>
+      <ul className="plain">
+        {plan.explanations.map((e) => (
+          <li key={e.offer_id}>
+            <b>{title(e.offer_id)}</b>: {e.why}
+            {e.tradeoffs.length > 0 && (
+              <div className="muted">Чем пожертвовали: {e.tradeoffs.join("; ")}</div>
+            )}
+            {e.risks.length > 0 && <div className="warn">Риски: {e.risks.join("; ")}</div>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function Changes({ plan }: { plan: Plan }) {
+  if (!plan.changes.length) return null;
+  return (
+    <section className="card" aria-label="Что изменилось">
+      <h2>Что изменилось</h2>
+      <ul className="plain">
+        {plan.changes.map((c) => (
+          <li key={c.what}>
+            {fieldLabel(c.what)}: было <s>{changeValue(c.before)}</s> → стало{" "}
+            <b>{changeValue(c.after)}</b>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function Timeline({ plan, canAdd, busy, onCart }: {
+  plan: Plan;
+  canAdd: boolean;
+  busy: boolean;
+  onCart: BoardProps["onCart"];
+}) {
+  if (!plan.timeline.length && !plan.issues.length) return null;
+  const offer = (id: string) => plan.offers.find((o) => o.offer_id === id);
+  return (
+    <section className="card" aria-label="Таймлайн">
+      <h2>Таймлайн</h2>
+      <p className="muted">Время местное для места события.</p>
+      <ol className="timeline">
+        {plan.timeline.map((e, i) => (
+          <li key={`${e.at}-${i}`}>
+            <time>{localTime(e.at)}</time> {e.title}
+          </li>
+        ))}
+      </ol>
+      {plan.issues.map((issue, i) => (
+        <div key={i} className={`issue ${issue.severity}`} role="note">
+          <b>{issue.severity === "error" ? "Ошибка стыковки" : "Внимание"}:</b> {issue.text}
+          {issue.fixes.length > 0 && (
+            <ul>
+              {issue.fixes.map((id) => {
+                const o = offer(id);
+                return (
+                  <li key={id}>
+                    {o ? o.title : id}
+                    {o && (
+                      <>
+                        {" — "}
+                        <Price value={o.price_rub} synthetic={o.synthetic} />
+                      </>
+                    )}
+                    {o && canAdd && (
+                      <button type="button" disabled={busy} onClick={() => onCart("add", id)}>
+                        В корзину
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
+  cart: Cart;
+  spec: TripSpec;
+  stage: Stage;
+  removed: Offer[];
+  busy: boolean;
+  onCart: BoardProps["onCart"];
+  onCheckout: () => void;
+}) {
+  const editable = stage === "checkout";
+  const back = removed.filter((r) => !cart.items.some((o) => o.offer_id === r.offer_id));
+  if (!cart.items.length && !back.length) return null;
+  const over = spec.budget_rub !== null && cart.total_rub > spec.budget_rub;
+  const synthetic = isSynthetic(cart.items);
+  return (
+    <section className="card" aria-label="Корзина">
+      <h2>Корзина</h2>
+      <ul className="plain">
+        {cart.items.map((o) => (
+          <li key={o.offer_id} className="row">
+            <span>{o.title}</span>
+            <Price value={o.price_rub} synthetic={o.synthetic} />
+            {editable && (
+              <button
+                type="button"
+                disabled={busy}
+                aria-label={`Убрать ${o.title}`}
+                onClick={() => onCart("remove", o.offer_id)}
+              >
+                Убрать
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {editable && back.length > 0 && (
+        <ul className="plain removed">
+          {back.map((o) => (
+            <li key={o.offer_id} className="row">
+              <s>{o.title}</s>
+              <button
+                type="button"
+                disabled={busy}
+                aria-label={`Вернуть ${o.title}`}
+                onClick={() => onCart("add", o.offer_id)}
+              >
+                Вернуть
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="total" data-testid="cart-total">
+        Итого: <Price value={cart.total_rub} synthetic={synthetic} />
+      </p>
+      {over && (
+        <p className="warn" role="note">
+          Итог больше бюджета {rub(spec.budget_rub!)} на{" "}
+          <Price value={cart.total_rub - spec.budget_rub!} synthetic={synthetic} />.
+        </p>
+      )}
+      {editable && cart.items.length > 0 && (
+        <button type="button" className="primary" disabled={busy} onClick={onCheckout}>
+          Подтвердить бронь на {rub(cart.total_rub)}
+          {synthetic && " (синтетика)"} · оплата имитируется
+        </button>
+      )}
+    </section>
+  );
+}
+
+function VoucherView({ voucher }: { voucher: Voucher }) {
+  const s = voucher.spec;
+  return (
+    <section className="card voucher" aria-label="Ваучер">
+      <h2>Ваучер {voucher.booking_id}</h2>
+      <p className="warn">Бронь и оплата имитированы. Это не настоящий заказ.</p>
+      <dl className="spec">
+        <div>
+          <dt>Номер брони</dt>
+          <dd>{voucher.booking_id}</dd>
+        </div>
+        <div>
+          <dt>Даты</dt>
+          <dd>
+            {localDate(s.date_from)} – {localDate(s.date_to)}
+          </dd>
+        </div>
+        <div>
+          <dt>Гости</dt>
+          <dd>{guests(s)}</dd>
+        </div>
+        <div>
+          <dt>Оформлено</dt>
+          <dd>{localTime(voucher.created_at)}</dd>
+        </div>
+      </dl>
+      <ul className="plain">
+        {voucher.items.map((o) => (
+          <li key={o.offer_id} className="row">
+            <span>
+              {o.title} <small className="muted">{o.offer_id}</small>
+            </span>
+            <Price value={o.price_rub} synthetic={o.synthetic} />
+          </li>
+        ))}
+      </ul>
+      <p className="total">
+        Итого: <Price value={voucher.total_rub} synthetic={isSynthetic(voucher.items)} />
+      </p>
+    </section>
+  );
+}
+
+const NEXT: Partial<Record<Stage, { label: string; text: string }>> = {
+  compare: { label: "Собрать план", text: "беру" },
+  assemble: { label: "Положить в корзину", text: "да" },
+};
+
+export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: BoardProps) {
+  const { plan, stage, cart, voucher } = reply;
+  const next = NEXT[stage];
+  return (
+    <div className="board">
+      <StageBar stage={stage} />
+      {!reply.llm && (
+        <p className="badge" role="note">
+          без ИИ — упрощённый режим: модель недоступна, агент работает по правилам
+        </p>
+      )}
+      {voucher && <VoucherView voucher={voucher} />}
+      <SpecSummary spec={plan.spec} />
+      <Changes plan={plan} />
+      {plan.destinations.length > 0 && (
+        <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      )}
+      <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      <Transport plan={plan} />
+      <Bundles plan={plan} />
+      <Explanations plan={plan} />
+      <Timeline plan={plan} canAdd={stage === "checkout"} busy={busy} onCart={onCart} />
+      {next && (
+        <button type="button" className="primary" disabled={busy} onClick={() => onSend(next.text)}>
+          {next.label}
+        </button>
+      )}
+      <CartView
+        cart={cart}
+        spec={plan.spec}
+        stage={stage}
+        removed={removed}
+        busy={busy}
+        onCart={onCart}
+        onCheckout={onCheckout}
+      />
+    </div>
+  );
+}
