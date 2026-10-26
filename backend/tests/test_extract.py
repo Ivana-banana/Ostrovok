@@ -507,8 +507,14 @@ def test_trap3_verb_at_the_start_gives_no_unknown_destination_reply(word):
 
 
 def test_trap3_rebuild_verb_after_inspiration_keeps_no_fake_city():
-    first = step(None, "s", "Отдых в ноябре")
-    assert first.plan.spec.destinations == []
+    first = step(None, "s", "Хочу на море в ноябре")
+    r = step(first, "s", "Сдвинь на 3 дня")
+    assert r.plan.spec.destinations == first.plan.spec.destinations
+    assert not any("нет в каталоге" in q for q in r.questions + [r.reply])
+
+
+def test_trap3_common_noun_as_the_first_message_gives_no_fake_city():
+    assert step(None, "s", "Отдых в ноябре").plan.spec.destinations == []
 
 
 @pytest.mark.parametrize(
@@ -519,6 +525,9 @@ def test_trap3_rebuild_verb_after_inspiration_keeps_no_fake_city():
         ("Мурманск, северное сияние", "Мурманск"),
         ("Ухта, 3 ночи", "Ухта"),
         ("Калуга в мае", "Калуга"),
+        ("Уберландия в мае", "Уберландия"),
+        ("Заменград на 3 дня", "Заменград"),
+        ("Добавск в мае", "Добавск"),
     ],
 )
 def test_trap3_real_first_word_city_survives_the_veto(text, city):
