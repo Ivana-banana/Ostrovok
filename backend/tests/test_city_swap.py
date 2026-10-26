@@ -1,6 +1,8 @@
 """#93: the agent never books a city the user did not name or explicitly choose (S5, TRAP-2).
 
-Without a model (TRAP-1). The sessions answer the way the eval driver does: the first option
+Without a model (TRAP-1). The three off-catalogue phrases (Ханой, Лиссабон, Хошимин) are copied from
+eval/cases_unseen.json: after #93 those rows are no longer «unseen» (D-011).
+The sessions answer the way the eval driver does: the first option
 of a clarify question, then «1» / «беру» / «да» / «подтверждаю».
 """
 
@@ -18,8 +20,8 @@ OFF_CATALOG = [
     (HANOI, "Ханой"),
     ("Хочу в Лиссабон в марте", "Лиссабон"),
     ("Хошимин на 10 дней", "Хошимин"),
-    ("Ухта на выходные", "Ухта"),
-    ("Ханой на неделю", "Ханой"),
+    ("Ухта на 3 дня", "Ухта"),
+    ("Ханой, 5 ночей", "Ханой"),
 ]
 
 
@@ -53,7 +55,24 @@ def test_trap_2_unknown_first_word_is_the_destination(text, city):
 
 @pytest.mark.parametrize(
     "text",
-    ["Домой на 3 дня", "Отдыхаем на 5 дней", "Перенеси на выходные", "Подвинь на 2 дня"],
+    [
+        "Домой на 3 дня",
+        "Отдыхаем на 5 дней",
+        "Перенеси на выходные",
+        "Подвинь на 2 дня",
+        "Другой на 3 ночи",
+        "Простой в мае",
+        "Мой на 3 дня",
+        "Отдых на неделю на море, недорого",
+        "Отдых на выходные с детьми",
+        "Каникулы на неделю с ребёнком",
+        "Завтра на выходные куда-нибудь",
+        "Город на выходные недалеко от Москвы",
+        "Поход на выходные",
+        "Рыбалка на неделю",
+        "Природа на выходные",
+        "Экскурсия на выходные",
+    ],
 )
 def test_trap_2_ordinary_first_word_is_no_destination(text):
     assert "destinations" not in extract(text)[0]

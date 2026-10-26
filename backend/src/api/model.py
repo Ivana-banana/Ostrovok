@@ -569,13 +569,13 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
     spec = merge(old.plan.spec, found, notes)
-    swapped = [d for d in old.plan.spec.destinations if d not in spec.destinations]
     used = False  # the LLM output changed this reply
     if llm_found:
         with_model = with_llm(found, llm_found)
         spec_model = merge(old.plan.spec, with_model, notes)
         if spec_model != spec:
             found, spec, used = with_model, spec_model, True
+    swapped = [d for d in old.plan.spec.destinations if d not in spec.destinations]
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
         return ChatReply(

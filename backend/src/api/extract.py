@@ -92,11 +92,8 @@ _two_word_places()
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой"}
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
 # An unknown capitalized word counts only in main's narrow pattern: «Ухта, 3 ночи»,
-# «Калуга в мае», «Тула на 3 дня», «Ухта на выходные». Even then the lists below veto
-# ordinary first words.
-FIRST_NEXT = re.compile(
-    r"\s*,\s*\d|\s+(?:во?\s+" + MONTH + r"|[сн]а?\s+\d|на\s+(?:выходн|недел|праздник|майск))"
-)
+# «Калуга в мае», «Тула на 3 дня». Even then the lists below veto ordinary first words.
+FIRST_NEXT = re.compile(r"\s*,\s*\d|\s+(?:во?\s+" + MONTH + r"|[сн]а?\s+\d)")
 NOT_CITY_START = re.compile(
     r"(?:хоч|хот|ищ|нуж|надо|подск|посов|подбер|подбир|помог|помощ|орган|спланир|планир|собир"
     r"|собер|давай|еду|едем|леч|лет[иеа]|поед|полет|мечт|привет|здравств|добр|отпуск|отел|билет"
@@ -105,11 +102,13 @@ NOT_CITY_START = re.compile(
     r"|мы\b|ну\b|вот\b|так\b|или\b|тепл|хорош|нормал|красив|дешев|дорог|быстр|скоро|срочно"
     r"|лучш|любо|какой|какая|какое|зим|весн|осен|друз|компан|сем[ьъ]|одн|вмест"
     r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят"
-    r"|перенес|перенис|подвин|сдвин|сдвиг)"
+    r"|перенес|перенис|подвин|сдвин|сдвиг"
+    r"|друг|прост|больш|(?:мо|тво|сво)[йяеи]\b|сестр|(?:мам|пап)[аеу]\b|бабушк|доч|муж\b)"
 )  # fmt: skip
 # Not a city by its ending: verbs («Планируем», «Ищете»), adjectives («Тёплое»), infinitives.
-# «ой» is not here: «Ханой» is a city. An adjective in «ой» is never followed at once by
-# «на 8 ночей» (FIRST_NEXT), and «Домой» is in NOT_PLACES.
+# «ой» is not here: «Ханой» is a city. The adjectives and pronouns in «ой» that can stand
+# before a number («Другой на 3 ночи», «Мой на 3 дня») are in NOT_CITY_START; «Домой» is in
+# NOT_PLACES.
 NOT_CITY_END = re.compile(r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ая|яя|ое|ее|ые|ие)$")
 CASES = "(?:а|у|е|ом|ем|ой|ы|и|ю|я|ь|ею|ам|ах|ами)"
 CASES_SHORT = "(?:а|у|е|ы)"  # «Рим», «Вена»: a longer ending would make a common word
