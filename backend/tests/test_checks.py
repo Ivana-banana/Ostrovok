@@ -74,11 +74,13 @@ def test_s2_fails_when_the_dates_do_not_move(monkeypatch):
     assert not ok and "п.2" in note
 
 
-def over_budget(monkeypatch, refundable: bool, line=None):
+def over_budget(monkeypatch, refundable: bool, line=None, was_refundable: bool = False):
     """S2 turn: the new hotel is the old one at +200 000 ₽ (same meal, title, city).
 
     `refundable` is the cancellation of the new hotel; `line(old_hotel)` gives the «отель» line
-    (before, after) of the turn, None keeps the lines of the product.
+    (before, after) of the turn, None keeps the lines of the product. `was_refundable` makes the
+    hotel of the checkout plan refundable: the ranking (#50: the cheapest first) does not decide
+    whether the case has a cancellation to lose.
     """
     seen = {}
     real = main.chat
@@ -86,6 +88,17 @@ def over_budget(monkeypatch, refundable: bool, line=None):
     def chat(req, store):
         out = real(req, store)
         if out.stage == "checkout":
+            if was_refundable:
+                kept = set(out.plan.selected)
+                patched = [
+                    o.model_copy(update={"cancellation": Cancellation(refundable=True)})
+                    if o.offer_id in kept and o.kind == "hotel"
+                    else o
+                    for o in out.plan.offers
+                ]
+                out = out.model_copy(
+                    update={"plan": out.plan.model_copy(update={"offers": patched})}
+                )
             seen["old"] = next(o for o in checks._chosen(out.plan) if o.kind == "hotel")
         if "позже" not in req.message:
             return out
@@ -126,6 +139,7 @@ def test_s2_passes_item_4_when_the_lost_cancellation_is_named_before_and_after(m
     over_budget(
         monkeypatch,
         refundable=False,
+        was_refundable=True,
         line=lambda h: (
             f"{h.title}, {dag.MEALS[h.meal]}, бесплатная отмена, {h.price_rub} ₽",
             f"{h.title}, {dag.MEALS[h.meal]}, невозвратный тариф, {h.price_rub + 200_000} ₽",
@@ -140,6 +154,7 @@ def test_s2_fails_when_the_lost_cancellation_is_not_named(monkeypatch):
     over_budget(
         monkeypatch,
         refundable=False,
+        was_refundable=True,
         line=lambda h: (
             f"{h.title}, бесплатная отмена, {h.price_rub} ₽",
             f"{h.title}, бесплатная отмена, {h.price_rub + 200_000} ₽",
