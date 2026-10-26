@@ -133,6 +133,39 @@ def test_returned_hotel_brings_its_transfers_back(client, at_checkout):
     assert [o["kind"] for o in done["items"]].count("transfer") == 2
 
 
+def test_transfer_without_its_hotel_cannot_be_added_and_never_reaches_the_voucher(
+    client, at_checkout
+):
+    """Review of #45: remove transfer, remove hotel, add transfer -> 409, no orphan."""
+    r = at_checkout
+    hotel = next(o for o in r.cart.items if o.kind == "hotel")
+    transfer = next(o for o in r.cart.items if o.kind == "transfer")
+    cart_post(client, r, "remove", transfer.offer_id)
+    less = cart_post(client, r, "remove", hotel.offer_id).json()
+    res = cart_post(client, r, "add", transfer.offer_id)
+    assert res.status_code == 409
+    assert "корзине" in res.json()["detail"]
+    done = _checkout(client, r, less["total_rub"])
+    assert done.status_code == 200, done.text
+    assert not {"hotel", "transfer"} & {o["kind"] for o in done.json()["items"]}
+
+
+def test_returned_hotel_does_not_bring_back_a_transfer_removed_on_its_own(client, at_checkout):
+    r = at_checkout
+    hotel = next(o for o in r.cart.items if o.kind == "hotel")
+    transfers = [o for o in r.cart.items if o.kind == "transfer"]
+    alone, kept = transfers[0], transfers[1]
+    cart_post(client, r, "remove", alone.offer_id)
+    cart_post(client, r, "remove", hotel.offer_id)
+    back = cart_post(client, r, "add", hotel.offer_id).json()
+    ids = {o["offer_id"] for o in back["items"]}
+    assert hotel.offer_id in ids and kept.offer_id in ids and alone.offer_id not in ids
+    # The user can add it back by hand: its hotel and leg are in the cart again.
+    again = cart_post(client, r, "add", alone.offer_id)
+    assert again.status_code == 200
+    assert {o["offer_id"] for o in again.json()["items"]} == {o.offer_id for o in r.cart.items}
+
+
 def test_remove_both_legs_leaves_no_transfers_and_return_of_one_restores_its_own(
     client, at_checkout
 ):
