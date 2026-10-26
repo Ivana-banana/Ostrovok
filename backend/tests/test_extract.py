@@ -473,3 +473,40 @@ def test_trap3_city_note_goes_away_when_a_city_is_stated_later():
     r = step(second, "s", "Лучше Казань")
     assert r.plan.spec.destinations == ["Казань"]
     assert not any("каталоге" in a for a in r.plan.spec.assumptions)
+
+
+# --- #82: a two-word city first in the phrase (TRAP-3) ---
+
+
+@pytest.mark.parametrize(
+    "text, city",
+    [
+        ("Великий Новгород в мае", "Великий Новгород"),
+        ("Минеральные Воды на 3 дня", "Минеральные Воды"),
+        ("Нижний Новгород на выходные", "Нижний Новгород"),
+        ("Санкт-Петербург в июле", "Санкт-Петербург"),
+        ("санкт-петербург в июле", "Санкт-Петербург"),
+        ("Петербург в июле", "Санкт-Петербург"),
+        ("великий новгород в мае", "Великий Новгород"),
+        ("Великий Новгород, 3 ночи", "Великий Новгород"),
+        ("Хочу в Великом Новгороде на 3 дня", "Великий Новгород"),
+        ("Поездка в Минеральные Воды", "Минеральные Воды"),
+        ("Отдых в Сочи", "Сочи"),
+    ],
+)
+def test_trap3_two_word_city_in_any_place_of_the_phrase(text, city):
+    assert extract(text)[0]["destinations"] == [city]
+
+
+def test_trap3_two_word_city_as_origin_and_as_destination():
+    found, _ = extract("Из Москвы в Великий Новгород")
+    assert found["origin"] == "Москва" and found["destinations"] == ["Великий Новгород"]
+    found, _ = extract("Из Великого Новгорода в Сочи")
+    assert found["origin"] == "Великий Новгород" and found["destinations"] == ["Сочи"]
+
+
+@pytest.mark.parametrize(
+    "text", ["Хочу на море в мае", "Великий отпуск в мае", "Минеральная вода на 3 дня"]
+)
+def test_trap3_ordinary_capitalised_first_words_are_no_city(text):
+    assert "destinations" not in extract(text)[0]

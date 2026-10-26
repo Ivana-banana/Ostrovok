@@ -42,9 +42,35 @@ PLACES = {
     "Армения": "армени", "Минск": "минск", "Баку": "баку", "Ярославль": "ярославл",
     "Суздаль": "суздал", "Новосибирск": "новосибирск", "Владивосток": "владивосток",
 }  # fmt: skip
+
+
+# Nominative ending -> case endings. «Минеральная вода» is not «Минеральные Воды».
+ADJECTIVE_FORMS = {
+    ("ые", "ие"): "(?:ые|ие|ых|их|ым|им|ыми|ими)",
+    ("ый", "ий", "ой"): "(?:ый|ий|ой|ого|его|ому|ему|ом|ем|ым|им)",
+    ("ая", "яя"): "(?:ая|яя|ой|ей|ую|юю)",
+}
+
+
+def _word_re(word: str) -> str:
+    """A word of a two-word name in any case: «Великого», «Воды» -> «воду»."""
+    w = word.lower().replace("ё", "е")
+    for tails, forms in ADJECTIVE_FORMS.items():
+        if w.endswith(tails):
+            return w[:-2] + forms
+    return re.sub(r"[аяыиеийьюуо]+$", "", w) + r"\w*"
+
+
 PLACE_RES = [
     (name, re.compile(rf"\b(?:{'|'.join(c['stems'])})\w*")) for name, c in CATALOG.items()
 ] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
+# Two-word cities of places.json not listed above («Великий Новгород», «Минеральные Воды»):
+# both words in any case (TRAP-3). One word alone is no city, so «Великий» stays a word.
+PLACE_RES += [
+    (p["name"], re.compile(r"\b" + r"\s+".join(_word_re(w) for w in p["name"].split())))
+    for p in places()
+    if " " in p["name"] and p["name"] not in PLACES
+]
 # Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not.
 CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)"))]
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск"}
