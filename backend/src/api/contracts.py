@@ -1,6 +1,7 @@
 """Agent API contract (ADR-0001). Consumers: web/src/contracts.ts (mirror), web/src/api.ts,
 web/src/format.ts, web/e2e, checks.py, tests; agent modules: T2 state machine, T3/T11 extractor,
-T4/T5 providers, T6 DAG, T7 optimizer, T8 timeline checker, T9 cart, T10 web.
+T4/T5 providers, T6 DAG, T7 optimizer, T8 timeline checker, T9 cart, T10 web,
+T12 inspiration, T14 eval.
 
 Routes: POST /api/chat (ChatRequest -> ChatReply), GET /api/session/{session_id} -> ChatReply,
 POST /api/cart (CartAction -> Cart), POST /api/checkout (CheckoutRequest -> Voucher;
