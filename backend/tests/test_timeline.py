@@ -286,6 +286,36 @@ def test_default_selection_has_no_errors_and_local_events(city, day_in, day_out)
     assert len({e.title for e in events}) == len(events)
 
 
+@pytest.mark.parametrize(
+    ("city", "day_in", "day_out"),
+    [
+        ("Казань", date(2026, 12, 11), date(2026, 12, 13)),
+        ("Анталия", date(2026, 11, 8), date(2026, 11, 15)),
+        ("Сочи", date(2026, 11, 20), date(2026, 11, 23)),
+        ("Екатеринбург", date(2027, 3, 27), date(2027, 3, 29)),
+        ("Дубай", date(2026, 11, 10), date(2026, 11, 17)),
+    ],
+)
+def test_optimizer_default_selection_has_no_timeline_errors(city, day_in, day_out):
+    """The pick of `rank` itself, not the fixed `trip()` selection: no error, real fixes."""
+    spec = TripSpec(
+        origin="Москва",
+        destinations=[city],
+        date_from=day_in,
+        date_to=day_out,
+        nights=(day_out - day_in).days,
+    )
+    offers = find_offers(spec, city)
+    selected, _ = rank(spec, offers)
+    plan = Plan(spec=spec, offers=offers, selected=selected)
+    by_id = {o.offer_id: o for o in offers}
+    assert {by_id[i].kind for i in selected} >= {"hotel", "transport"}
+    events, issues = build_timeline(plan)
+    assert events
+    assert [i for i in issues if i.severity == "error"] == []
+    assert_fixes_exist(plan, issues)
+
+
 def test_no_hotel_and_empty_plan_do_not_fail():
     spec = TripSpec(origin="Москва", date_from=date(2026, 12, 11), date_to=date(2026, 12, 13))
     assert build_timeline(Plan(spec=spec)) == ([], [])
@@ -321,23 +351,45 @@ def add(client, r, offer_id):
     return ChatReply.model_validate(client.get(f"/api/session/{r.session_id}").json())
 
 
+def out_train(reply: ChatReply) -> str:
+    """The outbound train: it lands at 07:10, so the check-in is a long wait (S6)."""
+    return next(
+        o.offer_id
+        for o in reply.plan.offers
+        if o.kind == "transport" and o.mode == "train" and o.origin == reply.plan.spec.origin
+    )
+
+
+def early_fix(reply: ChatReply) -> str:
+    return next(f for i in reply.plan.issues for f in i.fixes if f.endswith("-early"))
+
+
 def test_cart_early_check_in_fixes_the_issue(client):
+    """S6: the train there makes the arrival warning, the cart buys the early check-in."""
     http, store = client
     r = at_checkout(store)
-    assert [i.severity for i in r.plan.issues] == ["warn"]
-    early = r.plan.issues[0].fixes[0]
-    now = add(http, r, early)
-    assert now.plan.issues == [] and early in now.plan.selected
+    assert not any(f.endswith("-early") for i in r.plan.issues for f in i.fixes)
+    train = add(http, r, out_train(r))
+    assert train.plan.issues and any("Прибытие" in i.text for i in train.plan.issues)
+    early = early_fix(train)
+    now = add(http, train, early)
+    assert early in now.plan.selected
     assert early in {o.offer_id for o in now.cart.items}
+    assert not any("Прибытие" in i.text for i in now.plan.issues)
+    assert not any(f.endswith("-early") for i in now.plan.issues for f in i.fixes)
+    price = next(o.price_rub for o in now.plan.offers if o.offer_id == early)
+    assert now.cart.total_rub == train.cart.total_rub + price
 
 
 def test_cart_replaced_flight_and_hotel_are_what_the_checker_sees(client):
     """The review of #11: a swap in the cart must reach plan.selected and the timeline."""
     http, store = client
     r = at_checkout(store)
-    flight = next(f for f in r.plan.issues[0].fixes if f.startswith("t-"))
-    now = add(http, r, flight)
-    assert flight in now.plan.selected and now.plan.issues == []
+    train = add(http, r, out_train(r))
+    flight = next(f for i in train.plan.issues for f in i.fixes if f.startswith("t-mow-kzn-flight"))
+    now = add(http, train, flight)
+    assert flight in now.plan.selected and out_train(r) not in now.plan.selected
+    assert not any("Прибытие" in i.text for i in now.plan.issues)
     arrival = next(e for e in now.plan.timeline if e.title.startswith("Прилёт"))
     assert arrival.at.strftime("%H:%M") == "10:30"
 
