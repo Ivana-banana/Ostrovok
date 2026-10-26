@@ -95,6 +95,7 @@ def osm_hotels() -> dict[str, list[dict]]:
 
 
 places = catalog.places  # extract.py reads the city names from here
+_norm = catalog.norm  # checks.py compares city names with it
 
 
 def resolve_place(name: str) -> dict | None:
