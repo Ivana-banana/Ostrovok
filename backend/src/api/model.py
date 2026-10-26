@@ -526,7 +526,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return reply("clarify", Plan(spec=spec), _text_clarify(questions), questions=questions)
     spec = assume(spec)
     if not spec.destinations:
-        plan = Plan(spec=spec, destinations=suggest_destinations(spec))
+        # The origin is no destination: a stay in the city of departure has no transport (#94).
+        ideas = [d for d in suggest_destinations(spec) if d.name != spec.origin]
+        plan = Plan(spec=spec, destinations=ideas)
         return reply("inspire", plan, _text_inspire(plan))
 
     if "date_from" not in found:
@@ -547,6 +549,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if why and why != plan.explanations:
             plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)
         text = _text_compare(plan.model_copy(update={"changes": []}))
+        if spec.origin in spec.destinations:
+            text += f" Город вылета {spec.origin} совпадает с направлением: перевозки в плане нет."
         if plan.changes:
             text = "\n".join(["Было → стало:", *describe(plan.changes), text])
         return reply("compare", plan, text, cart)
