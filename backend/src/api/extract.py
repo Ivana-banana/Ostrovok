@@ -11,7 +11,7 @@ import re
 from datetime import date, timedelta
 
 from api.fixtures import CATALOG, future_date
-from api.offers import places
+from api.offers import places, resolve_place
 
 MONTHS = {
     "январ": 1, "феврал": 2, "март": 3, "апрел": 4, "ма": 5, "июн": 6,
@@ -275,10 +275,110 @@ def _switch_city(text: str) -> tuple[int, str] | None:
     return (m.start(), known) if m and known else None
 
 
-def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> None:
-    """Origin after «из/от», then destinations in text order: known places and capitalized names."""
+# #113: a place after a negation is refused, not wanted: «кроме Турции», «в Турции уже были».
+# Countries are not destinations by themselves (the alias of places.json takes «Турция» to
+# a city), so the refusal must know them: «Турцию и Египет муж отвергает» names two countries.
+COUNTRY_STEMS = {"Египет": "египе?т", "Таиланд": "т(?:аи|ай)ланд"}
+
+
+def _country_res() -> list[tuple[str, re.Pattern]]:
+    names = {p["country"] for p in places()} | {c["country"] for c in CATALOG.values()}
+    out = []
+    for name in sorted(names):
+        if name in COUNTRY_STEMS:
+            rx = COUNTRY_STEMS[name] + r"\w{0,3}"
+        else:
+            words = name.lower().replace("ё", "е").split()
+            rx = r"\s+".join(re.sub(r"[аяйьыи]$", "", w) + r"\w{0,3}" for w in words)
+        out.append((name, re.compile(rf"\b{rx}\b")))
+    return out
+
+
+COUNTRY_RES = _country_res()
+COUNTRIES = {c for c, _ in COUNTRY_RES}
+NEG_VERBS = (
+    r"(?:хочу|хотим|хотел\w*|хочется|хотелось|надо|нужн\w*|нужен|нужна|поеду|поедем|еду|едем"
+    r"|ехать|лететь|летим|лечу|полетим|полечу|полететь|поехать|отдыхать|люблю|любим|нравится"
+    r"|интересует|рассматрива\w*|предлагай\w*|показывай\w*|выбира\w*|давай\w*|планируем|думаем)"
+)
+# Right before a place; «не дорого, в Турцию» is no match: only these words may stand between.
+NEG_BEFORE = re.compile(
+    rf"(?:\b(?:кроме|без|ни)\s+|\bне\s+(?:{NEG_VERBS}\s+)*"
+    r"|\b(?:надоел\w*|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|избега\w+|устал\w*\s+от)\s+"
+    r"|\bуже\s+(?:были|бывали|ездили|летали|отдыхали)\s+(?:там\s+)?)"
+    r"(?:(?:в|во|на)\s+)?$"
+)
+# Right after a place, only a few light words in between and no comma: «Турция надоела».
+NEG_AFTER = re.compile(
+    r"\s*(?:[—–-]\s*)?(?:(?:мы|я|они|там|уже|вс[её]|давно|тоже|муж|жена|мама|папа|нам|мне|нас|ему|ей"
+    r"|совсем|категорически|точно|никак|вот)\s+){0,3}"
+    r"(?:уже\s+(?:был\w*|бывал\w*|ездил\w*|летал\w*|отдыхал\w*|посетил\w*)|надоел\w*|надоест"
+    r"|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|ненавид\w+|табу|отпада\w+"
+    r"|не\s+(?:хочу|хотим|хочется|хотелось|надо|нужн\w*|подходит|подойд\w*|нравится|нравятся"
+    r"|интересует|вариант|едем|поедем|поеду|летим|полетим|рассматрива\w*|любим|люблю))"
+)
+# Places in one list share the refusal: «кроме Турции и Египта», «Турцию и Египет отвергает».
+LIST_FORWARD = re.compile(r"\s*(?:,\s*(?:ни\s+)?|\s+и\s+|\s+или\s+|\s+ни\s+)(?:(?:в|во|на)\s+)?")
+LIST_BACK = re.compile(r"\s+и\s+(?:(?:в|во|на)\s+)?")
+SENTENCE_END = re.compile(r"[.!?;\n]")
+
+
+def _word_end(t: str, pos: int) -> int:
+    m = re.compile(r"[\w-]+").match(t, pos)
+    return m.end() if m else pos
+
+
+def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
+    """Which of the place mentions (start, end; sorted) a negation refuses."""
+    neg = [False] * len(spans)
+    for i, (s, _) in enumerate(spans):
+        gap = t[spans[i - 1][1] : s] if i else ""
+        neg[i] = bool(NEG_BEFORE.search(t[max(0, s - 60) : s])) or (
+            i > 0 and neg[i - 1] and bool(LIST_FORWARD.fullmatch(gap))
+        )
+    for i in reversed(range(len(spans))):
+        e = spans[i][1]
+        stop = SENTENCE_END.search(t, e)
+        limit = min([stop.start() if stop else len(t)] + [x for x, _ in spans[i + 1 :] if x >= e])
+        area = t[e:limit]
+        after = NEG_AFTER.match(area)
+        # «уже были в Турции»: the preposition right after the marker belongs to the next place
+        marked = bool(after) and not re.fullmatch(r"\s+(?:в|во|на)\s*", area[after.end() :])
+        listed = i + 1 < len(spans) and neg[i + 1] and LIST_BACK.fullmatch(t[e : spans[i + 1][0]])
+        neg[i] = neg[i] or marked or bool(listed)
+    return neg
+
+
+def is_excluded(name: str, excluded: list[str]) -> bool:
+    """The place, or the country of the place, is refused («Турция» refuses Анталия)."""
+    place = resolve_place(name)
+    country = place["country"] if place else CATALOG.get(name, {}).get("country")
+    return name in excluded or country in excluded or bool(place and place["name"] in excluded)
+
+
+def _other_city(place: dict, excluded: list[str]) -> str | None:
+    """A city of the same country, with the sea or without it as the refused one."""
+    return next(
+        (
+            p["name"]
+            for p in places()
+            if p["country"] == place["country"]
+            and p["sea"] == place["sea"]
+            and p["name"] != place["name"]
+            and not is_excluded(p["name"], excluded)
+        ),
+        None,
+    )
+
+
+def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
+    """Origin after «из/от», then destinations in text order: known places and capitalized names.
+
+    A place after a negation is no destination (#113). Returns the refused places and countries."""
     for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
         w = re.match(r"[а-яе-]+", t[m.end() :])
+        if re.search(r"устал\w*\s+$", t[: m.start()]):
+            continue  # «устали от Турции» is a refusal, not an origin
         if name := _place_at(text, t, m.end()) or _capital(text, m.end()) or (w and _known(w[0])):
             break
     else:
@@ -288,30 +388,57 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         end = t.find(" ", m.end())
         end = len(t) if end < 0 else end
         t = t[: m.start()] + " " * (end - m.start()) + t[end:]  # the origin is not a destination
-    hits = [(m.start(), name) for name, rx in PLACE_RES for m in rx.finditer(t)]
-    hits += [(m.start(), name) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
+    hits = [(m.start(), name, m.end()) for name, rx in PLACE_RES for m in rx.finditer(t)]
+    hits += [(m.start(), name, m.end()) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
     for m in re.finditer(r"(?:^|[\s,(])(?:[вВ]о?|[нН]а)\s+(?=[А-ЯЁ])", text):
         free = t[m.end()] != " " and not _place_at(text, t, m.end())  # " ": the origin span
         if free and (name := _capital(text, m.end())):
-            hits.append((m.end(), name))
+            hits.append((m.end(), name, _word_end(t, m.end())))
     for m in re.finditer(r"(?:^|[\s,(])(?:во?|на)\s+([а-яе-]+)", t):  # «в иркутск», «в Иркутске»
         if (
             t[m.start(1)] != " "
             and not _place_at(text, t, m.start(1))
             and (n := _known(m.group(1)))
         ):
-            hits.append((m.start(1), n))
+            hits.append((m.start(1), n, m.end(1)))
     if switch := _switch_city(text):
-        hits.append(switch)
+        hits.append((*switch, _word_end(t, switch[0])))
     # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
     if first := _first_city(text, t, not hits and not has_destination, None if hits else notes):
-        hits.append(first)
+        hits.append((*first, _word_end(t, first[0])))
+    # Mentions for the negation: the places above and the bare countries («Турцию и Египет…»).
+    # The refused name is the country when the word is one: «египет» is a hit of Хургада.
+    mentions = {s: (e, name, name) for s, name, e in hits}
+    for country, rx in COUNTRY_RES:
+        for m in rx.finditer(t):
+            e, name, _ = mentions.get(m.start(), (m.end(), None, None))
+            mentions[m.start()] = (max(e, m.end()), name, country)
+    starts = sorted(mentions)
+    neg = _negated(t, [(s, mentions[s][0]) for s in starts])
+    refused_at = {s for s, n in zip(starts, neg, strict=True) if n}
+    refused = list(dict.fromkeys(mentions[s][2] for s in starts if s in refused_at))
     dests = []
-    for _, name in sorted(hits):
-        if name not in dests and name != found.get("origin"):
+    for s, name, _ in sorted(hits):
+        if s in refused_at or name == found.get("origin"):
+            continue
+        place = resolve_place(name)
+        if place and mentions[s][2] in COUNTRIES and place["name"] in refused:
+            # The country is named, its city is refused: another city of the country.
+            alt = _other_city(place, refused)
+            if alt is None:
+                continue
+            notes.append(f"направление: «{place['name']}» исключена, вместо неё {alt}")
+            name = alt
+        if name not in dests:
             dests.append(name)
     if dests:
         found["destinations"] = dests
+    return refused
+
+
+def excluded_places(text: str) -> list[str]:
+    """Places and countries the message refuses («кроме Турции», «в Египте уже были»), #113."""
+    return _places(text, text.lower().replace("ё", "е"), {}, [], True)
 
 
 def _capital(text: str, pos: int) -> str | None:
@@ -500,14 +627,20 @@ def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:
 DATE_KEYS = {"date_from", "date_to", "month", "nights"}
 
 
-def with_llm(found: dict, llm_found: dict | None) -> dict:
+def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = None) -> dict:
     """Rule fields win; the LLM adds the fields rules missed and its wishes (T11, #15).
 
     Dates are one group: if rules read any date field, the LLM dates are not mixed in.
+    excluded: a refused place (#113) never comes back as a model destination.
     """
     if not llm_found:
         return found
     out = dict(found)
+    if excluded and llm_found.get("destinations"):
+        kept = [d for d in llm_found["destinations"] if not is_excluded(d, excluded)]
+        llm_found = {**llm_found, "destinations": kept}
+        if not kept:
+            del llm_found["destinations"]
     for k, v in llm_found.items():
         if k == "wishes":
             out["wishes"] = found.get("wishes", []) + [w for w in v if w not in found.get(k, [])]
