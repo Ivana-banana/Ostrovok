@@ -1,8 +1,17 @@
-"""Модель решения. Пока — заглушка демо-пути (TODO: заменить по ADR)."""
+"""Agent. For now a demo-path stub; the stage state machine replaces it (T2, #6)."""
 
-from api.contracts import Prediction, PredictRequest
+from uuid import uuid4
+
+from api.contracts import Cart, ChatReply, ChatRequest, Plan, TripSpec
 
 
-def predict(req: PredictRequest) -> Prediction:
-    # TODO(kickoff): заглушка — сквозной путь демо работает до появления модели.
-    return Prediction(label="unknown", score=0.0, explanation="заглушка: модели ещё нет", stub=True)
+def chat(req: ChatRequest) -> ChatReply:
+    # TODO(T2): stub keeps the demo path alive until the state machine lands.
+    return ChatReply(
+        session_id=req.session_id or uuid4().hex,
+        stage="clarify",
+        reply="заглушка: агента ещё нет",
+        plan=Plan(spec=TripSpec()),
+        cart=Cart(),
+        llm=False,
+    )

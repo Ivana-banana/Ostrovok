@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { predict } from "./api";
+import { chat } from "./api";
 import { describe } from "./format";
 
 export function App() {
@@ -7,13 +7,16 @@ export function App() {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [session, setSession] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      setResult(describe(await predict({ text })));
+      const r = await chat({ session_id: session, message: text });
+      setSession(r.session_id);
+      setResult(describe(r));
     } catch (err) {
       setError(String(err));
     } finally {

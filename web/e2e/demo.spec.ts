@@ -6,5 +6,5 @@ test("демо-путь: запрос → ответ", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Запрос").fill("пример");
   await page.getByRole("button", { name: "Отправить" }).click();
-  await expect(page.getByRole("status")).toContainText(":");
+  await expect(page.getByRole("status")).not.toBeEmpty();
 });

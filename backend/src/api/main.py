@@ -5,8 +5,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from api.contracts import Prediction, PredictRequest
-from api.model import predict
+from api.contracts import ChatReply, ChatRequest
+from api.model import chat
 
 app = FastAPI(title="hackathon")
 
@@ -17,9 +17,9 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/api/predict")
-def predict_route(req: PredictRequest) -> Prediction:
-    return predict(req)
+@app.post("/api/chat")
+def chat_route(req: ChatRequest) -> ChatReply:
+    return chat(req)
 
 
 DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
