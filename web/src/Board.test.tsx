@@ -7,6 +7,9 @@ import { changeValue, localTime } from "./format";
 
 const base = fixture as unknown as ChatReply;
 const noop = () => {};
+// The fixture cart holds only the transfer; the hotel is outside it, so its fixes are hidden.
+const hotelBought = structuredClone(base);
+hotelBought.cart.items = [...base.cart.items, ...base.plan.offers.filter((o) => o.offer_id === "h1")];
 
 function render(r: ChatReply): Document {
   const html = renderToStaticMarkup(
@@ -17,7 +20,7 @@ function render(r: ChatReply): Document {
 
 suite("доска поездки", () => {
   it("TRAP-7: у каждой синтетической цены есть пометка «синтетика»", () => {
-    const doc = render(base);
+    const doc = render(hotelBought);
     const prices = [...doc.querySelectorAll(".price")];
     // hotel, transport, destination, bundle, fix in the issue, cart item + total, voucher item + total
     expect(prices.length).toBeGreaterThanOrEqual(9);
@@ -45,7 +48,7 @@ suite("доска поездки", () => {
     process.env.TZ = "America/New_York";
     try {
       expect(localTime("2026-12-11T07:10:00+03:00")).toBe("11.12 07:10");
-      const text = render(base).querySelector("[aria-label='Таймлайн']")?.textContent ?? "";
+      const text = render(hotelBought).querySelector("[aria-label='Таймлайн']")?.textContent ?? "";
       expect(text).toContain("11.12 07:10");
       expect(text).toContain("прибытие 07:10 раньше заезда 14:00");
       expect(text).toContain("Ранний заезд"); // the fix offer is shown by its offer_id
@@ -133,12 +136,31 @@ suite("доска поездки", () => {
     for (const li of items()) expect(li.textContent).not.toContain("убрано из корзины");
   });
 
-  it("таймлайн: до открытия корзины и после брони пометок нет", () => {
+  it("таймлайн: после брони помечены события позиций, которых нет в купленной корзине", () => {
+    const r = structuredClone(base); // stage booked
+    r.plan.timeline.push({ at: "2026-12-11T14:00:00+03:00", title: "Заселение", offer_id: "h1" });
+    r.cart.items = r.plan.offers.filter((o) => o.offer_id === "t1"); // only the train was bought
+    const [arrival, checkin] = [...render(r).querySelectorAll(".timeline li")];
+    expect(arrival.textContent).not.toContain("убрано из корзины");
+    expect(checkin.textContent).toContain("убрано из корзины");
+  });
+
+  it("таймлайн: пока корзины нет (assemble), пометок нет", () => {
     const r = structuredClone(base);
     r.cart.items = [];
-    for (const stage of ["assemble", "booked"] as const) {
-      const doc = render({ ...r, stage });
-      expect(doc.querySelector(".timeline")?.textContent).not.toContain("убрано из корзины");
-    }
+    const doc = render({ ...r, stage: "assemble", voucher: null });
+    expect(doc.querySelector(".timeline")?.textContent).not.toContain("убрано из корзины");
+  });
+
+  it("таймлайн: доп. услуга убранного отеля не предлагается, услуга имеющегося — да", () => {
+    const r = structuredClone(base);
+    r.stage = "checkout";
+    r.voucher = null;
+    const issue = () => render(r).querySelector("[aria-label='Таймлайн'] .issue");
+    r.cart.items = r.plan.offers.filter((o) => o.offer_id === "t1"); // hotel removed
+    expect(issue()).toBeNull();
+    r.cart.items = r.plan.offers.filter((o) => o.offer_id === "t1" || o.offer_id === "h1");
+    expect(issue()?.textContent).toContain("Ранний заезд");
+    expect(issue()?.querySelector("button")?.textContent).toBe("В корзину");
   });
 });
