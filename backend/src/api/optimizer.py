@@ -371,8 +371,8 @@ def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
             why += "; важнее всего цена («недорого»)"
         else:
             why += "; цена важна («недорого»), самый дешёвый вариант ниже"
-            if cheapest.legs:
-                why += f": дорога {_h(max(_leg_hours(x) for x in cheapest.legs))}"
+            if cheapest.slow_leg:  # hours only when the road is the reason
+                why += f": дорога {_h(_leg_hours(cheapest.slow_leg))}"
     return why
 
 

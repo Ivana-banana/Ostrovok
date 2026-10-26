@@ -261,7 +261,7 @@ def _explain(plan: Plan) -> list[Explanation]:
     pool, fits = _pool(plan.spec, trips)
     hotel = Explanation(
         offer_id=trip.hotel.offer_id,
-        why=_hotel_why(plan.spec, trip),
+        why=_hotel_why(plan.spec, trip, pool),
         tradeoffs=_sacrificed(plan.spec, trip, pool),
         risks=_risks(plan.spec, trip, fits, trips),
     )

@@ -654,6 +654,16 @@ def test_why_for_cheap_wish_names_the_cheaper_option_with_its_road_hours():
     assert any(why.endswith(f"дорога {h}") for h in hours)
 
 
+def test_why_for_cheap_wish_gives_no_hours_when_the_cheaper_road_is_not_slow():
+    """The cheaper package differs by the hotel, not by a long leg: no «дорога N ч»."""
+    cheap = hotel("cheap", 10_000, rating=5.0)
+    better = hotel("better", 10_300, refundable=True, rating=9.8, meal="BB")
+    far = hotel("far", 30_000, rating=6.0)  # a wide price range: 300 ₽ is a small gap
+    first = rank(spec(wishes=["недорого"]), offers([cheap, better, far], FLIGHTS))[1][0]
+    assert first.offer_id == "h-better"
+    assert first.why.endswith("цена важна («недорого»), самый дешёвый вариант ниже")
+
+
 def test_why_for_cheap_wish_keeps_the_old_text_when_the_first_package_is_the_cheapest():
     first = rank(spec(wishes=["недорого"]), offers([hotel("a", 10_000)], FLIGHTS))[1][0]
     assert first.why.endswith("важнее всего цена («недорого»)")
