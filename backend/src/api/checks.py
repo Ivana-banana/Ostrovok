@@ -161,14 +161,7 @@ def _walk(
         sid = r.session_id
         if run.first_rec_ms is None and r.stage in ("inspire", "compare"):
             run.first_rec_ms = (time.perf_counter() - started) * 1000
-        # A pets dead end (#131): no hotel is chosen for the user, other cities are offered.
-        dead_end = bool(
-            r.plan.spec.pets
-            and r.stage in ("select", "compare")
-            and r.questions
-            and r.questions[0].options
-            and not any(x.kind == "hotel" for x in _chosen(r.plan))
-        )
+        dead_end = _is_pets_dead_end(r)
         if r.stage in stop and not dead_end:
             break
         if dead_end:  # nothing takes the pet there (#131): the user takes the offered city
@@ -178,6 +171,20 @@ def _walk(
         else:
             text = ANSWERS[r.stage]
     return run
+
+
+def _is_pets_dead_end(r: ChatReply) -> bool:
+    """A pets dead end (#131): no hotel is chosen for the user, other cities are offered.
+
+    «Not in the catalogue» (#136) offers cities too, but it is no pet dead end."""
+    return bool(
+        r.plan.spec.pets
+        and r.stage in ("select", "compare")
+        and r.questions
+        and r.questions[0].options
+        and "нет в каталоге" not in r.reply
+        and not any(x.kind == "hotel" for x in _chosen(r.plan))
+    )
 
 
 def _say(client: TestClient, run: Run, text: str) -> ChatReply | None:

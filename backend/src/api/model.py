@@ -120,9 +120,10 @@ OTHER_VARIANTS_RE = re.compile(r"\bдруг(?:ие|их|ой)\s+вариант\w
 # «второй половине ноября» is a part of a month, not the second offer.
 ORDINAL_RE = re.compile(
     r"\b(перв(?:ый|ая|ое|ую|ого)|втор(?:ой|ая|ое|ую|ого)|трет(?:ий|ья|ье|ью|ьего)"
-    r"|четв[её]рт(?:ый|ая|ое|ую|ого))\b(?!\s+(?:половин|недел|декад))|^\s*([1-4])\s*$"
+    r"|четв[её]рт(?:ый|ая|ое|ую|ого)|пят(?:ый|ая|ое|ую|ого))\b(?!\s+(?:половин|недел|декад))"
+    r"|^\s*([1-5])\s*$"
 )
-ORDINALS = {"перв": 0, "втор": 1, "трет": 2, "четв": 3}
+ORDINALS = {"перв": 0, "втор": 1, "трет": 2, "четв": 3, "пяты": 4, "пята": 4, "пято": 4, "пяту": 4}
 # S6 (#31): the user picks transport by a mode word or by a row of the transport table.
 # A pick needs a verb or an ordinal with a noun: «хочу только поезда» stays a constraint.
 LEG_PICK_RE = re.compile(
@@ -592,6 +593,17 @@ def _hotel_selected(plan: Plan) -> bool:
     return any(o.kind == "hotel" and o.offer_id in plan.selected for o in plan.offers)
 
 
+def _pet_dead_cities(spec: TripSpec) -> list[str]:
+    """Cities where no trip takes the pet: they are no way out of a dead end (#136)."""
+    if not spec.pets:
+        return []
+    return [
+        d.name
+        for d in suggest_destinations(spec, len(CATALOG))
+        if not pets_possible(spec, find_offers(spec, d.name))
+    ]
+
+
 def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
     """No trip takes the pet (#131): the reason, other cities where it can go, no cart.
 
@@ -600,12 +612,7 @@ def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
     text = dead_end_text(spec, plan.offers)
     if plan.selected:  # the hotels, as the user must see them to pick one
         text = _text_compare(plan).split("\nПредлагаю:")[0] + "\n" + text
-    dead = [
-        d.name
-        for d in suggest_destinations(spec, len(CATALOG))
-        if not pets_possible(spec, find_offers(spec, d.name))
-    ]
-    text, questions = _no_offers(plan, text, dead)
+    text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
     return ("compare" if plan.selected else "select"), plan, text, questions
 
 
@@ -827,6 +834,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return reply("select", plan, text, cart, questions=questions)
         if not pets_possible(spec, plan.offers):
             stage, plan, text, questions = _pets_dead_end(plan)
+            if plan.changes:  # the dropped hotel must show as a change (#136)
+                text = "\n".join(["Было → стало:", *describe(plan.changes), text])
             return reply(stage, plan, text, cart, questions=questions)
         why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
         if why and why != plan.explanations:
@@ -872,7 +881,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return reply(old.stage, plan, e.text)
     text = HINTS.get(old.stage, "Уточните запрос.")
     if old.stage == "select":
-        text, questions = _no_offers(plan, text)
+        text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
         return reply("select", plan, text, questions=questions)
     return reply(old.stage, plan, text)
 
