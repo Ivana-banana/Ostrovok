@@ -169,6 +169,15 @@ def _walk(
     return run
 
 
+def _say(client: TestClient, run: Run, text: str) -> ChatReply | None:
+    """One more chat turn of the session `run` already has."""
+    code, reply = _post(client, text, run.last.session_id)
+    run.codes.append(code)
+    if reply is not None:
+        run.replies.append(reply)
+    return reply
+
+
 def _timeline_errors(run: Run) -> int:
     return sum(i.severity == "error" for i in run.last.plan.issues) if run.replies else 0
 
@@ -737,11 +746,11 @@ def check_S6(case: dict) -> tuple[bool, str]:
     """The jury clicks through the API. UI-only parts (click count, browser console) are in e2e."""
     started = time.perf_counter()
     with _api() as (client, _):
-        run = _until_checkout(client, "S6", "клики", _quotes(case)[0])
-        if run is None:
-            return False, "чат не довёл до корзины"
-        r = run.last
-        sid, plan, spec = r.session_id, r.plan, r.plan.spec
+        run = _walk(client, "S6", "клики", _quotes(case)[0], stop=("compare",))
+        if not run.replies or run.last.stage != "compare":
+            return False, "чат не довёл до сравнения"
+        plan, spec = run.last.plan, run.last.plan.spec
+        sid = run.last.session_id
         items: dict[str, str | None] = {}
         full = [h for h in _hotels(plan) if None not in (h.distance_center_km, h.rating)]
         legs = [x for x in plan.offers if x.kind == "transport" and x.origin == spec.origin]
@@ -750,23 +759,38 @@ def check_S6(case: dict) -> tuple[bool, str]:
             len(full) >= 3 and {"train", "flight"} <= modes,
             f"отелей с полными признаками {len(full)}, виды транспорта {sorted(modes)}",
         )
-        train = next((x for x in legs if x.mode == "train"), None)
         ids = {x.offer_id for x in plan.offers}
         fixes: list[str] = []
-        if train is not None:
-            res = _cart_call(client, sid, "add", train.offer_id)
+        if "train" in modes:
+            # Item 3 goes through the chat, like the user. The default pick may already be
+            # the train, so the check goes to the flight first and then asks for the train.
+            to_flight = _say(client, run, "возьми самолёт")
+            switched = _say(client, run, "возьми поезд") if to_flight else None
+            modes_of = lambda x: {o.mode for o in _chosen(x.plan) if o.kind == "transport"}
             warn = [
                 i
-                for i in _session(client, sid).plan.issues
+                for i in (switched.plan.issues if switched else [])
                 if "07:10" in i.text and "14:00" in i.text
             ]
             fixes = [f for i in warn for f in i.fixes if f in ids]
             items["3"] = _need(
-                res.status_code == 200 and bool(fixes),
-                "нет пометки о прибытии 07:10 при заезде 14:00 с действием из предложений",
+                bool(to_flight and switched)
+                and modes_of(to_flight) == {"flight"}
+                and modes_of(switched) == {"train"}
+                and bool(fixes),
+                "фразы «возьми самолёт» и «возьми поезд» не сменили транспорт или нет пометки "
+                "о прибытии 07:10 при заезде 14:00 с действием из предложений",
             )
         else:
             items["3"] = "в предложениях нет поезда"
+        for _ in range(8):  # the rest of the way to the cart, as the chat leads
+            if run.last.stage in ("checkout", "booked") or not _say(
+                client, run, ANSWERS[run.last.stage]
+            ):
+                break
+        if run.last.stage != "checkout":
+            return False, "чат не довёл до корзины"
+        r = run.last
         now = _session(client, sid)
         hotel_id = next((x.offer_id for x in now.cart.items if x.kind == "hotel"), None)
         if hotel_id is None:
