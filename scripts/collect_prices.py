@@ -8,14 +8,18 @@ Only facts are kept (price, stars, distances, free cancellation, rating, train t
 no hotel names, descriptions, photos or reviews (rules 6.5(4), 6.9). Raw pages are cached in
 data/prices/cache/, facts go to data/prices/<source>/ (data/ is outside git, D-004).
 
-Politeness: robots.txt is checked before every request (Google semantics, from rlt
-src/sources/robots.py); one request per host at a time with PAUSE_S between them; a refusal
-(403, 429, captcha page) stops the whole run — the host is not retried.
+Politeness: an honest UA with a link to the repository; robots.txt (Google semantics, from rlt
+src/sources/robots.py) is read for our UA and checked before every request; a robots.txt that is
+not 200/404 stops the run. One request per host at a time with PAUSE_S between them. A refusal
+(403, 429, captcha page, a redirect, a 200 page without the expected facts) stops the whole run:
+the host is not retried and the page is not cached.
+Provenance: every page gets a line in data/prices/manifest.jsonl (url, time, sha1, facts).
 Standard library only.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import statistics
@@ -23,12 +27,15 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "prices"
 PAUSE_S = 5.0
-UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+AGENT = "nedovost-price-probe"
+UA = f"Mozilla/5.0 (compatible; {AGENT}/0.1; +https://github.com/ostrovok-hackathon-2026/nedovost-org)"
 # Normal pages load captcha scripts too (101hotels: reCAPTCHA, SmartCaptcha), so the word counts
 # only on a small page: challenge pages in the recon were 4-25 KB, city pages 500+ KB.
 REFUSAL = ("вы не робот", "проверяем, что вы не бот")
@@ -64,10 +71,13 @@ def _groups(text: str) -> dict[str, list[tuple[bool, str]]]:
     return groups
 
 
-def allowed(robots_txt: str, path: str) -> bool:
-    """May the `*` agent fetch `path` (with the query string)?"""
+def allowed(robots_txt: str, path: str, agent: str = AGENT) -> bool:
+    """May `agent` fetch `path` (with the query string)? Its own group if any, else `*`."""
+    groups = _groups(robots_txt)
+    specific = [a for a in groups if a != "*" and agent.lower().startswith(a)]
+    rules = groups[max(specific, key=len)] if specific else groups.get("*", [])
     best_len, verdict = -1, True
-    for is_allow, pattern in _groups(robots_txt).get("*", []):
+    for is_allow, pattern in rules:
         if pattern == "":
             continue
         anchored = pattern.endswith("$")
@@ -85,16 +95,17 @@ _robots: dict[str, str] = {}
 _last: dict[str, float] = {}
 
 
-def _get(host: str, path: str) -> tuple[int, str]:
+def _get(host: str, path: str) -> tuple[int, str, str]:
+    """(status, final url, text); urlopen follows redirects, the caller compares the url."""
     wait = PAUSE_S - (time.monotonic() - _last.get(host, -1e9))
     if wait > 0:
         time.sleep(wait)
     req = urllib.request.Request(f"https://{host}{path}", headers={"User-Agent": UA})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, r.read().decode("utf-8", "replace")
+            return r.status, r.geturl(), r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        return e.code, ""
+        return e.code, e.geturl(), ""
     finally:
         _last[host] = time.monotonic()
 
@@ -104,23 +115,49 @@ def refused(text: str) -> bool:
     return any(w in low for w in REFUSAL) or (len(text) < CHALLENGE_MAX and "captcha" in low)
 
 
-def fetch(host: str, path: str) -> str | None:
-    """Page text, or None for 404. Cached on disk; raises Refused on a refusal or a robots ban."""
+def _robots_txt(host: str) -> str:
+    if host not in _robots:
+        status, _, text = _get(host, "/robots.txt")
+        if status not in (200, 404):  # Google: 5xx means «all disallowed»; 403 here is a block
+            raise Refused(f"{host}/robots.txt: HTTP {status} — останавливаюсь")
+        _robots[host] = text
+    return _robots[host]
+
+
+def fetch[T](host: str, path: str, parse: Callable[[str], T]) -> T | None:
+    """Facts parsed from the page, or None for 404. Raises Refused on a refusal, a robots ban,
+    a redirect or a page without facts; only a page that gave facts is cached."""
+    url = f"https://{host}{path}"
     cache = OUT / "cache" / host / (re.sub(r"[^\w.-]", "_", path.strip("/")) + ".html")
     if cache.exists():
-        return cache.read_text(encoding="utf-8")
-    if host not in _robots:
-        _robots[host] = _get(host, "/robots.txt")[1]
-    if not allowed(_robots[host], path):
-        raise Refused(f"robots.txt запрещает {host}{path}")
-    status, text = _get(host, path)
+        return parse(cache.read_text(encoding="utf-8"))
+    if not allowed(_robots_txt(host), path):
+        raise Refused(f"robots.txt запрещает {url}")
+    status, final, text = _get(host, path)
     if status == 404:
         return None
+    if final != url:
+        raise Refused(f"{url}: редирект на {final} — останавливаюсь")
     if status != 200 or refused(text):
-        raise Refused(f"{host}{path}: HTTP {status}, отказ хоста — останавливаюсь")
+        raise Refused(f"{url}: HTTP {status}, отказ хоста — останавливаюсь")
+    try:
+        facts = parse(text)
+    except ValueError as e:
+        raise Refused(f"{url}: {e} — останавливаюсь") from e
+    if not facts:
+        raise Refused(f"{url}: HTTP 200 без фактов (вызов или новая разметка) — останавливаюсь")
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(text, encoding="utf-8")
-    return text
+    line = {
+        "url": url,
+        "fetched_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "ua": UA,
+        "sha1": hashlib.sha1(text.encode()).hexdigest(),
+        "facts": len(facts["trains"]) if isinstance(facts, dict) else len(facts),
+    }
+    with (OUT / "manifest.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    return facts
 
 
 # --- names → URL slugs ---
@@ -180,7 +217,7 @@ def _num(s: str) -> float:
 
 
 def _km(text: str, label: str) -> float | None:
-    m = re.search(label + r"[^<]*?\s([\d.,]+)\s*(км|м)<", text)
+    m = re.search(label + r"[^<\d]*(\d[\d\s.,]*?)\s*(км|м)<", text)
     if not m:
         return None
     return round(_num(m.group(1)) / (1 if m.group(2) == "км" else 1000), 3)
@@ -193,20 +230,23 @@ def parse_101hotels(html: str) -> list[dict]:
     )[1:]
     out = []
     for card in cards:
-        price = re.search(r'data-price-value="(\d+)"', card)
+        card = card.split("</article>", 1)[0]  # the last card would run to the end of the page
+        price = re.search(r'data-price-currency="(\w+)" data-price-value="(\d+)"', card)
         if not price:
             continue
+        if price.group(1) != "RUB":
+            raise ValueError(f"цена в {price.group(1)}, ждали RUB")
         stars = re.search(r'class="stars stars_(\d)"', card)
-        rating = re.search(r'itemprop="ratingValue">([\d.]+)', card)
+        rating = re.search(r'itemprop="ratingValue">([\d.,]+)', card)
         reviews = re.search(r'itemprop="reviewCount" content="(\d+)"', card)
         out.append(
             {
-                "price_rub": int(price.group(1)),
+                "from_rub": int(price.group(2)),
                 "stars": int(stars.group(1)) if stars else None,
                 "center_km": _km(card, "До центра"),
                 "sea_km": _km(card, "До (?:[А-ЯЁ][а-яё]+ )?(?:моря|океана|залива|пляжа)"),
                 "free_cancel": "Бесплатная отмена" in card,
-                "rating": float(rating.group(1)) if rating else None,
+                "rating": _num(rating.group(1)) if rating else None,
                 "reviews": int(reviews.group(1)) if reviews else 0,
             }
         )
@@ -214,7 +254,9 @@ def parse_101hotels(html: str) -> list[dict]:
 
 
 def parse_tutu(html: str) -> dict | None:
-    """Fares of a tutu.ru train route page from its schema.org Product/AggregateOffer block."""
+    """Fares of a tutu.ru train route page from its schema.org Product/AggregateOffer block.
+    Times are local station times; `arrive_next_day` only says arrive < depart — a train of two
+    or more nights is not told apart, so the timeline (TRAP-5) must not take these times as is."""
     for block in re.findall(
         r"<script[^>]*application/ld\+json[^>]*>(.*?)</script>", html, re.DOTALL
     ):
@@ -230,6 +272,8 @@ def parse_tutu(html: str) -> dict | None:
                     "number": o["itemOffered"].get("trainNumber"),
                     "depart": o["itemOffered"]["departureTime"][:5],
                     "arrive": o["itemOffered"]["arrivalTime"][:5],
+                    "arrive_next_day": o["itemOffered"]["arrivalTime"]
+                    < o["itemOffered"]["departureTime"],
                     "category": o.get("category"),
                     "price_rub": o["price"],
                 }
@@ -240,14 +284,15 @@ def parse_tutu(html: str) -> dict | None:
 
 
 def summary(hotels: list[dict]) -> dict:
-    """City aggregate that goes to the calibration: quartiles of the «from» price, shares."""
-    prices = sorted(h["price_rub"] for h in hotels)
+    """City aggregate for the calibration. «From» = the cheapest room per night without dates,
+    on the day of the run (season!), not a typical price."""
+    prices = sorted(h["from_rub"] for h in hotels)
     q = statistics.quantiles(prices, n=4) if len(prices) > 1 else prices * 3
     return {
         "n": len(prices),
-        "p25_rub": round(q[0]),
-        "median_rub": round(q[1]),
-        "p75_rub": round(q[2]),
+        "from_p25_rub": round(q[0]),
+        "from_median_rub": round(q[1]),
+        "from_p75_rub": round(q[2]),
         "free_cancel_share": round(sum(h["free_cancel"] for h in hotels) / len(hotels), 2),
     }
 
@@ -265,14 +310,13 @@ def hotels(cities: list[str]) -> None:
     for arg in cities:
         # 101hotels slugs are irregular (gelendjik, hanty-mansiysk): «Город=slug» overrides translit
         city, _, slug = arg.partition("=")
-        html = fetch("101hotels.com", f"/main/cities/{slug or translit(city)}")
-        found = parse_101hotels(html) if html else []
-        if not found:
-            print(f"{city}: страницы нет или нет цен — пропуск")
+        path = f"/main/cities/{slug or translit(city)}"
+        found = fetch("101hotels.com", path, parse_101hotels)
+        if found is None:
+            print(f"{city}: 404 — пропуск")
             continue
-        _save(
-            "101hotels", translit(city), {"city": city, "hotels": found, "summary": summary(found)}
-        )
+        facts = {"city": city, "source_url": f"https://101hotels.com{path}", "hotels": found}
+        _save("101hotels", translit(city), {**facts, "summary": summary(found)})
         print(city, summary(found))
 
 
@@ -280,12 +324,13 @@ def trains(routes: list[str]) -> None:
     for route in routes:
         a, b = route.split(":")
         slug = "/".join(translit(x).title() for x in (a, b))
-        html = fetch("www.tutu.ru", f"/poezda/{slug}/")
-        fares = parse_tutu(html) if html else None
-        if not fares:
-            print(f"{route}: страницы нет или нет цен — пропуск")
+        path = f"/poezda/{slug}/"
+        fares = fetch("www.tutu.ru", path, parse_tutu)
+        if fares is None:
+            print(f"{route}: 404 — пропуск")
             continue
-        _save("tutu", f"{translit(a)}--{translit(b)}", {"route": [a, b], **fares})
+        facts = {"route": [a, b], "source_url": f"https://www.tutu.ru{path}", **fares}
+        _save("tutu", f"{translit(a)}--{translit(b)}", facts)
         print(route, fares["low_rub"], fares["high_rub"], len(fares["trains"]), "поездов")
 
 
