@@ -25,6 +25,7 @@ from api.contracts import (
     Cart,
     ChatReply,
     ChatRequest,
+    Explanation,
     HotelOffer,
     Plan,
     Question,
@@ -35,7 +36,15 @@ from api.contracts import (
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract, with_llm
 from api.fixtures import build_timeline, future_date, suggest_destinations
-from api.optimizer import pick_hotel
+from api.optimizer import (
+    _hotel_why,
+    _leg_why,
+    _pool,
+    _risks,
+    _sacrificed,
+    enumerate_trips,
+    pick_hotel,
+)
 from api.store import SessionStore
 
 DEFAULT_NIGHTS = 7
@@ -73,11 +82,15 @@ LEG_PICK_RE = re.compile(
 LEG_NOUN = r"(?:рейс\w*|перел[её]т\w*|поезд\w*)"
 LEG_STEMS = ("перв", "втор", "трет", "четв", "пят", "шест", "седьм", "восьм", "девят")
 LEG_ORDINAL = r"(?:перв|втор|трет|четв[её]рт|пят|шест|седьм|восьм|девят)(?:ый|ой|ий|ая|ое|ую)"
-LEG_NOT_DATE = r"(?![:.]\d|\s*(?:янв|фев|мар|апр|ма[яй]|июн|июл|авг|сен|окт|ноя|дек))"
-LEG_ROW_RE = re.compile(
-    rf"\b({LEG_ORDINAL})\s+{LEG_NOUN}"
-    rf"|\b{LEG_NOUN}\s+(?:№\s*|номер\s+)?(\d{{1,2}})\b{LEG_NOT_DATE}"
-    rf"|\b{LEG_NOUN}\s+({LEG_ORDINAL})"
+LEG_NOT_DATE = (
+    r"(?![:.]\d|\s*(?:янв|фев|мар|апр|ма[яй]|июн|июл|авг|сен|окт|ноя|дек"
+    r"|ч\b|час|мин|дн|дне|ноч|раз|чел|взр|дет|₽|руб|тыс))"
+)
+# (ordinal, noun), (noun, digits), (noun, ordinal): the groups are the number and the noun.
+LEG_ROW_RES = (
+    (re.compile(rf"\b({LEG_ORDINAL})\s+({LEG_NOUN})"), 0, 1),
+    (re.compile(rf"\b({LEG_NOUN})\s+(?:№\s*|номер\s+)?(\d{{1,2}})\b{LEG_NOT_DATE}"), 1, 0),
+    (re.compile(rf"\b({LEG_NOUN})\s+({LEG_ORDINAL})"), 1, 0),
 )
 LEG_MODES: dict[str, re.Pattern] = {
     "train": re.compile(r"\bпоезд\w*|\bж/?д\b|сапсан|ласточк"),
@@ -194,9 +207,26 @@ def _ordinal(text: str) -> int | None:
 LegCommand = tuple[str, str | int, str | None]
 
 
-def leg_commands(text: str) -> list[LegCommand]:
-    """Picks of transport in the message: (kind, mode or table row, direction or None).
+def _leg_row(clause: str) -> tuple[int, str | None] | None:
+    """(row from 0, mode of the noun or None) of «второй поезд», «рейс 3»: the row counts
+    among the offers of the named mode; «рейс» names no mode."""
+    for rx, num, noun in LEG_ROW_RES:
+        if m := rx.search(clause):
+            n = m.group(num + 1)
+            row = (
+                int(n) - 1 if n.isdigit() else next(i for i, st in enumerate(LEG_STEMS) if st in n)
+            )
+            word = m.group(noun + 1)
+            return row, "train" if word.startswith("поезд") else "flight" if word[
+                :4
+            ] == "перел" else None
+    return None
 
+
+def leg_commands(text: str) -> list[LegCommand]:
+    """Picks of transport in the message: (kind, mode or row, direction or mode filter).
+
+    A «row» command holds the row among the offers of its mode filter (None: the whole table).
     Empty when the message is not a pick: no verb and no ordinal with a noun, or a negation.
     """
     t = text.lower().replace("ё", "е")
@@ -205,10 +235,8 @@ def leg_commands(text: str) -> list[LegCommand]:
     verb = bool(LEG_PICK_RE.search(t))
     out: list[LegCommand] = []
     for clause in LEG_CLAUSE_RE.split(t):
-        if m := LEG_ROW_RE.search(clause):
-            word = m.group(1) or m.group(3)
-            row = next((i for i, st in enumerate(LEG_STEMS) if st in (word or "")), None)
-            out.append(("row", int(m.group(2)) - 1 if m.group(2) else row, None))
+        if row := _leg_row(clause):
+            out.append(("row", row[0], row[1]))
             continue
         direction = "there" if LEG_THERE_RE.search(clause) else None
         direction = "back" if LEG_BACK_RE.search(clause) else direction
@@ -218,6 +246,26 @@ def leg_commands(text: str) -> list[LegCommand]:
             if (verb or direction) and p.search(clause)
         ]
     return out
+
+
+def _explain(plan: Plan) -> list[Explanation]:
+    """Why of the selected trip, from the facts of the offers as the optimizer writes them.
+
+    The old text names the totals of the old selection, so it must not stay after a switch.
+    """
+    trips = enumerate_trips(plan.offers)
+    chosen = set(plan.selected)
+    trip = next((t for t in trips if set(t.ids) <= chosen), None)
+    if trip is None:
+        return []
+    pool, fits = _pool(plan.spec, trips)
+    hotel = Explanation(
+        offer_id=trip.hotel.offer_id,
+        why=_hotel_why(plan.spec, trip),
+        tradeoffs=_sacrificed(plan.spec, trip, pool),
+        risks=_risks(plan.spec, trip, fits, trips),
+    )
+    return [hotel, *(_leg_why(trip, leg, plan.offers) for leg in trip.legs)]
 
 
 def _cheapest(legs: list[TransportOffer]) -> TransportOffer | None:
@@ -248,11 +296,17 @@ def switch_transport(plan: Plan, text: str) -> tuple[Plan | None, str]:
     now = {d: next((x for x in xs if x.offer_id in plan.selected), None) for d, xs in dirs.items()}
     new, touched = dict(now), set()
     for kind, what, direction in commands:
+        # The spec filtered this mode out of the offers (offers.py): «возьми поезд» then
+        # is a new constraint, and the caller re-plans the trip instead.
+        want = direction if kind == "row" else what  # the mode asked for, if any
+        if want and plan.spec.modes and want not in plan.spec.modes:
+            return None, ""
         if kind == "row":
-            if what >= len(table):
-                return None, f"Рейса {what + 1} нет: в таблице рейсов {len(table)}."
-            d = "there" if table[what] in dirs["there"] else "back"
-            new[d] = table[what]
+            rows = [x for x in table if direction in (None, x.mode)]
+            if not 0 <= what < len(rows):
+                return None, f"Рейса {what + 1} нет: в таблице их {len(rows)}."
+            d = "there" if rows[what] in dirs["there"] else "back"
+            new[d] = rows[what]
             touched.add(d)
             continue
         found = False
@@ -285,6 +339,7 @@ def switch_transport(plan: Plan, text: str) -> tuple[Plan | None, str]:
         }
     )
     out.timeline, out.issues = build_timeline(out)
+    out.explanations = _explain(out)
     titles = [x.title for x in new.values() if x]
     return out, "Транспорт заменён: " + "; ".join(titles) + "."
 
@@ -364,7 +419,7 @@ def _text_compare(plan: Plan) -> str:
 def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
     lines += [f"{e.at:%d.%m %H:%M} — {e.title}" for e in plan.timeline]
-    lines += [f"Внимание: {i.text.rstrip('.')}." for i in plan.issues]
+    lines += [f"Внимание: {i.text}." for i in plan.issues]
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
 
@@ -401,9 +456,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # At checkout «подтверждаю» books first: the prices come from the catalogue anyway.
         hint = HINTS.get(old.stage, "Опишите поездку: куда, когда и кто едет.")
         return old.model_copy(update={"reply": f"{REFUSAL} {hint}", "questions": [], "llm": False})
-    if prev and old.stage in ("compare", "assemble", "checkout"):
-        # S6 (#31): «возьми поезд», «второй рейс» pick offers of the plan. It goes to no model
-        # and is no constraint: the spec stays, only plan.selected and the timeline change.
+    # S6 (#31): «возьми поезд», «второй рейс» pick offers of the plan. It goes to no model and is
+    # no constraint: the spec stays, only plan.selected and the timeline change. A message that
+    # also states trip fields or moves the dates («давай в Сочи поездом») is a re-plan, as before.
+    pure = set(extract(message)[0]) <= {"modes"} and not SHIFT_RE.search(t.replace("ё", "е"))
+    if pure and prev and old.stage in ("compare", "assemble", "checkout"):
         plan, note = switch_transport(old.plan, message)
         if old.stage == "checkout" and (plan or note):
             note = "Корзина уже собрана, транспорт в ней не меняю."

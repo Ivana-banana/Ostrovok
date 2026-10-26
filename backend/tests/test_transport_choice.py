@@ -106,3 +106,65 @@ def test_checkout_refuses_a_switch(store):
     again = say(store, "возьми поезд", r.session_id)
     assert again.stage == "checkout" and again.plan.selected == r.plan.selected
     assert again.cart == r.cart
+
+
+def rub(n):
+    return f"{n:,} ₽".replace(",", " ")
+
+
+@pytest.mark.parametrize(
+    ("text", "field"),
+    [
+        ("давай в Казань поездом", "destinations"),
+        ("давай на неделю позже, полетим самолётом", "date_from"),
+        ("лучше с завтраком и поездом", "meal"),
+    ],
+)
+def test_mixed_phrase_is_a_replan_not_a_pick(store, text, field):
+    r = say(store, SOCHI)
+    again = say(store, text, r.session_id)
+    assert getattr(again.plan.spec, field) != getattr(r.plan.spec, field)
+    assert "уже выбран" not in again.reply and "Транспорт заменён" not in again.reply
+
+
+def test_mode_filtered_out_by_the_spec_sets_the_constraint(store):
+    r = say(store, "Казань самолётом, 3 ночи с 20 ноября, двое взрослых")
+    assert r.plan.spec.modes == ["flight"]
+    assert {x.mode for x in transport_rows(r)} == {"flight"}
+    again = say(store, "давай поездом", r.session_id)
+    assert again.plan.spec.modes == ["train"] and "нет" not in again.reply.split("\n")[0]
+    assert [x.mode for x in legs(again)] == ["train", "train"]
+    third = say(store, "возьми самолёт", again.session_id)
+    assert [x.mode for x in legs(third)] == ["flight", "flight"]
+
+
+def test_ordinal_counts_among_offers_of_the_named_kind(store):
+    r = say(store, SOCHI)
+    r = say(store, "возьми самолёт", r.session_id)
+    trains = [x for x in transport_rows(r) if x.mode == "train"]
+    r = say(store, "второй поезд", r.session_id)
+    assert trains[1].offer_id in r.plan.selected  # the train back, not row 2 of the table
+    assert [x.mode for x in legs(r)] == ["flight", "train"]
+    again = say(store, "третий поезд", r.session_id)
+    assert again.plan.selected == r.plan.selected and "нет" in again.reply.split("\n")[0]
+
+
+@pytest.mark.parametrize("text", ["рейс 0", "перелёт 2 часа", "рейс 20 ноября"])
+def test_not_a_row(store, text):
+    r = say(store, SOCHI)
+    again = say(store, text, r.session_id)
+    assert again.plan.selected == r.plan.selected
+    assert "Транспорт заменён" not in again.reply
+
+
+def test_why_after_a_switch_matches_the_new_total(store):
+    r = say(store, SOCHI)
+    r = say(store, "возьми самолёт", r.session_id)
+    other = say(store, "возьми поезд", r.session_id)
+    total = sum(o.price_rub for o in other.plan.offers if o.offer_id in other.plan.selected)
+    assert total != sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
+    assert f"Итого {rub(total)}" in other.reply
+    assert f"поездка целиком {rub(total)}" in other.reply  # the old totals are gone
+    first = other.plan.explanations[0]
+    assert first.offer_id in other.plan.selected
+    assert {e.offer_id for e in other.plan.explanations[1:]} == {x.offer_id for x in legs(other)}
