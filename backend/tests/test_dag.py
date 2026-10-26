@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from api import dag
+from api import dag, llm
 from api.contracts import Cart, ChatRequest, Plan, TripSpec
 from api.model import chat
 from api.optimizer import enumerate_trips, hotel_rows
@@ -203,6 +203,10 @@ def test_s2_shifts_dates_and_budget_without_new_questions(store):
         ("а на 3 дня раньше?", -3),
         ("сдвинь на неделю позже", 7),
         ("на день раньше", -1),
+        ("на пару дней позже", 2),
+        ("на сутки позже", 1),
+        ("на двое суток раньше", -2),
+        ("на пару недель позже", 14),
         ("на 3 дня", 0),  # a duration, not a shift
         ("бюджет меньше", 0),
     ],
@@ -220,6 +224,194 @@ def test_shift_dates_moves_the_current_dates(text, days):
     assert out.date_from == date(2030, 11, 8) + timedelta(days=days)
     assert out.date_to == date(2030, 11, 15) + timedelta(days=days) and out.nights == 7
     assert (out.assumptions == spec.assumptions) == (days == 0)
+    assert "откуда: Москва" in out.assumptions
+    if days:
+        way = "позже" if days > 0 else "раньше"
+        assert f"даты: сдвинуты на {abs(days)} дн. {way} по вашей просьбе" in out.assumptions
+        assert not any("точных дат не было" in a for a in out.assumptions)
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end"),
+    [
+        ("обратно на день раньше", 0, -1),
+        ("хотим вернуться на два дня позже", 0, 2),
+        ("выезд из отеля на день раньше", 0, -1),
+        ("заселиться на день позже", 1, 0),
+        ("прилетим на сутки раньше", -1, 0),
+        ("вылет на пару дней позже", 2, 0),
+        ("вылет обратно на день позже", 0, 1),
+        ("заселиться на день позже, а обратно на день раньше", 1, -1),
+        # leaving home is the start, but no cue word: both ends move as before
+        ("улетим на день позже", 1, 1),
+        ("уедем на неделю позже", 7, 7),
+        ("выезд из Москвы на день позже", 1, 1),
+        ("дата отъезда на день позже", 1, 1),
+        ("давай улетим в Сочи на два дня раньше", -2, -2),
+    ],
+)
+def test_shift_dates_moves_only_one_end(text, start, end):
+    spec = TripSpec.model_validate(
+        {"date_from": date(2030, 11, 8), "date_to": date(2030, 11, 15), "nights": 7}
+    )
+    out = dag.shift_dates(spec, text)
+    assert out.date_from == date(2030, 11, 8) + timedelta(days=start)
+    assert out.date_to == date(2030, 11, 15) + timedelta(days=end)
+    assert out.nights == 7 - start + end == (out.date_to - out.date_from).days
+    assert any(a.startswith("даты:") and "по вашей просьбе" in a for a in out.assumptions)
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end"),
+    [
+        ("вылет из Сочи на день позже", 0, 1),  # the destination: the flight back
+        ("вылет из Москвы на день позже", 1, 0),
+    ],
+)
+def test_shift_dates_flight_from_the_destination_is_the_return(text, start, end):
+    spec = TripSpec.model_validate(
+        {
+            "destinations": ["Сочи"],
+            "date_from": date(2030, 11, 8),
+            "date_to": date(2030, 11, 15),
+            "nights": 7,
+        }
+    )
+    out = dag.shift_dates(spec, text)
+    assert out.date_from == date(2030, 11, 8) + timedelta(days=start)
+    assert out.date_to == date(2030, 11, 15) + timedelta(days=end)
+
+
+def test_shift_dates_leaves_less_than_a_night_is_an_error():
+    spec = TripSpec.model_validate(
+        {"date_from": date(2030, 11, 8), "date_to": date(2030, 11, 10), "nights": 2}
+    )
+    with pytest.raises(ValueError, match="ноч"):
+        dag.shift_dates(spec, "обратно на два дня раньше")
+
+
+def test_shift_notes_add_up():
+    spec = TripSpec.model_validate(
+        {"date_from": date(2030, 11, 8), "date_to": date(2030, 11, 15), "nights": 7}
+    )
+    out = dag.shift_dates(dag.shift_dates(spec, "на два дня позже"), "на день раньше")
+    assert out.date_from == date(2030, 11, 9)
+    assert [a for a in out.assumptions if a.startswith("даты:")] == [
+        "даты: сдвинуты на 1 дн. позже по вашей просьбе"
+    ]
+    back = dag.shift_dates(out, "на день раньше")
+    assert back.date_from == spec.date_from
+    assert not any(a.startswith("даты:") for a in back.assumptions)
+
+
+@pytest.fixture
+def antalya(store):
+    return say(store, S2_SESSION)
+
+
+def _no_errors(r):
+    assert not [i for i in r.plan.issues if i.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    ("text", "days"),
+    [
+        ("А можно на пару дней позже?", 2),
+        ("давайте на сутки позже", 1),
+        ("а на пару недель раньше?", -14),
+    ],
+)
+def test_say_shifts_both_ends(store, antalya, text, days):
+    old = antalya.plan.spec
+    r = say(store, text, antalya.session_id)
+    spec = r.plan.spec
+    assert r.stage == "compare" and "Было → стало" in r.reply
+    assert spec.date_from == old.date_from + timedelta(days=days)
+    assert spec.date_to == old.date_to + timedelta(days=days) and spec.nights == old.nights
+    way = "позже" if days > 0 else "раньше"
+    assert f"даты: сдвинуты на {abs(days)} дн. {way} по вашей просьбе" in spec.assumptions
+    assert all(o.date_in == spec.date_from for o in r.plan.offers if o.kind == "hotel")
+    _no_errors(r)
+
+
+def test_say_return_a_day_earlier_moves_only_the_return(store, antalya):
+    old = antalya.plan.spec
+    r = say(store, "обратно на день раньше", antalya.session_id)
+    spec = r.plan.spec
+    assert r.stage == "compare" and spec.date_from == old.date_from
+    assert spec.date_to == old.date_to - timedelta(days=1) and spec.nights == old.nights - 1
+    assert "даты: возврат на 1 дн. раньше по вашей просьбе" in spec.assumptions
+    hotels = [o for o in r.plan.offers if o.kind == "hotel"]
+    assert hotels and all((o.date_in, o.date_out) == (spec.date_from, spec.date_to) for o in hotels)
+    _no_errors(r)
+
+
+def test_say_check_in_a_day_later_moves_only_the_check_in(store, antalya):
+    old = antalya.plan.spec
+    r = say(store, "заселиться на день позже", antalya.session_id)
+    spec = r.plan.spec
+    assert r.stage == "compare" and spec.date_to == old.date_to
+    assert spec.date_from == old.date_from + timedelta(days=1) and spec.nights == old.nights - 1
+    assert "даты: заезд на 1 дн. позже по вашей просьбе" in spec.assumptions
+    assert all(o.date_in == spec.date_from for o in r.plan.offers if o.kind == "hotel")
+    _no_errors(r)
+
+
+def test_say_shift_survives_a_later_nights_edit(store, antalya):
+    r = say(store, "заселиться на день позже", antalya.session_id)
+    start = r.plan.spec.date_from
+    r = say(store, "а 4 ночи", r.session_id)
+    assert r.plan.spec.date_from == start and r.plan.spec.nights == 4
+
+
+def test_say_shift_too_short_is_refused_and_changes_nothing(store, antalya):
+    old = antalya.plan.spec
+    r = say(store, f"обратно на {old.nights} дней раньше", antalya.session_id)
+    assert r.plan.spec == old and r.stage == antalya.stage
+    assert "меньше одной ночи" in r.reply and r.plan.offers == antalya.plan.offers
+    r = say(store, f"обратно на {old.nights} дней раньше и бюджет 100 тысяч", antalya.session_id)
+    assert r.plan.spec == old and "ничего не применено" in r.reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "перенеси даты",
+        "давай сдвинем поездку",
+        "хочу вернуться пораньше, вернуться раньше",
+        "заселиться позже",
+        "а если на несколько дней позже?",
+        # a move without a direction or a change of length is not a new length (review of PR #70)
+        "Сдвинь на 3 дня",
+        "Продли на 2 дня",
+        "Сократи на 2 дня",
+        "Отодвинь на пару дней",
+    ],
+)
+def test_say_unclear_date_edit_gets_an_explicit_reply(store, antalya, text):
+    r = say(store, text, antalya.session_id)
+    assert "не понял, что изменить" in r.reply.lower()
+    assert r.plan == antalya.plan and r.stage == antalya.stage and r.cart == antalya.cart
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "спасибо!",
+        "раньше мы ездили в Сочи",
+        "а что с погодой?",
+        "расскажи про отель",
+        "измени бюджет поездки",
+        "поменяй направление поездки",
+        "вылет позже 10 утра",
+        "Всё верно, раньше не получится",
+        "заселение после 14, раньше нельзя",
+        "хочу вылет позже, утром тяжело",
+    ],
+)
+def test_say_ordinary_chat_is_not_a_date_edit(store, antalya, text):
+    r = say(store, text, antalya.session_id)
+    assert "не понял, что изменить" not in r.reply.lower()
 
 
 @pytest.fixture
@@ -325,6 +517,25 @@ def test_date_shift_keeps_the_tariff_terms_of_the_picked_hotel(store):
         before.meal,
         before.cancellation.refundable,
     )
+
+
+def test_say_shift_ignores_the_dates_of_the_model(monkeypatch, store, antalya):
+    """The rules read the shift; the model must not add other dates or nights next to it."""
+    old = antalya.plan.spec
+
+    def stub(message, spec, until=None, today=None):
+        return {
+            "date_from": date(2030, 1, 1),
+            "date_to": date(2030, 1, 3),
+            "nights": 2,
+            "budget_rub": 150_000,
+        }
+
+    monkeypatch.setattr(llm, "extract_spec", stub)
+    r = say(store, "а можно на сутки позже?", antalya.session_id)
+    spec = r.plan.spec
+    assert spec.date_from == old.date_from + timedelta(days=1) and spec.nights == old.nights
+    assert spec.date_to == old.date_to + timedelta(days=1) and spec.budget_rub == 150_000
 
 
 def test_manual_pick_comes_from_the_stored_ranking_not_a_second_rank(store, monkeypatch):

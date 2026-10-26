@@ -33,8 +33,17 @@ from api.contracts import (
     TransportOffer,
     TripSpec,
 )
-from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
+from api.dag import (
+    DATE_EDIT_RE,
+    SHIFT_RE,
+    describe,
+    dirty_nodes,
+    is_shift_note,
+    replan,
+    shift_dates,
+)
 from api.extract import (
+    DATE_KEYS,
     MONTH_NAMES,
     excluded_places,
     extract,
@@ -171,7 +180,8 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     stated = {LABELS[k] for k in found if k in LABELS}
     if stated & {"когда", "даты", "длительность"}:
         data["date_to"] = None  # derived from date_from + nights again
-        if "даты" not in stated and any(_label(a) == "даты" for a in data["assumptions"]):
+        assumed = [a for a in data["assumptions"] if _label(a) == "даты" and not is_shift_note(a)]
+        if "даты" not in stated and assumed:  # the dates were guessed, not said; a shift is said
             data["date_from"] = None
             stated.add("даты")
     kept = [a for a in data["assumptions"] if _label(a) not in stated]
@@ -607,7 +617,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if SHIFT_RE.search(t.replace("ё", "е")):
         found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
         if llm_found:
-            llm_found.pop("nights", None)
+            # The rules read the shift (which end, how far); the model must not add other dates.
+            for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
+                llm_found.pop(k, None)
     if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
         notes.append(PARTY_UNKNOWN)
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
@@ -660,8 +672,26 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         text = gone_text + _text_inspire(plan)
         return reply("inspire", plan, text, Cart(), questions=[question, *party_question(spec)])
 
+    dated = bool(old.plan.spec.date_from and old.plan.spec.date_to)
+    te = t.replace("ё", "е")
+    if not found and prev and dated and not SHIFT_RE.search(te) and DATE_EDIT_RE.search(te):
+        # The message asks to move the dates but says how far or which way in no known words (S2).
+        s = old.plan.spec
+        text = (
+            f"Не понял, что изменить в датах. Сейчас {s.date_from:%d.%m}–{s.date_to:%d.%m}. "
+            "Напишите, например: «на два дня позже», «обратно на день раньше» "
+            "или «с 20 ноября на 5 ночей»."
+        )
+        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     if "date_from" not in found:
-        spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
+        try:
+            spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
+        except ValueError as e:
+            text = (
+                f"{e} Из этого сообщения ничего не применено. "
+                f"Сейчас {spec.date_from:%d.%m}–{spec.date_to:%d.%m}. {HINTS.get(old.stage, '')}"
+            )
+            return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     if dirty_nodes(old.plan.spec, spec) or not plan.offers:
