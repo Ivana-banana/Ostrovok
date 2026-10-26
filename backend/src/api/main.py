@@ -7,7 +7,8 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from api.contracts import ChatReply, ChatRequest
+from api.cart import cart_route, checkout_route
+from api.contracts import Cart, CartAction, ChatReply, ChatRequest, CheckoutRequest, Voucher
 from api.model import chat
 from api.store import SessionStore, db_path
 
@@ -39,6 +40,16 @@ def session_route(session_id: str, store: Store) -> ChatReply:
     if reply is None:
         raise HTTPException(status_code=404, detail="сессия не найдена")
     return reply
+
+
+@app.post("/api/cart")
+def cart_edit_route(req: CartAction, store: Store) -> Cart:
+    return cart_route(req, store)
+
+
+@app.post("/api/checkout")
+def checkout_post_route(req: CheckoutRequest, store: Store) -> Voucher:
+    return checkout_route(req, store)
 
 
 DIST = Path(__file__).resolve().parents[3] / "web" / "dist"

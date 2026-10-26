@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, cartAction, chat, checkout, getSession, missingRoute } from "./api";
+import { ApiError, cartAction, chat, checkout, getSession } from "./api";
 import { Board } from "./Board";
 import type { ChatReply, Offer } from "./contracts";
 import { describe } from "./format";
@@ -87,7 +87,6 @@ export function App() {
   const [reply, setReply] = useState<ChatReply | null>(null);
   const [ui, setUi] = useState<Ui>({ messages: [], removed: [] });
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(() => !!readSid());
   const end = useRef<HTMLDivElement>(null);
@@ -134,7 +133,6 @@ export function App() {
     if (!m || busy) return;
     setBusy(true);
     setError(null);
-    setNotice(null);
     const withUser = { ...ui, messages: [...ui.messages, { role: "user" as const, text: m }] };
     setUi(withUser);
     try {
@@ -157,7 +155,6 @@ export function App() {
     if (!reply || busy) return;
     setBusy(true);
     setError(null);
-    setNotice(null);
     try {
       const cart = await cartAction({ session_id: reply.session_id, action, offer_id: offerId });
       const item =
@@ -167,9 +164,7 @@ export function App() {
       update({ ...ui, removed: action === "remove" && item ? [...rest, item] : rest });
       setReply({ ...reply, cart });
     } catch (e) {
-      // TODO(#11): POST /api/cart is not in main yet; the cart stays as the agent filled it.
-      if (missingRoute(e)) setNotice("Правка корзины пока недоступна на сервере. Корзина не изменилась.");
-      else setError(userError(e));
+      setError(userError(e));
     } finally {
       setBusy(false);
     }
@@ -179,7 +174,6 @@ export function App() {
     if (!reply || busy) return;
     setBusy(true);
     setError(null);
-    setNotice(null);
     const id = reply.session_id;
     try {
       const voucher = await checkout({ session_id: id, confirm_total_rub: reply.cart.total_rub });
@@ -188,12 +182,6 @@ export function App() {
       const text = `Бронь ${voucher.booking_id} оформлена. Оплата имитирована.`;
       update({ ...ui, messages: [...ui.messages, { role: "agent", text }] });
     } catch (e) {
-      if (missingRoute(e)) {
-        // TODO(#11): POST /api/checkout is not in main yet; the agent books on «подтверждаю».
-        setBusy(false);
-        await send("подтверждаю");
-        return;
-      }
       if (e instanceof ApiError && e.status === 409) {
         setError("Итог корзины изменился. Проверьте сумму и подтвердите ещё раз.");
         const fresh = await getSession(id).catch(() => null);
@@ -209,7 +197,6 @@ export function App() {
     setReply(null);
     setUi({ messages: [], removed: [] });
     setError(null);
-    setNotice(null);
     setText("");
   }
 
@@ -260,11 +247,6 @@ export function App() {
                 </div>
               ))}
             </div>
-          )}
-          {notice && (
-            <p className="notice" role="note">
-              {notice}
-            </p>
           )}
           {error && (
             <p className="error" role="alert">

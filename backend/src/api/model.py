@@ -15,16 +15,11 @@ import re
 from datetime import date, timedelta
 from uuid import uuid4
 
+from api.cart import book, fill_cart
 from api.contracts import Cart, ChatReply, ChatRequest, Plan, Question, Stage, TripSpec
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract
-from api.fixtures import (
-    book,
-    build_timeline,
-    fill_cart,
-    future_date,
-    suggest_destinations,
-)
+from api.fixtures import build_timeline, future_date, suggest_destinations
 from api.store import SessionStore
 
 DEFAULT_NIGHTS = 7
