@@ -348,6 +348,31 @@ def test_trap3_male_is_still_found_by_its_name(text):
     assert extract(text)[0]["destinations"] == ["Мале"]
 
 
+@pytest.mark.parametrize(
+    "text, wrong",
+    [
+        ("Дела такие: хочу на море в ноябре", "Дели"),
+        ("Себе хочу тёплое море", "Себу"),
+        ("Губы обветрились, хочу на море", "Губа"),
+        ("Бару нашли, теперь отель", "Бар"),
+    ],
+)
+def test_trap3_case_form_of_a_short_name_at_the_start_is_no_place(text, wrong):
+    """#102: «Дела» is a word; a short name at the start counts only in its exact form."""
+    assert wrong not in extract(text)[0].get("destinations", [])
+
+
+def test_trap3_start_word_like_a_short_name_does_not_join_a_real_place():
+    assert extract("Кашу не любим, хотим в Италию")[0]["destinations"] == ["Италия"]
+
+
+@pytest.mark.parametrize(
+    "text, city", [("Дели в ноябре", "Дели"), ("хочу в Себу", "Себу"), ("Бар, 3 ночи", "Бар")]
+)
+def test_trap3_short_name_is_found_by_its_name_or_after_a_preposition(text, city):
+    assert extract(text)[0]["destinations"] == [city]
+
+
 def test_trap3_small_hotel_after_a_plan_keeps_the_city():
     first = step(None, "s", "Сочи на неделю в декабре")
     r = step(first, "s", "Хочу в малом отеле")

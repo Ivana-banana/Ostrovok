@@ -193,8 +193,10 @@ def _place_at(text: str, t: str, pos: int) -> str | None:
     )
 
 
-def _known(word: str) -> str | None:
-    """«Иркутске», «иркутска» -> «Иркутск» (TRAP-3): one-word names of places.json, any case."""
+def _known(word: str, exact_short: bool = False) -> str | None:
+    """«Иркутске», «иркутска» -> «Иркутск» (TRAP-3): one-word names of places.json, any case.
+
+    exact_short: a short name counts only as written, «Дела» is not «Дели» (#102)."""
     w = word.lower().replace("ё", "е")
     for p in places():
         n = p["name"].lower().replace("ё", "е")
@@ -203,7 +205,7 @@ def _known(word: str) -> str | None:
         stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
         short = len(stem) <= 3
         if w == n or re.fullmatch(re.escape(stem) + (CASES_SHORT if short else CASES), w):
-            if short and w != n and w in NOT_SHORT_FORMS:
+            if short and w != n and (exact_short or w in NOT_SHORT_FORMS):
                 continue
             return p["name"]
     return None
@@ -221,7 +223,7 @@ def _first_city(
     if not m:
         return None
     word, low = m.group(1), t[m.start(1) : m.end(1)]
-    if known := _known(word):
+    if known := _known(word, exact_short=True):  # no preposition: «Дела такие» is no «Дели»
         if known in PERSON_CITIES and ADDRESS_NEXT.match(t, m.end()):
             return None
         return m.start(1), known  # a known city may be lower case: «иркутск на неделю»
