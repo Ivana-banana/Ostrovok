@@ -19,7 +19,7 @@ import re
 from datetime import date, timedelta
 from uuid import uuid4
 
-from api import llm
+from api import catalog, llm
 from api.cart import CartRefusal, checkout_reply, fill_cart
 from api.contracts import (
     Cart,
@@ -215,6 +215,12 @@ def assume(spec: TripSpec) -> TripSpec:
     if not data["origin"]:
         data["origin"] = "Москва"
         note("откуда", "Москва (город вылета не назван)")
+    else:
+        # TRAP-4 (#104): no flight from a city off the hub list; the nearest hub, said aloud.
+        hub, why = catalog.origin_hub(data["origin"])
+        data["origin"] = hub["name"]
+        if why:
+            note("откуда", why[:1].lower() + why[1:])
     if data["budget_rub"] is None:
         cheap = "недорого" in data["wishes"]
         note("бюджет", "не задан — сначала дешёвые" if cheap else "не задан — разные цены")
