@@ -3,7 +3,6 @@
 import random
 import re
 from datetime import date, datetime, timedelta
-from itertools import combinations
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -25,7 +24,6 @@ from api.offers import find_offers, transfer_id
 from api.optimizer import (
     DEFAULT_WEIGHTS,
     bundles,
-    enumerate_trips,
     optimize,
     pick_hotel,
     rank,
@@ -377,20 +375,26 @@ RUB_RE = re.compile(r"(\d[\d ]*) ₽")
 
 
 def _allowed_amounts(s, items, out):
-    """Prices, trip totals and parts (of the bundles and of every trip), their differences,
-    the budget and the overrun."""
+    """Prices, trip totals and parts, their differences, the budget and the overrun.
+
+    The sums come from price_rub of the offers, not from total_rub of the bundles. A difference
+    needs a bundle sum or a price of a bundle offer on one side: pairs of any numbers would
+    allow almost every round amount.
+    """
     by_id = {o.offer_id: o for o in items}
     base = {o.price_rub for o in items}
-    for t in enumerate_trips(items):  # texts name trips that are not in the bundles
-        base |= {t.total, t.road, t.transfer_rub}
+    bund = set()
     for b in out:
         parts = [by_id[i] for i in b.offer_ids]
-        base.add(b.total_rub)
-        base.add(sum(o.price_rub for o in parts if o.kind == "transport"))
-        base.add(sum(o.price_rub for o in parts if o.kind == "transfer"))
+        road = sum(o.price_rub for o in parts if o.kind == "transport")
+        moves = sum(o.price_rub for o in parts if o.kind == "transfer")
+        whole = sum(o.price_rub for o in parts)
+        assert b.total_rub == whole, b  # the bundle total is the sum of its offers
+        bund |= {whole, road, moves, *(o.price_rub for o in parts)}
+    base |= bund
     if s.budget_rub is not None:
         base |= {s.budget_rub} | {t - s.budget_rub for t in base if t > s.budget_rub}
-    return base | {abs(a - b) for a, b in combinations(base, 2)}
+    return base | {abs(a - b) for a in bund for b in base}
 
 
 @pytest.mark.parametrize(
@@ -777,3 +781,16 @@ def test_in_budget_bundle_is_among_the_alternatives_even_when_others_fill_the_li
     assert labels[1] == "в бюджете", labels
     assert len(r.bundles) == 1 + 3
     assert r.bundles[1].total_rub <= 25_000
+
+
+def test_allowed_amounts_reject_a_made_up_round_difference():
+    """A text with a round difference that no sums of the offers give (a mutant of _diff) fails."""
+    a, b = hotel("a", 10_000), hotel("b", 14_000, rating=9.0)
+    items = offers([a, b], FLIGHTS)
+    s = spec(priorities=["rating"])
+    r = optimize(s, items)
+    allowed = _allowed_amounts(s, items, r.bundles)
+    real = {int(m.group(1).replace(" ", "")) for t in _texts(r) for m in RUB_RE.finditer(t)}
+    assert real and real <= allowed
+    for k in (100, 500, 1500):  # a mutant prints d + k instead of d
+        assert not {n + k for n in real} <= allowed, k
