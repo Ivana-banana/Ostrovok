@@ -52,27 +52,43 @@ ADJECTIVE_FORMS = {
 }
 
 
-def _word_re(word: str) -> str:
-    """A word of a two-word name in any case: «Великого», «Воды» -> «воду»."""
+def _word_re(word: str, first: str | None = None) -> str:
+    """A word of a two-word name in any case: «Великого», «Воды» -> «воду».
+
+    first: a pattern for its first letter («В»); None keeps the lower case letter."""
     w = word.lower().replace("ё", "е")
+    rest = re.sub(r"[аяыиеийьюуо]+$", "", w) + r"\w*"
     for tails, forms in ADJECTIVE_FORMS.items():
         if w.endswith(tails):
-            return w[:-2] + forms
-    return re.sub(r"[аяыиеийьюуо]+$", "", w) + r"\w*"
+            rest = w[:-2] + forms
+    return (first or rest[0]) + rest[1:]
 
 
 PLACE_RES = [
     (name, re.compile(rf"\b(?:{'|'.join(c['stems'])})\w*")) for name, c in CATALOG.items()
 ] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
-# Two-word cities of places.json not listed above («Великий Новгород», «Минеральные Воды»):
-# both words in any case (TRAP-3). One word alone is no city, so «Великий» stays a word.
-PLACE_RES += [
-    (p["name"], re.compile(r"\b" + r"\s+".join(_word_re(w) for w in p["name"].split())))
-    for p in places()
-    if " " in p["name"] and p["name"] not in PLACES
-]
 # Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not.
 CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)"))]
+# Two-word cities of places.json not listed above (TRAP-3): «Великий Новгород в мае». Their
+# words are common («лечение минеральными водами»), so a name counts only with a capital first
+# letter (original text) or right after «в/во/из/до» (lower text).
+AFTER_PREPOSITION = r"(?:(?<=\bв )|(?<=\bво )|(?<=\bиз )|(?<=\bдо ))"
+
+
+def _two_word_places() -> None:
+    for p in places():
+        if " " not in p["name"] or p["name"] in PLACES:
+            continue
+        words = p["name"].split()
+        # the original text may have «ё»; the lower text has none
+        cap = [w[0].upper() + _word_re(w)[1:].replace("е", "[её]") for w in words]
+        cap[1:] = [f"[{w[0]}{w[0].lower()}]{w[1:]}" for w in cap[1:]]
+        CAPITAL_PLACES.append((p["name"], re.compile(r"\b" + r"\s+".join(cap))))
+        low = r"\s+".join(_word_re(w) for w in words)
+        PLACE_RES.append((p["name"], re.compile(AFTER_PREPOSITION + low)))
+
+
+_two_word_places()
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск"}
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
 # An unknown capitalized word counts only in main's narrow pattern: «Ухта, 3 ночи»,
