@@ -496,6 +496,36 @@ def _bundle(label: str, t: Trip, tradeoffs: list[str]) -> Bundle:
     )
 
 
+def _explanations(
+    spec: TripSpec, t: Trip, offers: list[Offer], trips: list[Trip]
+) -> list[Explanation]:
+    """Why of trip t against the pool of the spec: the hotel first, then each leg."""
+    pool, fits = _pool(spec, trips)
+    hotel = Explanation(
+        offer_id=t.hotel.offer_id,
+        why=_hotel_why(spec, t, pool),
+        tradeoffs=_sacrificed(spec, t, pool),
+        risks=_risks(spec, t, fits, trips),
+    )
+    return [hotel, *(_leg_why(t, leg, offers) for leg in t.legs)]
+
+
+def _selected_trip(trips: list[Trip], selected: list[str]) -> Trip | None:
+    chosen = set(selected)
+    return next((t for t in trips if set(t.ids) <= chosen), None)
+
+
+def explain(spec: TripSpec, offers: list[Offer], selected: list[str]) -> list[Explanation]:
+    """Why of the selected trip (not of the best one), from the facts of the offers.
+
+    Use it after the selection changed (another leg or hotel): the old text names the totals
+    of the old selection. Empty when the selection is not a whole trip of the offers.
+    """
+    trips = enumerate_trips(offers)
+    trip = _selected_trip(trips, selected)
+    return _explanations(spec, trip, offers, trips) if trip else []
+
+
 def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
     """Selected offers of the best trip, why for each of them, and the bundles to compare."""
     trips = enumerate_trips(offers)
@@ -503,16 +533,8 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
         return Ranked([], [], [])
     pool, fits = _pool(spec, trips)
     best = pool[0]
-    sacrificed = _sacrificed(spec, best, pool)
-    explanations = [
-        Explanation(
-            offer_id=best.hotel.offer_id,
-            why=_hotel_why(spec, best, pool),
-            tradeoffs=sacrificed,
-            risks=_risks(spec, best, fits, trips),
-        )
-    ]
-    explanations += [_leg_why(best, leg, offers) for leg in best.legs]
+    explanations = _explanations(spec, best, offers, trips)
+    sacrificed = explanations[0].tradeoffs
     label = "лучший по вашим приоритетам" if fits else "ближе всего к условиям"
     bundles = [_bundle(label, best, sacrificed + best.rules)]
     bundles += [_bundle(lb, t, _versus(t, best)) for lb, t in _alternatives(best, pool, trips)]
@@ -525,9 +547,23 @@ def rank(spec: TripSpec, offers: list[Offer]) -> tuple[list[str], list[Explanati
     return r.selected, r.explanations
 
 
-def bundles(spec: TripSpec, offers: list[Offer]) -> list[Bundle]:
-    """Whole-trip options for Plan.bundles: the best one first."""
-    return optimize(spec, offers).bundles
+def bundles(spec: TripSpec, offers: list[Offer], selected: list[str] | None = None) -> list[Bundle]:
+    """Whole-trip options for Plan.bundles: the best one first.
+
+    With `selected` that is a trip other than the best one (the user switched a leg or a
+    hotel), the bundle of the selected trip goes first as «ваш выбор»: it matches `explain`.
+    The best trip keeps its own label. So no label sits on a trip the «Почему» does not name.
+    """
+    r = optimize(spec, offers)
+    trips = enumerate_trips(offers)
+    mine = _selected_trip(trips, selected or [])
+    if mine is None or mine.ids == r.selected:
+        return r.bundles
+    pool, _ = _pool(spec, trips)
+    old = next((b for b in r.bundles if b.offer_ids == mine.ids), None)
+    label = f"ваш выбор ({old.label})" if old else "ваш выбор"
+    own = _bundle(label, mine, _versus(mine, pool[0]))
+    return [own, *(b for b in r.bundles if b.offer_ids != mine.ids)]
 
 
 def pick_hotel(selected: list[str], offers: list[Offer], hotel_id: str) -> list[str]:

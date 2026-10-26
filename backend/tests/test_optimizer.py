@@ -26,6 +26,7 @@ from api.optimizer import (
     _pool,
     bundles,
     enumerate_trips,
+    explain,
     hotel_rows,
     optimize,
     order_tariffs,
@@ -830,3 +831,80 @@ def test_allowed_amounts_reject_a_made_up_round_difference():
     assert real and real <= allowed
     for k in (100, 500, 1500):  # a mutant prints d + k instead of d
         assert not {n + k for n in real} <= allowed, k
+
+
+def _trip_ids(items, hotel_key, there_key, back_key):
+    h = next(o for o in items if o.offer_id == f"h-{hotel_key}")
+    legs = [o for o in items if o.offer_id in (there_key, back_key)]
+    return pick_hotel([x.offer_id for x in legs], items, h.offer_id)
+
+
+def _train_case():
+    h = hotel("a", 10_000)
+    train = [leg("train", 9000, mode="train", hours=9), leg("tb", 9000, there=False, mode="train")]
+    items = offers([h], [*FLIGHTS, *train])
+    s = spec()
+    return s, items, optimize(s, items)
+
+
+def test_model_imports_only_public_names_of_the_optimizer():
+    """#58: model.py uses explain(), not the private helpers of the optimizer."""
+    import ast
+    from pathlib import Path
+
+    import api.model
+
+    tree = ast.parse(Path(api.model.__file__).read_text(encoding="utf-8"))
+    names = [
+        a.name
+        for n in ast.walk(tree)
+        if isinstance(n, ast.ImportFrom) and n.module == "api.optimizer"
+        for a in n.names
+    ]
+    assert "explain" in names and not [x for x in names if x.startswith("_")]
+
+
+def test_explain_of_the_best_selection_equals_the_ranking_why():
+    s, items, r = _train_case()
+    assert explain(s, items, r.selected) == r.explanations
+    assert explain(s, items, []) == []
+
+
+def test_explain_names_the_selected_trip_not_the_best_one():
+    s, items, r = _train_case()
+    other = _trip_ids(items, "a", "t-train", "t-tb")
+    assert other != r.selected
+    why = explain(s, items, other)
+    assert why[0].offer_id == "h-a"
+    assert [e.offer_id for e in why[1:]] == ["t-train", "t-tb"]
+    t = total(other, items)
+    assert t != total(r.selected, items)
+    assert f"поездка целиком {t:,} ₽".replace(",", " ") in why[0].why
+
+
+def test_bundles_put_the_selected_trip_first_under_its_own_label():
+    """#58: after a switch the label «лучший» must not sit on a trip the «Почему» does not name."""
+    s, items, r = _train_case()
+    assert bundles(s, items, r.selected) == r.bundles == bundles(s, items)
+    other = _trip_ids(items, "a", "t-train", "t-tb")
+    out = bundles(s, items, other)
+    assert out[0].offer_ids == other and out[0].label.startswith("ваш выбор")
+    best = next(b for b in out if b.offer_ids == r.selected)
+    assert best.label == r.bundles[0].label  # the best trip keeps its label
+    assert len({tuple(b.offer_ids) for b in out}) == len(out)  # each trip once
+    assert out[0].total_rub == total(other, items)
+
+
+def test_switch_transport_recomputes_the_bundles_and_the_why_together():
+    from api.model import switch_transport
+
+    s, items, r = _train_case()
+    plan = Plan(spec=s, offers=items, bundles=r.bundles, selected=r.selected)
+    new, note = switch_transport(plan, "возьми поезд")
+    assert new is not None, note
+    assert new.bundles[0].offer_ids == new.selected and new.bundles[0].label.startswith("ваш")
+    assert new.explanations[0].offer_id in new.bundles[0].offer_ids
+    assert [e.offer_id for e in new.explanations[1:]] == ["t-train", "t-tb"]
+    assert sum(b.label.startswith("лучший") for b in new.bundles) == 1
+    best = next(b for b in new.bundles if b.label.startswith("лучший"))
+    assert "t-train" not in best.offer_ids  # the best trip is the other transport

@@ -8,6 +8,7 @@ import pytest
 
 from api.contracts import ChatRequest
 from api.model import chat
+from api.offers import transfer_id
 from api.store import SessionStore
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых"
@@ -193,3 +194,70 @@ def test_bare_train_phrase_on_the_default_pick_keeps_the_plan_and_the_note(store
     r = say(store, "беру", r.session_id)
     assert r.stage == "assemble"
     assert any("07:10" in i.text and "14:00" in i.text for i in r.plan.issues)
+
+
+def hotel_ids(r):
+    return [
+        o.offer_id for o in r.plan.offers if o.kind == "hotel" and o.offer_id in r.plan.selected
+    ]
+
+
+def test_second_hotel_and_train_changes_both(store):
+    """#58: «беру второй отель и поезд» keeps the hotel pick; the 2nd row is a hotel, not a tariff."""
+    from api.optimizer import hotel_rows
+
+    r = say(store, SOCHI)
+    r = say(store, "возьми самолёт", r.session_id)
+    rows = hotel_rows(r.plan.offers, r.plan.selected)
+    assert hotel_ids(r) != [rows[1].offer_id]
+    r = say(store, "беру второй отель и поезд", r.session_id)
+    assert r.stage == "compare"  # the user has not accepted the set yet
+    assert hotel_ids(r) == [rows[1].offer_id]
+    assert [x.mode for x in legs(r)] == ["train", "train"]
+    assert "Отель заменён" in r.reply and "Транспорт заменён" in r.reply
+    by_id = {o.offer_id: o for o in r.plan.offers}
+    mine = {transfer_id(rows[1].offer_id, x.offer_id) for x in legs(r)}
+    assert mine <= set(r.plan.selected)  # the transfers of the new hotel, not of the old one
+    assert {i for i in r.plan.selected if by_id[i].kind == "transfer"} == mine
+    assert r.plan.explanations[0].offer_id == rows[1].offer_id  # «Почему» names the new hotel
+    assert r.plan.bundles[0].offer_ids == r.plan.selected
+
+
+def test_hotel_and_train_in_the_other_order_and_with_a_digit(store):
+    from api.optimizer import hotel_rows
+
+    r = say(store, SOCHI)
+    rows = hotel_rows(r.plan.offers, r.plan.selected)
+    r = say(store, "возьми поезд и отель 3", r.session_id)
+    assert hotel_ids(r) == [rows[2].offer_id]
+    assert [x.mode for x in legs(r)] == ["train", "train"]
+
+
+def test_hotel_pick_with_the_transport_already_chosen_still_changes_the_hotel(store):
+    from api.optimizer import hotel_rows
+
+    r = say(store, SOCHI)
+    r = say(store, "возьми поезд", r.session_id)
+    rows = hotel_rows(r.plan.offers, r.plan.selected)
+    sel = [i for i in r.plan.selected if i not in hotel_ids(r)]
+    r = say(store, "беру второй отель и поезд", r.session_id)
+    assert hotel_ids(r) == [rows[1].offer_id]
+    assert "Отель заменён" in r.reply and "уже выбран" not in r.reply
+    assert [x.mode for x in legs(r)] == ["train", "train"] and sel
+
+
+def test_unknown_hotel_row_changes_nothing(store):
+    r = say(store, SOCHI)
+    again = say(store, "беру отель 9 и поезд", r.session_id)
+    assert again.plan.selected == r.plan.selected and "Отеля 9 нет" in again.reply
+
+
+def test_why_and_bundles_follow_a_plain_switch(store):
+    """#58: the first bundle is the selected trip; «Почему» names the same legs."""
+    r = say(store, SOCHI)
+    r = say(store, "возьми самолёт", r.session_id)
+    r = say(store, "возьми поезд", r.session_id)
+    top = r.plan.bundles[0]
+    assert set(top.offer_ids) == set(r.plan.selected)
+    legs_why = {e.offer_id for e in r.plan.explanations[1:]}
+    assert legs_why == {x.offer_id for x in legs(r)} <= set(top.offer_ids)
