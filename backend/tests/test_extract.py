@@ -6,7 +6,7 @@ import pytest
 
 from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import chat
+from api.model import chat, step
 from api.store import SessionStore
 
 S3A = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч за всё, нужен завтрак."
@@ -205,3 +205,121 @@ def test_start_offset_is_not_a_duration(text, days):
         assert found["date_from"] == date.today() + timedelta(days=days)
     else:
         assert found["date_from"].weekday() == 0 and any(n.startswith("даты:") for n in notes)
+
+
+@pytest.mark.parametrize(
+    "text,city",
+    [
+        ("Иркутск на неделю в декабре, бюджетно, из Москвы", "Иркутск"),
+        ("Калининград в мае, на 5 дней", "Калининград"),
+        ("Мурманск, северное сияние", "Мурманск"),
+        ("Пермь на выходные", "Пермь"),
+        ("Омск с ребёнком, на 4 дня", "Омск"),
+    ],
+)
+def test_trap2_city_as_first_word_is_the_destination(text, city):
+    found, _ = extract(text)
+    assert found["destinations"] == [city]
+
+
+def test_trap2_first_word_city_keeps_origin_and_other_fields():
+    found, _ = extract("Иркутск на неделю в декабре, бюджетно, из Москвы")
+    assert found["origin"] == "Москва" and found["destinations"] == ["Иркутск"]
+    assert (found["month"], found["nights"]) == (12, 7)
+    assert "недорого" in found["wishes"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "иркутск на неделю в декабре",
+        "Иркутска на неделю в декабре",
+        "хочу в иркутск на неделю",
+        "Хочу в Иркутске на неделю",
+        "Из Москвы в Иркутск на неделю",
+    ],
+)
+def test_trap3_spelling_and_case_of_a_city_give_one_name(text):
+    found, _ = extract(text)
+    assert found["destinations"] == ["Иркутск"]
+
+
+def test_trap3_origin_in_genitive_is_normalised_and_not_a_destination():
+    found, _ = extract("Из Иркутска в Сочи на неделю")
+    assert found["origin"] == "Иркутск" and found["destinations"] == ["Сочи"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Тёплое море в ноябре, недорого, с ребёнком",
+        "Хочу на море на неделю",
+        "Недорого в ноябре",
+        "Хочу в декабре, на 5 дней",
+        "Подскажи отель на неделю",
+        "Ищу, на 3 ночи",
+        "Привет",
+        "Бюджетно, на выходные",
+    ],
+)
+def test_trap2_ordinary_first_word_is_not_a_destination(text):
+    found, _ = extract(text)
+    assert "destinations" not in found
+
+
+@pytest.mark.parametrize(
+    "text", ["Нет", "Нет, спасибо", "Спасибо", "Зима, горы, на неделю", "Один, на неделю"]
+)
+def test_trap2_chat_reply_or_season_is_not_a_destination(text):
+    assert "destinations" not in extract(text)[0]
+
+
+def test_trap2_chat_with_first_word_city_does_not_go_to_inspire(tmp_path):
+    text = "Иркутск на неделю в декабре, бюджетно, из Москвы"
+    r = chat(ChatRequest(message=text), SessionStore(tmp_path / "s.db"))
+    assert r.stage != "inspire"
+    assert r.plan.spec.destinations == ["Иркутск"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Отдых на море с детьми в ноябре",
+        "Мама с ребёнком в декабре, на море",
+        "Неделю на море в ноябре, недорого",
+        "Бюджет до 100 тысяч",
+        "Перенеси на неделю позже",
+        "Только с завтраком",
+        "Вылет в пятницу",
+        "Неделя в Италии",
+        "Музеи в Петербурге",
+        "Шопинг в Стамбуле",
+    ],
+)
+def test_trap2_unknown_first_word_is_never_guessed_from_a_stop_list(text):
+    found, _ = extract(text)
+    assert found.get("destinations", []) in ([], ["Италия"], ["Санкт-Петербург"], ["Стамбул"])
+    assert not {"Отдых", "Мама", "Неделю", "Бюджет", "Неделя", "Музеи", "Шопинг"} & set(
+        found.get("destinations", [])
+    )
+
+
+@pytest.mark.parametrize("text", ["Работа в декабре", "Отдых в ноябре"])
+def test_trap2_first_word_pattern_needs_no_plan_destination(text):
+    assert "destinations" not in extract(text, has_destination=True)[0]
+
+
+@pytest.mark.parametrize(
+    "follow",
+    [
+        "Перенеси на неделю позже",
+        "Только с завтраком",
+        "Вылет в пятницу",
+        "Бюджет до 100 тысяч",
+        "Работа в декабре",
+    ],
+)
+def test_trap2_followup_message_keeps_the_destination_of_the_plan(follow):
+    first = step(None, "s", "Сочи на неделю в декабре")
+    r = step(first, "s", follow)
+    assert r.plan.spec.destinations == ["Сочи"] and r.stage != "select"
