@@ -19,7 +19,7 @@ import re
 from datetime import timedelta
 
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
-from api.extract import MONTH_NAMES, NUM, NUMS
+from api.extract import EDIT_VERB, MONTH_NAMES, NUM, NUMS
 from api.fixtures import find_offers, rank
 from api.optimizer import bundles, order_tariffs, pick_hotel
 from api.timeline import build_timeline
@@ -92,26 +92,24 @@ SHIFT_RE = re.compile(
 )
 # A word that says which end of the trip moves; no word -> both ends move. Departure verbs
 # («улетим», «уедем», «выезд из Москвы», «отъезд») mean leaving home, so they are no cue.
-END_CUE = r"\b(?:обратн|верн|домой|выезд\s+из\s+отел|выселя|выселен|выписа|возврат|возвращ)"
+END_CUE = r"\b(?:обратн|верну|верне[мт]|верни|домой|выезд\s+из\s+отел|выселя|выселен|выписа|возврат|возвращ)"
 START_CUE = r"\b(?:засел|заезд|заех|заезж|приезд|приед|приеха|прилет|вылет|начал|старт)"
 # A request to move the dates that SHIFT_RE does not read: no amount, no direction or an odd word.
 # «поездк…» names the date only with a move verb: «измени бюджет поездки» is no date edit.
-_MOVE = (
-    r"(?:перенес\w*|перенос\w*|сдвин\w*|сдвиг\w*|передвин\w*|отлож\w*|подвин\w*"
-    r"|продл\w*|удлин\w*|сократ\w*|укороти\w*)"
-)
+_MOVE = rf"(?:{EDIT_VERB}\w*)"  # the verbs of extract.py: its amount is no length either
 _WEAK_MOVE = r"(?:поменя\w*|измени\w*)"
 _DATE_WORD = (
     r"(?:дат\w*|поездк\w*|вылет\w*|отпуск\w*|заезд\w*|выезд\w*|заселени\w*|возвращени\w*|обратн\w*)"
 )
 _WEAK_DATE_WORD = r"(?:дат\w*|заезд\w*|заселени\w*|возвращени\w*|возврат\w*)"
 _UNIT = r"(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
+_EDIT_START = START_CUE.replace("|вылет", "")  # a bare «вылет позже» may be a time
 DATE_EDIT_RE = re.compile(
     rf"\b{_MOVE}\b[^.!?]*?\b(?:{_DATE_WORD}|на\s+\w+\s+{_UNIT})"
     rf"|\b{_WEAK_MOVE}\b[^.!?]*?\b(?:{_WEAK_DATE_WORD}|на\s+\w+\s+{_UNIT})"
     rf"|\bна\s+\w+\s+{_UNIT}\s+(?:позже|раньше)"
-    # «вылет позже 10 утра» is a time of day, not a date
-    rf"|(?:{START_CUE}|{END_CUE})\w*[^.!?]*\b(?:позже|раньше)\b(?!\s+(?:\d|чем|в\s+\d))"
+    # «вылет позже 10 утра», «хочу вылет позже, утром тяжело» is a time of day, not a date
+    rf"|(?:{_EDIT_START}|{END_CUE})\w*[^.!?,;]*\b(?:позже|раньше)\b(?!\s+(?:\d|чем|в\s+\d))"
 )
 MANUAL_WHY = "вы выбрали этот отель сами"
 # What the user sees about a shift; the kinds are the ends that moved.

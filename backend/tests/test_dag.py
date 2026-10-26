@@ -385,6 +385,7 @@ def test_say_shift_too_short_is_refused_and_changes_nothing(store, antalya):
         "Сдвинь на 3 дня",
         "Продли на 2 дня",
         "Сократи на 2 дня",
+        "Отодвинь на пару дней",
     ],
 )
 def test_say_unclear_date_edit_gets_an_explicit_reply(store, antalya, text):
@@ -403,6 +404,9 @@ def test_say_unclear_date_edit_gets_an_explicit_reply(store, antalya, text):
         "измени бюджет поездки",
         "поменяй направление поездки",
         "вылет позже 10 утра",
+        "Всё верно, раньше не получится",
+        "заселение после 14, раньше нельзя",
+        "хочу вылет позже, утром тяжело",
     ],
 )
 def test_say_ordinary_chat_is_not_a_date_edit(store, antalya, text):
