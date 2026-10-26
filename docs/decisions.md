@@ -6,3 +6,4 @@
 - D-001 2026-10-26: архитектура — Автомат этапов + TripSpec + DAG пересборки + детерминированный оптимизатор (C6); стек — пресет web-fullstack (docs/adr/ADR-0001-avtomat-etapov-dag-optimizator.md).
 - D-002 2026-10-26: ADR-0001 принят целиком: DAG пересборки в M0, откат на C2 не планируем. План — Issues #5–#22 (T1–T18).
 - D-003 2026-10-26: контракт v2 — TripSpec.priorities, Bundle/Plan.bundles, HotelOffer.amenities, TransportOffer.pets_allowed, Destination.risks; Mode без bus (#26).
+- D-004 2026-10-26: снапшоты для работы без сети (TRAP-6) — backend/src/api/*.json: их читает образ; data/ закрыт хуком и .dockerignore. OSM — с атрибуцией ODbL (#9).

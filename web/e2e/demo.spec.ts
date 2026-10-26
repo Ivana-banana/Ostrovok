@@ -17,12 +17,12 @@ test("S6: запрос → сравнение → план → корзина �
 
   // Сравнение: ≥ 3 отеля, цены с пометкой «синтетика», транспорт со временем в пути.
   const hotels = page.getByRole("region", { name: "Сравнение отелей" });
-  await expect(hotels.locator("tbody tr")).toHaveCount(3);
+  await expect(hotels.locator("tbody tr").nth(2)).toBeVisible(); // S6: не меньше 3
   await expect(hotels.locator(".price .synth").first()).toHaveText("синтетика");
   await expect(page.getByRole("region", { name: "Сравнение транспорта" })).toContainText("ч ");
 
   // Выбор другого отеля — один клик; агент собирает план с таймлайном.
-  await page.getByRole("button", { name: /^Выбрать Отель/ }).first().click();
+  await hotels.getByRole("button", { name: /^Выбрать/ }).first().click();
   await expect(page.getByRole("region", { name: "Таймлайн" })).toBeVisible();
 
   await page.getByRole("button", { name: "Положить в корзину" }).click();
