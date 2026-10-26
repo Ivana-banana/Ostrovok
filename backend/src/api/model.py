@@ -569,6 +569,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
     spec = merge(old.plan.spec, found, notes)
+    swapped = [d for d in old.plan.spec.destinations if d not in spec.destinations]
     used = False  # the LLM output changed this reply
     if llm_found:
         with_model = with_llm(found, llm_found)
@@ -622,6 +623,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         text = _text_compare(plan.model_copy(update={"changes": []}))
         if plan.changes:
             text = "\n".join(["Было → стало:", *describe(plan.changes), text])
+        if old.stage == "select" and swapped:
+            # The user named a city that is not in the catalogue and picked another one:
+            # the reply says so, the new city never comes silently (#93).
+            gone, now = ", ".join(swapped), spec.destinations[0]
+            text = f"«{gone}» нет в каталоге. По вашему выбору — {now}.\n{text}"
         return reply("compare", plan, text, cart)
 
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
