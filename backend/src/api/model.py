@@ -36,14 +36,17 @@ from api.contracts import (
 from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract, is_chip_message, with_llm
 from api.fixtures import CATALOG, build_timeline, future_date, suggest_destinations
+from api.offers import find_offers
 from api.optimizer import (
     _hotel_why,
     _leg_why,
     _pool,
     _risks,
     _sacrificed,
+    dead_end_text,
     enumerate_trips,
     hotel_rows,
+    optimize,
     pick_hotel,
 )
 from api.store import SessionStore
@@ -424,17 +427,20 @@ def _text_compare(plan: Plan) -> str:
         "Отели:",
     ]
     hotels = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
+    pet = spec.pets
     for i, h in enumerate(hotels, 1):
         cancel = "бесплатная отмена" if h.cancellation.refundable else "невозвратный"
         lines.append(
             f"{i}. {h.title} — {h.stars}★, рейтинг {h.rating}, {h.meal}, {cancel} — "
             f"{_rub(h.price_rub)}"
+            + (" · нет отметки о животных" if pet and not h.pets_allowed else "")
         )
     legs = [o for o in plan.offers if o.kind == "transport"]
     if legs:
         lines.append("Транспорт:")
     for i, o in enumerate(legs, 1):
-        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}")
+        no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
+        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}{no_pet}")
     chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
     lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:
@@ -462,9 +468,9 @@ def _alternatives(spec: TripSpec, skip: list[str]) -> list[str]:
     return names[:3]
 
 
-def _no_offers(plan: Plan, text: str) -> tuple[str, list[Question]]:
+def _no_offers(plan: Plan, text: str, skip: list[str] | None = None) -> tuple[str, list[Question]]:
     """The «choose another» exit of the select stage: 2–3 destinations as the text and buttons."""
-    names = _alternatives(plan.spec, [*plan.spec.destinations, plan.spec.origin])
+    names = _alternatives(plan.spec, [*plan.spec.destinations, plan.spec.origin, *(skip or [])])
     if not names:
         return text, []
     plan.destinations = [d for d in suggest_destinations(plan.spec) if d.name in names]
@@ -622,6 +628,16 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
                 f"{HINTS['select']}"
             )
             text, questions = _no_offers(plan, text)
+            return reply("select", plan, text, cart, questions=questions)
+        if spec.pets and not plan.selected:  # no hotel or leg takes the pet: say so, no cart (#131)
+            text = f"{dead_end_text(spec, plan.offers)} {HINTS['select']}"
+            # Not the cities where the pet has no trip either.
+            dead = [
+                d.name
+                for d in suggest_destinations(spec, len(CATALOG))
+                if not optimize(spec, find_offers(spec, d.name)).selected
+            ]
+            text, questions = _no_offers(plan, text, dead)
             return reply("select", plan, text, cart, questions=questions)
         why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
         if why and why != plan.explanations:

@@ -161,9 +161,14 @@ def _walk(
         sid = r.session_id
         if run.first_rec_ms is None and r.stage in ("inspire", "compare"):
             run.first_rec_ms = (time.perf_counter() - started) * 1000
-        if r.stage in stop:
+        dead_end = (
+            r.stage == "select" and r.plan.spec.pets and r.questions and r.questions[0].options
+        )
+        if r.stage in stop and not dead_end:
             break
-        if r.stage == "clarify":
+        if dead_end:  # nothing takes the pet there (#131): the user takes the offered city
+            text = r.questions[0].options[0]
+        elif r.stage == "clarify":
             text = " ".join(q.options[0] for q in r.questions if q.options) or "пока не знаю"
         else:
             text = ANSWERS[r.stage]

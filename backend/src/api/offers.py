@@ -5,6 +5,8 @@
   names outside the snapshot, until then find_offers returns [] for them.
 - Hotels: osm_hotels.json (OpenStreetMap snapshot) when it has the city, else synthetic
   hotels around the centre. Every tariff (price, meal, cancellation) is synthetic.
+  The OSM snapshot has no pet tag: with spec.pets one synthetic hotel that takes pets joins
+  the real ones (#131).
 - Tariffs: every hotel sells 2-4 tariffs (meal RO/BB or BB/HB/AI x free cancellation or not),
   each its own HotelOffer with its own id, transfers and add-ons. They do not read
   spec.meal or spec.refundable; the optimizer picks the tariff.
@@ -47,6 +49,7 @@ SEASON = {1: 0.95, 2: 0.9, 3: 0.9, 4: 0.95, 5: 1.1, 6: 1.2, 7: 1.3, 8: 1.3, 9: 1
 STAR_FACTOR = {1: 0.55, 2: 0.7, 3: 0.95, 4: 1.45, 5: 2.5}
 MEAL_RUB = {"RO": 0, "BB": 700, "HB": 1800, "FB": 2800, "AI": 3800}  # person-night, level 5000
 SYNTH_STARS = [2, 3, 4, 4, 5]
+PET_FRIENDLY = 1  # index of the synthetic hotel that always takes pets
 SYNTH_KM = {2: (2.5, 6.0), 3: (1.0, 3.0), 4: (0.4, 2.5), 5: (0.2, 1.2)}
 CITY_NAMES = ["Центральный", "Панорама", "Старый город", "Парк", "Гранд", "Бульвар", "Сити",
               "Акварель", "Европа", "Северная звезда"]  # fmt: skip
@@ -247,8 +250,8 @@ def _synthetic_bases(place: dict) -> list[dict]:
         lat = place["lat"] + km / 111.2 * math.cos(bearing)
         lon = place["lon"] + km / (111.2 * math.cos(math.radians(place["lat"]))) * math.sin(bearing)
         name = names[(shift + i) % len(names)]
-        # The second hotel always takes pets: a dog owner has at least one option.
-        tags = {"pets": "yes"} if i == 1 else {}
+        # One hotel always takes pets: a dog owner has at least one option.
+        tags = {"pets": "yes"} if i == PET_FRIENDLY else {}
         base = _hotel_base(place, key, name, stars, round(lat, 6), round(lon, 6), tags, True)
         out.append({**base, "title": f"Отель «{name}», {place['name']}", "note": SYNTH_NOTE})
     return out
@@ -506,6 +509,10 @@ def offers_for_place(
     now = now or datetime.now(UTC)  # only the cancellation state depends on it
     osm = _osm_bases(place)
     bases = osm if len(osm) >= 3 else _synthetic_bases(place)
+    if spec.pets and not any(b["pets"] for b in bases):
+        # The OSM snapshot has no pet tag, so no real hotel is known to take the pet (#131).
+        # The synthetic hotel that always takes pets joins them, marked synthetic as any other.
+        bases = [*bases, _synthetic_bases(place)[PET_FRIENDLY]]
     pairs = [pair for b in bases for pair in _hotel(spec, place, b, now)]
     hotels = [h for h, _ in pairs]
     legs = transport_offers(spec, _complete(origin), place) if origin else []
