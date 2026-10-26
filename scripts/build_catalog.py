@@ -917,8 +917,11 @@ def match(sel: dict, rows: list[list[str]]) -> tuple[list[str] | None, list[str]
 def geocode(sel: dict, cache_dir: Path) -> dict | None:
     for q in (sel["ru"], sel["en"]):
         cache = cache_dir / f"geo_{hashlib.sha1((q + sel['cc']).encode()).hexdigest()[:12]}.json"
-        body = get_json(GEOCODE, {"name": q, "count": 10, "language": "ru", "countryCode": sel["cc"],
-                                  "format": "json"}, cache, 1)  # fmt: skip
+        try:
+            body = get_json(GEOCODE, {"name": q, "count": 10, "language": "ru",
+                                      "countryCode": sel["cc"], "format": "json"}, cache, 1)  # fmt: skip
+        except LookupError:  # --cached-only and no answer in the cache
+            continue
         res = [r for r in body.get("results", []) if r.get("country_code") == sel["cc"]]
         if res:
             return max(res, key=lambda r: r.get("population") or 0)
@@ -1046,7 +1049,7 @@ def main() -> None:
             g = {"gid": row[0], "lat": float(row[4]), "lon": float(row[5]), "tz": row[17],
                  "pop": int(row[14] or 0), "elev": int(row[16]) if row[16] not in ("", "-9999") else None,
                  "ascii": row[2]}  # fmt: skip
-        elif not CACHED_ONLY and (r := geocode(s, om)):
+        elif r := geocode(s, om):
             g = {"gid": str(r["id"]), "lat": r["latitude"], "lon": r["longitude"],
                  "tz": r["timezone"], "pop": r.get("population") or 0,
                  "elev": round(r["elevation"]) if r.get("elevation") is not None else None,
