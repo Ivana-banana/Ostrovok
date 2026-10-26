@@ -61,45 +61,19 @@ def llm_available(env: dict[str, str] | None = None) -> bool:
     return bool(env.get("LLM_API_KEY", "").strip())
 
 
-MONTHS = {
-    "январ": 1,
-    "феврал": 2,
-    "март": 3,
-    "апрел": 4,
-    "ма": 5,
-    "июн": 6,
-    "июл": 7,
-    "август": 8,
-    "сентябр": 9,
-    "октябр": 10,
-    "ноябр": 11,
-    "декабр": 12,
-}
-
-
 def rule_extract(text: str) -> dict:
-    """Разбор запроса без LLM (TRAP-1): месяц, бюджет, дети, животные, море."""
-    t = text.lower()
-    month = next(
-        (n for stem, n in MONTHS.items() if re.search(rf"\b{stem}\w*", t) and stem != "ма"), None
-    )
-    if month is None and re.search(r"\bма[йяе]\b", t):
-        month = 5
-    budget = None
-    # «40 тысяч», «40к», «тысяч 150»; затем «150 000 ₽».
-    m = re.search(r"(\d+)\s*(?:тыс\w*|k|к)\b", t) or re.search(r"\bтыс\w*\s+(\d+)", t)
-    if m:
-        budget = int(m.group(1)) * 1000
-    else:
-        m = re.search(r"\b(\d{1,3}(?:\s\d{3})+|\d{5,7})\s*(?:₽|руб|р\b)", t)
-        budget = int(m.group(1).replace(" ", "")) if m else None
+    """Разбор запроса без LLM (TRAP-1): месяц, бюджет, дети, животные, море — через api.extract."""
+    from api.extract import extract  # extract -> fixtures -> guards: импорт здесь, не наверху
+
+    found, _ = extract(text)
+    wishes = found.get("wishes", [])
     return {
-        "month": month,
-        "budget_rub": budget,
-        "cheap": bool(re.search(r"недорог|дешев|бюджетн", t)),
-        "kids": bool(re.search(r"ребен|ребён|дет[иья]|сын|доч", t)),
-        "pets": bool(re.search(r"собак|кошк|питом", t)),
-        "sea": bool(re.search(r"\bмор[еяю]|пляж", t)),
+        "month": found.get("month"),
+        "budget_rub": found.get("budget_rub"),
+        "cheap": "недорого" in wishes,
+        "kids": bool(found.get("children_ages")),
+        "pets": found.get("pets", False),
+        "sea": "море" in wishes,
     }
 
 
