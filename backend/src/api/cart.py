@@ -25,6 +25,7 @@ from api.contracts import (
     Voucher,
 )
 from api.store import SessionStore
+from api.timeline import build_timeline
 
 
 def _rub(n: int) -> str:
@@ -71,6 +72,27 @@ def edit_cart(plan: Plan, cart: Cart, action: str, offer_id: str) -> Cart:
                 items = [x for x in items if x.kind != "extra" or x.for_offer_id != o.offer_id]
             return make_cart(items)
     return make_cart(items + [offer])
+
+
+def sync_plan(plan: Plan, old: Cart, new: Cart) -> Plan:
+    """The plan after a cart edit: the selection follows the cart, the timeline is rebuilt.
+
+    Without it a replaced hotel or flight stays in `plan.selected`, and the checker (TRAP-5)
+    checks the old one. A bought add-on enters the selection and fixes its timeline issue.
+    A plain removal of a hotel or a leg keeps it selected: the user may return it.
+    """
+    before = {o.offer_id for o in old.items}
+    after = {o.offer_id for o in new.items}
+    kinds = {o.offer_id: o.kind for o in old.items}
+    added = [o.offer_id for o in new.items if o.offer_id not in before]
+    gone = {i for i in before - after if added or kinds[i] == "extra"}
+    kept = [i for i in plan.selected if i not in gone]
+    selected = kept + [i for i in added if i not in kept]
+    if selected == plan.selected:
+        return plan
+    plan = plan.model_copy(update={"selected": selected})
+    plan.timeline, plan.issues = build_timeline(plan)
+    return plan
 
 
 def book(spec: TripSpec, cart: Cart) -> Voucher:
@@ -147,7 +169,8 @@ def cart_route(req: CartAction, store: SessionStore) -> Cart:
         reply = _known(prev)
         _guard_cart_open(reply)
         cart = edit_cart(reply.plan, reply.cart, req.action, req.offer_id)
-        return reply.model_copy(update={"cart": cart})
+        plan = sync_plan(reply.plan, reply.cart, cart)
+        return reply.model_copy(update={"cart": cart, "plan": plan})
 
     try:
         return store.update(req.session_id, change).cart

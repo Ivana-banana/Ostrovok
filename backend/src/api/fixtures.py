@@ -5,20 +5,11 @@ All prices are synthetic (TRAP-7). November climate and flight hours are team es
 without a source; the reply labels them as an estimate.
 """
 
-from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from datetime import date
 
-from api.contracts import (
-    Destination,
-    Explanation,
-    Offer,
-    Plan,
-    TimelineEvent,
-    TimelineIssue,
-    TripSpec,
-)
-from api.guards import check_arrival_vs_checkin
+from api.contracts import Destination, Explanation, Offer, TripSpec
 from api.offers import find_offers
+from api.timeline import build_timeline  # noqa: F401  # T8 (#14) lives in api/timeline.py
 
 # TODO(T12, #20): climate from Open-Meteo and travel hours from the catalogue (T4, #8).
 # name -> slug, country, lat, lon, IANA tz, UTC offset, stems, sea, hours from Moscow,
@@ -147,42 +138,3 @@ def rank(spec: TripSpec, offers: list[Offer]) -> tuple[list[str], list[Explanati
     expl = [Explanation(offer_id=hotel.offer_id, why=why, tradeoffs=tradeoffs, risks=risks)]
     expl += [Explanation(offer_id=o.offer_id, why="самый дешёвый рейс") for o in legs]
     return [hotel.offer_id] + [o.offer_id for o in legs], expl
-
-
-def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]]:
-    """Events of the selected items and docking issues.
-
-    TODO(T8, #14): replace with the timeline checker (transfers, extras as fixes).
-    """
-    chosen = [o for o in plan.offers if o.offer_id in plan.selected]
-    events: list[TimelineEvent] = []
-    issues: list[TimelineIssue] = []
-    hotel = next((o for o in chosen if o.kind == "hotel"), None)
-    for o in chosen:
-        if o.kind == "transport":
-            events.append(
-                TimelineEvent(at=o.depart_at, title=f"Вылет: {o.title}", offer_id=o.offer_id)
-            )
-            events.append(
-                TimelineEvent(at=o.arrive_at, title=f"Прилёт: {o.destination}", offer_id=o.offer_id)
-            )
-    if hotel:
-        tz = ZoneInfo(hotel.tz)  # the hotel may be outside CATALOG (T5, #9)
-        check_in = datetime.combine(hotel.date_in, hotel.check_in, tz)
-        events.append(
-            TimelineEvent(at=check_in, title=f"Заселение: {hotel.title}", offer_id=hotel.offer_id)
-        )
-        events.append(
-            TimelineEvent(
-                at=datetime.combine(hotel.date_out, hotel.check_out, tz),
-                title=f"Выезд: {hotel.title}",
-                offer_id=hotel.offer_id,
-            )
-        )
-        for o in chosen:
-            same_day = o.kind == "transport" and o.arrive_at.date() == hotel.date_in
-            if same_day and o.destination == hotel.city:
-                for text in check_arrival_vs_checkin(o.arrive_at, hotel.check_in)[:1]:
-                    issues.append(TimelineIssue(severity="warn", text=text))
-    events.sort(key=lambda e: e.at)
-    return events, issues

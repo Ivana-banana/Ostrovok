@@ -5,8 +5,9 @@ Nodes, each one feeds the next:
 - destination: spec.destinations[0]; nothing to compute, the root of the chain.
 - offers: find_offers(spec, destination); the search depends on dates, guests, origin.
 - ranking: rank(spec, offers); selected offers and why; budget, meal, refund, wishes.
-- timeline: build_timeline(plan) reads only the selected offers. It is rebuilt when the
-  selection changed and the old plan had a timeline (the stage machine builds it on "беру").
+- timeline: build_timeline(plan) reads plan.selected and plan.offers, never the spec. It is
+  rebuilt when the selection changed and the old plan had a timeline (the stage machine
+  builds it on "беру").
 - cart: the cart confirms one TripSpec (the voucher keeps it), so any trip change empties it.
   The next confirmation refills it with fill_cart, which replaces the items, never appends.
 
@@ -20,7 +21,8 @@ from datetime import timedelta
 
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
 from api.extract import MONTH_NAMES, NUM, NUMS
-from api.fixtures import build_timeline, find_offers, rank
+from api.fixtures import find_offers, rank
+from api.timeline import build_timeline
 
 NODES = ("destination", "offers", "ranking", "timeline", "cart")
 # The first node that reads the field. "assumptions" is text for the user, no node reads it.
@@ -186,8 +188,9 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
         plan.bundles = []  # TODO(T7, #13): the optimizer returns bundles with the ranking
         lost = _keep_pick(old, plan) if old.offers else None
         done.append("ranking")
-    # Invariant: build_timeline reads only the selected offers, not the spec; T8 (#14) must
-    # revisit this shortcut if the checker starts reading spec fields.
+    # Invariant: build_timeline reads plan.selected and plan.offers, not the spec (T8, #14).
+    # The offer_id of a hotel or a leg carries dates and guests, so the same selected offers
+    # mean the same timeline. If the checker starts reading spec fields, rebuild it here.
     if _chosen(plan) != _chosen(old):
         if old.timeline:
             plan.timeline, plan.issues = build_timeline(plan)

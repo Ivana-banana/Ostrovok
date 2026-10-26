@@ -155,14 +155,35 @@ export function App() {
     if (!reply || busy) return;
     setBusy(true);
     setError(null);
+    const id = reply.session_id;
     try {
-      const cart = await cartAction({ session_id: reply.session_id, action, offer_id: offerId });
+      let cart = await cartAction({ session_id: id, action, offer_id: offerId });
       const item =
         reply.cart.items.find((o) => o.offer_id === offerId) ??
         reply.plan.offers.find((o) => o.offer_id === offerId);
+      // The server drops the add-ons of a removed item; «Вернуть» brings them back with it.
+      const extras = (list: Offer[]) =>
+        list.filter((o) => o.kind === "extra" && o.for_offer_id === offerId);
       const rest = ui.removed.filter((o) => o.offer_id !== offerId);
-      update({ ...ui, removed: action === "remove" && item ? [...rest, item] : rest });
-      setReply({ ...reply, cart });
+      let removed = rest;
+      if (action === "remove" && item) {
+        const own = extras(reply.cart.items).filter((o) => !rest.some((r) => r.offer_id === o.offer_id));
+        removed = [...rest, item, ...own];
+      } else if (action === "add") {
+        const again = extras(rest);
+        try {
+          for (const x of again) {
+            cart = await cartAction({ session_id: id, action: "add", offer_id: x.offer_id });
+          }
+          removed = rest.filter((o) => !again.includes(o));
+        } catch (e) {
+          setError(userError(e));
+        }
+      }
+      // The cart edit can change the plan (selection, timeline, issues): take it from the server.
+      const fresh = await getSession(id).catch(() => null);
+      update({ ...ui, removed });
+      setReply({ ...(fresh ?? reply), cart });
     } catch (e) {
       setError(userError(e));
     } finally {
@@ -277,7 +298,9 @@ export function App() {
           <Board
             reply={reply}
             busy={busy}
-            removed={ui.removed}
+            removed={ui.removed.filter(
+              (o) => o.kind !== "extra" || !ui.removed.some((p) => p.offer_id === o.for_offer_id),
+            )}
             onSend={send}
             onCart={onCart}
             onCheckout={onCheckout}
