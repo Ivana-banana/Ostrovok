@@ -16,15 +16,13 @@ from datetime import date, timedelta
 from uuid import uuid4
 
 from api.contracts import Cart, ChatReply, ChatRequest, Plan, Question, Stage, TripSpec
+from api.dag import SHIFT_RE, describe, dirty_nodes, replan, shift_dates
 from api.extract import MONTH_NAMES, extract
 from api.fixtures import (
     book,
     build_timeline,
     fill_cart,
-    find_offers,
     future_date,
-    plan_changes,
-    rank,
     suggest_destinations,
 )
 from api.store import SessionStore
@@ -52,10 +50,6 @@ LABELS = {
     "adults": "взрослых",
     "max_travel_hours": "время в пути",
 }
-TRIP_FIELDS = {
-    "destinations", "date_from", "date_to", "nights", "adults", "children_ages",
-    "budget_rub", "meal", "origin",
-}  # fmt: skip
 
 
 def _label(assumption: str) -> str:
@@ -241,6 +235,8 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
         llm=False,
     )
     found, notes = extract(message)
+    if SHIFT_RE.search(message.lower().replace("ё", "е")):
+        found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
     if prev is None and "adults" not in found:
         notes.append("взрослых: 2 (состав не назван)")
     idx = _ordinal(message)
@@ -260,24 +256,24 @@ def step(prev: ChatReply | None, sid: str, message: str) -> ChatReply:
         plan = Plan(spec=spec, destinations=suggest_destinations(spec))
         return reply("inspire", plan, _text_inspire(plan))
 
-    plan = old.plan.model_copy(update={"spec": spec})
-    trip_changed = old.plan.spec.model_dump(include=TRIP_FIELDS) != spec.model_dump(
-        include=TRIP_FIELDS
-    )
-    if trip_changed or not plan.offers:
-        plan = Plan(spec=spec, destinations=old.plan.destinations)
-        plan.offers = find_offers(spec, spec.destinations[0])
-        plan.selected, plan.explanations = rank(spec, plan.offers)
-        if old.plan.offers:
-            plan.changes = plan_changes(old.plan.spec, spec)
+    if "date_from" not in found:
+        spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
+    # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
+    plan = old.plan.model_copy(update={"spec": spec, "changes": []})
+    if dirty_nodes(old.plan.spec, spec) or not plan.offers:
+        # The DAG recomputes only the nodes that depend on the changed fields (T6, #10).
+        plan, cart, _ = replan(old.plan, spec, old.cart)
         if not plan.offers:
             # TODO(T4, #8): the geocoder and synthetic offers cover any city.
             text = (
                 f"Направления «{spec.destinations[0]}» пока нет в каталоге, предложений нет. "
                 f"{HINTS['select']}"
             )
-            return reply("select", plan, text, Cart())
-        return reply("compare", plan, _text_compare(plan), Cart())
+            return reply("select", plan, text, cart)
+        text = _text_compare(plan.model_copy(update={"changes": []}))
+        if plan.changes:
+            text = "\n".join(["Было → стало:", *describe(plan.changes), text])
+        return reply("compare", plan, text, cart)
 
     t = message.lower()
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
