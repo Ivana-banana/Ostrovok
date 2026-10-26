@@ -235,7 +235,13 @@ function Hotels({ plan, stage, busy, onSend }: {
   );
 }
 
-function Transport({ plan }: { plan: Plan }) {
+// The backend picks a leg by the row number of this table ("возьми рейс 2", S6).
+function Transport({ plan, stage, busy, onSend }: {
+  plan: Plan;
+  stage: Stage;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
   const legs = plan.offers.filter((o): o is TransportOffer => o.kind === "transport");
   if (!legs.length) return null;
   return (
@@ -245,6 +251,7 @@ function Transport({ plan }: { plan: Plan }) {
         <table>
           <thead>
             <tr>
+              <th>№</th>
               <th>Рейс</th>
               <th>Тип</th>
               <th>Отправление</th>
@@ -252,13 +259,15 @@ function Transport({ plan }: { plan: Plan }) {
               <th>В пути</th>
               <th>Пересадки</th>
               <th>Цена</th>
+              <th />
             </tr>
           </thead>
           <tbody>
-            {legs.map((t) => {
+            {legs.map((t, i) => {
               const chosen = plan.selected.includes(t.offer_id);
               return (
                 <tr key={t.offer_id} className={chosen ? "chosen" : undefined}>
+                  <td>{i + 1}</td>
                   <td>
                     {t.title}
                     {chosen && <span className="tag">выбран</span>}
@@ -274,6 +283,18 @@ function Transport({ plan }: { plan: Plan }) {
                   <td>{t.changes || "нет"}</td>
                   <td>
                     <Price value={t.price_rub} synthetic={t.synthetic} />
+                  </td>
+                  <td>
+                    {(stage === "compare" || stage === "assemble") && !chosen && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        aria-label={`Выбрать рейс ${i + 1}: ${t.title}`}
+                        onClick={() => onSend(`возьми рейс ${i + 1}`)}
+                      >
+                        Выбрать
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -540,7 +561,7 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
         <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />
       )}
       <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
-      <Transport plan={plan} />
+      <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
       <Bundles plan={plan} />
       <Explanations plan={plan} />
       <Timeline plan={plan} canAdd={stage === "checkout"} busy={busy} onCart={onCart} />
