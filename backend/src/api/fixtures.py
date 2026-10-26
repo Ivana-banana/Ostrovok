@@ -67,15 +67,20 @@ def trip_cost(spec: TripSpec, name: str) -> int:
     )
 
 
-def suggest_destinations(spec: TripSpec, limit: int = 4) -> list[Destination]:
+def suggest_destinations(
+    spec: TripSpec, limit: int = 4, exclude: list[str] | None = None
+) -> list[Destination]:
     """2–4 destinations (up to `limit`) for the spec, violations marked.
+
+    exclude: refused cities and countries (#113); «Турция» drops every city of Turkey.
 
     TODO(T4, #8; T12, #20): replace with the destination catalogue and inspiration ranking.
     """
     sea = "море" in spec.wishes
+    exclude = exclude or []
     out = []
     for name, c in CATALOG.items():
-        if sea and not c["sea"]:
+        if (sea and not c["sea"]) or name in exclude or c["country"] in exclude:
             continue
         air, water = c["nov"] if spec.month == 11 else (None, None)
         violates = []
