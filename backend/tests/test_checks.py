@@ -178,6 +178,29 @@ def test_s6_fails_without_the_simulated_payment_mark(monkeypatch):
     assert not ok and "п.5" in note
 
 
+@pytest.mark.parametrize("word", ["поезд", "самолёт"])
+def test_s6_fails_when_the_chat_does_not_switch_transport(monkeypatch, word):
+    """#56: the train comes from the phrase in /api/chat, not from /api/cart."""
+    deaf(monkeypatch, word)
+    ok, note = checks.check_S6(BY_ID["S6"])
+    assert not ok and "п.3" in note
+
+
+def test_s6_switches_transport_by_chat_phrases():
+    messages = []
+    real = main.chat
+
+    def spy(req, store):
+        messages.append(req.message)
+        return real(req, store)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(main, "chat", spy)
+        ok, note = checks.check_S6(BY_ID["S6"])
+    assert ok, note
+    assert messages.index("возьми самолёт") < messages.index("возьми поезд")
+
+
 def test_s7_fails_without_bundles(monkeypatch):
     def no_bundles(r: ChatReply) -> ChatReply:
         return r.model_copy(update={"plan": r.plan.model_copy(update={"bundles": []})})
