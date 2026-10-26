@@ -500,17 +500,45 @@ def test_trap3_verb_or_common_noun_at_the_start_is_not_a_city(text):
     assert "destinations" not in extract(text)[0]
 
 
-@pytest.mark.parametrize("word", ["Сдвинь", "Перенеси", "Отдых"])
+REBUILD_VERB_FORMS = [  # imperative sg/pl, «мы» form, infinitive, «-ка» (#73)
+    "Сдвинь Сдвиньте Сдвинем Сдвинуть Сдвинь-ка",
+    "Перенеси Перенесите Перенесём Перенести Перенеси-ка Переносим Переносить",
+    "Поменяй Поменяйте Поменяем Поменять Поменяй-ка",
+    "Замени Замените Заменим Заменить Замени-ка Заменяй",
+    "Добавь Добавьте Добавим Добавить Добавь-ка Добавляй",
+    "Убери Уберите Уберём Убрать Убери-ка Убирай",
+    "Удали Удалите Удалим Удалить Удали-ка Удаляй",
+    "Измени Измените Изменим Изменить Измени-ка Изменяй",
+    "Увеличь Увеличьте Увеличим Увеличить Увеличь-ка",
+    "Уменьши Уменьшите Уменьшим Уменьшить Уменьши-ка",
+    "Продли Продлите Продлим Продлить Продли-ка",
+    "Сократи Сократите Сократим Сократить Сократи-ка",
+    "Исправь Исправьте Исправим Исправить Исправь-ка",
+    "Пересобери Пересоберите Пересоберём Пересобрать Пересобери-ка",
+]
+REBUILD_WORDS = [w for row in REBUILD_VERB_FORMS for w in row.split()]
+
+
+@pytest.mark.parametrize("word", REBUILD_WORDS)
+@pytest.mark.parametrize("has_destination", [False, True])
+def test_trap3_every_rebuild_verb_form_is_not_a_city(word, has_destination):
+    found, notes = extract(f"{word} на 2 дня", has_destination)
+    assert "destinations" not in found and not any("каталоге" in n for n in notes)
+
+
+@pytest.mark.parametrize("word", ["Сдвинь", "Перенести", "Перенеси", "Отдых"])
 def test_trap3_verb_at_the_start_gives_no_unknown_destination_reply(word):
     r = step(None, "s", f"{word} на 3 дня")
     assert r.plan.spec.destinations == []
+    assert not any("каталоге" in m for m in [r.reply, *r.questions])
 
 
 def test_trap3_rebuild_verb_after_inspiration_keeps_no_fake_city():
     first = step(None, "s", "Хочу на море в ноябре")
-    r = step(first, "s", "Сдвинь на 3 дня")
-    assert r.plan.spec.destinations == first.plan.spec.destinations
-    assert not any("нет в каталоге" in q for q in r.questions + [r.reply])
+    for word in ["Сдвинь", "Перенести", "Перенеси", "Заменить"]:
+        r = step(first, "s", f"{word} на 3 дня")
+        assert r.plan.spec.destinations == first.plan.spec.destinations
+        assert not any("каталоге" in m for m in [r.reply, *r.questions])
 
 
 def test_trap3_common_noun_as_the_first_message_gives_no_fake_city():
@@ -528,6 +556,12 @@ def test_trap3_common_noun_as_the_first_message_gives_no_fake_city():
         ("Уберландия в мае", "Уберландия"),
         ("Заменград на 3 дня", "Заменград"),
         ("Добавск в мае", "Добавск"),
+        ("Убераба в мае", "Убераба"),
+        ("Удомля на 3 дня", "Удомля"),
+        ("Моршанск в мае", "Моршанск"),
+        ("Морозовск в мае", "Морозовск"),
+        ("Измаил в мае", "Измаил"),
+        ("Сдвинск на 3 дня", "Сдвинск"),
     ],
 )
 def test_trap3_real_first_word_city_survives_the_veto(text, city):
