@@ -52,6 +52,7 @@ from api.extract import (
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date, suggest_destinations
+from api.offers import resolve_place
 from api.optimizer import (
     _hotel_why,
     _leg_why,
@@ -170,8 +171,11 @@ ROUTE_RE = re.compile(
     r"\b(?:потом|затем|далее|оттуда|следом|а\s+после|после\s+(?:этого|того|чего))\b"
 )
 STAY_RE = re.compile(
-    r"\b(?:\d+|одну?|дв[ае]|три|четыре|пять|шесть|семь|восемь|девять|десять)\s*(?:ноч|дн|сут)"
+    r"\b(?:\d+|од(?:ин|на|ну)|дв(?:а|е|ое)|тр(?:и|ое)|четыре|пять|шесть|семь|восемь|девять|десять)"
+    r"\s*(?:ноч|дн|сут)"
 )
+AHEAD_RE = re.compile(r"\bчерез\s+\S+\s*(?:ноч|дн|сут)")  # «вылет через 3 дня»: no stay length
+OR_RE = re.compile(r"\bили\b")  # cities joined by «или» are candidates, never a route
 # The adults are not named: 2 by default. With a child this becomes a question (#112).
 PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
 # #113: the refused places live in this assumption (TripSpec has no field for them).
@@ -286,23 +290,26 @@ def is_route(message: str, destinations: list[str]) -> bool:
     «Сочи или Анапа» are candidates, not a route: the rules stay as they were.
     """
     low = message.lower().replace("ё", "е")
-    return len(destinations) > 1 and (bool(ROUTE_RE.search(low)) or len(STAY_RE.findall(low)) > 1)
+    if len(destinations) < 2 or OR_RE.search(low):
+        return False
+    stays = STAY_RE.findall(AHEAD_RE.sub(" ", low))
+    return bool(ROUTE_RE.search(low)) or len(stays) > 1
 
 
 def route_note(destinations: list[str]) -> str:
     rest = ", ".join(destinations[1:])
-    return f"{ROUTE}: в план вошёл только {destinations[0]}, не вошло: {rest}"
+    return f"{ROUTE}: в плане только {destinations[0]}, не вошло: {rest}"
 
 
-def route_reply(destinations: list[str]) -> tuple[str, Question]:
+def route_reply(destinations: list[str]) -> tuple[str, list[Question]]:
+    """The notice and one chip per city; a city without offers (out of the data) gets no chip."""
     first, rest = destinations[0], ", ".join(destinations[1:])
     text = (
-        f"Пока планирую только {first}. Поездку {' → '.join(destinations)} "
-        f"как один план я пока не собираю. В этот план не вошло: {rest}. "
-        "Выберите, что планировать."
+        f"В плане только: {first}. Поездку {' → '.join(destinations)} "
+        f"как один план я пока не собираю. Не вошло: {rest}. Выберите, что планировать."
     )
-    options = [f"Спланировать {d}" for d in destinations]
-    return text, Question(text="Что спланировать?", options=options)
+    options = [f"План: {d}" for d in destinations if resolve_place(d) is not None]
+    return text, [Question(text="Что планировать?", options=options)] if len(options) > 1 else []
 
 
 def _cap(s: str) -> str:
@@ -675,10 +682,16 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if not any(is_excluded(d, [r]) for d in named)
     ]
     spec = with_refused(spec, refused)
-    route = is_route(message, found.get("destinations", []))
-    if route:  # the lost city stays visible in the plan (#128)
+    if is_route(message, found.get("destinations", [])):  # the lost city stays visible (#128)
         spec = spec.model_copy(
             update={"assumptions": [*spec.assumptions, route_note(spec.destinations)]}
+        )
+        route = True
+    else:  # a route of an earlier message: the notice comes with the first plan (after a question)
+        route = any(_label(a) == ROUTE for a in spec.assumptions) and old.stage not in (
+            "compare",
+            "assemble",
+            "checkout",
         )
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
@@ -761,7 +774,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         questions = party_question(spec)
         if route:
             notice, chips = route_reply(spec.destinations)
-            return reply("compare", plan, f"{notice}\n{text}", cart, questions=[chips, *questions])
+            return reply("compare", plan, f"{notice}\n{text}", cart, questions=[*chips, *questions])
         return reply("compare", plan, text, cart, questions=questions)
 
     if old.stage == "compare" and (idx is not None or _confirmed(t)):
