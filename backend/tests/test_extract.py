@@ -695,3 +695,55 @@ def test_flight_and_hotel_sum_is_the_trip_budget_and_a_dearer_plan_is_flagged(tm
     assert total > 100_000
     risks = [x for e in r.plan.explanations for x in e.risks]
     assert any("не укладывается в бюджет" in x for x in risks)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "отель с перелётом до 60 тысяч",
+        "отель с билетами до 60 тысяч",
+        "отель с авиа до 60 тысяч",
+        "отель с трансфером до 60 тысяч",
+        "60 тысяч на отель и перелёт",
+        "тур с отелем до 60 тысяч",
+        "перелёт и отель до 60 тысяч",
+        "перелёт + отель до 60 тысяч",
+    ],
+)
+def test_hotel_with_another_expense_item_is_the_trip_budget(text):
+    """#41: «отель» and another expense item in one fragment: the sum is for the whole trip."""
+    found, notes = extract(text)
+    assert found.get("budget_rub") == 60_000 and "hotel_budget_rub" not in found
+    assert not any(n.startswith("бюджет отеля:") for n in notes)
+
+
+@pytest.mark.parametrize(
+    "text,hotel",
+    [
+        ("отель до 40 тысяч", 40_000),
+        ("40 тысяч на отель", 40_000),
+        ("отель до 40 тысяч, перелёт любой", 40_000),
+        ("5 ночей, отель до 5000 за ночь", 25_000),
+    ],
+)
+def test_hotel_alone_in_its_fragment_is_the_hotel_budget(text, hotel):
+    found, _ = extract(text)
+    assert found.get("hotel_budget_rub") == hotel and "budget_rub" not in found
+
+
+def test_hotel_price_per_night_without_nights_is_kept_in_the_assumption():
+    found, notes = extract("отель до 5000 за ночь")
+    assert "hotel_budget_rub" not in found and "budget_rub" not in found
+    assert notes == ["бюджет отеля: 5 000 ₽ за ночь"]
+
+
+def test_hotel_with_flight_sum_is_the_trip_budget_and_a_dearer_cart_is_flagged(tmp_path):
+    """#41: «отель с перелётом до 60 тысяч» limits the trip; a dearer cart shows the risk."""
+    store = SessionStore(tmp_path / "s.db")
+    r = chat(ChatRequest(message="Бали на 12 ночей вдвоём, отель с перелётом до 60 тысяч"), store)
+    spec = r.plan.spec
+    assert spec.budget_rub == 60_000 and spec.hotel_budget_rub is None
+    total = sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
+    assert total > 60_000
+    risks = [x for e in r.plan.explanations for x in e.risks]
+    assert any("не укладывается в бюджет" in x for x in risks)
