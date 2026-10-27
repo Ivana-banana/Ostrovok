@@ -8,7 +8,7 @@ import pytest
 
 from api import llm
 from api.contracts import ChatRequest
-from api.model import chat
+from api.model import CHOICE_RE, chat
 from api.store import SessionStore
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч, нужен завтрак"
@@ -112,8 +112,10 @@ def test_wish_after_est_without_a_model_does_not_say_it_is_a_question(store, req
 @pytest.mark.parametrize("edit", ["а подешевле есть?", "а есть что-нибудь с бассейном?"])
 def test_comparatives_and_offers_stay_edits(monkeypatch, store, edit):
     r = at(store, "checkout")
-    stub_model(monkeypatch, [])
+    calls = []
+    stub_model(monkeypatch, calls)
     r2 = say(store, edit, r.session_id)
+    assert calls == [edit]  # an edit goes to the model
     assert r2.stage == "compare" and r2.cart.items == []
 
 
@@ -160,3 +162,13 @@ def test_choice_verb_with_if_still_switches_the_transport(store):
     r2 = say(store, "возьми поезд, если есть?", r.session_id)
     assert "Транспорт заменён" in r2.reply
     assert r2.plan.selected != r.plan.selected
+
+
+@pytest.mark.parametrize("text", ["что если рейс задержат, а до берега далеко?", "а берег рядом?"])
+def test_shore_is_no_choice_verb(text):
+    assert CHOICE_RE.search(text) is None
+
+
+@pytest.mark.parametrize("text", ["берите поезд", "бери второй", "берем поезд", "беру"])
+def test_take_is_a_choice_verb(text):
+    assert CHOICE_RE.search(text)
