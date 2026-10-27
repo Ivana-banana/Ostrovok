@@ -811,7 +811,7 @@ def asks_cheaper(low: str) -> bool:
 
 def is_rebuild(low: str) -> bool:
     """A phrase that asks to rebuild the plan: it is never a consent (#184)."""
-    return bool(pick_kinds(low) or NO_FLIGHT_RE.search(low) or stay_delta(low) or asks_cheaper(low))
+    return bool(pick_kinds(low) or NO_FLIGHT_RE.search(low) or stay_delta(low))
 
 
 def lower_budget(plan: Plan, found: dict, notes: list[str]) -> None:
@@ -1589,13 +1589,13 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     planned = (
         prev is not None and old.stage in PLAN3 and bool(old.plan.offers) and not asks_about(low)
     )
-    rebuild = planned and is_rebuild(low)
+    cheaper = planned and asks_cheaper(low) and old.stage != "checkout"
+    rebuild = planned and (is_rebuild(low) or cheaper)
     picks = pick_kinds(low) if planned else []
     lines: list[str] = []  # reasons there is nothing to change («уже поездом»)
     pinned = (
         rebuild_spec_edit(old.plan.spec, old.plan, low, found, notes, lines) if planned else None
     )
-    cheaper = planned and asks_cheaper(low) and old.stage != "checkout"
     if cheaper:
         lower_budget(old.plan, found, notes)  # #278
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
