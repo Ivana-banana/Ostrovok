@@ -106,6 +106,7 @@ def test_wish_after_est_without_a_model_does_not_say_it_is_a_question(store, req
     r = at(store, "checkout")
     r2 = say(store, request_, r.session_id)
     assert "Это вопрос" not in r2.reply
+    assert r2.stage == "checkout" and r2.cart == r.cart  # no model: the rules know no pool
 
 
 @pytest.mark.parametrize("edit", ["а подешевле есть?", "а есть что-нибудь с бассейном?"])
@@ -126,3 +127,36 @@ def test_delay_question_does_not_switch_the_train_to_a_plane(store, stage):
     r2 = say(store, "что если рейс задержат?", r.session_id)
     assert r2.stage == stage and r2.plan == r.plan and r2.cart == r.cart
     assert r2.plan.selected == r.plan.selected and r2.plan.spec.modes == r.plan.spec.modes
+
+
+WISH_THEN_ASK = [
+    "а поездом можно?",
+    "а у моря нужно?",
+    "а с бассейном можно?",
+    "а с завтраком можно?",
+    "а без пересадок можно?",
+]
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize("text", WISH_THEN_ASK)
+def test_wish_then_can_is_a_request(monkeypatch, store, text, stage, model):
+    r = at(store, stage)
+    calls = []
+    if model:
+        stub_model(monkeypatch, calls)
+    r2 = say(store, text, r.session_id)
+    assert "Это вопрос" not in r2.reply
+    assert calls == ([text] if model else [])
+    if model or "поезд" in text or "моря" in text:  # a wish is read: the plan is re-planned
+        assert r2.cart.items == [] and r2.stage == "compare"
+    else:  # no model: the rules know no wish, nothing changes
+        assert r2.stage == stage and r2.cart == r.cart
+
+
+def test_choice_verb_with_if_still_switches_the_transport(store):
+    r = at(store, "assemble")
+    r2 = say(store, "возьми поезд, если есть?", r.session_id)
+    assert "Транспорт заменён" in r2.reply
+    assert r2.plan.selected != r.plan.selected

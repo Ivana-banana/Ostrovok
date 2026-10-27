@@ -124,15 +124,25 @@ STRONG_CONFIRM_RE = re.compile(r"\b(?:да|ок|окей|хорошо|подхо
 # «а трансфер нужен?» and «можно будет отменить?» ask too (#181). A wish after «есть» or «можно
 # ли с» («а с бассейном есть?», «можно ли с бассейном?») is a request: the model reads it.
 REQUEST_RE = re.compile(
-    r"\b(?:можно|нужен|нужн\w+|надо)\b(?!\s+(?:ли|будет)\b)(?!\s*\?)"
+    r"\b(?:можно|нужен|нужн\w+|надо)\b(?!\s+(?:ли|будет)\b)"
     r"|\bс\s+\w+\s+есть\b|\bесть\s+с\s+\w|\bможно\s+(?:ли|будет)\s+с\s+\w"
     r"|\b(?:хоч\w+|хотим|добав\w+|убер\w+|замен\w+|смен\w+|поменя\w+|измен\w+|перенес\w+"
     r"|подвин\w+|сдвин\w+|исключ\w+|с\s+нами|поедем|планиру\w+"
     r"|(?:по)?(?:дешевле|дороже|ближе|лучше|больше|меньше)"
     r"|а\s+есть\s+(?:что-нибудь|что-то|вариант\w*|друг\w+))\b"
 )
-# «что если рейс задержат?» asks what would happen: it picks no transport.
-HYPOTHESIS_RE = re.compile(r"\bесли\b[^?]*\?")
+# A bare «трансфер нужен?» or «можно?» asks. «с бассейном можно?», «поездом можно?», «у моря
+# нужно?» name a wish before the word: a request, as before #181.
+BARE_ASK_RE = re.compile(r"\b(?:можно|нужен|нужн\w+|надо)\s*\?")
+WISH_BEFORE_RE = re.compile(
+    r"\b(?:с|со|без|у)\s+\w+|\b(?:поезд|самол|перел|рейс|авиа|автобус|машин|такси|мор)\w*"
+)
+# «что если рейс задержат?» asks what would happen: it picks no transport. «возьми поезд, если
+# есть?» has a choice verb: it picks.
+HYPOTHESIS_RE = re.compile(r"\bесли\b[^?]*\?|\b(?:задерж|опозда)\w*")
+CHOICE_RE = re.compile(
+    r"\b(?:возьм|бер[уие]|давай|хоч|хотим|поменя|смен|замен|переключ|выбер|оформ)\w*"
+)
 EDIT_KEYS = {
     "destinations", "date_from", "date_to", "month", "nights", "adults", "children_ages",
     "origin", "budget_rub", "hotel_budget_rub", "pets", "max_travel_hours",
@@ -598,7 +608,10 @@ def is_question(low: str, found: dict) -> bool:
     """A question about the plan or the cart, not an edit (#81). `low` is lower case, no «ё»."""
     if (
         BOOK_RE.search(low)
-        or REQUEST_RE.search(low)
+        or any(
+            not (BARE_ASK_RE.match(low, m.start()) and not WISH_BEFORE_RE.search(low[: m.start()]))
+            for m in REQUEST_RE.finditer(low)
+        )
         or SHIFT_RE.search(low)
         or DATE_EDIT_RE.search(low)
         or OTHER_RE.search(low)
@@ -900,7 +913,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     asking = old.stage in PLAN_STAGES and is_child_question(message)
     rules_found, rules_notes = extract(message, bool(old.plan.spec.destinations), asking=asking)
     pure = (
-        set(rules_found) <= {"modes"} and not SHIFT_RE.search(low) and not HYPOTHESIS_RE.search(low)
+        set(rules_found) <= {"modes"}
+        and not SHIFT_RE.search(low)
+        and not (HYPOTHESIS_RE.search(low) and not CHOICE_RE.search(low))
     )
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
         plan, note = switch_transport(old.plan, message)
