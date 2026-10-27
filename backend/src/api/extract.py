@@ -809,6 +809,9 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
     return sides
 
 
+TRANSIT = re.compile(r"(?:через|с\s+пересадкой\s+(?:в|во|на))\s+$")
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -853,6 +856,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         hits.append((*first, _word_end(t, first[0])))
     elif not hits and not has_destination:
         _vetoed_first_word(text, t, notes)
+    # A transit point is no destination (#274): «через Минводы», «с пересадкой в Москве».
+    hits = [h for h in hits if not TRANSIT.search(t[: h[0]])]
     # Mentions for the negation: the places above and the bare countries («Турцию и Египет…»).
     # The refused name is the country when the word is one: «египет» is a hit of Хургада.
     mentions = {s: (e, name, name) for s, name, e in hits}

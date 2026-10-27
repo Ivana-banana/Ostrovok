@@ -811,3 +811,19 @@ def test_trap_3_no_place_in_ordinary_sentences():
 def test_trap_3_exact_catalogue_name_is_not_respelled(name):
     found, _ = extract(f"хочу в {name} в мае")
     assert found["destinations"] == [name]
+
+
+C15 = "Из Ебурга в Кисловоцк через Минводы, с мамой 70 лет в санаторий на 10 ночей в мае"
+
+
+def test_trap_3_transit_point_is_no_destination():
+    found, _ = extract(C15)
+    assert found["origin"] == "Екатеринбург"
+    assert found["destinations"] == ["Кисловодск"]
+    found, _ = extract("Хочу в Сочи с пересадкой в Москве на неделю")
+    assert found["destinations"] == ["Сочи"]
+
+
+def test_trap_3_c15_full_turn_has_no_missing_catalogue_reply(tmp_path):
+    r = chat(ChatRequest(session_id=None, message=C15), SessionStore(tmp_path / "s.db"))
+    assert "нет в каталоге" not in r.reply.lower(), r.reply
