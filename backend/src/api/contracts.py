@@ -55,6 +55,8 @@ class TripSpec(BaseModel):
     max_travel_hours: float | None = None
     # C5 (#408): the user has tickets. No transport is searched; transfers start from the
     # user's own arrival and end before the own departure (local to the destination).
+    # Consumers: api/extract.py (rules), model.py (assume, compare text), offers.py (own_legs),
+    # optimizer.py, timeline.py, dag.py; web/src/Board.tsx (SpecSummary).
     own_transport: bool = False
     arrive_at: AwareDatetime | None = None
     leave_at: AwareDatetime | None = None
