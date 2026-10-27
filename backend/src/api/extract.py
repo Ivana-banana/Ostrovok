@@ -1573,7 +1573,8 @@ DATE_KEYS = {"date_from", "date_to", "month", "nights"}
 def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = None) -> dict:
     """The model's fields win over the rules' fields; the rules keep what it did not say (#258).
 
-    Dates are one group: if the model read any date field, its group replaces the rules' group.
+    Dates are one group: a full model group (date_from and date_to or nights) replaces the rules'
+    group; a part of a group never replaces it, and fills only when the rules read no dates.
     excluded: a refused place (#113) never comes back as a model destination.
     """
     if not llm_found:
@@ -1584,10 +1585,13 @@ def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = N
         llm_found = {**llm_found, "destinations": kept}
         if not kept:
             del llm_found["destinations"]
-    if DATE_KEYS & llm_found.keys():
+    full_dates = "date_from" in llm_found and bool({"date_to", "nights"} & llm_found.keys())
+    if full_dates:
         for d in DATE_KEYS:
             out.pop(d, None)
     for k, v in llm_found.items():
+        if k in DATE_KEYS and not full_dates and DATE_KEYS & found.keys():
+            continue
         if k == "wishes":
             out["wishes"] = found.get("wishes", []) + [w for w in v if w not in found.get(k, [])]
         elif k == "budget_rub" and v == found.get("hotel_budget_rub"):

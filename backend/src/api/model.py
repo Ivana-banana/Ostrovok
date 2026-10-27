@@ -1595,13 +1595,13 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             notes[:] = [n for n in notes if _label(n) != "длительность" or is_too_long_note(n)]
         if llm_found:
             # The rules read the shift (which end, how far); the model must not add other dates.
-            for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
+            for k in ("nights", *DATE_KEYS):
                 llm_found.pop(k, None)
     # Dates only the model read pass the check of the rules' dates (#164).
     past = llm_past_dates(llm_found) if llm_found else None
     if past and DATE_KEYS & found.keys() and not DATE_KEYS & llm_found.keys():
         past = None  # the model's dates are dropped; the rules' dates stay, nothing to tell
-    if past:
+    if past and past not in notes:
         notes.append(past)
     if llm_found:
         # The model may not set a length the rules would not take; note and plan then agree (#160).
@@ -1617,6 +1617,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         notes.append(PARTY_UNKNOWN)
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
+        (llm_found or {}).pop("destinations", None)  # the model does not see the numbered list
     # The departure city is no destination (#139): «Москва — Питер — Казань» starts in Москва.
     # It runs after the model too (#141): the model may return the departure city as a stay.
     start_default = not found.get("origin") and (
