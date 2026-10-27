@@ -767,6 +767,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         old.plan.spec.nights or DEFAULT_NIGHTS,
         old.plan.spec.adults,
     )
+    # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
+    asks_length = any(is_too_long_note(n) for n in notes)
+    yes = _confirmed(t) and not asks_length
+    service = prev is not None and (pick or (consent and not asks_length))
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
     other = (
@@ -952,7 +956,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return reply("compare", plan, f"{notice}\n{text}", cart, questions=[*chips, *questions])
         return reply("compare", plan, text, cart, questions=questions)
 
-    if old.stage == "compare" and (idx is not None or _confirmed(t)):
+    if old.stage == "compare" and (idx is not None or yes):
         hotels = hotel_rows(plan.offers, plan.selected)
         picks = idx is not None and idx < len(hotels)
         if not picks and not pets_possible(spec, plan.offers) and not _hotel_selected(plan):
@@ -963,7 +967,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
         plan.timeline, plan.issues = build_timeline(plan)
         return reply("assemble", plan, _text_assemble(plan))
-    if old.stage == "assemble" and _confirmed(t):
+    if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
         text = (
             f"В корзине {len(cart.items)} поз. на {_rub(cart.total_rub)} "
