@@ -88,3 +88,59 @@ def test_c310_can_i_cheaper_is_a_request(store, text):
     second = say(store, text, first.session_id)
     assert second.plan.spec.budget_rub is not None
     assert total_of(second) < total_of(first)
+
+
+def test_c310_other_edit_in_the_message_counts_in_the_minimum(store):
+    first = say(store, "Казань на 4 ночи с 1 декабря вдвоём из Москвы")
+    second = say(store, "подешевле, с завтраком", first.session_id)
+    assert second.plan.spec.budget_rub is not None
+    assert second.plan.spec.budget_rub >= total_of(second)
+    assert "Дешевле в предложениях нет" not in second.reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "подешевле, не надо дорогих",
+        "подешевле, не хочу переплачивать",
+        "давай дешевле, не стоит брать люкс",
+        "ещё подешевле, не хочу переплачивать",
+    ],
+)
+def test_c310_tail_negation_still_lowers(store, text):
+    first = say(store, START)
+    second = say(store, text, first.session_id)
+    assert not second.reply.startswith(HINT)
+    assert second.plan.spec.budget_rub is not None
+    assert total_of(second) < total_of(first)
+
+
+@pytest.mark.parametrize("text", ["не надо дешевле", "дешевле не надо", "не хочу подешевле"])
+def test_c310_adjacent_negation_still_refuses(store, text):
+    first = say(store, START)
+    assert say(store, text, first.session_id).plan.spec.budget_rub is None
+
+
+@pytest.mark.parametrize(
+    "text", ["есть ли дешевле?", "а есть ли что-то подешевле?", "нельзя ли подешевле?"]
+)
+def test_c310_li_requests_lower(store, text):
+    first = say(store, START)
+    second = say(store, text, first.session_id)
+    assert second.plan.spec.budget_rub is not None
+    assert total_of(second) < total_of(first)
+
+
+def test_c310_hand_picked_hotel_never_makes_a_false_minimum(store):
+    """TRAP-4: the reply never calls the total with a hand-picked hotel the minimum."""
+    first = say(store, "Байкал на 4 ночи с 1 декабря вдвоём из Москвы")
+    picked = say(store, "беру второй", first.session_id)
+    r = say(store, "подешевле", picked.session_id)
+    from api.model import _ranked_total
+
+    floor = _ranked_total(r.plan)
+    if total_of(r) > floor:
+        assert f"{floor:,}".replace(",", " ") in r.reply
+        assert "минимум" not in r.reply.split("\n")[0]
+    else:
+        assert total_of(r) == floor
