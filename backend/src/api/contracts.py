@@ -246,6 +246,7 @@ class CheckoutRequest(BaseModel):
 # start-up (main.py) or in a test; no factories, no env switch. Backend only: no mirror in
 # web/src/contracts.ts, the offer types the web sees do not change.
 # Consumers: api/offers.py (adapters, offers_for_place), api/fixtures.py (travel_hours),
+# api/inspire.py (TRANSPORT: hours door to door and at the wheel, #321),
 # via find_offers: api/dag.py, api/inspire.py, api/model.py, api/checks.py;
 # tests/test_ports.py (conformance).
 
