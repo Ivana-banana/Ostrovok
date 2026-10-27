@@ -468,3 +468,44 @@ def test_ages_in_brackets():
 def test_bracketed_ages_do_not_break_the_kin_chain():
     found, _ = extract("Едем я, муж, двое детей (3 и 11) и бабушка на море в Анапу в июле")
     assert found["adults"] == 3 and found["children_ages"] == [3, 11]
+
+
+# --- #337: units per age, age adjectives, twins ---
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("Дети 1 год и 4 года, едем в Сочи", [1, 4]),
+        ("Дети 4 года и 1 год, едем в Сочи", [4, 1]),
+        ("С детьми 1 года и 4 лет в Сочи", [1, 4]),
+        ("Дети 6 месяцев и 3 года, Сочи", [0, 3]),
+        ("С годовалым ребёнком в Сочи", [1]),
+        ("С годовалой дочкой в Сочи", [1]),
+        ("С полуторагодовалым ребёнком в Сочи", [1]),
+        ("Близнецы по 2 года, едем в Сочи", [2, 2]),
+        ("Двойняшки 5 лет, Сочи", [5, 5]),
+        ("Сын 10, дочь 3 года, Сочи", [10, 3]),
+        (
+            "Мы с подругой и наши дети: у меня близнецы по 2 года, у неё сын 10. Хотим в Сочи",
+            [2, 2, 10],
+        ),
+    ],
+)
+def test_337_ages(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
+
+
+def test_337_triplets_without_age_are_three_children_with_the_note():
+    found, notes = extract("Тройняшки едут в Сочи")
+    assert found["children_ages"] == [7, 7, 7]
+    assert "возраст ребёнка: 7 лет (возраст не назван)" in notes
+
+
+@pytest.mark.parametrize(
+    "text", ["С сыном 10 июля в Сочи", "С сыном 10.07 в Сочи", "С сыном 10 ночей в Сочи"]
+)
+def test_337_a_bare_number_after_a_child_that_is_no_age(text):
+    found, _ = extract(text)
+    assert found["children_ages"] == [7]
