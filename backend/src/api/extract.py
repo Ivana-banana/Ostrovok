@@ -1723,8 +1723,10 @@ def extract(
     negated = re.compile(r"\b(?:не|без)\s+(?:\w+\s+)?$")  # «не хочу лететь», «не на машине»
     hits = {m: list(re.finditer(p, t)) for m, p in MODES}
     modes = [m for m, xs in hits.items() if any(not _refused(t, x) for x in xs)]
-    no_flight = (hits["flight"] and "flight" not in modes) or NO_FLIGHT.search(t)
-    if not modes and (no_flight or FLIGHT_FEAR_RE.search(t)):
+    # A refusal after the word bans the flight; a refusal before it is NO_FLIGHT's: «не хочу
+    # лететь долго» bans a long flight only (#277).
+    refused_after = any(REFUSED_AFTER_RE.match(t, x.end()) for x in hits["flight"])
+    if not modes and (refused_after or NO_FLIGHT.search(t) or FLIGHT_FEAR_RE.search(t)):
         # #277, #302: «без самолётов», «самолёт ни за что» ban the flight, the rest stay.
         # «не хочу поезд» bans nothing: it is no pick at a built plan (test_transport_choice).
         modes = ["train", "car"]
