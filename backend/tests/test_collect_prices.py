@@ -138,3 +138,23 @@ def test_tutu_price_not_in_rub_is_an_error():
     )
     with pytest.raises(ValueError):
         cp.parse_tutu(html)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        cp.urllib.error.URLError("timed out"),
+        ConnectionResetError("reset by peer"),
+        cp.http.client.IncompleteRead(b""),
+    ],
+)
+def test_network_error_is_a_refusal_not_a_traceback(monkeypatch, error):
+    """Москва:Новороссийск in the mass run: urlopen raised and the run ended with a traceback."""
+    monkeypatch.setattr(cp, "PAUSE_S", 0)
+
+    def urlopen(*_args, **_kw):
+        raise error
+
+    monkeypatch.setattr(cp.urllib.request, "urlopen", urlopen)
+    with pytest.raises(cp.Refused):
+        cp._get("x.ru", "/a")

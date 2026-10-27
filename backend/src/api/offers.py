@@ -15,7 +15,8 @@
 Deterministic: the same place, dates and guests give the same offers (sha256 seed, no
 random module). Network only for a name outside the catalogue, with a fallback (TRAP-6).
 Every offer is synthetic=True (TRAP-7); prices and times come only from here (TRAP-4).
-All coefficients below are team estimates without a source.
+All coefficients below are team estimates without a source; level and free_cancel_share of a
+place with 101hotels facts come from scripts/calibrate_prices.py (catalog.json _source, #119).
 """
 
 import hashlib
@@ -261,7 +262,10 @@ def _hotel(
     # A tariff (price and offer_id) does not depend on the clock. The free-cancellation rate
     # exists only until its deadline: after it the hotel sells the non-refundable rate alone,
     # so no two tariffs of a hotel share (meal, refundable).
-    refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 0.2
+    # Free cancellation only from 3 stars (team estimate), in the share of 3+ star hotels with it
+    # on the 101hotels city page (#119), else in 80% (team estimate).
+    share = place.get("free_cancel_share", 0.8)
+    refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 1 - share
     free_until = None
     if refundable_rate:
         days = (7, 3, 1)[int(_rand(place["name"], key, "deadline") * 3)]
