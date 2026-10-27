@@ -21,7 +21,7 @@ from datetime import date, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from api import llm
+from api import catalog, llm
 from api.answers import is_hotel_compare, plan_fact, span, without_plan_fields
 from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
 from api.contracts import (
@@ -347,18 +347,26 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     # refusing makes it one (#198).
     parts = re.split(r",|\s(?:но|и|а)\s", clause, maxsplit=1)
     near, after = parts[0], parts[1] if len(parts) > 1 else ""
-    stop = r"нельзя|отпадает|отпадают|исключен|невозможн"
+    strong = r"нельзя|отпадает|отпадают|исключен|невозможн"  # a refusal anywhere near the month
+    weak = r"отменя|неудобн"  # a refusal only as the whole part (#215)
     verbs = (
-        r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|над|нуж|вариант|устраива|катит"
+        r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|надо\b|нуж|вариант|устраива|катит"
         r"|рассматр|будет|удобн"
     )
     # «не поедем» ends the part: «не поедем на самолёте» only drops a way to travel
-    moves = r"поед|полет|лет|ед[еи]м"
+    moves = r"(?:по)?(?:ед|езж|лет(?!ом\b|о\b|н))\w*"  # not «летом», «лето», «летний»
     end = r"(?=\s*(?:,|;|$))"
-    gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{stop})"
+    # «январь нет», «январь — нет», «январь мимо», «в январе никак»: a bare no ends the part (#215)
+    bare = rf"(?:нет|никак|мимо){end}"
+    # The weak words follow the month directly or after a filler: «январь или никак» is a move
+    filler = r"(?:(?:—|–|-|точно|уже|вообще|совсем|тоже|нам)\s+)*"
+    gone = rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\b|{strong})|{filler}(?:{weak}|{bare}))"
+    # After a comma «не» + a verb and the strong words may follow up to two words («увы, не
+    # получится», «увы, нельзя»). A «нет» or «неудобно» deeper in the part belongs to a
+    # neighbour: «детей нет», «в декабре никак».
     refusing = (
-        rf"\s*(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
-        rf"|не\s+(?:{moves})\w*{end}|не{end}|{stop})"
+        rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
+        rf"|не\s+{moves}{end}|не{end}|{strong})|(?:{weak})\w*{end}|{bare})"
     )
     if negated or re.match(gone, near) or re.match(refusing, after):
         return "stay", month
@@ -489,6 +497,12 @@ def assume(spec: TripSpec) -> TripSpec:
     if not data["origin"]:
         data["origin"] = DEFAULT_ORIGIN
         note("откуда", "Москва (город вылета не назван)")
+    else:
+        # TRAP-4 (#104): no flight from a city off the hub list; the nearest hub, said aloud.
+        hub, why = catalog.origin_hub(data["origin"])
+        data["origin"] = hub["name"]
+        if why:
+            note("откуда", why[:1].lower() + why[1:])
     if data["hotel_budget_rub"] is not None:  # the rules wrote their note; the LLM did not
         note(HOTEL_NOTE, f"{_rub(data['hotel_budget_rub'])} за все ночи")
     resolve_hotel_budget(data)

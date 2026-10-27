@@ -362,6 +362,31 @@ REFUSALS = [
     "в январе, но не получится",
     "январь, не",
     "в январе, не",
+    # #215: a bare «нет» and the like
+    "в январе нет",
+    "январь — нет",
+    "январь нет",
+    "в январе никак",
+    "январь точно нет",
+    "январь мимо",
+    "январь отменяется",
+    "в январе неудобно",
+    "январь, к сожалению, не подходит",
+    "в январе и в феврале не можем",
+    "в январе, не летаем",
+    "в январе, не поедешь",
+    "январь, увы, нельзя",
+    "в январе, нам нельзя",
+    "в январе, никак нельзя",
+    "январь, никак нельзя",
+    "в январе, нельзя никак",
+    "в январе, нельзя: работа",
+    "январь, это невозможно",
+    "в январе, невозможно по работе",
+    "в январе, к сожалению, исключено",
+    "январь, увы, отпадает",
+    "январь, отпадает к сожалению",
+    "январь, отпадает совсем",
 ]
 
 
@@ -435,3 +460,60 @@ def test_a_negated_neighbour_after_the_month_is_still_a_move(store, text):
     s = r.plan.spec
     assert (s.date_from, s.date_to, s.month) == (date(2027, 1, 3), date(2027, 1, 8), 1)
     assert "Они остаются" not in r.reply and r.stage == "compare"
+
+
+@pytest.mark.parametrize("text", ["в январе, не летом", "в январе, не надолго"])
+def test_a_stem_of_a_refusal_verb_does_not_catch_other_words(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 3) and "Они остаются" not in r.reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "в январе",
+        "лучше в январе",
+        "в январе, нет проблем",
+        "лучше в январе, детей нет, двое взрослых",
+        "лучше в январе, в декабре никак",
+        "в январе, в декабре нет",
+        "в январе, багажа нет",
+        "в январе, неудобно в декабре",
+        "в январе, отменяется только завтрак",
+        "январь или никак",
+        "в январе или никак",
+        "только январь или никак",
+        "январь либо никак",
+        "лучше в январе декабрь нет",
+        "давай январь декабрь никак",
+        "переносим на январь декабрь отменяется",
+        "январь подходит декабрь отменяется",
+    ],
+)
+def test_a_plain_request_still_moves(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 3)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "январь нет, подтверждаю",
+        "январь отменяется, беру",
+        "в январе никак, оформляй",
+        "в январе, не летаем, подтверждаю",
+        "в январе, не поедешь, подтверждаю",
+        "январь, увы, нельзя, подтверждаю",
+    ],
+)
+@pytest.mark.parametrize("stages", [1, 2])
+def test_a_bare_no_is_no_consent_at_assemble_and_checkout(store, text, stages):
+    r = named(store)
+    for _ in range(stages):
+        r = say(store, "беру", r.session_id)
+    stage, cart = r.stage, r.cart
+    r = say(store, text, r.session_id)
+    assert (r.plan.spec.date_from, r.plan.spec.date_to) == (date(2026, 12, 3), date(2026, 12, 8))
+    assert r.stage == stage and r.cart == cart and not r.voucher
