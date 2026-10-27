@@ -90,6 +90,16 @@ def test_same_selection_keeps_the_timeline(booked, calls):
     assert plan.timeline == booked.plan.timeline and plan.issues == booked.plan.issues
 
 
+def test_empty_timeline_of_a_plan_with_offers_is_not_rebuilt_by_a_kept_selection(booked, calls):
+    """#79: the timeline node counts as recomputed only when the selection changed or on the
+    first plan; an old plan with offers and an empty timeline does not inflate the count."""
+    old = booked.plan.model_copy(update={"timeline": [], "issues": []})
+    spec = old.spec.model_copy(update={"refundable": False})
+    plan, _, done = dag.replan(old, spec, booked.cart)
+    assert plan.selected == old.selected
+    assert "timeline" not in done and "build_timeline" not in calls
+
+
 def test_date_shift_searches_again_for_the_same_destination(booked, calls):
     old = booked.plan.spec
     spec = old.model_copy(
@@ -153,6 +163,19 @@ def test_chat_shows_before_after_and_replaces_the_cart(store, booked):
     hotel = next(o for o in r.cart.items if o.kind == "hotel")
     back = next(o for o in r.cart.items if o.kind == "transport" and o.origin == "Сочи")
     assert hotel.date_out == back.depart_at.date() == r.plan.spec.date_to  # no old dates
+
+
+def test_spec_edit_at_compare_shows_the_issues_line(store):
+    """#79: «стыковки» in «Было → стало» before «беру», when the edit changes the issues."""
+    r = say(store, SOCHI)
+    assert r.stage == "compare" and r.plan.issues
+    old_issues = "; ".join(i.text for i in r.plan.issues)
+    r = say(store, "а 4 ночи", r.session_id)
+    assert r.stage == "compare"
+    line = next(c for c in r.plan.changes if c.what == "стыковки")
+    new_issues = "; ".join(i.text for i in r.plan.issues)
+    assert (line.before, line.after) == (old_issues, new_issues) and old_issues != new_issues
+    assert f"стыковки: {old_issues} → {new_issues}" in r.reply
 
 
 def test_budget_change_line_is_readable(store, booked):

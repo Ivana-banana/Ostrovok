@@ -87,6 +87,7 @@ class Run:
     replies: list[ChatReply] = field(default_factory=list)
     codes: list[int] = field(default_factory=list)
     first_rec_ms: float | None = None  # local wall time to the first inspire/compare reply
+    note: str = ""  # why the walk stopped short, e.g. a stage without a scripted answer
 
     @property
     def last(self) -> ChatReply:
@@ -164,8 +165,11 @@ def _walk(
             break
         if r.stage == "clarify":
             text = " ".join(q.options[0] for q in r.questions if q.options) or "пока не знаю"
-        else:
+        elif r.stage in ANSWERS:
             text = ANSWERS[r.stage]
+        else:
+            run.note = f"чат не довёл до «{'/'.join(stop)}»: на этапе «{r.stage}» нет ответа"
+            break
     return run
 
 
@@ -196,7 +200,9 @@ def metric(split: str) -> dict | None:
     asked = [r.asked for r in runs]
     ms = [r.first_rec_ms for r in runs if r.first_rec_ms is not None]
     errors = sum(_timeline_errors(r) for r in runs)
-    failed = [f"{r.case}/{r.label}" for r in to_book if not r.booked]
+    failed = [
+        f"{r.case}/{r.label}" + (f" ({r.note})" if r.note else "") for r in to_book if not r.booked
+    ]
     return {
         "name": "доля сессий, доведённых до брони (ваучер)",
         "system": round(share, 2),
