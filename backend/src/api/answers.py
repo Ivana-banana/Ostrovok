@@ -9,10 +9,18 @@ import re
 from datetime import timedelta
 
 from api import catalog
-from api.contracts import HotelOffer, Plan, TransportOffer
+from api.contracts import HotelOffer, Plan, TransportOffer, TripSpec
 from api.extract import MONTH, NOT_PLACES
 from api.fixtures import CATALOG, IN_MONTH
-from api.offers import FAR_AIRPORT_KM, places, resolve_place
+from api.offers import (
+    CLOSED_NOTE,
+    FAR_AIRPORT_KM,
+    ROOM_GUESTS,
+    closed_airport,
+    places,
+    resolve_place,
+    rooms,
+)
 from api.optimizer import hotel_rows
 
 WEATHER_RE = re.compile(
@@ -486,9 +494,24 @@ def destination_line(plan: Plan) -> str:
         )
     if port := place.get("airport"):
         parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км {_how(port)}")
+        if closed_airport(place):  # C8 (#363): the reason a plan has no flight
+            parts[-1] += f" — {CLOSED_NOTE}"
     if not parts:
         return ""
     return "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
+
+
+def rooms_line(spec: TripSpec) -> str:
+    """C7 (#363): a party over one standard room gets more rooms; the hotel price is for them."""
+    n = rooms(spec)
+    if n == 1:
+        return ""
+    guests = spec.adults + len(spec.children_ages)
+    word = "номера" if n < 5 else "номеров"
+    return (
+        f"Размещение: {guests} гостей — {n} {word} (в стандартном номере до {ROOM_GUESTS} гостей, "
+        f"оценка); цена отеля — за {n} {word}. Точное размещение уточните у отеля."
+    )
 
 
 def airport_fact(plan: Plan, cities: list[str] | None = None) -> str:
@@ -502,6 +525,9 @@ def airport_fact(plan: Plan, cities: list[str] | None = None) -> str:
             lines.append(f"Аэропорта для {city} в данных нет — {NO_DATA}.")
             continue
         name, iata, km = place["name"], port["iata"], port["km"]
+        if closed_airport(place):
+            lines.append(f"{name}: ближайший аэропорт {iata}, {km} км — {CLOSED_NOTE}.")
+            continue
         if km <= FAR_AIRPORT_KM:
             lines.append(f"{name}: ближайший аэропорт {iata}, {km} км от города ({_how(port)}).")
             continue

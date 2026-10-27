@@ -26,6 +26,7 @@ from api.answers import (
     destination_line,
     is_hotel_compare,
     plan_fact,
+    rooms_line,
     span,
     without_plan_fields,
 )
@@ -1525,6 +1526,7 @@ def _text_compare(plan: Plan) -> str:
         ),
         *([line] if (line := destination_line(plan)) else []),
         *([line] if (line := missing_mode(plan)) else []),
+        *([line] if (line := rooms_line(spec)) else []),
         "Отели:",
     ]
     hotels = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff

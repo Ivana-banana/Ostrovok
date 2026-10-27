@@ -142,10 +142,20 @@ def _guests_tag(spec: TripSpec) -> str:
     return f"{spec.adults}a" + "".join(f"c{a}" for a in spec.children_ages)
 
 
+ROOM_GUESTS = 4  # a standard room sleeps 2-4 (critic card C7, team estimate)
+
+
+def rooms(spec: TripSpec) -> int:
+    """Standard rooms for the party (C7, #363); a child under 2 sleeps in a cot."""
+    guests = spec.adults + sum(a >= 2 for a in spec.children_ages)
+    return max(1, math.ceil(guests / ROOM_GUESTS))
+
+
 def _room_factor(spec: TripSpec) -> float:
-    """Room price for these guests relative to two adults."""
+    """Room price for these guests relative to two adults; each extra room adds a single room."""
     adults = 0.85 if spec.adults == 1 else 1 + 0.45 * (spec.adults - 2)
-    return adults + sum(0 if a < 2 else 0.25 if a < 12 else 0.45 for a in spec.children_ages)
+    kids = sum(0 if a < 2 else 0.25 if a < 12 else 0.45 for a in spec.children_ages)
+    return adults + kids + 0.85 * (rooms(spec) - 1)
 
 
 # Child fares by mode: (age below, share of a full fare, takes a seat). An age from the last
@@ -394,6 +404,17 @@ def _flight_hours(km: float) -> float:
 
 
 FAR_AIRPORT_KM = 60  # a place farther from its airport has none of its own (#123)
+# C8 (#363): airports of the south of Russia closed to flights since 24.02.2022, the list of
+# the critic card C8. Their status on the day of the defence is [СПРОСИТЬ]. A place behind
+# such an airport gets no flight: a train or a car.
+CLOSED_AIRPORTS = {"AAQ", "GDZ", "KRR", "ESL"}
+CLOSED_NOTE = "закрыт для рейсов с 24.02.2022"
+
+
+def closed_airport(place: dict) -> str:
+    """The IATA code of the airport of a place when it is closed to flights, else empty."""
+    iata = (place.get("airport") or {}).get("iata", "")
+    return iata if iata in CLOSED_AIRPORTS else ""
 
 
 def _via_airport(mode: Mode, a: dict, b: dict) -> str:
@@ -580,7 +601,8 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
         return base * SEASON[day.month] * noise * _fares(spec, mode)
 
     legs: list[TransportOffer] = []
-    if a["airport_km"] is not None and b["airport_km"] is not None and km >= 300:
+    open_ports = not closed_airport(a) and not closed_airport(b)
+    if a["airport_km"] is not None and b["airport_km"] is not None and km >= 300 and open_ports:
         pair = {a["country"], b["country"]}
         changes = int("Россия" in pair and bool(pair & NO_DIRECT))
         hours = _flight_hours(km) + 3 * changes

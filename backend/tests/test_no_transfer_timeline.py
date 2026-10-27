@@ -26,7 +26,8 @@ from api.timeline import OWN_WAY, build_timeline
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч, нужен завтрак"
 KAZAN = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."
-YEYSK = "Ейск из Москвы, 3 ночи с 20 января"  # the airport (KRR) is 197 km away
+# The airport (PES) is 182 km away. Ейск (KRR) was here before #363: KRR is closed (C8).
+SORTAVALA = "Сортавала из Москвы, 3 ночи с 20 января"
 
 
 @pytest.fixture
@@ -233,11 +234,11 @@ def test_trap_5_refusal_survives_a_direct_flight_in_the_chat(client):
 
 
 def test_trap_5_far_airport_keeps_the_road_by_data_and_the_night_check_in(client):
-    """Ейск: the airport of catalog.json (KRR) is 197 km away. Without the transfer the road is
-    still ≈6 h, not a flat 1 h 30 min: the check-in comes after midnight, and the late
+    """Сортавала: the airport of catalog.json (PES) is 182 km away. Without the transfer the road
+    is still ≈6 h, not a flat 1 h 30 min: the check-in comes near midnight, and the late
     check-in warning stays."""
     _, store = client
-    r = at(store, "assemble", YEYSK)
+    r = at(store, "assemble", SORTAVALA)
     with_transfer = r.plan.timeline
     r2 = say(store, "давайте без трансфера", r.session_id)
     assert_no_transfer(r2)
@@ -245,7 +246,7 @@ def test_trap_5_far_airport_keeps_the_road_by_data_and_the_night_check_in(client
     hotel = selected(r2, "hotel")[0]
     out = next(x for x in selected(r2, "transport") if x.destination == hotel.city)
     own = next(e for e in r2.plan.timeline if "добираетесь сами" in e.title)
-    assert "≈197.7 км" in own.title  # the distance of catalog.json, not a flat road
+    assert "≈185.5 км" in own.title  # the distance of catalog.json, not a flat road
     check_in = next(e for e in r2.plan.timeline if e.title.startswith("Заселение"))
     assert check_in.at - out.arrive_at > OWN_WAY[out.mode] + timedelta(hours=1)
     was = next(e for e in with_transfer if e.title.startswith("Заселение"))
