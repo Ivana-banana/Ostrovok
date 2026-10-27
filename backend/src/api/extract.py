@@ -152,8 +152,9 @@ CHILD_RE = re.compile(
 # are no children. Between «без» and the child stand only «X и» or one word in -их/-ых
 # («без пересадок двое детей 5 и 8 лет» has children). Only a genitive form can be refused.
 NO_CHILD_BEFORE = re.compile(r"\bбез\s+(?:\w+\s+и\s+|\w+[иы]х\s+)?$")
-# A number word or a number right after the child noun: the children are named.
-NO_CHILD_AFTER = re.compile(r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)")
+# A number word or a number right after the child noun: the children are named. A negation
+# later in the clause is a double negation («без детей не поедем»): the children stay.
+NO_CHILD_AFTER = re.compile(r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)|[^,.;!?]*\b(?:не|ни\w*)\b")
 NO_CHILD_FORM = ("детей", "ребенка", "сына", "дочери", "малыша")
 # #112: the party. A number word names a person only in a few forms; «одна ночь», «один из
 # вариантов», «один и тот же отель» are not a party. A solo word needs a stop, a preposition

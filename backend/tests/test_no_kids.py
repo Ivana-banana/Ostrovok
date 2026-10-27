@@ -129,3 +129,30 @@ def test_question_with_no_kids_at_a_built_plan_changes_nothing(
 def test_children_named_after_a_bez_phrase_stay_in_the_plan(store):
     r = say(store, f"{FIRST}, без ночных перелетов двое детей 2 и 5 лет")
     assert r.plan.spec.children_ages == [2, 5]
+
+
+@pytest.mark.parametrize(
+    ("text", "ages"),
+    [
+        ("Сочи в ноябре, без детей не поедем", [7, 7]),
+        ("Сочи в ноябре, без ребенка не можем", [7]),
+        ("Сочи в ноябре, без сына не поеду", [7]),
+        ("Сочи в ноябре, мы без детей не ездим", [7, 7]),
+        ("Сочи в ноябре, без детей никуда", [7, 7]),
+        ("Сочи в ноябре, без дочери и сына не едем", [7, 7]),
+    ],
+)
+def test_double_negation_keeps_the_children(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
+
+
+def test_double_negation_does_not_remove_the_daughter(store):
+    first = say(store, "Сочи из Москвы с 3 по 8 декабря, двое взрослых и дочка 5 лет")
+    again = say(store, "без дочери не поедем", first.session_id)
+    assert len(again.plan.spec.children_ages) >= 1
+
+
+def test_double_negation_in_the_first_message_books_the_children(store):
+    r = say(store, f"{FIRST}, без детей не поедем")
+    assert r.plan.spec.children_ages == [7, 7]
