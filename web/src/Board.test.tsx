@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { Board } from "./Board";
+import { Board, Destinations, destinationsInChat } from "./Board";
 import type { ChatReply } from "./contracts";
 import { changeValue, localTime } from "./format";
 
@@ -12,8 +12,12 @@ const hotelBought = structuredClone(base);
 hotelBought.cart.items = [...base.cart.items, ...base.plan.offers.filter((o) => o.offer_id === "h1")];
 
 function render(r: ChatReply): Document {
+  // Before a destination is picked its cards live in the chat (App): render them as there.
   const html = renderToStaticMarkup(
-    <Board reply={r} busy={false} removed={[]} onSend={noop} onCart={noop} onCheckout={noop} />,
+    <>
+      {destinationsInChat(r.stage) && <Destinations plan={r.plan} stage={r.stage} busy={false} onSend={noop} />}
+      <Board reply={r} busy={false} removed={[]} onSend={noop} onCart={noop} onCheckout={noop} />
+    </>,
   );
   return new DOMParser().parseFromString(html, "text/html");
 }
@@ -163,6 +167,21 @@ suite("доска поездки", () => {
     expect(v).toContain("x1");
     expect(v).toContain("2 500 ₽");
     expect(v).toContain("имитирован");
+  });
+
+  it("#367: ваучер показывает гостя отдельной строкой или честную пометку", () => {
+    const r = structuredClone(base);
+    r.voucher = { ...r.voucher!, guest: { name: "Иван Петров", contact: "ivan@example.com" } };
+    const line = render(r).querySelector("[aria-label='Ваучер'] .guest-line")?.textContent;
+    expect(line).toBe("Гость: Иван Петров, ivan@example.com");
+    r.voucher = { ...r.voucher!, guest: { name: "Иван Петров", contact: "" } };
+    expect(render(r).querySelector(".guest-line")?.textContent).toBe("Гость: Иван Петров");
+    r.voucher = { ...r.voucher!, guest: null };
+    expect(render(r).querySelector(".guest-line")?.textContent).toBe(
+      "Гость: имя не введено (имитация)",
+    );
+    r.voucher = { ...r.voucher!, simulated: false };
+    expect(render(r).querySelector(".guest-line")?.textContent).toBe("Гость: имя не введено");
   });
 
   it("ваучер настоящей брони: статус вместо пометки об имитации (#376)", () => {

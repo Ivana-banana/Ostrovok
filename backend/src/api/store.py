@@ -1,6 +1,7 @@
 """Session store: session_id -> the last ChatReply as JSON (stdlib sqlite3).
 
-Table `booking_attempts` keeps the booking attempts of POST /api/checkout (#376): the attempt
+Table `booking_attempts` keeps the booking attempts of a session (#376): POST /api/checkout
+and the chat confirmation book through it (#382, cart.checkout_reply). The attempt
 is saved before the provider call and its voucher right after it, outside the session lock.
 A repeat after a failed session write finds the voucher here and does not book again.
 """

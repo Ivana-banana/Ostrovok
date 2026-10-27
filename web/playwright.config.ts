@@ -5,7 +5,8 @@ const PORT = Number(process.env.E2E_PORT ?? 8765);
 
 export default defineConfig({
   testDir: "e2e",
-  use: { baseURL: `http://localhost:${PORT}` },
+  // Reduced motion: no typing effect and no row animations, the steps do not wait for them.
+  use: { baseURL: `http://localhost:${PORT}`, reducedMotion: "reduce" },
   webServer: {
     command: `cd ../backend && uv run --frozen uvicorn api.main:app --port ${PORT}`,
     url: `http://localhost:${PORT}/api/health`,
