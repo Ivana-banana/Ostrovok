@@ -1,6 +1,6 @@
 """Facts for a question at a built plan (#186): weather, visas, «почему не <отель>».
 
-Every fact comes from the plan offers or the catalogue (fixtures.CATALOG); the model writes
+Every fact comes from the plan offers or the catalogue (catalog.json); the model writes
 none of it (TRAP-4). No data means «нет данных», never a guess. Each price is marked as
 synthetic (TRAP-7). A question changes neither the plan nor the cart: the caller only reads.
 """
@@ -8,6 +8,7 @@ synthetic (TRAP-7). A question changes neither the plan nor the cart: the caller
 import re
 from datetime import timedelta
 
+from api import catalog
 from api.contracts import HotelOffer, Plan, TransportOffer
 from api.extract import MONTH
 from api.fixtures import CATALOG, IN_MONTH
@@ -267,7 +268,7 @@ def _is_place(tail: str) -> bool:
         return True
     tokens = re.findall(r"\w+", tail.lower().replace("ё", "е"))
     stems = [st for c in CATALOG.values() for st in c["stems"]]
-    countries = {p.get("country", "") for p in places()} | {c["country"] for c in CATALOG.values()}
+    countries = {p.get("country", "") for p in places()}
     words = [w for c in countries for w in _words(c, 3)]
     return any(t.startswith(st) for t in tokens for st in stems) or any(
         _hit(tokens, w, loose=True) is not None for w in words
@@ -336,29 +337,29 @@ def without_plan_fields(found: dict, plan: Plan) -> dict:
 
 
 def weather_fact(plan: Plan, low: str = "") -> str:
-    """The climate of the trip month from the catalogue; the catalogue has November only."""
+    """The climate of the trip month from the catalogue (catalog.json, or the geocoder place)."""
     month = _month(plan)
     when = IN_MONTH[month - 1] if month else ""
     lines = []
     for city in _places(plan):
-        row = CATALOG.get(city)
-        if row is None:
+        place = resolve_place(city)
+        if place is None:
             lines.append(f"Климата для {city} в данных нет — {NO_DATA}.")
             continue
-        air, water = row["nov"]
-        nov = f"воздух {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
-        if month == 11:
-            lines.append(f"{city} в ноябре: {nov} — оценка по каталогу, не прогноз.")
-        else:
-            lines.append(
-                f"Климата {city} {when or 'вашего месяца'} в данных нет — {NO_DATA}. "
-                f"В каталоге только ноябрь: {nov} (оценка); {when or 'в ваш месяц'} "
-                "может быть иначе."
+        air, water = catalog.month_climate(place, month) if month else (None, None)
+        if air is None:
+            lines.append(f"Климата {city} {when or 'вашего месяца'} в данных нет — {NO_DATA}.")
+            continue
+        fact = f"воздух {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
+        rain = place["climate"]["rain"][month - 1]
+        if RAIN_RE.search(low):
+            fact += (
+                f", осадки {rain:g} мм за месяц" if rain is not None else ", осадков в данных нет"
             )
+        lines.append(f"{city} {when}: {fact} — оценка по каталогу, не прогноз.")
     if not lines:
         return f"Направление не выбрано — климата {NO_DATA}."
-    rain = "Данных об осадках (дождь, снег) нет. " if RAIN_RE.search(low) else ""
-    return "\n".join(lines) + "\n" + rain + "Прогноза погоды в данных нет."
+    return "\n".join(lines) + "\nПрогноза погоды в данных нет."
 
 
 def visa_fact() -> str:

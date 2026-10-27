@@ -7,6 +7,7 @@ the same `found`; with_llm merges it: rules first, the LLM fills what rules miss
 Invalid values (31 ноября, 0 ночей) are skipped with a note, never an exception.
 """
 
+import functools
 import re
 from datetime import date, timedelta
 
@@ -109,7 +110,8 @@ def _two_word_places() -> None:
 
 
 _two_word_places()
-NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой"}
+NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой",
+              "европа", "европе", "европу", "европы"}  # fmt: skip
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
 # An unknown capitalized word counts only in main's narrow pattern: «Ухта, 3 ночи»,
 # «Калуга в мае», «Тула на 3 дня». Even then the lists below veto ordinary first words.
@@ -316,6 +318,9 @@ WISHES = [
     ("красиво", r"красив"),
     ("романтика", r"романт"),
     ("командировка", r"командиров"),
+    # #20: region words narrow the inspiration (api/inspire.py); «Европа» is no destination
+    ("Европа", r"\bевроп[аеуы]\b"),
+    ("юг", r"\bна\s+юг\b"),
 ]
 PRIORITY_RE = re.compile(r"\b(?:важн\w*|главн\w*|приоритет\w*|в первую очередь|прежде всего)")
 PRIORITIES = [
@@ -361,6 +366,12 @@ def _place_at(text: str, t: str, pos: int) -> str | None:
     )
 
 
+@functools.cache
+def _stem_re(stem: str, short: bool) -> re.Pattern:
+    # 445 places overflow the re module cache (512): compile each stem once (#232)
+    return re.compile(re.escape(stem) + (CASES_SHORT if short else CASES))
+
+
 def _known(word: str) -> str | None:
     """«Иркутске», «иркутска» -> «Иркутск» (TRAP-3): one-word names of places.json, any case."""
     w = word.lower().replace("ё", "е")
@@ -370,7 +381,7 @@ def _known(word: str) -> str | None:
             continue
         stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
         short = len(stem) <= 3
-        if w == n or re.fullmatch(re.escape(stem) + (CASES_SHORT if short else CASES), w):
+        if w == n or _stem_re(stem, short).fullmatch(w):
             if short and w != n and w in NOT_SHORT_FORMS:
                 continue
             return p["name"]
@@ -456,7 +467,7 @@ COUNTRY_STEMS = {"Египет": "египе?т", "Таиланд": "т(?:аи|�
 
 
 def _country_res() -> list[tuple[str, re.Pattern]]:
-    names = {p["country"] for p in places()} | {c["country"] for c in CATALOG.values()}
+    names = {p["country"] for p in places()}
     out = []
     for name in sorted(names):
         if name in COUNTRY_STEMS:
@@ -680,7 +691,7 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
 def is_excluded(name: str, excluded: list[str]) -> bool:
     """The place, or the country of the place, is refused («Турция» refuses Анталия)."""
     place = resolve_place(name)
-    country = place["country"] if place else CATALOG.get(name, {}).get("country")
+    country = place["country"] if place else None
     return name in excluded or country in excluded or bool(place and place["name"] in excluded)
 
 
