@@ -827,3 +827,17 @@ def test_trap_3_transit_point_is_no_destination():
 def test_trap_3_c15_full_turn_has_no_missing_catalogue_reply(tmp_path):
     r = chat(ChatRequest(session_id=None, message=C15), SessionStore(tmp_path / "s.db"))
     assert "нет в каталоге" not in r.reply.lower(), r.reply
+
+
+@pytest.mark.parametrize(
+    ("text", "dests"),
+    [("из Москвы в Казань, потом через Нижний в Сочи", ["Казань", "Нижний Новгород", "Сочи"]),
+     ("хочу проехать через Карелию и Мурманск", ["Карелия", "Мурманск"]),
+     ("из Москвы через Казань в Екатеринбург, по 3 ночи в каждом", ["Казань", "Екатеринбург"]),
+     ("маршрут через Ярославль, Кострому и Плёс в июле", ["Ярославль"]),
+     ("из Москвы в Санкт-Петербург через Великий Новгород на 5 дней",
+      ["Санкт-Петербург", "Великий Новгород"])],
+)  # fmt: skip
+def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
+    found, _ = extract(text)
+    assert found["destinations"] == dests

@@ -809,7 +809,29 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
     return sides
 
 
-TRANSIT = re.compile(r"(?:через|с\s+пересадкой\s+(?:в|во|на))\s+$")
+TRANSFER = re.compile(r"с\s+пересадкой\s+(?:в|во|на)\s+$")
+VIA = re.compile(r"через\s+$")
+
+
+def _transit_dropped(t: str, hits: list) -> list:
+    """Hits without transit points (#274): the place after «с пересадкой в», or after «через» when
+    it has its own airport that serves another named place («через Минводы» to Кисловодск, MRV).
+    «через Нижний в Сочи» is a route stop and stays. The last place is never dropped."""
+    def iata(name: str) -> str | None:
+        p = resolve_place(name)
+        return (p or {}).get("airport", {}).get("iata")
+
+    out = []
+    for h in hits:
+        before = t[: h[0]]
+        own = ((resolve_place(h[1]) or {}).get("airport") or {}).get("km", 99) <= 25  # own airport
+        hub = VIA.search(before) and own and iata(h[1]) and any(
+            o[1] != h[1] and not VIA.search(t[: o[0]]) and iata(o[1]) == iata(h[1]) for o in hits
+        )
+        if TRANSFER.search(before) or hub:
+            continue
+        out.append(h)
+    return out or hits
 
 
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
@@ -857,7 +879,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     elif not hits and not has_destination:
         _vetoed_first_word(text, t, notes)
     # A transit point is no destination (#274): «через Минводы», «с пересадкой в Москве».
-    hits = [h for h in hits if not TRANSIT.search(t[: h[0]])]
+    hits = _transit_dropped(t, hits)
     # Mentions for the negation: the places above and the bare countries («Турцию и Египет…»).
     # The refused name is the country when the word is one: «египет» is a hit of Хургада.
     mentions = {s: (e, name, name) for s, name, e in hits}
