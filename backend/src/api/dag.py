@@ -22,7 +22,7 @@ from datetime import date, timedelta
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
 from api.extract import EDIT_VERB, MONTH_NAMES, NUM, NUMS
 from api.fixtures import find_offers, rank
-from api.optimizer import bundles, order_tariffs, pick_hotel
+from api.optimizer import BEST_LABELS, bundles, order_tariffs, pick_hotel
 from api.timeline import build_timeline
 
 NODES = ("destination", "offers", "ranking", "timeline", "cart")
@@ -318,10 +318,6 @@ def _same_hotel(h: HotelOffer, offers: list[Offer]) -> HotelOffer | None:
         return group[0] if group else None
     same = (h.meal, h.cancellation.refundable)
     return next((o for o in group if (o.meal, o.cancellation.refundable) == same), group[0])
-
-
-# Labels of the best bundle in optimizer.optimize; a test keeps them in step.
-BEST_LABELS = ("лучший по вашим приоритетам", "ближе всего к условиям")
 
 
 def _ranked_hotel(plan: Plan) -> HotelOffer | None:
