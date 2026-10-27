@@ -501,8 +501,8 @@ def _span_h(delta: timedelta) -> str:
 # tests/test_rail_time.py within ±20 %; the rest are team estimates (D-028). Prices do not
 # depend on the speed.
 # A day train comes by DAY_ARRIVE_BY (no arrival at night, TRAP-5). Back it leaves at DAY_BACK,
-# earlier when it would come later, never before DAY_BACK_FROM (check-out at 12:00 and the way
-# to the station); a longer ride back goes by the overnight train only.
+# earlier when it would come later, never before _back_from (check-out and the way to the
+# station, #370); a longer ride back goes by the overnight train only.
 RAIL_DETOUR = 1.2
 DAY_TRAIN_KMH = 75
 FAST_LINES = {
@@ -511,12 +511,33 @@ FAST_LINES = {
     frozenset(("Москва", "Владимир")): 1.8,
 }
 FAST_END_KM = 60
-DAY_OUT, DAY_BACK, DAY_BACK_FROM, DAY_ARRIVE_BY = (
-    time(7, 40),
-    time(16, 20),
-    time(13, 0),
-    time(23, 0),
-)
+DAY_OUT, DAY_BACK, DAY_ARRIVE_BY = time(7, 40), time(16, 20), time(23, 0)
+# #370 (TRAP-5): a leg back leaves no earlier than the check-out, the transfer from the
+# farthest hotel to the hub and the margin at the hub, so its transfer never starts before the
+# check-out. CHECK_OUT is HotelOffer.check_out; FAR_HOTEL_KM the farthest synthetic hotel
+# (SYNTH_KM); HUB_MARGIN as transfer_offers. Times of the transfer: _ride.
+CHECK_OUT = time(12, 0)
+FAR_HOTEL_KM = max(hi for _, hi in SYNTH_KM.values())
+HUB_MARGIN = {"flight": timedelta(minutes=120), "train": timedelta(minutes=40)}
+
+
+def _hub_road(hub_km: float, hotel_km: float) -> float:
+    """Road between a hotel and the airport or the station, km (the hub is out of the centre)."""
+    return round(hub_km + 0.6 * hotel_km, 1)
+
+
+def _ride(road: float) -> timedelta:
+    """A transfer ride: 10 minutes to board and 35 km/h."""
+    return _minutes((10 + road / 35 * 60) / 60)
+
+
+def _back_from(place: dict, mode: Mode, day: date) -> datetime:
+    """The earliest departure back from `place` on `day`: check-out, ride, margin; 5 min up."""
+    hub_km = place["airport_km"] if mode == "flight" else place["station_km"]
+    out = datetime.combine(day, CHECK_OUT, ZoneInfo(place["tz"]))
+    at = _shift(out, _ride(_hub_road(hub_km, FAR_HOTEL_KM)) + HUB_MARGIN[mode])
+    up = (-at.minute) % 5
+    return _shift(at, timedelta(minutes=up)).replace(second=0, microsecond=0)
 
 
 def _ends(p: dict) -> list[tuple[str, float]]:
@@ -568,8 +589,13 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
             depart = _shift(datetime.combine(there, slot, tb), -_minutes(hours))
             price = fare("flight", base * k, there, slot)
             legs.append(_leg(spec, "flight", a, b, depart, hours, price, changes))
+        earliest, taken = _back_from(b, "flight", back), set()
         for slot, k in BACK_FLIGHTS:
-            depart = datetime.combine(back, slot, tb)
+            # A far airport (#370): the slot moves after the check-out and the transfer.
+            depart = max(datetime.combine(back, slot, tb), earliest)
+            if depart in taken:
+                continue
+            taken.add(depart)
             price = fare("flight", base * k, back, slot)
             legs.append(_leg(spec, "flight", b, a, depart, hours, price, changes))
     route = km * RAIL_DETOUR
@@ -577,13 +603,14 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
         # (hours, fare base, start there, start back or None, fare slot back)
         trains: list[tuple[float, float, datetime, datetime | None, time]] = []
         day = _day_train_hours(a, b, route)
+        earliest = _back_from(b, "train", back)
         if day is not None:  # a day train comes by DAY_ARRIVE_BY both ways (#343, TRAP-5)
             out = datetime.combine(there, DAY_OUT, ta)
             by = datetime.combine(back, DAY_ARRIVE_BY, ta)
             latest = _shift(by, -_minutes(day)).astimezone(tb)
             latest = latest.replace(minute=latest.minute - latest.minute % 5)
-            ret = min(datetime.combine(back, DAY_BACK, tb), latest)
-            if ret < datetime.combine(back, DAY_BACK_FROM, tb):
+            ret = min(max(datetime.combine(back, DAY_BACK, tb), earliest), latest)
+            if ret < earliest:
                 ret = None
             if _shift(out, _minutes(day)).astimezone(tb) <= datetime.combine(
                 there, DAY_ARRIVE_BY, tb
@@ -592,9 +619,8 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
         if route >= 600:  # overnight train: arrives in the morning
             hours, base = route / 70, 1100 + 3.0 * route
             out = _shift(datetime.combine(there, time(7, 10), tb), -_minutes(hours))
-            trains.append(
-                (hours, base, out, datetime.combine(back, time(21, 40), tb), time(21, 40))
-            )
+            ret = max(datetime.combine(back, time(21, 40), tb), earliest)
+            trains.append((hours, base, out, ret, time(21, 40)))
         for hours, base, out, ret, slot in trains:
             legs.append(
                 _leg(spec, "train", a, b, out, hours, fare("train", base, there, out.time()))
@@ -638,20 +664,20 @@ def transfer_offers(
         hub = "аэропорт" if flight else "вокзал"
         if flight and place.get("airport"):
             hub += " " + place["airport"]["iata"]
+        # C10 (#364): the road to the airport crosses water by a ferry (catalog «ferry»).
+        ferry = ", дорога и паром" if flight and (place.get("airport") or {}).get("ferry") else ""
         for h in hotels:
-            road = round(hub_km + 0.6 * (h.distance_center_km or 0), 1)
-            ride = _minutes((10 + road / 35 * 60) / 60)
+            road = _hub_road(hub_km, h.distance_center_km or 0)
+            ride = _ride(road)
             if leg.destination == place["name"]:
                 start = _shift(
                     leg.arrive_at.astimezone(tz), timedelta(minutes=40 if flight else 15)
                 )
-                title = f"Трансфер: {hub} → {h.title}, ≈{road:g} км"
+                title = f"Трансфер: {hub} → {h.title}, ≈{road:g} км{ferry}"
             else:
-                end = _shift(
-                    leg.depart_at.astimezone(tz), -timedelta(minutes=120 if flight else 40)
-                )
+                end = _shift(leg.depart_at.astimezone(tz), -HUB_MARGIN[leg.mode])
                 start = _shift(end, -ride)
-                title = f"Трансфер: {h.title} → {hub}, ≈{road:g} км"
+                title = f"Трансфер: {h.title} → {hub}, ≈{road:g} км{ferry}"
             out.append(
                 TransferOffer(
                     offer_id=transfer_id(h.offer_id, leg.offer_id),

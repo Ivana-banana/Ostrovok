@@ -17,7 +17,7 @@ same path runs on rules (TRAP-1).
 
 import re
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -71,6 +71,7 @@ from api.extract import (
     PLACE_RES,
     SEASONS,
     _known,
+    asks_booking,
     asks_stay,
     children_uncounted,
     excluded_places,
@@ -86,7 +87,7 @@ from api.extract import (
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
-from api.inspire import ROAD_LINE, suggest_destinations
+from api.inspire import ROAD_LINE, suggest_destinations, unchecked_wishes
 from api.offers import find_offers, resolve_place, road_nights
 from api.optimizer import (
     _hotel_why,
@@ -101,6 +102,7 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
+from api.timeline import VERBS
 
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
@@ -272,9 +274,12 @@ ROUTE_RE = re.compile(
     r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
 )
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
-# #302: from this far (straight line from DEFAULT_ORIGIN) the road is a large part of a whole-trip
-# budget, so an unnamed origin is asked. Team estimate: Иркутск 4200 km asks, Анталия 2160 not.
-FAR_KM = 3000
+# #351: an unnamed origin is asked when the fit of a whole-trip budget depends on it: the round
+# trip from DEFAULT_ORIGIN costs ROAD_GAP of the budget more than from the cheapest big hub, or
+# takes over ROAD_SHARE of it alone. Sums from the offers (TRAP-4). Team estimates (README).
+ROAD_GAP = 0.15
+ROAD_SHARE = 0.5
+BIG_HUBS = 10  # the hubs by population compared with DEFAULT_ORIGIN
 ORIGIN_OPTIONS = ("Москвы", "Санкт-Петербурга", "Екатеринбурга", "Новосибирска")
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
 STAY_RE = re.compile(
@@ -469,17 +474,112 @@ def party_question(spec: TripSpec) -> list[Question]:
     return [Question(text="Кто едет с ребёнком — сколько взрослых?", options=options)]
 
 
+def _round_trip(probe: TripSpec, origin: str) -> int | None:
+    """The cheapest round trip origin -> destination -> origin for the party, from the offers."""
+    spec = probe.model_copy(update={"origin": origin})
+    legs = [o for o in find_offers(spec, spec.destinations[0]) if isinstance(o, TransportOffer)]
+    there = _cheapest([o for o in legs if o.origin == origin])
+    back = _cheapest([o for o in legs if o.destination == origin])
+    return there.price_rub + back.price_rub if there and back else None
+
+
+ADJ_GENITIVE = (("кий", "кого"), ("ний", "него"), ("ий", "ого"), ("ый", "ого"), ("ой", "ого"))
+
+
+def _adj_genitive(word: str) -> str | None:
+    return next((word[: -len(a)] + g for a, g in ADJ_GENITIVE if word.endswith(a)), None)
+
+
+def _noun_genitive(word: str) -> str | None:
+    if word.endswith("ль"):
+        return word[:-1] + "я"  # «Ярославль», «Ставрополь»
+    if word.endswith("ь"):
+        return word[:-1] + "и"  # «Казань», «Пермь»
+    if word.endswith("ы"):
+        return None  # «Чебоксары»: a plural, the rule does not decline it
+    if word.endswith("а"):
+        return word[:-1] + ("и" if word[-2] in "гкхжчшщ" else "ы")
+    if word[-1] in "бвгджзклмнпрстфхцчшщ":
+        return word + "а"
+    return word  # «Сочи», «Улан-Удэ»: not declined
+
+
+def _genitive(name: str) -> str | None:
+    """«Новосибирск» -> «Новосибирска», «Ростов-на-Дону» -> «Ростова-на-Дону», «Нижний Новгород»
+    -> «Нижнего Новгорода», «Санкт-Петербург» -> «Санкт-Петербурга» for the chip «Из …». None
+    when the rules would not read the form back as this city (the chip is then left out)."""
+    if "-на-" in name:
+        head, sep, tail = name.partition("-на-")
+        parts = [_noun_genitive(head), sep + tail]
+        form = None if None in parts else "".join(parts)
+    elif " " in name:
+        *adjs, noun = name.split()
+        parts = [*map(_adj_genitive, adjs), _noun_genitive(noun)]
+        form = None if None in parts else " ".join(parts)  # «Набережные Челны»: None
+    elif "-" in name:
+        first, last = name.rsplit("-", 1)
+        if (adj := _adj_genitive(last)) and (noun := _noun_genitive(first)):
+            form = f"{noun}-{adj}"  # «Петропавловска-Камчатского»
+        else:
+            form = (noun := _noun_genitive(last)) and f"{first}-{noun}"  # «Санкт-Петербурга»
+    else:
+        form = _noun_genitive(name)
+    if not form:
+        return None
+    origin = extract(f"из {form}", has_destination=True)[0].get("origin")
+    return form if origin and catalog.origin_hub(origin)[0]["name"] == name else None
+
+
+def _from(name: str) -> str:
+    """«из Новосибирска»; «из города X» when the rule has no form for X."""
+    return f"из {gen}" if (gen := _genitive(name)) else f"из города {name}"
+
+
+def _share(rub: int, budget: int) -> str:
+    return f"{round(100 * rub / budget)} %"
+
+
 def far_origin_question(spec: TripSpec) -> list[Question]:
-    """F15 (#302): no origin, a far place and a budget for the whole trip. The road from the
-    default origin is a large part of that budget, so the origin is asked, not assumed."""
+    """#302, #351: no origin and a budget for the whole trip. The origin is asked when the road
+    from DEFAULT_ORIGIN (a round trip for the party) costs over ROAD_GAP of the budget more than
+    from the cheapest big hub, or over ROAD_SHARE of the budget alone. The question names what
+    is measured: the road sums (offers, TRAP-4), their difference and its share of the budget.
+    It claims nothing about the whole trip. Otherwise the origin is an assumption."""
     if spec.origin or spec.budget_rub is None or not spec.destinations:
         return []
-    start, place = catalog.resolve(DEFAULT_ORIGIN), catalog.resolve(spec.destinations[0])
-    if not (start and place) or catalog.km_between(start, place) < FAR_KM:
+    probe = assume(spec)  # the dates and the party the plan would have
+    home = _round_trip(probe, DEFAULT_ORIGIN)
+    if home is None:
         return []
+    hubs = sorted(catalog.hubs(), key=lambda h: -h["pop"])
+    names = [h["name"] for h in hubs if h["name"] != DEFAULT_ORIGIN][:BIG_HUBS]
+    if place := catalog.resolve(spec.destinations[0]):
+        # The place itself is no origin to compare: «Казань» from Казань has no road. The hub
+        # nearest the place is not added either: its road is always small (Чебоксары — Казань
+        # 4 900 ₽), so the gap would measure the distance to the nearest city, not the origin.
+        names = [n for n in names if n != place["name"]]
+    sums = [(r, n) for n in dict.fromkeys(names) if (r := _round_trip(probe, n)) is not None]
+    best = min(sums, default=None)
+    budget = spec.budget_rub
+    gap = best is not None and home - best[0] > ROAD_GAP * budget
+    if not (gap or home > ROAD_SHARE * budget):
+        return []
+    text = f"Откуда начинается поездка? Из Москвы дорога туда и обратно ≈ {_rub(home)}"
+    if best and best[0] < home:
+        diff = home - best[0]
+        text += (
+            f", {_from(best[1])} ≈ {_rub(best[0])} — разница ≈ {_rub(diff)}, "
+            f"это {_share(diff, budget)} бюджета."
+        )
+    else:
+        text += "."
+    if home > ROAD_SHARE * budget:
+        text += f" Дорога из Москвы — {_share(home, budget)} бюджета {_rub(budget)}."
+    text += " Если города нет в кнопках, напишите «из …»."
     options = [f"Из {w}" for w in ORIGIN_OPTIONS]
-    text = "Откуда вы едете? От города вылета зависит цена дороги, а она в вашем бюджете."
-    return [Question(text=text + " Если города нет в кнопках, напишите «из …».", options=options)]
+    if best and (gen := _genitive(best[1])) and f"Из {gen}" not in options:
+        options.insert(1, f"Из {gen}")
+    return [Question(text=text, options=options)]
 
 
 def children_question(message: str, spec: TripSpec) -> list[Question]:
@@ -495,13 +595,16 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
 
     A place or a wish is enough to move on: the rest becomes assumptions named in the reply.
     Exceptions ask one question, the most important first (#302): the city of a hotel request
-    (F14), the origin of a far trip with a whole budget (F15), the children without a number
-    (F25), then the adults next to a child (#112). The guest count sets the price and the
+    (F14) or the place of a booking (#351); the origin when the fit of a whole budget depends on
+    it (F15, far_origin_question); the children without a number (F25); the adults next to a
+    child (#112). The guest count sets the price and the
     booking, so it is asked, not assumed. Without a place the adults question only goes next to
     the options (party_question), it never replaces them.
     """
     if not (spec.destinations or spec.wishes) and asks_stay(message):
         return [Question(text="В каком городе нужна гостиница?", options=[])]
+    if not (spec.destinations or spec.wishes) and asks_booking(message):
+        return [Question(text="Куда хотите поехать? Напишите город.", options=[])]  # #351: tickets
     party = party_question(spec) if spec.destinations else []
     if spec.destinations:
         first = far_origin_question(spec) or children_question(message, spec) or party
@@ -1258,6 +1361,37 @@ def _question_fact(old: ChatReply, low: str) -> str:
     return ""
 
 
+# #369: «сколько это на 1 человека?», «покажи цену на человека»: a price per head from the plan
+# total; the party stays. «Есть номер на 2 человека?» asks about a room, not about the party.
+PER_HEAD_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
+PER_HEAD_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж\w*\s+цен")
+ROOM_FOR_RE = re.compile(r"\bномер\w*\s+на\s+(?:\d{1,2}|двоих|троих|четверых)\b")
+
+
+def _per_head_reply(old: ChatReply, low: str) -> str:
+    """The reply to a price-per-head question, from the plan only (TRAP-4); "" if it is none."""
+    spec = old.plan.spec
+    people = spec.adults + len(spec.children_ages)
+    if PER_HEAD_RE.search(low) and PER_HEAD_CUE_RE.search(low):
+        total = old.cart.total_rub or sum(
+            o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
+        )
+        if not total:
+            return f"Состав не меняю: {people} чел. Итог пока не посчитан, цену на человека назвать не могу."
+        return (
+            f"Состав не меняю: {people} чел. Итого {_rub(total)} (синтетика), "
+            f"{'в среднем ' if spec.children_ages else ''}на человека около "
+            f"{_rub(round(total / people))} (синтетика)"
+            + (", дети по детскому тарифу." if spec.children_ages else ".")
+        )
+    if ROOM_FOR_RE.search(low) and "?" in low:
+        return (
+            f"Состав не меняю: в плане {people} чел. Чтобы пересчитать на другой состав, "
+            "напишите, кто едет: например, «нас двое»."
+        )
+    return ""
+
+
 def _question_answer(
     old: ChatReply, low: str = "", message: str = "", found: dict | None = None
 ) -> str:
@@ -1284,7 +1418,7 @@ def _question_answer(
     )
     if old.plan.timeline:  # times come from the timeline tool, never from the model
         cart += "\nПлан поездки:\n" + "\n".join(
-            f"{e.at:%d.%m %H:%M} — {e.title}" for e in old.plan.timeline
+            f"{_at(e.at)} — {e.title}" for e in old.plan.timeline
         )
     edit = "Чтобы изменить поездку, напишите, что поменять: например, «хотим с бассейном»."
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
@@ -1323,6 +1457,12 @@ def _text_clarify(questions: list[Question]) -> str:
     return "Чтобы подобрать поездку, уточню: " + " ".join(q.text for q in questions)
 
 
+def _unchecked_lines(spec: TripSpec) -> list[str]:
+    """#361: a wish with no data is named in the reply, not dropped."""
+    unchecked = unchecked_wishes(spec)
+    return [f"Не проверяю по данным: {', '.join(unchecked)}."] if unchecked else []
+
+
 def _text_inspire(plan: Plan) -> str:
     spec = plan.spec
     guests = spec.adults + len(spec.children_ages)
@@ -1343,6 +1483,7 @@ def _text_inspire(plan: Plan) -> str:
         if d.violates:
             line += f" Нарушает требования: {'; '.join(d.violates)}."
         lines.append(line)
+    lines += _unchecked_lines(spec)
     return "\n".join(lines + _tail(spec, "Напишите номер или название направления."))
 
 
@@ -1394,7 +1535,12 @@ def _text_compare(plan: Plan) -> str:
         lines.append("Транспорт:")
     for i, o in enumerate(legs, 1):
         no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
-        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}{no_pet}")
+        # C14 (#364, TRAP-5): local times with their zones, the verbs of the mode and the
+        # duration; the start time leaves the title so it is not shown twice.
+        start, end = (v.lower() for v in VERBS[o.mode])
+        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
+        when = f"{start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)}"
+        lines.append(f"Рейс {i}. {title} — {_rub(o.price_rub)}{no_pet} · {when}")
     chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
     lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:
@@ -1402,6 +1548,7 @@ def _text_compare(plan: Plan) -> str:
         lines += [f"Риск: {r}." for r in e.risks]
     for c in plan.changes:
         lines.append(f"Изменено {c.what}: {c.before} → {c.after}.")
+    lines += _unchecked_lines(spec)
     return "\n".join(
         lines
         + _tail(
@@ -1412,10 +1559,25 @@ def _text_compare(plan: Plan) -> str:
     )
 
 
+def _zone(dt: datetime) -> str:
+    """«UTC+10», «UTC+5:30», «UTC-3»: the offset of a local time from the tools (TRAP-5)."""
+    off = dt.utcoffset() or timedelta()
+    minutes = int(off.total_seconds() // 60)
+    sign, minutes = ("+" if minutes >= 0 else "-"), abs(minutes)
+    h, m = divmod(minutes, 60)
+    return f"UTC{sign}{h}" + (f":{m:02d}" if m else "")
+
+
+def _at(dt: datetime) -> str:
+    """A local time of a leg or an event with its zone (C14, #364)."""
+    return f"{dt:%d.%m %H:%M} ({_zone(dt)})"
+
+
 def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
-    lines += [f"{e.at:%d.%m %H:%M} — {e.title}" for e in plan.timeline]
-    lines += [f"Внимание: {i.text}." for i in plan.issues]
+    lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
+    lines += [f"Внимание: {i.text.rstrip('.')}." for i in plan.issues]
+    lines += _unchecked_lines(plan.spec)
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
 
@@ -1606,6 +1768,14 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return old.model_copy(
             update={"reply": _question_answer(old, low), "questions": [], "llm": False}
         )
+    if (
+        prev
+        and old.stage in PLAN3
+        and not rules_found  # an edit in the same message is a rebuild, as before
+        and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
+        and (reply := _per_head_reply(old, low))
+    ):
+        return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
         return drop_transfers(old)
     # #186, #216: «какая погода в декабре?» at a December plan names no new field: still a

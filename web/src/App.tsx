@@ -201,7 +201,7 @@ export function App() {
       const voucher = await checkout({ session_id: id, confirm_total_rub: reply.cart.total_rub });
       const fresh = await getSession(id).catch(() => null);
       setReply(fresh?.voucher ? fresh : { ...reply, stage: "booked", voucher });
-      const text = `Бронь ${voucher.booking_id} оформлена. Оплата имитирована.`;
+      const text = `Бронь ${voucher.booking_id} оформлена. ${voucher.simulated ? "Оплата имитирована." : "Оплата принята."}`;
       update({ ...ui, messages: [...ui.messages, { role: "agent", text }] });
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
