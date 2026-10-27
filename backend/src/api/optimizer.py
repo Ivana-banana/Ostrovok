@@ -80,6 +80,9 @@ BEST_LABELS = ("лучший по вашим приоритетам", "ближ�
 # Team estimate without a source (D-009): a leg longer than one night on the road does not go
 # first while a trip without such a leg exists.
 LONG_LEG_H = 13.0
+# #343: «есть быстрее» only for a real saving: at least FASTER_H and FASTER_SHARE of the road
+# (team estimate, D-028). 2.6 h against 2.5 h is no reason to pay more.
+FASTER_H, FASTER_SHARE = 1.0, 0.15
 
 
 class Ranked(NamedTuple):
@@ -453,7 +456,8 @@ def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
     if _less(h.rating, top.hotel.rating):
         out.append(f"рейтинг ниже, чем у варианта {top.hotel.title} ({top.hotel.rating})")
     fast = min(pool, key=lambda x: (x.hours, x.total, x.key))
-    if fast.hours < t.hours:
+    saved = t.hours - fast.hours
+    if saved >= FASTER_H and saved >= FASTER_SHARE * t.hours:
         out.append(
             f"дорога {_h(t.hours)}, есть быстрее: {_h(fast.hours)}, {_diff(fast.total - t.total)}"
         )

@@ -151,8 +151,19 @@ ADDRESS_NEXT = re.compile(
 # A length after a comma behind an unknown first word in a plan: «Ухта, 3 ночи». The form
 # «<word> на 3 дня» is a rebuild command («Перенеси на 2 дня позже»), never a note.
 LENGTH_NEXT = re.compile(r"\s*,\s*\d+\s*(?:ноч|дн|недел)")
+# #337: an age adjective («годовалым ребёнком»), twins and triplets (a fixed count).
+AGE_ADJ = {
+    "полуторагодовал": 1, "годовал": 1, "двухлетн": 2, "двухгодовал": 2, "трехлетн": 3,
+    "трёхлетн": 3, "четырехлетн": 4, "четырёхлетн": 4, "пятилетн": 5, "шестилетн": 6,
+    "семилетн": 7, "восьмилетн": 8, "девятилетн": 9, "десятилетн": 10,
+}  # fmt: skip
+TWINS = {"близнец": 2, "близняшк": 2, "двойняшк": 2, "двойн": 2, "тройняшк": 3, "тройн": 3}
+# Nouns only: «двойной номер», «тройная кровать» are adjectives, not children.
+TWIN_RE = r"(?:близнец|близняшк|двойняшк|тройняшк)\w*|(?:двойн|тройн)(?:я|и|ей|ю|ями)(?!\w)"
 CHILD_RE = re.compile(
-    rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*|внук\w*|внуч\w*)"
+    rf"\b(?:{NUM}\s+)?(?:(?P<adj>{'|'.join(AGE_ADJ)})\w*\s+)?"
+    rf"(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*|внук\w*|внуч\w*"
+    rf"|(?P<twin>{TWIN_RE}))"
 )
 # #195: «без детей», «без маленьких детей», «без мужа и детей», «без двоих детей» say there
 # are no children. Between «без» and the child stand only «X и» or one word in -их/-ых
@@ -248,7 +259,44 @@ AGES_BARE_RE = re.compile(
     r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
     r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
 )
-AGES_RE = re.compile(r"\D{0,12}?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)")
+# #337: every number may carry its own unit: «1 год и 4 года», «6 месяцев и 3 года».
+AGES_RE = re.compile(
+    r"\D{0,12}?((?:\d{1,2}(?:\s*(?:лет|год|мес)\w*)?\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)"
+)
+# «с детьми 5 лет и 8»: the first number has a unit, the last has none.
+AGES_TAIL_RE = re.compile(
+    r"\D{0,12}?(\d{1,2}\s*(лет|год|мес)\w*\s*(?:,|и)\s*\d{1,2})(?![\d.,]*\d)(?!\s*(?:лет|год|мес))(?=\s*(?:[.,;!?)]|$))"
+    r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
+)
+# «сын 10.» / «дочь 3,»: one bare number closing the clause is the age of a single child.
+AGE_ONE_RE = re.compile(
+    r"\s*(\d{1,2})(?![\d.,]*\d)(?=\s*(?:[.,;!?)]|$))"
+    r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
+)
+AGE_ITEM_RE = re.compile(r"(\d{1,2})(?:\s*(лет|год|мес))?")
+
+
+def _ages_of(a: re.Match, one_child: bool = False) -> list[int]:
+    """Ages of a matched list; a number without its own unit takes the last one.
+
+    one_child: «1 год и 8 месяцев» after a single child word is one age in years."""
+    ages = []
+    prev = ""
+    for n, unit in AGE_ITEM_RE.findall(a.group(1)):
+        unit = unit or a.group(2)
+        if one_child and prev in ("лет", "год") and unit == "мес":
+            continue
+        prev = unit
+        if unit == "мес":
+            if int(n) <= 23:
+                ages.append(0)
+        elif int(n) <= 17:
+            ages.append(int(n))
+    return ages
+
+
 # #193: «дети с нами — двое, 5 и 8 лет»: a dash or a colon, an optional count word, the ages.
 AGES_LIST_RE = re.compile(
     r"\s*(?:с\s+нами\s*)?[—–:-]\s*(?:[а-я]+\s*,\s*)?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)"
@@ -331,7 +379,7 @@ FLIGHT_FEAR_RE = re.compile(r"аэрофоб|бо(?:юсь|имся|ится)\s+
 # «не тепло», «не люблю жару» and «тёплая куртка» are no wish for the warm.
 WARM = (
     r"\b(?:тепл(?!оход|\w*\s+(?:мор|одежд|куртк|вещ|одет|носк|шапк|плед))\w*"
-    r"|жарк\w*|жар[аеуы]\b|погре(?:ться|тся|ем\w*)(?!\s+(?:в\s+(?:бан|саун)|у\s+(?:камин|костр|печ)))|\bwarm\b|\bhot\b)"
+    r"|жарк\w*|жар[аеуы]\b|погре(?:ться|тся|ем\w*+)(?!\s+(?:в\s+(?:бан|саун)|у\s+(?:камин|костр|печ)))|\bwarm\b|\bhot\b)"
 )
 # The warm is refused or only asked about: «не люблю жару», «жару не люблю», «жарко не надо»,
 # «будет ли тепло?».
@@ -1469,17 +1517,40 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
         ):
             no_kids = True  # «без детей»: nobody is added (#195)
             continue
-        a = AGES_RE.match(t, m.end()) or AGES_LIST_RE.match(t, m.end())
+        plural_word = m.group(0).split()[-1].startswith("дет")
+        a = (
+            (m.group(0).split()[-1].startswith("дет") and AGES_TAIL_RE.match(t, m.end()))
+            or AGES_RE.match(t, m.end())
+            or AGES_LIST_RE.match(t, m.end())
+        )
         if asking and a and THRESHOLD_RE.search(t[m.end() : a.start(1)]):
             a = None  # «детям до 12 лет скидка?»: 12 is a limit of a fare, not an age
-        said = [int(x) for x in re.findall(r"\d+", a.group(1))] if a else []
-        said = [0 if a.group(2) == "мес" else x for x in said if x <= 17]
+        said = _ages_of(a, not plural_word) if a else []
         if not a and not asking and (b := AGES_BARE_RE.match(t, m.end())):
             bare = [int(x) for x in re.findall(r"\d+", b.group(1))]
             if max(bare) <= 17 and (not m.group(1) or _num(m.group(1)) == len(bare)):
                 said = bare
+        single = (
+            not m.group(1) and not m.group("twin") and not m.group(0).split()[-1].startswith("дет")
+        )
+        if not said and not asking and single and (o := AGE_ONE_RE.match(t, m.end())):
+            said = [int(o.group(1))] if int(o.group(1)) <= 17 else []
+        if not said and m.group("adj"):
+            said = [AGE_ADJ[m.group("adj")]]
         plural = m.group(0).split()[-1].startswith("дет")
         count = _num(m.group(1)) if m.group(1) else len(said) or (2 if plural else 1)
+        if m.group("twin"):  # «близнецы по 2 года»: one age for every child of the set
+            count = next(v for k, v in TWINS.items() if m.group("twin").startswith(k))
+        if len(said) == 1 and count > 1 and (m.group("twin") or m.group("adj")):
+            said = said * count
+        if (
+            plural
+            and not m.group(1)
+            and re.match(r"\s*:", t[m.end() :])
+            and CHILD_RE.search(t, m.end())
+            and (not a or CHILD_RE.search(t, m.end(), a.start(1)))
+        ):
+            continue  # «наши дети: у меня близнецы…»: the list that follows has them
         if asking and len(said) < count:  # no age for every counted child: nobody is added
             if ASKING_NOTE not in notes:
                 notes.append(ASKING_NOTE)
