@@ -27,6 +27,7 @@ from api.contracts import (
     CartAction,
     ChatReply,
     CheckoutRequest,
+    Guest,
     Offer,
     Plan,
     TripSpec,
@@ -439,7 +440,9 @@ def _attempt(store: SessionStore, reply: ChatReply, cart: Cart) -> tuple[int, Vo
     return n, done
 
 
-def checkout_reply(store: SessionStore, session_id: str, confirm_total_rub: int) -> ChatReply:
+def checkout_reply(
+    store: SessionStore, session_id: str, confirm_total_rub: int, guest: Guest | None = None
+) -> ChatReply:
     """The one booking path of a session: POST /api/checkout and the chat «подтверждаю» (#382).
     Returns the stored reply with the voucher; a refusal is a CartRefusal.
 
@@ -452,7 +455,10 @@ def checkout_reply(store: SessionStore, session_id: str, confirm_total_rub: int)
     The provider calls (`quote`, `book`) run outside the session write lock: a slow provider
     does not block the other sessions. The attempt is saved before `book` and its voucher
     right after it, so a repeat after a failed session write returns that voucher and books
-    nothing new."""
+    nothing new.
+
+    `guest` (#367) goes into the voucher of a new booking; the provider does not get it. A
+    repeat returns the first booking with its first guest."""
     sid = session_id
     seen = _known(store.get(sid))
     if _repeat(seen, confirm_total_rub):
@@ -472,7 +478,7 @@ def checkout_reply(store: SessionStore, session_id: str, confirm_total_rub: int)
     n, done = _attempt(store, seen, quoted)
     try:
         key = attempt_key(sid, n, seen.plan.spec, quoted)
-        voucher = done or _book(seen.plan.spec, quoted, key)
+        voucher = done or _book(seen.plan.spec, quoted, key).model_copy(update={"guest": guest})
     except _Rejected as e:
         store.save_voucher(sid, n, e.voucher)  # closes attempt n: the next one has a new key
         raise
@@ -494,7 +500,7 @@ def checkout_reply(store: SessionStore, session_id: str, confirm_total_rub: int)
 def checkout_route(req: CheckoutRequest, store: SessionStore) -> Voucher:
     """POST /api/checkout: the voucher of checkout_reply; a refusal is its HTTP code."""
     try:
-        out = checkout_reply(store, req.session_id, req.confirm_total_rub)
+        out = checkout_reply(store, req.session_id, req.confirm_total_rub, req.guest)
     except CartRefusal as e:
         raise _http(e) from e
     assert out.voucher is not None  # checkout_reply returns a booked session

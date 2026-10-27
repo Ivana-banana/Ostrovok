@@ -71,6 +71,17 @@ function button(text: string): HTMLButtonElement {
   return b;
 }
 
+async function type(label: string, value: string) {
+  const input = [...box.querySelectorAll("label")]
+    .find((l) => l.textContent?.startsWith(label))
+    ?.querySelector("input");
+  if (!input) throw new Error(`нет поля «${label}»`);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 async function click(text: string) {
   await act(async () => button(text).click());
   await flush();
@@ -197,6 +208,32 @@ suite("приложение", () => {
       confirm_total_rub: 600,
     });
     expect(box.querySelector("[aria-label='Ваучер']")?.textContent).toContain("OST-0001");
+  });
+
+  it("#367: имя и контакт из формы уходят в запрос как guest", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    routes["POST /api/checkout"] = () => ({ status: 200, body: booked.voucher });
+    await mount();
+    await type("Имя гостя", "  Иван Петров ");
+    await type("Контакт", "ivan@example.com");
+    await click("Подтвердить бронь");
+    expect(calls.find((c) => c.key === "POST /api/checkout")?.body).toEqual({
+      session_id: "s1",
+      confirm_total_rub: 600,
+      guest: { name: "Иван Петров", contact: "ivan@example.com" },
+    });
+  });
+
+  it("#367: контакт без имени — кнопка выключена и просит имя", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    await type("Контакт", "ivan@example.com");
+    expect(button("Подтвердить бронь").disabled).toBe(true);
+    expect(box.querySelector(".guest-form")?.textContent).toContain("Укажите имя");
+    await type("Имя гостя", "Иван");
+    expect(button("Подтвердить бронь").disabled).toBe(false);
   });
 
   it("подтверждение: 409 показывает текст сервера и не создаёт ваучер", async () => {
