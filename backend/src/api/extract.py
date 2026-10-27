@@ -340,7 +340,7 @@ NOT_MONEY_RE = re.compile(
 )
 # After the sum: «на каждого», «на человека» (not «на каждого ребёнка»); «в сутки», «за ночь».
 PER_PERSON = (
-    r"(?:(?:на|с|за|для)\s+(?:кажд\w+\b(?!\s+(?:ребен|дет))|челов\w*|чел\b|персон\w+|душу"
+    r"(?:(?:на|с|за|для)\s+(?:1\s+)?(?:кажд\w+\b(?!\s+(?:ребен|дет))|челов\w*|чел\b|персон\w+|душу"
     r"|взросл\w+|одного|нос\b|голов\w+)|кажд\w+\b(?!\s+(?:ребен|дет)))"
 )
 PER_NIGHT = (
@@ -1592,13 +1592,28 @@ def _people_count(t: str, kids: int) -> tuple[int, str] | None:
     return None
 
 
-def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None:
+# #369: «по 50 тысяч на 1 человека», «сколько на человека?»: the price per head, no party.
+PER_PERSON_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
+PRICE_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж\w*\s+цен")
+MONEY_PER_PERSON_RE = re.compile(
+    r"((?:тыс\w*|руб\w*|₽|\d\s*к|\bр)\.?)\s+на\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b"
+)
+
+
+def _people(
+    t: str, found: dict, notes: list[str], asking: bool = False, built: bool = False
+) -> None:
     """Adults, children with ages; «нас четверо» counts children out.
+
+    built: the plan exists; «на 1 человека» near a price word is then a unit, not a party (#369).
 
     asking: the message is a question at a built plan; a child without a number or an age in
     it adds nobody (#179)."""
     ages: list[int] = []
     no_kids = False
+    if built and (PRICE_CUE_RE.search(t) or asking):  # only at a built plan
+        t = PER_PERSON_RE.sub(" ", t)  # #369: «на 1 человека» is a unit of price, not a party
+    t = MONEY_PER_PERSON_RE.sub(r"\1", t)
     for m in CHILD_RE.finditer(t):
         if ADULT_KIN_RE.match(t, m.end()):
             continue  # «сын с женой»: a grown-up son is no child (#275)
@@ -1673,7 +1688,9 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     elif (m := FRIENDS_RE.search(t)) and _num(m.group(1)) >= 1:
         found["adults"], note = _friends(t, m)
         notes.append(note)
-    elif not ages and (m := GROUP_RE.search(t)):  # «на двоих с ребёнком»: the child may count
+    elif (
+        not ages and not asking and (m := GROUP_RE.search(t))
+    ):  # a question changes no party  # «на двоих с ребёнком»: the child may count
         total = GROUP[m.group(1)] if m.group(1) else _num(m.group(2))
         found["adults"] = max(total - len(ages), 1)
     elif SOLO_OTHER.search(t) or any(
@@ -1874,7 +1891,7 @@ def extract(
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     if holiday:
         _holiday_end(holiday, found, notes)
-    _people(t, found, notes, asking)
+    _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
     if re.search(
         r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"
