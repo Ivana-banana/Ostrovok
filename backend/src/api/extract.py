@@ -1205,7 +1205,7 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         elif (m := WEEKDAY_RANGE.search(t)) and not _busy_days(t, m):
             wd1, wd2 = (WEEKDAY_STEMS.index(g) for g in m.groups())
             month, tomorrow = found.get("month"), today + timedelta(days=1)
-            if via := re.search(rf"\bчерез\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)", t):
+            if via := IN_DAYS.search(t):
                 n = _num(via.group(1)) if via.group(1) else 1
                 base = today + timedelta(days=n * (7 if via.group(2).startswith("нед") else 1))
             elif re.search(r"\bследующ\w*\s+недел", t):
@@ -1220,7 +1220,7 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
             if (n := re.search(rf"\b{NUM}\s*ноч\w*", t)) and _num(n.group(1)) != found["nights"]:
                 span = f"{found['nights']} {_night_word(found['nights'])}"
                 notes.append(f"даты: «{m.group(0)}» — {span}, «{n.group(0)}» не применено")
-        elif m := re.search(rf"\bчерез\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)", t):
+        elif m := IN_DAYS.search(t):
             n = _num(m.group(1)) if m.group(1) else 1
             found["date_from"] = today + timedelta(
                 days=n * (7 if m.group(2).startswith("нед") else 1)
