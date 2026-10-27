@@ -4,12 +4,17 @@ import { rub } from "./format";
 export type ParamId = "origin" | "dates" | "party" | "budget";
 export type ParamChip = { id: ParamId; label: string; value: string; assumed: boolean; why: string[] };
 
-// Assumption labels (the text before «:») that mean the agent filled the field itself.
-const ASSUMED: Record<ParamId, string[]> = {
-  origin: ["откуда"],
-  dates: ["когда", "длительность", "даты"],
-  party: ["взрослых"],
-  budget: ["бюджет"],
+// Which assumptions mean the agent filled the field itself. The same labels also carry notes about
+// the user's own words (shift «по вашей просьбе», «вы и двое друзей»); those are not marked.
+// Mirrors dates_named() and PARTY_UNKNOWN in backend/src/api/model.py.
+const SHIFT_NOTE = /^даты: .* по вашей просьбе$/;
+const PAST_NOTE = /уже прошл[оие]/;
+const AGENT_CHOICE: Record<ParamId, (a: string) => boolean> = {
+  origin: (a) => label(a) === "откуда",
+  dates: (a) =>
+    ["когда", "длительность", "даты"].includes(label(a)) && !SHIFT_NOTE.test(a) && !PAST_NOTE.test(a),
+  party: (a) => a === "взрослых: 2 (состав не назван)",
+  budget: (a) => label(a) === "бюджет",
 };
 
 const MONTHS_GEN = [
@@ -66,15 +71,15 @@ export function paramChips(spec: TripSpec): ParamChip[] {
     budget: "Бюджет",
   };
   return (Object.keys(names) as ParamId[]).map((id) => {
-    const why = spec.assumptions.filter((a) => ASSUMED[id].includes(label(a)));
+    const why = spec.assumptions.filter(AGENT_CHOICE[id]);
     return { id, label: names[id], value: value[id], assumed: why.length > 0, why };
   });
 }
 
-// Assumptions that no chip shows (route, refused places, ...).
+// Assumptions that no chip shows (route, refused places, notes about the user's own words, ...).
 export function otherAssumptions(spec: TripSpec): string[] {
-  const shown = Object.values(ASSUMED).flat();
-  return spec.assumptions.filter((a) => !shown.includes(label(a)));
+  const checks = Object.values(AGENT_CHOICE);
+  return spec.assumptions.filter((a) => !checks.some((is) => is(a)));
 }
 
 // Chat messages of the chip editors. The agent reads them like any user message (rule form

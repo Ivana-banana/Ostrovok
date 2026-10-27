@@ -24,6 +24,23 @@ describe("чипы параметров", () => {
     expect(by).toEqual({ origin: true, dates: true, party: false, budget: false });
   });
 
+  it("заметки о словах пользователя не делают чип «по умолчанию»", () => {
+    const notes = [
+      "даты: сдвинуты на 2 дн. позже по вашей просьбе",
+      "даты: 05.10 уже прошло — взят 2027 год",
+      "взрослых: 3 (вы и двое друзей)",
+    ];
+    const s = with_({ assumptions: notes });
+    const by = Object.fromEntries(paramChips(s).map((c) => [c.id, c.assumed]));
+    expect(by).toEqual({ origin: false, dates: false, party: false, budget: false });
+    expect(otherAssumptions(s)).toEqual(notes);
+  });
+
+  it("состав «не назван» помечен", () => {
+    const s = with_({ assumptions: ["взрослых: 2 (состав не назван)"] });
+    expect(paramChips(s).find((c) => c.id === "party")?.assumed).toBe(true);
+  });
+
   it("допущение без чипа остаётся в списке допущений", () => {
     const s = with_({ assumptions: ["бюджет: не задан", "маршрут: Сочи потерян"] });
     expect(otherAssumptions(s)).toEqual(["маршрут: Сочи потерян"]);
