@@ -260,3 +260,14 @@ def test_a_limit_word_before_the_month_is_no_request(store, text):
     r = say(store, f"бюджет 100 тысяч, {text}", first.session_id)
     s = r.plan.spec
     assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+
+
+@pytest.mark.parametrize(
+    "text", ["давай с января", "хорошо, с января", "давай после января", "хорошо, после января"]
+)
+def test_a_limit_word_before_the_month_is_no_consent(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+    assert r.stage == "compare" and not r.cart.items

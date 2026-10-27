@@ -1050,7 +1050,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # A new session, clarify and select are never service turns.
     consent = (
         old.stage in ("compare", "assemble", "checkout")
-        and month_verdict != "stay"
+        and month_verdict not in ("stay", "skip")
         and (_confirmed(t) or bool(BOOK_RE.search(t)))
     )
     pick = old.stage in ("inspire", "compare") and idx is not None
@@ -1077,7 +1077,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
     # «беру, на месяц вперёд спасибо» is a consent: shift_matches skips a remark after a booking.
     shifts = bool(shift_matches(t.replace("ё", "е"), prev is not None))
-    yes = _confirmed(t) and not asks_length and not shifts and month_verdict != "stay"
+    yes = _confirmed(t) and not asks_length and not shifts and month_verdict not in ("stay", "skip")
     service = prev is not None and (pick or (consent and not asks_length and not shifts))
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
