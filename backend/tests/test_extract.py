@@ -879,7 +879,7 @@ def test_pets_negation_gives_false(text):  # #294
 @pytest.mark.parametrize(
     "text",
     ["едем с собакой", "с нами кот", "без детей, с собакой", "без питомцев не поедем",
-     "с собакой, без кошек", "едем с домашним животным", "без детей с собакой"],
+     "с собакой, без кошек", "без детей с собакой"],
 )  # fmt: skip
 def test_pets_positive_mention_stays_true(text):  # #294
     found, _ = extract(text)

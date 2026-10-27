@@ -1792,7 +1792,7 @@ PET_RE = re.compile(
     r"|\bпс(?:а|у|ом|е|ы|ов|ам|ами|ах)\b"
     r"|\bщен(?:ок|ка|ку|ком|ке|ки|ков|кам|ками|ках)\b|\bщенят(?:а|ам|ами|ах)?\b"
     r"|\bкот[её]н(?:ок|ка|ку|ком|ке)\b|\bкотят(?:а|ам|ами|ах)?\b"
-    r"|\bс(?:о)?\s+(?:домашн\w+\s+)?животн|\bживотн"  # a bare «животные» is a zoo, not a pet
+    r"|\bживотн"  # only a refusal counts: «с животными» is the model's, a bare «животные» is a zoo
 )
 # #294: «без питомцев», «без детей и собаки», «питомцев нет», «собаку не берём». Words between
 # «без» and the pet: «без нашей собаки»; «с» stops it: «без детей с собакой» has the dog.
@@ -1812,12 +1812,10 @@ def _pets(t: str) -> bool | None:
     A pet that is not refused wins: «с собакой, без кошек»."""
     refused = False
     for m in PET_RE.finditer(t):
-        if m.group().startswith(("с ", "со ")):
-            return True  # «с домашним животным»
         no = _PET_BEFORE.search(t[: m.start()]) or _PET_AFTER.match(t, m.end())
         if no and not _DOUBLE_NO.match(t, m.end()):
             refused = True
-        elif m.group() != "животн":  # a bare «животные»: a zoo, not a pet
+        elif m.group() != "животн":
             return True
     return False if refused else None
 
