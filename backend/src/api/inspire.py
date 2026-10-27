@@ -66,10 +66,27 @@ NO_SWIM = "море не для купания"  # #224: the sea is near, but it
 NOT_EUROPE = "не в Европе"
 NOT_SOUTH = "не южнее, чем"
 NOT_WARM = "не тепло"
+NO_AURORA = "северного сияния нет"
+# #361: «горы и море» — no place has both tags: a place with one, the other within this distance
+NEAR_KM = 100
+AURORA_LAT = 65.0  # the aurora oval; the dark season is September–March (team estimate)
+AURORA_MONTHS = (9, 10, 11, 12, 1, 2, 3)
+# Wishes the catalogue has no field for: the reply names them as not checked (TRAP-7).
+UNCHECKED = (
+    "киты", "термальные источники", "фестиваль", "дайвинг",
+    "серфинг", "рыбалка", "сафари", "шопинг", "музеи", "йога", "вино и еда", "романтика",
+    "красиво", "с удобствами",
+)  # fmt: skip
 # Not the asked kind of place: below a place of the theme with cold water or a long road.
 OFF_THEME = {NO_SEA, NO_SWIM, NOT_EUROPE, *(miss for _, _, miss in TAGS.values())}
 WHY = {tag: why for tag, why, _ in TAGS.values()}
-THEMES = (*TAGS, "море", "Европа", "юг")  # wishes that pick places by catalogue facts
+THEMES = (
+    *TAGS,
+    "море",
+    "Европа",
+    "юг",
+    "северное сияние",
+)  # wishes that pick places by catalogue facts
 
 
 def _month(spec: TripSpec) -> int | None:
@@ -82,10 +99,38 @@ def _themed(spec: TripSpec) -> bool:
     return warm or any(w in spec.wishes for w in THEMES)
 
 
+def unchecked_wishes(spec: TripSpec) -> list[str]:
+    """The wishes of the spec that no catalogue field checks: the reply says so (#361)."""
+    return [w for w in UNCHECKED if w in spec.wishes]
+
+
+def _near(place: dict, field: str) -> bool:
+    """The place has the feature (tag mountains, the sea) or one within NEAR_KM."""
+    has = (lambda p: p["sea"]) if field == "sea" else (lambda p: field in p["tags"])
+    return any(has(q) and catalog.km_between(place, q) <= NEAR_KM for q in catalog.places())
+
+
+def _both(spec: TripSpec, place: dict) -> bool:
+    """«горы и море»: a place with one, the other close (Сочи — Красная Поляна, 50 км)."""
+    return (
+        "горы" in spec.wishes
+        and "море" in spec.wishes
+        and _near(place, "mountains")
+        and _near(place, "sea")
+    )
+
+
 def _rule_breaks(spec: TripSpec, place: dict, hub: dict, month: int | None) -> list[str]:
     """What breaks the request without the price and the travel time: theme, region, climate."""
+    both = _both(spec, place)
     out = [miss for wish, (tag, _, miss) in TAGS.items()
-           if wish in spec.wishes and tag not in place["tags"]]  # fmt: skip
+           if wish in spec.wishes and tag not in place["tags"]
+           and not (both and wish == "горы")]  # fmt: skip
+    if "северное сияние" in spec.wishes:
+        if place["lat"] < AURORA_LAT:
+            out.append(f"{NO_AURORA}: широта ниже {AURORA_LAT:g}°")
+        elif month and month not in AURORA_MONTHS:
+            out.append(f"{NO_AURORA}: светлый сезон")
     if "Европа" in spec.wishes and place["country"] not in EUROPE:
         out.append(NOT_EUROPE)
     if "юг" in spec.wishes and place["lat"] > hub["lat"] - SOUTH_DEG:
@@ -93,7 +138,8 @@ def _rule_breaks(spec: TripSpec, place: dict, hub: dict, month: int | None) -> l
     air, water = catalog.month_climate(place, month) if month else (None, None)
     if "море" in spec.wishes:
         if not place["sea"]:
-            out.append(NO_SEA)
+            if not both:
+                out.append(NO_SEA)
         elif water is not None and water < WARM_WATER_C:
             out.append(f"море холодное для купания: вода {water:g} °C")
         elif "swim" not in place["tags"]:
@@ -117,6 +163,9 @@ def _why(spec: TripSpec, place: dict, water: float | None) -> str:
         swim = "swim" in place["tags"] and (water or 0) >= WARM_WATER_C
         sea = "море для купания" if swim else "у моря"
         parts.insert(0 if "море" in spec.wishes else len(parts), sea)
+    if _both(spec, place):
+        parts += ["горы рядом"] * ("mountains" not in place["tags"])
+        parts = ["море рядом"] * (not place["sea"]) + parts
     return ", ".join(parts) or ("природа" if "nature" in place["tags"] else "город")
 
 
@@ -259,7 +308,7 @@ def _level(violates: list[str]) -> int:
     3 no trip at all."""
     if any(v == NO_PETS or v.endswith(NO_WAY) for v in violates):
         return 3
-    if any(v in OFF_THEME or v.startswith((NOT_SOUTH, NOT_WARM)) for v in violates):
+    if any(v in OFF_THEME or v.startswith((NOT_SOUTH, NOT_WARM, NO_AURORA)) for v in violates):
         return 2
     return int(bool(violates))
 

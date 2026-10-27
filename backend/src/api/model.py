@@ -86,7 +86,7 @@ from api.extract import (
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
-from api.inspire import ROAD_LINE, suggest_destinations
+from api.inspire import ROAD_LINE, suggest_destinations, unchecked_wishes
 from api.offers import find_offers, resolve_place, road_nights
 from api.optimizer import (
     _hotel_why,
@@ -1343,6 +1343,8 @@ def _text_inspire(plan: Plan) -> str:
         if d.violates:
             line += f" Нарушает требования: {'; '.join(d.violates)}."
         lines.append(line)
+    if unchecked := unchecked_wishes(spec):  # #361: a wish with no data is named, not dropped
+        lines.append(f"Не проверяю по данным: {', '.join(unchecked)}.")
     return "\n".join(lines + _tail(spec, "Напишите номер или название направления."))
 
 

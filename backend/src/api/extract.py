@@ -400,6 +400,18 @@ WISHES = [
     ),
     ("тепло", WARM),
     ("санаторий", r"санатор"),
+    # #361: wishes the catalogue has no field for; the reply names them as not checked
+    ("северное сияние", r"северн\w*\s+сияни|\bсияни\w*|\baurora\b|northern\s+lights"),
+    ("киты", r"\bкит(?:ы|ов|ам|ами|ах|а)\b|\bwhales?\b"),
+    ("термальные источники", r"термальн|\bтерм(?:ы|ах|ам)\b|горяч\w+\s+источник"),
+    ("фестиваль", r"фестивал|карнавал"),
+    ("дайвинг", r"дайвинг|дайвер|снорк"),
+    ("серфинг", r"серфинг|серфить|кайтсерф|кайтинг"),
+    ("рыбалка", r"рыбалк|рыбач"),
+    ("сафари", r"сафари"),
+    ("шопинг", r"шопинг|аутлет"),
+    ("музеи", r"\bмузе[йяеи]\w*|выставк|\bтеатр"),
+    ("йога", r"\bйог|ретрит"),
     ("тяжело ходить", r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил"),
     ("вино и еда", r"\bвин[оа]\b|\bвинн|гастро|\bеда\b|\bкухн"),
     ("с удобствами", r"удобств|палатк"),
@@ -1401,7 +1413,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
         notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
     elif m := re.search(rf"(?<!\bin )\b{NUM_EN}[\s-]*weeks?\b", t):
         found["nights"] = 7 * _num_en(m.group(1))
-    elif re.search(r"\bвыходн|\bweekend\b", t):
+    elif re.search(r"\bвыходн|\bweekend\b|\bуик-?[эе]нд", t):
         found["nights"] = 2
         if "date_from" not in found:
             month, tomorrow = found.get("month"), date.today() + timedelta(days=1)
