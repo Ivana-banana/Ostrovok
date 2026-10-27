@@ -70,6 +70,7 @@ from api.extract import (
     PER_NIGHT_NOTE_RE,
     PLACE_RES,
     SEASONS,
+    _known,
     excluded_places,
     extract,
     is_child_question,
@@ -261,7 +262,9 @@ CANDIDATES = "варианты"
 # «потом в Казань», «потом поедем в Казань»; not «потом решим», «потом на море».
 LINK_RE = re.compile(
     r"\b(?:потом|затем|далее|оттуда|следом|а\s+после(?:\s+(?:этого|того|чего))?"
-    r"|после\s+(?:этого|того|чего))\b([^,.;!?\n]*)"
+    r"|после\s+(?:этого|того|чего))\b"
+    r"(?:[\s,]*(?:может быть|может|наверное|скорее всего|возможно|вероятно|пожалуй)(?=[\s,])[\s,]*)?"
+    r"([^,.;!?\n]*)"
 )
 ROUTE_RE = re.compile(
     r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
@@ -532,16 +535,20 @@ def _city_in_clause(message: str, low: str, link: re.Match, later: list[str]) ->
     come from the patterns of extract: «Питер», «в Казани».
     """
     start, end = link.start(1), link.end(1)
+    words = [(w.start(), w.group()) for w in re.finditer(r"[\w-]+", low)]
     for name in later:
-        found = [rx.search(low) for n, rx in PLACE_RES if n == name]
+        found = [m.start() for n, rx in PLACE_RES if n == name and (m := rx.search(low))]
         if len(message) == len(low):  # the capital-letter names: «Нижний Новгород»
-            found += [rx.search(message) for n, rx in CAPITAL_PLACES if n == name]
-        stem = name.lower().replace("ё", "е")  # a name outside the patterns: as it is written
-        found.append(re.search(r"\b" + re.escape(stem[:-1] if len(stem) > 4 else stem), low))
-        if any(m and start <= m.start() < end for m in found):
-            first = min((m.start() for m in found if m), default=start)
-            if first >= link.start():
-                return True
+            found += [
+                m.start() for n, rx in CAPITAL_PLACES if n == name and (m := rx.search(message))
+            ]
+        # any case of a one-word name («Ригу», «Уфу»), or the name as it is written (not known)
+        known = next((pos for pos, w in words if _known(w) == name or w == name.lower()), None)
+        if known is not None:
+            found.append(known)
+        # the first mention is inside the clause: a city named before the link is no next stop
+        if found and start <= min(found) < end:
+            return True
     return False
 
 

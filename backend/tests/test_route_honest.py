@@ -13,6 +13,7 @@ import pytest
 from api import catalog, checks, model
 from api.contracts import ChatRequest
 from api.model import CANDIDATES, ROUTE, chat, is_route, severals
+from api.offers import places
 from api.store import SessionStore
 
 CASES = json.loads((Path(__file__).resolve().parents[2] / "eval/cases.json").read_text("utf-8"))
@@ -26,6 +27,8 @@ NOT_ROUTES = [
     ("Сочи, Анапа на 5 ночей, потом посмотрю цены", ["Сочи", "Анапа"]),
     ("Либо Сочи, либо Анапа, а там посмотрим", ["Сочи", "Анапа"]),
     ("Сочи и Анапа на неделю, затем сравню", ["Сочи", "Анапа"]),
+    ("Рим и Вена, потом венок куплю", ["Рим", "Вена"]),
+    ("Сочи и Чита, потом читать отзывы буду", ["Сочи", "Чита"]),
     ("Сочи или Анапа, потом в Казань", ["Сочи", "Анапа", "Казань"]),  # accepted risk
     ("Сочи и Анапа на 5 ночей, потом поищу отель в Анапе", ["Сочи", "Анапа"]),  # named before
 ]
@@ -47,6 +50,15 @@ ROUTES = [
     ("Питер, затем на поезде в Казань", ["Санкт-Петербург", "Казань"]),
     ("В Питер, потом на пару дней в Казань", ["Санкт-Петербург", "Казань"]),
     ("Питер, потом заедем в Казань", ["Санкт-Петербург", "Казань"]),
+    # Short names (4 letters or less): the case forms are not in the patterns.
+    ("Питер, потом в Ригу", ["Санкт-Петербург", "Рига"]),
+    ("Казань, потом в Уфу", ["Казань", "Уфа"]),
+    ("Из Москвы в Ригу, потом в Вену", ["Рига", "Вена"]),
+    # A parenthetical word right after the link.
+    ("Питер, потом, может, Казань", ["Санкт-Петербург", "Казань"]),
+    ("Питер, затем, наверное, в Казань", ["Санкт-Петербург", "Казань"]),
+    ("Питер, потом скорее всего Казань", ["Санкт-Петербург", "Казань"]),
+    ("Питер, потом, возможно, заедем в Казань", ["Санкт-Петербург", "Казань"]),
 ]
 
 
@@ -137,3 +149,30 @@ def test_s11_fails_when_the_route_notice_is_missing(fresh_runs, monkeypatch):
     ok, note = checks.check_S11(S11)
     assert not ok
     assert "п.5" in note
+
+
+def _forms(name: str) -> list[str]:
+    """Accusative and prepositional case of a one-word name, by the simple endings."""
+    if name.endswith("а"):
+        return [name[:-1] + "у", name[:-1] + "е"]
+    if name.endswith("я"):
+        return [name[:-1] + "ю", name[:-1] + "е"]
+    if name.endswith("ь"):
+        return [name, name[:-1] + "и"]
+    if name[-1] in "оеиыуюйэёъ":  # indeclinable or plural: the name as it is
+        return [name]
+    return [name, name + "е"]
+
+
+def test_every_one_word_catalog_city_after_the_link_is_a_route():
+    """The sweep of the reviewer: «Казань, потом в <город>» in two cases, offline."""
+    lost = []
+    for place in places():
+        name = place["name"]
+        if " " in name or name == "Казань" or "-" in name:
+            continue
+        for form in _forms(name):
+            text = f"Казань, потом в {form}"
+            if not is_route(text, ["Казань", name]):
+                lost.append(text)
+    assert lost == []
