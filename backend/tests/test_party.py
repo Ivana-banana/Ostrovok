@@ -190,3 +190,112 @@ def test_party_question_follows_to_the_comparison(store):
     third = say(store, "Двое взрослых", first.session_id)
     assert third.plan.spec.adults == 2 and third.plan.spec.children_ages == [7]
     assert not any("едет" in q.text for q in third.questions)
+
+
+# #179: a question about children at a built plan adds nobody and keeps the cart.
+KIDS_QUESTIONS = [
+    "А дети бесплатно?",
+    "А с детьми можно?",
+    "Детям есть скидка?",
+    "дети бесплатно",
+    "Можно ли с детьми?",
+    "Детям до 12 лет скидка?",
+    "Дети до 2 лет бесплатно?",
+    "А двое детей бесплатно?",
+    "А трое детей можно?",
+    "Детям младше 5 лет есть скидка?",
+]
+
+
+def _to_checkout(store):
+    r = say(store, "Сочи в ноябре на 5 ночей, вдвоём")
+    for msg in ("беру", "да"):
+        r = say(store, msg, r.session_id)
+    assert r.stage == "checkout" and r.cart.items
+    return r
+
+
+@pytest.mark.parametrize("text", KIDS_QUESTIONS)
+def test_kids_question_at_checkout_keeps_party_and_cart(store, text):
+    before = _to_checkout(store)
+    after = say(store, text, before.session_id)
+    assert after.stage == "checkout"
+    assert after.plan.spec.children_ages == [] and after.plan.spec.adults == 2
+    assert after.cart == before.cart and after.cart.items
+    assert "Состав не меняю" in after.reply and ".." not in after.reply
+
+
+@pytest.mark.parametrize("text", KIDS_QUESTIONS)
+def test_kids_question_at_compare_keeps_the_plan(store, text):
+    before = say(store, "Сочи в ноябре на 5 ночей, вдвоём")
+    assert before.stage == "compare"
+    after = say(store, text, before.session_id)
+    assert after.plan == before.plan and after.stage == "compare"
+
+
+def test_kids_question_at_compare_asks_the_age(store):
+    before = say(store, "Сочи в ноябре на 5 ночей, вдвоём")
+    after = say(store, "Можно с детьми?", before.session_id)
+    assert after.plan.spec.children_ages == [] and after.stage == "compare"
+    assert "напишите возраст" in after.reply and after.cart == before.cart
+
+
+def test_kids_question_keeps_existing_children(store):
+    before = say(store, "Сочи в ноябре на 5 ночей, вдвоём с ребёнком 4 года")
+    after = say(store, "А дети бесплатно?", before.session_id)
+    assert after.plan.spec.children_ages == [4] and "дети 4 лет" in after.reply
+
+
+def test_kids_question_with_an_age_still_adds_the_child(store):
+    before = say(store, "Сочи в ноябре на 5 ночей, вдвоём")
+    after = say(store, "А с ребёнком 5 лет можно?", before.session_id)
+    assert after.plan.spec.children_ages == [5]
+
+
+def test_kids_question_with_a_threshold_keeps_existing_children_at_checkout(store):
+    before = say(store, "Сочи в ноябре на 5 ночей, вдвоём с ребёнком 4 года")
+    for msg in ("беру", "да"):
+        before = say(store, msg, before.session_id)
+    after = say(store, "А двое детей до 12 лет бесплатно?", before.session_id)
+    assert after.plan.spec.children_ages == [4] and after.cart == before.cart
+    assert after.stage == "checkout"
+
+
+def test_kids_question_with_other_fields_replans_without_children(store):
+    before = say(store, "Сочи в ноябре на 5 ночей, вдвоём")
+    after = say(store, "А на 7 ночей с детьми?", before.session_id)
+    assert after.plan.spec.nights == 7 and after.plan.spec.children_ages == []
+
+
+def test_children_statement_in_the_first_message_stays_a_party(store):
+    r = say(store, "Тёплое море в ноябре, недорого, с ребёнком")
+    assert r.stage == "inspire" and r.plan.spec.children_ages == [7]
+    found, _ = extract("Куда поехать с детьми в ноябре?")
+    assert found["children_ages"] == [7, 7]
+
+
+def test_question_about_children_is_not_a_party_at_a_plan():
+    found, notes = extract("А дети бесплатно?", True, asking=True)
+    assert "children_ages" not in found and notes
+
+
+# #81 and #179 together: a question at checkout keeps the cart; only a children question
+# gets the party answer.
+def test_other_question_at_checkout_keeps_the_cart(store):
+    before = _to_checkout(store)
+    after = say(store, "а отель с завтраком?", before.session_id)
+    assert after.stage == "checkout" and after.cart == before.cart
+    assert "Это вопрос" in after.reply
+
+
+def test_kids_question_with_an_age_at_checkout_is_an_edit(store):
+    before = _to_checkout(store)
+    after = say(store, "А с ребёнком 5 лет можно?", before.session_id)
+    assert after.plan.spec.children_ages == [5]  # a real change, as any edit of #81
+
+
+def test_kids_reply_dots(store):
+    before = _to_checkout(store)
+    assert "взр. Отдельной" in say(store, "А дети бесплатно?", before.session_id).reply
+    kids = say(store, "Сочи в ноябре на 5 ночей, вдвоём с ребёнком 4 года")
+    assert "взр. + дети 4 лет. Отдельной" in say(store, "А дети бесплатно?", kids.session_id).reply

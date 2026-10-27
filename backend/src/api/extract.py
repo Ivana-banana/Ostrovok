@@ -1084,15 +1084,37 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
         notes.append(too_long_note(m.group(0), kept))
 
 
-def _people(t: str, found: dict, notes: list[str]) -> None:
-    """Adults, children with ages; «нас четверо» counts children out."""
+# #179: a question about children at a built plan («А дети бесплатно?», «а с детьми можно?»)
+# asks, it does not state a party. The words are the signs of a question without «?».
+CHILD_QUESTION_RE = re.compile(
+    r"\?|\bли\b|\bможно\b|\bбесплатн|\bскидк|\bльгот|\bа\s+(?:с\s+)?(?:дет|реб[её]н)"
+)
+THRESHOLD_RE = re.compile(r"\b(?:до|от|младше|старше|моложе|менее|более|меньше|больше)\b")
+ASKING_NOTE = "дети: вопрос, состав не менял — чтобы добавить, назовите возраст"
+
+
+def is_child_question(text: str) -> bool:
+    return bool(CHILD_QUESTION_RE.search(text.lower().replace("ё", "е")))
+
+
+def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None:
+    """Adults, children with ages; «нас четверо» counts children out.
+
+    asking: the message is a question at a built plan; a child without a number or an age in
+    it adds nobody (#179)."""
     ages: list[int] = []
     for m in CHILD_RE.finditer(t):
         a = AGES_RE.match(t, m.end())
+        if asking and a and THRESHOLD_RE.search(t[m.end() : a.start(1)]):
+            a = None  # «детям до 12 лет скидка?»: 12 is a limit of a fare, not an age
         said = [int(x) for x in re.findall(r"\d+", a.group(1))] if a else []
         said = [0 if a.group(2) == "мес" else x for x in said if x <= 17]
         plural = m.group(0).split()[-1].startswith("дет")
         count = _num(m.group(1)) if m.group(1) else len(said) or (2 if plural else 1)
+        if asking and len(said) < count:  # no age for every counted child: nobody is added
+            if ASKING_NOTE not in notes:
+                notes.append(ASKING_NOTE)
+            continue
         if len(said) < count:
             notes.append("возраст ребёнка: 7 лет (возраст не назван)")
         ages += (said + [7] * count)[:count]
@@ -1280,13 +1302,18 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
 
 
 def extract(
-    text: str, has_destination: bool = False, nights: int = 7, adults: int = 2
+    text: str,
+    has_destination: bool = False,
+    nights: int = 7,
+    adults: int = 2,
+    asking: bool = False,
 ) -> tuple[dict, list[str]]:
     """TripSpec fields stated in one message, plus assumptions made while reading it.
 
     has_destination: the plan has a city already; an unknown first word is then never a city.
     nights, adults: the plan's values (TripSpec defaults); only a «в сутки» or «на каждого»
-    budget reads them (#158)."""
+    budget reads them (#158).
+    asking: a question at a built plan; a child without a number or an age adds nobody (#179)."""
     t = text.lower().replace("ё", "е")  # same length: positions match the original text
     found: dict = {}
     notes: list[str] = []
@@ -1298,7 +1325,7 @@ def extract(
     for i in range_notes:  # «… на 10 ночей»: the note names the length the plan has (#173)
         kept = found.get("nights", nights)
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
-    _people(t, found, notes)
+    _people(t, found, notes, asking)
     _budget(t, found, notes, nights, adults)
     if re.search(
         r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"
