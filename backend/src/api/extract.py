@@ -278,11 +278,18 @@ AGE_ONE_RE = re.compile(
 AGE_ITEM_RE = re.compile(r"(\d{1,2})(?:\s*(лет|год|мес))?")
 
 
-def _ages_of(a: re.Match) -> list[int]:
-    """Ages of a matched list; a number without its own unit takes the last one."""
+def _ages_of(a: re.Match, one_child: bool = False) -> list[int]:
+    """Ages of a matched list; a number without its own unit takes the last one.
+
+    one_child: «1 год и 8 месяцев» after a single child word is one age in years."""
     ages = []
+    prev = ""
     for n, unit in AGE_ITEM_RE.findall(a.group(1)):
-        if (unit or a.group(2)) == "мес":
+        unit = unit or a.group(2)
+        if one_child and prev in ("лет", "год") and unit == "мес":
+            continue
+        prev = unit
+        if unit == "мес":
             if int(n) <= 23:
                 ages.append(0)
         elif int(n) <= 17:
@@ -1510,6 +1517,7 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
         ):
             no_kids = True  # «без детей»: nobody is added (#195)
             continue
+        plural_word = m.group(0).split()[-1].startswith("дет")
         a = (
             (m.group(0).split()[-1].startswith("дет") and AGES_TAIL_RE.match(t, m.end()))
             or AGES_RE.match(t, m.end())
@@ -1517,7 +1525,7 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
         )
         if asking and a and THRESHOLD_RE.search(t[m.end() : a.start(1)]):
             a = None  # «детям до 12 лет скидка?»: 12 is a limit of a fare, not an age
-        said = _ages_of(a) if a else []
+        said = _ages_of(a, not plural_word) if a else []
         if not a and not asking and (b := AGES_BARE_RE.match(t, m.end())):
             bare = [int(x) for x in re.findall(r"\d+", b.group(1))]
             if max(bare) <= 17 and (not m.group(1) or _num(m.group(1)) == len(bare)):

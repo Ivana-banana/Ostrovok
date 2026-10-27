@@ -568,3 +568,24 @@ def test_337_tail_after_a_unit_is_not_a_second_age(text):
 def test_337_children_header_keeps_its_own_ages(text, ages):
     found, _ = extract(text)
     assert found["children_ages"] == ages
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("Едем с малышом 1 год и 8 месяцев в Сочи", [1]),
+        ("Едем с дочкой 2 года и 3 месяца, Анапа", [2]),
+        ("Ребёнок 1 год и 2 месяца, Сочи на 5 ночей", [1]),
+        ("Едем с сыном 3 года и 2 месяца в Сочи", [3]),
+        ("Дети 6 месяцев и 3 года, Сочи", [0, 3]),
+    ],
+)
+def test_337_years_and_months_of_one_child_are_one_age(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
+
+
+def test_337_months_added_in_a_dialog_do_not_add_a_child(store):
+    r = say(store, "Едем с женой и сыном 6 лет в Сочи на 5 ночей с 1 июля")
+    r = say(store, "сын 6 лет и 3 месяца, это важно?", r.session_id)
+    assert r.plan.spec.children_ages == [6]
