@@ -271,3 +271,71 @@ def test_a_limit_word_before_the_month_is_no_consent(store, text):
     s = r.plan.spec
     assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
     assert r.stage == "compare" and not r.cart.items
+
+
+# #198: a negation in a neighbouring list item is no refusal of the month.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "не дорого, в январе",
+        "недорого, в январе",
+        "не дорого и в январе",
+        "не очень дорого, в январе",
+    ],
+)
+def test_a_negation_of_a_neighbour_does_not_refuse_the_month(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2027, 1, 3), date(2027, 1, 8), 1)
+    assert "Они остаются" not in r.reply and r.stage == "compare"
+
+
+def test_a_month_before_a_neighbouring_negation_is_no_refusal(store):
+    first = named(store)
+    r = say(store, "лучше в январе, не дорого", first.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 3)
+
+
+@pytest.mark.parametrize("text", ["не в январе, недорого", "в январе не получится, недорого"])
+def test_the_refusal_before_a_neighbour_stays_a_refusal(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+    assert "Они остаются" in r.reply and r.stage == "compare"
+
+
+def test_a_shift_into_the_refused_month_is_not_applied(store):
+    first = named(store)
+    r = say(store, "не в январе, на месяц позже", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+    assert "Сдвиг не применён" in r.reply and "январь" in r.reply
+    assert "Перенести на декабрь" not in r.reply and not r.cart.items
+    assert r.stage == "compare"
+
+
+def test_a_shift_out_of_the_refused_month_is_applied(store):
+    first = named(store)
+    r = say(store, "не в январе, на два дня позже", first.session_id)
+    assert r.plan.spec.date_from == date(2026, 12, 5)
+
+
+def test_the_other_fields_stay_applied_when_the_shift_is_refused(store):
+    first = named(store)
+    r = say(store, "не в январе, на месяц позже, бюджет 100 тысяч", first.session_id)
+    assert r.plan.spec.budget_rub == 100_000 and r.plan.spec.date_from == date(2026, 12, 3)
+    assert "Сдвиг не применён" in r.reply
+
+
+def test_a_shift_into_the_asked_month_is_told_as_a_shift(store):
+    first = named(store)
+    r = say(store, "может в январе? на месяц позже", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2027, 1, 3), date(2027, 1, 8), 1)
+    assert "Даты сдвинуты по вашей просьбе: 03.01.2027–08.01.2027." in r.reply
+    assert "вы назвали сами" not in r.reply and "Перенести" not in r.reply
+    assert not r.questions and r.stage == "compare" and not r.cart.items
