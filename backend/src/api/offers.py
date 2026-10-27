@@ -664,6 +664,8 @@ def transfer_offers(
         hub = "аэропорт" if flight else "вокзал"
         if flight and place.get("airport"):
             hub += " " + place["airport"]["iata"]
+        # C10 (#364): the road to the airport crosses water by a ferry (catalog «ferry»).
+        ferry = ", дорога и паром" if flight and (place.get("airport") or {}).get("ferry") else ""
         for h in hotels:
             road = _hub_road(hub_km, h.distance_center_km or 0)
             ride = _ride(road)
@@ -671,11 +673,11 @@ def transfer_offers(
                 start = _shift(
                     leg.arrive_at.astimezone(tz), timedelta(minutes=40 if flight else 15)
                 )
-                title = f"Трансфер: {hub} → {h.title}, ≈{road:g} км"
+                title = f"Трансфер: {hub} → {h.title}, ≈{road:g} км{ferry}"
             else:
                 end = _shift(leg.depart_at.astimezone(tz), -HUB_MARGIN[leg.mode])
                 start = _shift(end, -ride)
-                title = f"Трансфер: {h.title} → {hub}, ≈{road:g} км"
+                title = f"Трансфер: {h.title} → {hub}, ≈{road:g} км{ferry}"
             out.append(
                 TransferOffer(
                     offer_id=transfer_id(h.offer_id, leg.offer_id),

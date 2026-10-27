@@ -17,7 +17,7 @@ same path runs on rules (TRAP-1).
 
 import re
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -1284,7 +1284,7 @@ def _question_answer(
     )
     if old.plan.timeline:  # times come from the timeline tool, never from the model
         cart += "\nПлан поездки:\n" + "\n".join(
-            f"{e.at:%d.%m %H:%M} — {e.title}" for e in old.plan.timeline
+            f"{_at(e.at)} — {e.title}" for e in old.plan.timeline
         )
     edit = "Чтобы изменить поездку, напишите, что поменять: например, «хотим с бассейном»."
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
@@ -1394,7 +1394,9 @@ def _text_compare(plan: Plan) -> str:
         lines.append("Транспорт:")
     for i, o in enumerate(legs, 1):
         no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
-        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}{no_pet}")
+        # C14 (#364, TRAP-5): local times with their zones and the duration of the leg.
+        when = f"вылет {_at(o.depart_at)} → прилёт {_at(o.arrive_at)}, в пути {span(o)}"
+        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}{no_pet} · {when}")
     chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
     lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:
@@ -1412,9 +1414,23 @@ def _text_compare(plan: Plan) -> str:
     )
 
 
+def _zone(dt: datetime) -> str:
+    """«UTC+10», «UTC+5:30», «UTC-3»: the offset of a local time from the tools (TRAP-5)."""
+    off = dt.utcoffset() or timedelta()
+    minutes = int(off.total_seconds() // 60)
+    sign, minutes = ("+" if minutes >= 0 else "-"), abs(minutes)
+    h, m = divmod(minutes, 60)
+    return f"UTC{sign}{h}" + (f":{m:02d}" if m else "")
+
+
+def _at(dt: datetime) -> str:
+    """A local time of a leg or an event with its zone (C14, #364)."""
+    return f"{dt:%d.%m %H:%M} ({_zone(dt)})"
+
+
 def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
-    lines += [f"{e.at:%d.%m %H:%M} — {e.title}" for e in plan.timeline]
+    lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
     lines += [f"Внимание: {i.text}." for i in plan.issues]
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
