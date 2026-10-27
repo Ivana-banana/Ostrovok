@@ -46,7 +46,6 @@ SPEC_FIELDS = (
     "children_ages", "pets", "budget_rub", "hotel_budget_rub", "meal", "refundable", "modes",
     "max_travel_hours", "wishes", "priorities",
 )  # fmt: skip
-DATE_FIELDS = {"date_from", "date_to", "month", "nights"}
 
 
 def _nullable(t: str, **kw) -> dict:
@@ -237,7 +236,7 @@ def extract_spec(
     """TripSpec fields the message states, typed like extract.extract's `found`; None: no LLM.
 
     The patch passes TripSpec validation. Fields equal to the current spec are dropped: the
-    model repeats them, the user did not state them. Past dates are dropped as well.
+    model repeats them, the user did not state them. Past dates stay: model.py checks them (#164).
     """
     today = today or date.today()
     current = spec.model_dump(mode="json", exclude={"assumptions"})
@@ -264,9 +263,6 @@ def extract_spec(
             found.pop(k)  # «поставь цену 0» is not a budget
     if any(not 0 <= a <= 17 for a in found.get("children_ages", [])):
         found.pop("children_ages")
-    if found.get("date_from") and found["date_from"] < today:
-        for k in DATE_FIELDS:
-            found.pop(k, None)
     if found.get("date_from") and found.get("date_to"):
         if found["date_to"] <= found["date_from"]:
             found.pop("date_to")
