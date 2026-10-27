@@ -360,8 +360,20 @@ def check_S3(case: dict) -> tuple[bool, str]:
                         fails.append(f"{tag}: точный запрос не разобран ({run.replies[0].stage})")
                     if variant == "A1":
                         total = last.voucher.total_rub if last.voucher else 0
-                        budget = last.plan.spec.budget_rub
-                        over = f" > бюджета {budget}" if budget and total > budget else ""
+                        spec = last.plan.spec
+                        over = (
+                            f" > бюджета {spec.budget_rub}"
+                            if spec.budget_rub and total > spec.budget_rub
+                            else ""
+                        )
+                        hotel = next(
+                            (o for o in _chosen(last.plan) if isinstance(o, HotelOffer)), None
+                        )
+                        if spec.hotel_budget_rub and hotel:  # S3-A: the hotel within its own budget
+                            fits = hotel.price_rub <= spec.hotel_budget_rub
+                            over += f"; отель {hotel.price_rub} {'≤' if fits else '>'} {spec.hotel_budget_rub}"
+                            if not fits:
+                                fails.append(f"{variant}/{name}: отель дороже бюджета отеля")
                         notes.append(
                             f"{name}: вопросов {run.asked}, ходов {len(run.replies)}, "
                             f"итог {total}{over}"

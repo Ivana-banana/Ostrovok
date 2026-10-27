@@ -187,6 +187,9 @@ BUDGET_RES = [  # (pattern, multiplier); «к» counts only right after the numb
     (r"\b(\d{1,3}(?:\s\d{3})+|\d{4,7})\s*(?:₽|руб|р\b)", 1),
     (r"\bбюджет\w*\s*(?:до\s+|около\s+)?(\d{4,7})\b", 1),
 ]
+BARE_HOTEL_RE = (  # «отель до 5000 за ночь»: no unit after the number, but a night after it
+    r"\bдо\s+(\d{4,7})\b(?=\s*(?:за|в|/)\s*(?:ноч|сут))"
+)
 # #158: a budget in another currency is never read as rubles: (label, symbol, words).
 CURRENCIES = [
     ("евро", "€", r"евро|eur"),
@@ -459,6 +462,9 @@ NEG_AFTER = re.compile(
 LIST_FORWARD = re.compile(r"\s*(?:,\s*(?:ни\s+)?|\s+и\s+|\s+или\s+|\s+ни\s+)(?:(?:в|во|на)\s+)?")
 LIST_BACK = re.compile(r"\s+и\s+(?:(?:в|во|на)\s+)?")
 SENTENCE_END = re.compile(r"[.!?;\n]")
+# #127: «Турцию не хочу, Египет тоже»: the verb is dropped, the refusal goes on.
+ELLIPSIS_GAP = re.compile(r"\s*(?:,\s*(?:(?:а|и)\s+)?|(?:а|и)\s+)(?:(?:в|во|на)\s+)?")
+ELLIPSIS_TAIL = re.compile(r"\s*(?:тоже|также)(?=\s*(?:[,.!?;\n]|$))")
 
 
 def _word_end(t: str, pos: int) -> int:
@@ -466,11 +472,16 @@ def _word_end(t: str, pos: int) -> int:
     return m.end() if m else pos
 
 
-def _sentence(t: str, start: int, end: int) -> str:
-    """The sentence (up to «.!?;») around the mention."""
+def _sentence_span(t: str, start: int, end: int) -> tuple[int, int]:
     before = [m.end() for m in SENTENCE_END.finditer(t, 0, start)]
     stop = SENTENCE_END.search(t, end)
-    return t[before[-1] if before else 0 : stop.start() if stop else len(t)]
+    return (before[-1] if before else 0), (stop.start() if stop else len(t))
+
+
+def _sentence(t: str, start: int, end: int) -> str:
+    """The sentence (up to «.!?;») around the mention."""
+    a, b = _sentence_span(t, start, end)
+    return t[a:b]
 
 
 def _adds_place(t: str, spans: list[tuple[int, int]], i: int, refused: list[bool]) -> bool:
@@ -511,14 +522,34 @@ def _wanted_pair(t: str, spans: list[tuple[int, int]], i: int) -> bool:
     return any(re.match(r"[\w-]*[ая]\b", t[spans[j][0] :]) for j in group)
 
 
-def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
+def _mask(sentence: str, base: int, spans: list[tuple[int, int]]) -> str:
+    """The sentence without the given absolute spans (blanked, the length stays)."""
+    for a, b in spans:
+        if base <= a < base + len(sentence):
+            sentence = sentence[: a - base] + " " * (b - a) + sentence[b - base :]
+    return sentence
+
+
+def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None) -> list[bool]:
     """Which of the place mentions (start, end; sorted) a negation refuses.
 
     «кроме X» refuses X unless the sentence adds a place («ещё в Казань»). «уже были в X» refuses
     X only with a dislike in the sentence («не хочется», «надоело») or another place wanted
-    next to it, and never with «снова», «ещё раз», «понравилось»."""
+    next to it, and never with «снова», «ещё раз», «понравилось». A marker stands for its own
+    mention (#127): the dislike «в Анапу не хотим» and the wish «опять в Сочи» are not meant for
+    the other places of the sentence. keys[i] is the name of the mention (the same place twice)."""
     n = len(spans)
-    strong = [bool(NEG_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
+    keys = keys or [t[s:e] for s, e in spans]
+    strong = [False] * n
+    own: list[list[tuple[int, int]]] = [[] for _ in range(n)]  # marker spans of the mention
+    anchor: list[int | None] = [None] * n  # where the marker of the mention ends
+    for i, (s, _) in enumerate(spans):
+        w0 = max(0, s - 60)
+        before = NEG_BEFORE.search(t[w0:s])
+        strong[i] = bool(before)
+        if before:
+            own[i].append((w0 + before.start(), w0 + before.end()))
+            anchor[i] = spans[i][1]
     exc = [bool(EXCEPT_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     weak = [bool(WEAK_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     for i in reversed(range(n)):
@@ -532,8 +563,18 @@ def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
             if after and not re.fullmatch(r"\s+(?:в|во|на)\s*", area[after.end() :]):
                 if rx is NEG_AFTER:
                     strong[i] = True
+                    anchor[i] = e + after.end()
+                    own[i].append((e, e + after.end()))
                 else:
                     weak[i] = True
+    # «Турцию не хочу, Египет тоже»: «тоже» with no verb goes on the refusal of the mention before.
+    for i in range(1, n):
+        gap = ELLIPSIS_GAP.fullmatch(t[anchor[i - 1] : spans[i][0]]) if anchor[i - 1] else None
+        tail = ELLIPSIS_TAIL.match(t, spans[i][1]) if gap else None
+        if tail and not strong[i]:
+            strong[i] = True
+            anchor[i] = tail.end()
+            own[i].append((spans[i][1], tail.end()))
     neg = [False] * n
     for i in range(n):
         in_list = i > 0 and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : spans[i][0]]))
@@ -544,14 +585,41 @@ def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
             or (in_list and neg[i - 1])
         )
         weak[i] = weak[i] or (in_list and weak[i - 1])
+        if in_list and neg[i - 1] and not own[i]:
+            own[i] = own[i - 1]
     for i, (s, e) in enumerate(spans):
         if weak[i] and not neg[i]:
-            sentence = _sentence(t, s, e)
-            wanted = any(j != i and not weak[j] and not neg[j] for j in range(n))
-            neg[i] = not WISH_AGAIN.search(sentence) and (bool(DISLIKE.search(sentence)) or wanted)
+            base, stop = _sentence_span(t, s, e)
+            sentence = t[base:stop]
+            # The markers of the other refused places are not meant for this one.
+            other = [
+                x for j in range(n) if j != i and neg[j] and keys[j] != keys[i] for x in own[j]
+            ]
+            sentence = _mask(sentence, base, other)
+            # A wish right before another place («опять в Сочи») is for that place only.
+            wish = [
+                m
+                for m in WISH_AGAIN.finditer(sentence)
+                if not any(
+                    keys[j] != keys[i]
+                    and re.fullmatch(r"\s*(?:(?:в|во|на)\s+)?", t[base + m.end() : spans[j][0]])
+                    for j in range(n)
+                    if j != i and spans[j][0] >= base + m.end()
+                )
+            ]
+            wanted = any(
+                j != i and not weak[j] and not neg[j] and keys[j] != keys[i] for j in range(n)
+            )
+            neg[i] = not wish and (bool(DISLIKE.search(sentence)) or wanted)
     # A list shares the refusal: «кроме Турции и Египта», «В Турции и Египте уже были».
+    # Not when the same place is wanted again in the sentence: «были в Сочи и в Анапе, хотим в Сочи».
     for i in reversed(range(n - 1)):
-        if neg[i + 1] and LIST_BACK.fullmatch(t[spans[i][1] : spans[i + 1][0]]):
+        wanted_again = any(j != i and keys[j] == keys[i] and not neg[j] for j in range(n))
+        if (
+            neg[i + 1]
+            and not wanted_again
+            and LIST_BACK.fullmatch(t[spans[i][1] : spans[i + 1][0]])
+        ):
             neg[i] = True
     return neg
 
@@ -717,7 +785,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             e, name, _ = mentions.get(m.start(), (m.end(), None, None))
             mentions[m.start()] = (max(e, m.end()), name, country)
     starts = sorted(mentions)
-    neg = _negated(t, [(s, mentions[s][0]) for s in starts])
+    neg = _negated(t, [(s, mentions[s][0]) for s in starts], [mentions[s][2] for s in starts])
     refused_at = {s for s, n in zip(starts, neg, strict=True) if n}
     refused = list(dict.fromkeys(mentions[s][2] for s in starts if s in refused_at))
     dests = []
@@ -753,7 +821,10 @@ def _capital(text: str, pos: int) -> str | None:
     m = re.match(r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*", text[pos:])
     if not m or m.group(0).lower() in NOT_PLACES or re.match(MONTH, m.group(0).lower()):
         return None
-    return _known(m.group(0)) or _nominative(m.group(0))
+    word = m.group(0)
+    low = word.lower().replace("ё", "е")
+    country = next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None)
+    return _known(word) or country or _nominative(word)  # «Египте» is Египет, not a new city
 
 
 def _nominative(word: str) -> str:
@@ -801,8 +872,10 @@ def is_past_note(assumption: str) -> bool:
     return PAST_MARK in assumption
 
 
-def _dates(t: str, found: dict, notes: list[str]) -> None:
-    """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day."""
+def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
+    """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day.
+
+    kept: the length of the plan now; a range over MAX_NIGHTS is named and not taken (#168)."""
     d = r"(\d{1,2})(?:-?го)?"
     if m := re.search(rf"\b{MONTH}", t):
         found["month"] = _month(m.group(1))
@@ -847,7 +920,10 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
         if "date_from" in found:
             found["month"] = found["date_from"].month
         return
-    said = (two or one or m).group(0)
+    first = two or one or m
+    said = first.group(0)
+    if lead := re.search(r"\bс\s+$", t[: first.start()]):
+        said = lead.group(0) + said  # the quote starts where the user's range starts (#173)
     found["month"] = _month(m1)
     today = date.today()
     try:
@@ -868,6 +944,9 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
     if end <= start:
         notes.append(f"даты: «{said}» — такого периода нет, конец по длительности")
         return
+    if (end - start).days > MAX_NIGHTS:
+        notes.append(too_long_note(said, kept))  # the start stays, the end goes
+        return
     found["date_to"], found["nights"] = end, (end - start).days
 
 
@@ -886,6 +965,22 @@ def too_long_note(said: str, nights: int) -> str:
 
 def is_too_long_note(assumption: str) -> bool:
     return assumption.startswith("длительность: срок «")
+
+
+# A ruble sum right before «на месяц»: «бюджет 100 тысяч», «100 000 ₽», «100к».
+BUDGET_SUM_BEFORE = re.compile(
+    r"(?:бюджет\w*\W*(?:до\s+|около\s+)?\d[\d\s]*"
+    r"|\d[\d\s.,]*\s*(?:(?:тыс\w*|к|k|₽|руб\w*|р|млн|миллион\w*)\.?\s*)+)\s*$"
+)
+# «позже», «вперёд», «назад» after a period: the dates move, the length stays (#173).
+NOT_A_MOVE = r"(?!\s*(?:позже|раньше|вперед|вперёд|назад))"
+MONTH_STAY = re.compile(rf"\bна\s+(?:{NUM}\s+|пар[уы]\s+)?месяц\w*(?!\w){NOT_A_MOVE}")
+
+
+def _month_stay(t: str) -> re.Match | None:
+    """The first «на месяц» that is a length: one after a budget sum is a budget period (#170, #173)."""
+    stays = (m for m in MONTH_STAY.finditer(t) if not BUDGET_SUM_BEFORE.search(t[: m.start()]))
+    return next(stays, None)
 
 
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
@@ -920,10 +1015,14 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     elif m := re.search(r"\bна\s+пар[уы]\s+(?:дн\w*|день|суток)", t):
         found["nights"] = 2
         notes.append(f"длительность: 2 ноч. («{m.group(0)}»)")
-    elif m := re.search(
-        rf"\bна\s+(?:{NUM}\s+)?месяц\w*(?!\s*(?:позже|раньше|вперед|вперёд|назад))", t
-    ):
-        found["nights"] = 30 * (_num(m.group(1)) if m.group(1) else 1)
+    elif m := re.search(rf"\bна\s+пол\s?года\b{NOT_A_MOVE}", t):
+        found["nights"] = 180  # half a year: over the limit, named
+    elif m := re.search(rf"\bна\s+(?:полтора|1[.,]5)\s+месяц\w*(?!\w){NOT_A_MOVE}", t):
+        found["nights"] = 45
+        notes.append(f"длительность: «{m.group(0)}» — 45 ночей")
+    elif m := _month_stay(t):
+        # «на пару месяцев» is 2 months; «бюджет 100 тысяч на месяц» is a budget period (#170)
+        found["nights"] = 30 * (2 if "пар" in m.group(0) else _num(m.group(1)) if m.group(1) else 1)
         if found["nights"] <= MAX_NIGHTS:
             notes.append(f"длительность: «{m.group(0)}» — {found['nights']} ночей")
     elif m := re.search(rf"\b(?:{NUM}\s+)?недел\w*", t):
@@ -991,6 +1090,33 @@ def _people(t: str, found: dict, notes: list[str]) -> None:
         notes.append(f"взрослых: 2 (по слову «{m.group(0)}»)")
 
 
+HOTEL_NOTE = "бюджет отеля"  # the label of the assumption; model.LABELS uses it too
+# «отель до 40 тысяч»: up to 3 words between, none of them a comma or a conjunction
+HOTEL_BEFORE_RE = re.compile(
+    r"(?:отел|гостиниц|проживани)\w*\s+(?:(?!(?:и|а|но|да|\+|плюс)\s)[^\s,;.!?]+\s+){0,3}$"
+)
+HOTEL_AFTER_RE = re.compile(
+    r"[\w.]*\s*(?:₽|руб\w*|р\b)?\s*(?:на|за|для)\s+(?:отел|гостиниц|проживани)"
+)
+# A fragment ends at , ; ! ? a full stop (not in a number or «тыс.») and the conjunctions а, но.
+FRAGMENT_END_RE = re.compile(
+    r"[,;!?]|(?<!тыс)(?<!руб)(?<!млн)(?<!\bр)(?<!\bт)\.(?!\d)|\b(?:а|но)\b"
+)
+# Another expense item in the fragment: the sum is for the trip, not for the hotel (#41).
+EXPENSE_RE = re.compile(
+    r"\b(?:перел|авиа|билет|рейс|транспорт|трансфер|поезд|самол|пол[её]т|такси|автобус|тур\b|тура\b|туре\b|туром\b"
+    r"|итого|общ|вместе)\w*|\bдорог(?:а|и|у|е|ой|ою)\b"
+)
+AND_HOTEL_RE = re.compile(r"(?:\bи|\+|плюс)\s*(?:отел|гостиниц|проживани)")
+TOTAL_BEFORE_RE = re.compile(r"\b(?:всего|итого|общ\w+|вместе)\s+(?:\S+\s+){0,2}$")
+# «бюджет отеля: 10 000 ₽ за ночь…»: the price of a night, kept in the assumption (see model)
+PER_NIGHT_NOTE_RE = re.compile(rf"^{HOTEL_NOTE}: (\d[\d ]*) ₽ за ночь")
+
+
+def money(n: int) -> str:
+    return f"{n:,} ₽".replace(",", " ")
+
+
 def _night_word(n: int) -> str:
     if n % 10 == 1 and n % 100 != 11:
         return "ночь"
@@ -1024,18 +1150,49 @@ def _standalone_currency(t: str) -> str | None:
     return None
 
 
-def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> None:
-    """The first sum in the message; said about the hotel, it still counts for the whole trip.
+def _fragment(t: str, start: int, end: int) -> tuple[str, str]:
+    """The text before and after the sum inside its fragment (see FRAGMENT_END_RE)."""
+    ends = [(m.start(), m.end()) for m in FRAGMENT_END_RE.finditer(t)]
+    left = max((e for s_, e in ends if e <= start), default=0)
+    right = min((s_ for s_, e in ends if s_ >= end), default=len(t))
+    return t[left:start], t[end:right]
 
+
+def _hotel_sum(t: str, m: re.Match) -> bool:
+    """The sum is the hotel budget: «отель» is in its fragment and no other expense item is."""
+    before, after = _fragment(t, m.start(), m.end())
+    if AND_HOTEL_RE.search(before):  # «X и отель до N»: X is an expense item, known or not
+        return False
+    if EXPENSE_RE.search(before) or EXPENSE_RE.search(after) or TOTAL_BEFORE_RE.search(before):
+        return False
+    return bool(HOTEL_BEFORE_RE.search(before) or HOTEL_AFTER_RE.match(after))
+
+
+def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> None:
+    """The sums of the message: the first for the hotel (#41) and the first for the trip.
+
+    A sum is the hotel budget when «отель» is in its fragment and no other expense item is
+    (перелёт, билеты, тур, «итого»…); else it is the trip budget. A hotel price «за ночь»
+    becomes the total of the nights named in the message; else model.resolve_hotel_budget
+    does it from the assumption when the nights are known.
     #158: a foreign currency is no rubles (budget stays unset, the note says so); «на каждого»
     multiplies by the adults, «в сутки» by the nights (the note names the factors).
     nights, adults: the plan's values when the message does not state them."""
     foreign = None
     hits = [(m, v, True) for p, v in MILLION_RES for m in re.finditer(p, t)]
     hits += [(m, k, False) for p, k in BUDGET_RES for m in re.finditer(p, t)]
+    hits += [(m, 1, False) for m in re.finditer(BARE_HOTEL_RE, t)]  # only for a hotel, see below
+    hits.sort(key=lambda h: h[0].start())
+    taken: list[tuple[int, int]] = []
     for m, k, is_word in hits:
-        if NOT_MONEY_RE.match(t[m.end() :]):
+        if "budget_rub" in found and "hotel_budget_rub" in found:
+            return
+        if any(m.start() < e and s_ < m.end() for s_, e in taken) or NOT_MONEY_RE.match(
+            t[m.end() :]
+        ):
             continue
+        if m.re.pattern == BARE_HOTEL_RE and not _hotel_sum(t, m):
+            continue  # «до 5000» is no sum unless it is said about the hotel
         if is_word:
             value, tail = k, t[m.end() :]
         else:
@@ -1054,12 +1211,27 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
             else:
                 break
             tail = tail[r.end() :].lstrip()
+        taken.append((m.start(), m.end()))
+        hotel = _hotel_sum(t, m)
+        if (hotel and "hotel_budget_rub" in found) or (not hotel and "budget_rub" in found):
+            continue  # the first sum of each kind counts
         total, factors = value, []
         people = found.get("adults", adults)
         if per_person and people > 1:
             total *= people
             kids = " (дети не считаются)" if found.get("children_ages") else ""
             factors.append(f"{people} взрослых{kids}")
+        if hotel:
+            if not per_night:
+                found["hotel_budget_rub"] = total
+                notes.append(f"{HOTEL_NOTE}: {money(total)} за все ночи")
+            else:
+                line = f"{HOTEL_NOTE}: {money(total)} за ночь"
+                if stay := found.get("nights"):
+                    found["hotel_budget_rub"] = total * stay
+                    line += f", {money(total * stay)} за {stay} ноч."
+                notes.append(line)  # nights unknown: the total comes when they are
+            continue
         stay = found.get("nights", nights)
         if per_night and stay > 1:
             total *= stay
@@ -1068,12 +1240,9 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
         if factors:
             notes.append(f"бюджет: {_rub(value)} ₽ × " + " × ".join(factors))
         found["budget_rub"] = total
-        if re.search(r"отел\w*\s+(?:\S+\s+){0,2}$", t[: m.start()]):
-            # TODO(T7, #13): a hotel-only budget; TripSpec has one budget for the trip.
-            notes.append(f"бюджет: {_rub(total)} ₽ на всю поездку (сказано про отель)")
-        return
     # No ruble sum: «бюджет 1000 евро», «$1500». None, not absent: the model must not add rubles.
-    if label := foreign or _standalone_currency(t):
+    unset = "budget_rub" not in found and "hotel_budget_rub" not in found
+    if unset and (label := foreign or _standalone_currency(t)):
         found["budget_rub"] = None
         notes.append(f"бюджет: в {label} — не пересчитываю, уточните в рублях")
 
@@ -1091,8 +1260,11 @@ def extract(
     notes: list[str] = []
     _places(text, t, found, notes, has_destination)
     _english_places(t, found)
-    _dates(t, found, notes)
+    _dates(t, found, notes, nights)
+    range_notes = [i for i, n in enumerate(notes) if is_too_long_note(n)]
     _nights(t, found, notes, nights)
+    for i in range_notes:  # «… на 10 ночей»: the note names the length the plan has (#173)
+        notes[i] = re.sub(r"\d+ ночей$", f"{found.get('nights', nights)} ночей", notes[i])
     _people(t, found, notes)
     _budget(t, found, notes, nights, adults)
     if re.search(
@@ -1159,6 +1331,8 @@ def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = N
     for k, v in llm_found.items():
         if k == "wishes":
             out["wishes"] = found.get("wishes", []) + [w for w in v if w not in found.get(k, [])]
+        elif k == "budget_rub" and v == found.get("hotel_budget_rub"):
+            continue  # the model took the hotel sum for the trip budget (#41)
         elif k not in found and not (k in DATE_KEYS and DATE_KEYS & found.keys()):
             out[k] = v
     return out

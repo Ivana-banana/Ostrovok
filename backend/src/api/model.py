@@ -46,8 +46,10 @@ from api.dag import (
 from api.extract import (
     DATE_KEYS,
     DEFAULT_NIGHTS,
+    HOTEL_NOTE,
     MAX_NIGHTS,
     MONTH_NAMES,
+    PER_NIGHT_NOTE_RE,
     excluded_places,
     extract,
     is_chip_message,
@@ -79,6 +81,10 @@ CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
 NEGATION_RE = re.compile(r"\b(нет|не)\b")
+# A shift by months or a year: SHIFT_RE moves days and weeks only (#173).
+MONTH_SHIFT_RE = re.compile(
+    r"\bна\s+(?:(?:\d+|пар[уы]|полтора)\s+)?(?:месяц\w*|пол\s?года|год\w*)\s+(?:позже|раньше|вперед|назад)\b"
+)
 BOOK_RE = re.compile(r"\bподтверждаю\b")
 # S4: orders to set a price, to book without the confirmation or to show the prompt are
 # refused. Only orders: «цена 0 ₽ за ребёнка?» or «отель без подтверждения по телефону» pass.
@@ -171,6 +177,7 @@ LABELS = {
     "nights": "длительность",
     "origin": "откуда",
     "budget_rub": "бюджет",
+    "hotel_budget_rub": HOTEL_NOTE,
     "children_ages": "возраст ребёнка",
     "adults": "взрослых",
     "max_travel_hours": "время в пути",
@@ -220,6 +227,21 @@ def _label(assumption: str) -> str:
     return assumption.split(":", 1)[0]
 
 
+def resolve_hotel_budget(data: dict) -> None:
+    """The hotel budget stated per night is a total of the nights the plan has now (#41).
+
+    TripSpec holds the total only, so the price of a night lives in the assumption
+    «бюджет отеля: 10 000 ₽ за ночь…». A new `nights` then moves the total with it.
+    """
+    for i, a in enumerate(data["assumptions"]):
+        if (m := PER_NIGHT_NOTE_RE.match(a)) and data["nights"]:
+            night, n = int(m.group(1).replace(" ", "")), data["nights"]
+            data["hotel_budget_rub"] = night * n
+            data["assumptions"][i] = (
+                f"{HOTEL_NOTE}: {_rub(night)} за ночь, {_rub(night * n)} за {n} ноч."
+            )
+
+
 def _noted(spec: TripSpec, label: str) -> bool:
     return any(_label(a) == label for a in spec.assumptions)
 
@@ -228,6 +250,9 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     """Stated fields override the spec; their old assumptions are dropped."""
     data = spec.model_dump()
     stated = {LABELS[k] for k in found if k in LABELS}
+    if any(_label(n) == HOTEL_NOTE for n in notes):  # a price per night: no total until nights
+        stated.add(HOTEL_NOTE)
+        data["hotel_budget_rub"] = found.get("hotel_budget_rub")
     if "destinations" in found:
         stated |= {ROUTE, CANDIDATES}  # a new choice of the city ends the route note
     if stated & {"когда", "даты", "длительность"}:
@@ -246,6 +271,7 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     data["assumptions"] = kept + [n for n in notes if n not in kept]
     for k, v in found.items():
         data[k] = data[k] + [w for w in v if w not in data[k]] if k == "wishes" else v
+    resolve_hotel_budget(data)
     return TripSpec.model_validate(data)
 
 
@@ -289,7 +315,7 @@ def blocking_questions(spec: TripSpec) -> list[Question]:
         m = date.today().month
         options = [MONTH_NAMES[(m + i) % 12] for i in range(3)] + ["пока не знаю"]
         out.append(Question(text="Когда хотите поехать?", options=options))
-    if spec.budget_rub is None:
+    if spec.budget_rub is None and spec.hotel_budget_rub is None:
         options = ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽", "не важно"]
         out.append(Question(text="Какой бюджет на всю поездку?", options=options))
     return out
@@ -322,7 +348,10 @@ def assume(spec: TripSpec) -> TripSpec:
     if not data["origin"]:
         data["origin"] = DEFAULT_ORIGIN
         note("откуда", "Москва (город вылета не назван)")
-    if data["budget_rub"] is None:
+    if data["hotel_budget_rub"] is not None:  # the rules wrote their note; the LLM did not
+        note(HOTEL_NOTE, f"{_rub(data['hotel_budget_rub'])} за все ночи")
+    resolve_hotel_budget(data)
+    if data["budget_rub"] is None and data["hotel_budget_rub"] is None:
         cheap = "недорого" in data["wishes"]
         note("бюджет", "не задан — сначала дешёвые" if cheap else "не задан — разные цены")
     return TripSpec.model_validate(data)
@@ -764,13 +793,18 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         _confirmed(t) or bool(BOOK_RE.search(t))
     )
     pick = old.stage in ("inspire", "compare") and idx is not None
-    service = prev is not None and (consent or pick)
     found, notes = extract(
         message,
         bool(old.plan.spec.destinations),
         old.plan.spec.nights or DEFAULT_NIGHTS,
         old.plan.spec.adults,
     )
+    # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
+    asks_length = any(is_too_long_note(n) for n in notes)
+    # «давай на месяц позже» moves the dates, the plan has no such shift: no consent either (#173)
+    month_shift = bool(MONTH_SHIFT_RE.search(low))
+    yes = _confirmed(t) and not asks_length and not month_shift
+    service = prev is not None and (pick or (consent and not asks_length))
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
     other = (
@@ -895,7 +929,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
 
     dated = bool(old.plan.spec.date_from and old.plan.spec.date_to)
     te = t.replace("ё", "е")
-    if not found and prev and dated and not SHIFT_RE.search(te) and DATE_EDIT_RE.search(te):
+    date_edit = DATE_EDIT_RE.search(te) or month_shift
+    if not found and prev and dated and not SHIFT_RE.search(te) and date_edit:
         # The message asks to move the dates but says how far or which way in no known words (S2).
         s = old.plan.spec
         text = (
@@ -956,7 +991,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return reply("compare", plan, f"{notice}\n{text}", cart, questions=[*chips, *questions])
         return reply("compare", plan, text, cart, questions=questions)
 
-    if old.stage == "compare" and (idx is not None or _confirmed(t)):
+    if old.stage == "compare" and (idx is not None or yes):
         hotels = hotel_rows(plan.offers, plan.selected)
         picks = idx is not None and idx < len(hotels)
         if not picks and not pets_possible(spec, plan.offers) and not _hotel_selected(plan):
@@ -967,7 +1002,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
         plan.timeline, plan.issues = build_timeline(plan)
         return reply("assemble", plan, _text_assemble(plan))
-    if old.stage == "assemble" and _confirmed(t):
+    if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
         text = (
             f"В корзине {len(cart.items)} поз. на {_rub(cart.total_rub)} "

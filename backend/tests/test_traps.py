@@ -81,7 +81,6 @@ def test_trap_7_synthetic_offer_is_labeled():
 @pytest.mark.parametrize(
     "text,budget",
     [
-        ("отель до 40 тысяч за всё", 40_000),  # S3-A
         ("до 50 тысяч на всё", 50_000),  # S6
         ("бюджет тысяч 150 максимум", 150_000),  # S2
         ("итог 150 000 ₽", 150_000),
@@ -90,3 +89,9 @@ def test_trap_7_synthetic_offer_is_labeled():
 def test_trap_1_rules_parse_budget(text, budget):
     """TRAP-1: без ключа бюджет из живой речи не теряется."""
     assert rule_extract(text)["budget_rub"] == budget
+
+
+def test_trap_1_rules_parse_hotel_budget():
+    """TRAP-1: без ключа «отель до 40 тысяч» (S3-A) — бюджет отеля, не бюджет поездки (#41)."""
+    found = rule_extract("отель до 40 тысяч за всё")
+    assert found["hotel_budget_rub"] == 40_000 and found["budget_rub"] is None
