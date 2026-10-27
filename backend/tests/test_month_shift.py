@@ -163,13 +163,53 @@ def test_a_trailing_remark_stays_a_consent(store, text):
         "оплачу, только сдвинь на месяц позже",
         "возьму, если на месяц позже",
         "давай на месяц позже, беру",
+        "беру на месяц позже",
+        "беру, на месяц позже",
     ],
 )
-def test_a_booking_word_elsewhere_does_not_hide_the_shift(store, text):
+def test_a_booking_word_does_not_hide_the_shift(store, text):
     first = plan_for(store)
     r = say(store, text, first.session_id)
     assert r.stage == "compare" and not r.cart.items
     assert r.plan.spec.date_from == date(2026, 12, 3) and r.plan.spec.nights == 5
+
+
+@pytest.mark.parametrize("text", ["подтверждаю, на месяц позже", "подтверждаю на месяц позже"])
+def test_a_shift_on_checkout_is_no_booking(store, text):
+    r = plan_for(store)
+    for step_text in ("беру", "да"):
+        r = say(store, step_text, r.session_id)
+    assert r.stage == "checkout" and r.cart.items
+    r = say(store, text, r.session_id)
+    assert r.stage == "compare" and r.voucher is None and not r.cart.items
+    assert r.plan.spec.date_from == date(2026, 12, 3) and r.plan.spec.nights == 5
+    assert "Было → стало" in r.reply
+
+
+def test_a_year_in_the_diminutive_shifts_by_a_year(store):
+    first = plan_for(store)
+    r = say(store, "давай на годик позже", first.session_id)
+    assert r.plan.spec.date_from == date(2027, 11, 3)
+
+
+def test_days_forward_in_the_first_message_are_a_length_as_before(store):
+    r = say(store, "Сочи на неделю вперёд, двое взрослых")
+    assert (r.plan.spec.date_to - r.plan.spec.date_from).days == 7
+    assert r.plan.spec.nights == 7
+    assert not any("по вашей просьбе" in a for a in r.plan.spec.assumptions)
+    r = say(store, "Сочи с 10 ноября на 5 дней вперёд, двое взрослых")
+    assert r.plan.spec.date_from == date(2026, 11, 10) and r.plan.spec.nights == 4
+    assert not any("по вашей просьбе" in a for a in r.plan.spec.assumptions)
+
+
+def test_the_length_note_goes_with_a_dropped_length(store):
+    first = say(store, "Сочи на 5 ночей в ноябре, двое взрослых")
+    before = [a for a in first.plan.spec.assumptions if a.startswith("длительность")]
+    r = say(store, "а на два дня вперёд?", first.session_id)
+    assert r.plan.spec.nights == 5
+    after = [a for a in r.plan.spec.assumptions if a.startswith("длительность")]
+    assert after == before
+    assert not any("1 ночь" in a for a in after)
 
 
 def test_a_month_shift_on_assemble_moves_the_dates(store):

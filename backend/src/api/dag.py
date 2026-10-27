@@ -90,16 +90,16 @@ PRIORITIES = {
 # «на два дня позже», «на пару недель раньше», «на месяц позже», «на полгода раньше», «на год
 # вперёд»: a shift of the current dates, not a duration. model.step drops the nights the
 # extractor reads from «неделю» when it matches. Months and years move on the calendar (#176).
-LONG_UNIT = r"месяц\w*|пол\s?года|год[ау]?(?!\w)"
+LONG_UNIT = r"месяц\w*|пол\s?года|год(?:а|у|ик\w*)?(?!\w)"
 SHIFT_RE = re.compile(
     rf"\bна\s+(?:(?P<n>{NUM}|пар[уы])\s+)?(?P<unit>дн\w*|день|сут\w*|недел\w*|ноч\w*|{LONG_UNIT})"
     r"\s+(?P<way>позже|раньше|вперед|назад)"
 )
-# «беру», «оплачу»: the user books. A month or a year right after them is a remark («оплачу на
-# месяц позже», «беру, на месяц вперёд спасибо»), not a request to move the plan. A word that
-# turns the sentence («берём, но на месяц позже», «возьму, если на месяц позже», «оплачу,
-# только сдвинь …») or a stop of the sentence between them makes it a request.
-BOOKS_RE = re.compile(r"\b(?:беру|берем|возьму|оплач\w*|покупаю|подтверждаю)\b")
+# «оплачу на месяц позже» (the user pays later) and «беру, на месяц вперёд спасибо» (a thanks
+# after the phrase) are a consent with a remark, not a request to move the plan (#176). Any word
+# that turns the sentence («оплачу, только сдвинь на месяц позже») or a stop makes a request.
+PAYS_RE = re.compile(r"\b(?:оплач\w*)\b")
+THANKS_RE = re.compile(r"\s*(?:большое\s+|вам\s+)?спасибо\b")
 TURN_RE = re.compile(
     r"\b(?:но|только|если|а|лучше|хочу|хотим|можно|нет|не|давай\w*"
     r"|сдвин\w*|перенес\w*|перенос\w*|передвин\w*|отлож\w*|подвин\w*)\b|[.!?;]"
@@ -114,17 +114,21 @@ def shift_matches(t: str, planned: bool = True) -> list[re.Match]:
     """The shift phrases of the text t (lower case, «е» for «ё») that ask to move the dates.
 
     planned: the session has a plan. Without one «на полгода вперёд» is part of the first
-    request, not a move of dates the user never saw; days and weeks are moved as before.
+    request, not a move of dates the user never saw. «Вперёд» and «назад» are no shift of
+    the guessed dates either: «на неделю вперёд» is a length there. «Позже» and «раньше» move
+    days and weeks as before.
     """
     found = list(SHIFT_RE.finditer(t))
     if not planned:
-        found = [m for m in found if not _is_long(m)]
+        found = [m for m in found if not _is_long(m) and m.group("way") in ("позже", "раньше")]
     return [m for m in found if not (_is_long(m) and _remark(t, m))]
 
 
 def _remark(t: str, m: re.Match) -> bool:
-    """True when the phrase m follows a booking verb with no turn of the sentence between."""
-    verbs = list(BOOKS_RE.finditer(t[: m.start()]))
+    """True when the phrase m is a remark of a consent: after «оплачу» or before «спасибо»."""
+    if THANKS_RE.match(t[m.end() :]):
+        return True
+    verbs = list(PAYS_RE.finditer(t[: m.start()]))
     return bool(verbs) and not TURN_RE.search(t[verbs[-1].end() : m.start()])
 
 
@@ -267,8 +271,8 @@ def shift_dates(spec: TripSpec, text: str, planned: bool = True) -> TripSpec:
         for unit, n in units.items():
             if n:
                 way = "позже" if n > 0 else "раньше"
-                text = _amount_text(unit, abs(n))
-                kept.append(f"даты: {SHIFT_NOTE[kind]} на {text} {way} по вашей просьбе")
+                amount = _amount_text(unit, abs(n))
+                kept.append(f"даты: {SHIFT_NOTE[kind]} на {amount} {way} по вашей просьбе")
     return spec.model_copy(
         update={
             "date_from": start,

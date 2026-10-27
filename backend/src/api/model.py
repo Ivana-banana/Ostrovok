@@ -822,7 +822,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         else llm.extract_spec(message, old.plan.spec, deadline)
     )
     if shifts:
-        found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
+        if (
+            found.pop("nights", None) is not None
+        ):  # «на неделю позже» moves the dates, the length stays
+            # the length note of that reading goes with it; a length refused stays named (#160)
+            notes[:] = [n for n in notes if _label(n) != "длительность" or is_too_long_note(n)]
         if llm_found:
             # The rules read the shift (which end, how far); the model must not add other dates.
             for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
