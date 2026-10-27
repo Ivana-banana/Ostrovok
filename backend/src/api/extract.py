@@ -1158,6 +1158,15 @@ def llm_past_dates(llm_found: dict, today: date | None = None) -> str | None:
     return f"даты: от модели {start:%d.%m.%Y} {PAST_GONE_MARK} — не применены"
 
 
+def _busy_days(t: str, m: re.Match) -> bool:
+    """«с понедельника по пятницу работаю»: working days, not trip dates."""
+    busy = r"(?:работа\w+|занят\w*|учу\w*|дежур\w+|на работе)"
+    return bool(
+        re.match(rf"[\s,.;—-]*(?:я\s+)?{busy}", t[m.end() :])
+        or re.search(rf"\b{busy}\s+$", t[: m.start()])
+    )
+
+
 def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
     """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day.
 
@@ -1187,16 +1196,29 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         if m := re.search(r"\b(сегодня|завтра|послезавтра)\b", t):
             days = {"сегодня": 0, "завтра": 1, "послезавтра": 2}[m.group(1)]
             found["date_from"] = today + timedelta(days=days)
+        elif (m := WEEKDAY_RANGE.search(t)) and not _busy_days(t, m):
+            wd1, wd2 = (WEEKDAY_STEMS.index(g) for g in m.groups())
+            month, tomorrow = found.get("month"), today + timedelta(days=1)
+            if via := re.search(rf"\bчерез\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)", t):
+                n = _num(via.group(1)) if via.group(1) else 1
+                base = today + timedelta(days=n * (7 if via.group(2).startswith("нед") else 1))
+            elif re.search(r"\bследующ\w*\s+недел", t):
+                base = today + timedelta(days=7 - today.weekday())  # Monday
+            elif month and month != tomorrow.month:
+                base = future_date(month, 1)  # first such weekday of the named month or season
+            else:
+                base = tomorrow
+            start = base + timedelta(days=(wd1 - base.weekday()) % 7)
+            end = start + timedelta(days=(wd2 - wd1) % 7 or 7)  # the next such day after the start
+            found["date_from"], found["date_to"], found["nights"] = start, end, (end - start).days
+            if (n := re.search(rf"\b{NUM}\s*ноч\w*", t)) and _num(n.group(1)) != found["nights"]:
+                span = f"{found['nights']} {_night_word(found['nights'])}"
+                notes.append(f"даты: «{m.group(0)}» — {span}, «{n.group(0)}» не применено")
         elif m := re.search(rf"\bчерез\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)", t):
             n = _num(m.group(1)) if m.group(1) else 1
             found["date_from"] = today + timedelta(
                 days=n * (7 if m.group(2).startswith("нед") else 1)
             )
-        elif m := WEEKDAY_RANGE.search(t):
-            wd1, wd2 = (WEEKDAY_STEMS.index(g) for g in m.groups())
-            start = today + timedelta(days=(wd1 - today.weekday()) % 7 or 7)
-            end = start + timedelta(days=(wd2 - wd1) % 7 or 7)  # the next such day after the start
-            found["date_from"], found["date_to"], found["nights"] = start, end, (end - start).days
         elif m := re.search(
             rf"\b(?:в|во|на)\s+(?:(?:эт[уо]т?|ближайш\w+)\s+)?({'|'.join(WEEKDAYS)})\b", t
         ):

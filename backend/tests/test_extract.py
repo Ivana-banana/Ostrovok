@@ -880,7 +880,7 @@ def test_weekday_range_gives_the_nearest_dates(tuesday, text, start, end):
     found, notes = extract(text)
     assert found["date_from"] == start and found["date_to"] == end
     assert found["nights"] == (end - start).days and found["month"] == start.month
-    assert all("даты" not in n or "допущение" not in n for n in notes)
+    assert notes == []
 
 
 def test_weekday_range_from_today_weekday_starts_next_week(tuesday):
@@ -900,3 +900,45 @@ def test_weekday_range_turn_has_no_date_assumption(tuesday, tmp_path):
         2,
     )
     assert not [a for a in spec.assumptions if "дат" in a.lower()], spec.assumptions
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end", "month"),
+    [
+        ("Казань в декабре со среды по пятницу", date(2026, 12, 2), date(2026, 12, 4), 12),
+        ("Казань летом со среды по пятницу", date(2027, 6, 2), date(2027, 6, 4), 6),
+        (
+            "Казань на следующей неделе со среды по пятницу",
+            date(2026, 11, 4),
+            date(2026, 11, 6),
+            11,
+        ),
+        ("Казань со среды по пятницу следующей недели", date(2026, 11, 4), date(2026, 11, 6), 11),
+        ("Казань через неделю со среды по пятницу", date(2026, 11, 4), date(2026, 11, 6), 11),
+    ],
+)
+def test_weekday_range_respects_month_season_and_week_shift(tuesday, text, start, end, month):
+    found, notes = extract(text)
+    assert (found["date_from"], found["date_to"], found["month"]) == (start, end, month)
+    assert not [n for n in notes if n.startswith("даты:")]
+
+
+def test_weekday_range_names_a_conflicting_length(tuesday):
+    found, notes = extract("Казань со среды по пятницу, на 5 ночей")
+    assert found["nights"] == 2
+    assert any(n.startswith("даты:") and "5 ночей" in n for n in notes), notes
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "с понедельника по пятницу работаю, поехать на выходные в Казань",
+        "Казань, я работаю со среды по пятницу",
+    ],
+)
+def test_weekday_range_of_work_days_is_no_trip_range(tuesday, text):
+    found, _ = extract(text)
+    if "выходные" in text:  # the trip is the weekend: Friday to Sunday
+        assert (found["date_from"], found["date_to"]) == (date(2026, 10, 30), date(2026, 11, 1))
+    else:
+        assert "date_to" not in found
