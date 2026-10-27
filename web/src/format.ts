@@ -55,7 +55,7 @@ export function rub(n: number): string {
 export function cartLine(cart: Cart): string {
   if (!cart.items.length) return "Корзина пуста.";
   const mock = cart.items.some((o) => o.synthetic);
-  return `В корзине ${cart.items.length} поз. на ${rub(cart.total_rub)}${mock ? " (синтетика)" : ""}.`;
+  return `Теперь в корзине ${cart.items.length} поз. на ${rub(cart.total_rub)}${mock ? " (синтетика)" : ""}.`;
 }
 
 // Times are shown as written in the ISO string: local to the place of the event, never

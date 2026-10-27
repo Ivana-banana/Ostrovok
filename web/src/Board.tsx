@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type {
   Bundle,
   Cart,
@@ -49,26 +50,34 @@ export function Price({ value, synthetic = true }: { value: number; synthetic?: 
   );
 }
 
-// Free text from the backend ("дороже на 3 300 ₽", "было 6 400 ₽"): every amount in it gets the
+// Free text from the backend ("дороже на 3 300 ₽", "было 6 400 ₽"): every price in it gets the
 // same label as a price (TRAP-7). The text holds prices of the offers, so the label follows them.
-const AMOUNT = /(\d[\d\s\u00a0]*\s?₽)/g;
+// Not marked: a budget (the number the user typed) and a sum that already has the label.
+const AMOUNT = /\d[\d\s\u00a0]*\s?₽/g;
+const AFTER_BUDGET = /бюджет[а-яё]*(\s+отеля)?\s*$/i;
+const LABELLED = /^\s*\(?синтетика/;
 export function Money({ text, synthetic = true }: { text: string; synthetic?: boolean }) {
   if (!synthetic) return <>{text}</>;
-  return (
-    <>
-      {text.split(AMOUNT).map((part, i) =>
-        i % 2 === 1 ? (
-          <span key={i} className="price">
-            {part}
-            <span className="synth">синтетика</span>
-          </span>
-        ) : (
-          part
-        ),
-      )}
-    </>
-  );
+  const out: ReactNode[] = [];
+  let at = 0;
+  for (const m of text.matchAll(AMOUNT)) {
+    const end = m.index + m[0].length;
+    if (AFTER_BUDGET.test(text.slice(0, m.index)) || LABELLED.test(text.slice(end))) continue;
+    out.push(text.slice(at, m.index));
+    out.push(
+      <span key={m.index} className="price">
+        {m[0]}
+        <span className="synth">синтетика</span>
+      </span>,
+    );
+    at = end;
+  }
+  out.push(text.slice(at));
+  return <>{out}</>;
 }
+
+// plan.changes rows "бюджет" and "бюджет отеля" hold the number of the user.
+const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
 
@@ -498,11 +507,11 @@ function Changes({ plan }: { plan: Plan }) {
           <li key={c.what}>
             {fieldLabel(c.what)}: было{" "}
             <s>
-              <Money text={changeValue(c.before)} synthetic={synth} />
+              <Money text={changeValue(c.before)} synthetic={synth && !isBudget(c.what)} />
             </s>{" "}
             → стало{" "}
             <b>
-              <Money text={changeValue(c.after)} synthetic={synth} />
+              <Money text={changeValue(c.after)} synthetic={synth && !isBudget(c.what)} />
             </b>
           </li>
         ))}

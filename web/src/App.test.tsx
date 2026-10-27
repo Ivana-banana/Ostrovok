@@ -166,6 +166,7 @@ suite("приложение", () => {
     const offer = (id: string) => checkoutStage.plan.offers.find((o) => o.offer_id === id)!;
     const before = [...checkoutStage.cart.items, offer("h1")];
     const after = [...before, offer("x1")];
+    // total_rub of the stored cart is stale (1): the chat line must use the total the server returns
     const session = { ...structuredClone(checkoutStage), cart: { items: before, total_rub: 1 } };
     const total = after.reduce((n, o) => n + o.price_rub, 0);
     routes["GET /api/session/s1"] = () => ({ status: 200, body: session });
@@ -174,7 +175,7 @@ suite("приложение", () => {
     await click("В корзину");
     const sum = String(total).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     const last = [...box.querySelectorAll(".msg.agent")].at(-1)?.textContent;
-    expect(last).toBe(`В корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
+    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
   });
 
   it("подтверждение: отправляет итог, который видел пользователь, и показывает ваучер", async () => {

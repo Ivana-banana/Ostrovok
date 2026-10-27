@@ -35,21 +35,28 @@ suite("доска поездки", () => {
     r.plan.changes = [
       { what: "итог", before: "22 500 ₽", after: "23 000 ₽" },
       { what: "отель", before: "6 400 ₽ за ночь", after: "7 200 ₽ за ночь" },
+      { what: "budget_rub", before: "100 000 ₽", after: "80 000 ₽" },
+      { what: "бюджет отеля", before: "12 000 ₽", after: "10 000 ₽" },
     ];
     r.plan.explanations = [
       { offer_id: "h1", why: "дешевле на 1 100 ₽", tradeoffs: ["дороже на 3 300 ₽"], risks: ["штраф 2 000 ₽"] },
     ];
-    r.plan.bundles = r.plan.bundles.map((b) => ({ ...b, tradeoffs: ["дороже на 900 ₽"] }));
+    r.plan.bundles = r.plan.bundles.map((b) => ({ ...b, tradeoffs: ["дороже на 900 ₽", "не укладывается в бюджет 80 000 ₽: поездка целиком 91 000 ₽", "отель не укладывается в бюджет отеля 10 000 ₽: 12 500 ₽ (синтетика)"] }));
     r.plan.destinations = r.plan.destinations.map((d) => ({ ...d, why: `от 5 000 ₽ в сезон` }));
     r.plan.issues = r.plan.issues.map((i) => ({ ...i, text: `${i.text} (ранний заезд 1 200 ₽)` }));
     const text = render(r).body.textContent ?? "";
     const amounts = [...text.matchAll(/\d[\d \u00a0]*₽/g)];
     expect(amounts.length).toBeGreaterThanOrEqual(15);
+    expect(text).not.toMatch(/синтетика\s*\(?синтетика/); // a sum that has the label is not marked twice
     for (const m of amounts) {
-      const before = text.slice(Math.max(0, m.index! - 24), m.index!);
+      const before = text.slice(Math.max(0, m.index! - 48), m.index!);
       const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 24);
       // a budget is the number the user typed, not a price of ours
-      if (/бюджет[а-я]*( отеля)? ?$/i.test(before)) continue;
+      const userBudget = /бюджет[а-я]*( отеля)?:? ?(было )?$|бюджет[^→]*→ стало $/i;
+      if (userBudget.test(before)) {
+        expect(after, `${before}${m[0]}${after}`).not.toMatch(/^\s*\(?синтетика/);
+        continue;
+      }
       expect(after, `${before}${m[0]}${after}`).toMatch(/^\s*\(?синтетика/);
     }
   });
