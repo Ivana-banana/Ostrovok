@@ -345,7 +345,8 @@ def _leg(
     depart = depart.astimezone(ZoneInfo(a["tz"]))
     arrive = _shift(depart, _minutes(hours)).astimezone(ZoneInfo(b["tz"]))
     what = {"flight": "Перелёт", "train": "Поезд", "car": "На своей машине"}[mode]
-    title = f"{what} {a['name']} → {b['name']}, {depart:%d.%m %H:%M}"
+    port = f" ({b['airport']['iata']})" if mode == "flight" and b.get("airport") else ""
+    title = f"{what} {a['name']} → {b['name']}{port}, {depart:%d.%m %H:%M}"
     if changes:
         title += f", пересадок: {changes}"
     if mode == "car":
@@ -437,6 +438,8 @@ def transfer_offers(
         flight = leg.mode == "flight"
         hub_km = place["airport_km"] if flight else place["station_km"]
         hub = "аэропорт" if flight else "вокзал"
+        if flight and place.get("airport"):
+            hub += " " + place["airport"]["iata"]
         for h in hotels:
             road = round(hub_km + 0.6 * (h.distance_center_km or 0), 1)
             ride = _minutes((10 + road / 35 * 60) / 60)
