@@ -884,6 +884,10 @@ def too_long_note(said: str, nights: int) -> str:
     return f"длительность: срок «{said}» не принял — взято {nights} ночей"
 
 
+def is_too_long_note(assumption: str) -> bool:
+    return assumption.startswith("длительность: срок «")
+
+
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на месяц» (30), «на выходные» (пятница–воскресенье).
 
@@ -895,7 +899,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     # «Сократить расходы на 3 дня» names a cost, not the trip: the object word is no edit
     starts += rf"|\b{EDIT_VERB}\w*(?:\s+(?!расход|бюджет|затрат|цен)\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*|месяц\w*)"
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
-    if m := re.search(r"\b(?:на\s+)?(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
+    if m := re.search(r"\bна\s+(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
         found["nights"] = MAX_NIGHTS + 1  # too long, the 3 digits are no number the rules read
     elif m := re.search(rf"\b{NUM}\s*ноч\w*", t):
         n = _num(m.group(1))

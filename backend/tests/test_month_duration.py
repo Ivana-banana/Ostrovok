@@ -47,7 +47,6 @@ def test_two_months_is_the_limit_and_taken(store):
         ("Сочи на 400 ночей, двое взрослых", "на 400 ночей"),
         ("Сочи на 400 дней, двое взрослых", "на 400 дней"),
         ("Сочи на 99 ночей, двое взрослых", "99 ночей"),
-        ("Сочи 100 ночей, двое взрослых", "100 ночей"),
         ("Сочи на 9 недель, двое взрослых", "9 недель"),
     ],
 )
@@ -106,3 +105,28 @@ def test_model_length_over_the_limit_is_not_taken(monkeypatch, store):
     r = say(store, "Сочи в ноябре, двое взрослых")
     assert r.plan.spec.nights == 7
     assert one_note_for(r) == "длительность: срок «400 ночей» не принял — взято 7 ночей"
+
+
+def test_model_length_is_dropped_when_the_rules_rejected_one(monkeypatch, store):
+    from api import llm
+
+    monkeypatch.setattr(llm, "extract_spec", lambda m, s, until=None, today=None: {"nights": 14})
+    r = say(store, "Сочи на 400 ночей в ноябре, двое взрослых")
+    assert r.plan.spec.nights == 7
+    assert one_note_for(r) == "длительность: срок «на 400 ночей» не принял — взято 7 ночей"
+
+
+@pytest.mark.parametrize(
+    ("text", "nights"),
+    [
+        ("Сочи 5 ночей, не дороже 5000 ночь", 5),
+        ("Казань на 3 ночи, цена до 6000 сутки", 3),
+        ("Сочи на 5 ночей, отель до 4000 ночь", 5),
+        ("Сочи на неделю, отель 3000-4000 ночь", 7),
+        ("Сочи на 10 дней, 150 дней до отпуска", 9),
+    ],
+)
+def test_a_price_per_night_is_no_length(store, text, nights):
+    r = say(store, text + ", двое взрослых")
+    assert r.plan.spec.nights == nights
+    assert not any("не принял" in a for a in r.plan.spec.assumptions)
