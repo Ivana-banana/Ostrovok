@@ -23,7 +23,7 @@ from api.cart import keep_refusal, refused, remember_refusal
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
 from api.extract import EDIT_VERB, MONTH_NAMES, NUM, NUMS
 from api.fixtures import find_offers, rank
-from api.optimizer import bundles, order_tariffs, pick_hotel
+from api.optimizer import BEST_LABELS, bundles, order_tariffs, pick_hotel
 from api.timeline import build_timeline
 
 NODES = ("destination", "offers", "ranking", "timeline", "cart")
@@ -39,6 +39,9 @@ FIELD_NODE = {
     "children_ages": "offers",
     "pets": "offers",
     "modes": "offers",
+    "own_transport": "offers",
+    "arrive_at": "offers",
+    "leave_at": "offers",
     "budget_rub": "ranking",
     "hotel_budget_rub": "ranking",
     "meal": "ranking",
@@ -56,6 +59,7 @@ LABELS = {
     "guests": "состав",
     "pets": "питомец",
     "modes": "транспорт",
+    "tickets": "билеты",
     "budget_rub": "бюджет",
     "hotel_budget_rub": "бюджет отеля",
     "meal": "питание",
@@ -317,10 +321,6 @@ def _same_hotel(h: HotelOffer, offers: list[Offer]) -> HotelOffer | None:
     return next((o for o in group if (o.meal, o.cancellation.refundable) == same), group[0])
 
 
-# Labels of the best bundle in optimizer.optimize; a test keeps them in step.
-BEST_LABELS = ("лучший по вашим приоритетам", "ближе всего к условиям")
-
-
 def _ranked_hotel(plan: Plan) -> HotelOffer | None:
     """The hotel of the best set the ranking showed, read from the stored bundles.
 
@@ -406,7 +406,7 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
     # mean the same timeline. If the checker starts reading spec fields, rebuild it here.
     # The timeline is built whenever the selection changed, also for the first plan (#66): the
     # compare stage shows it before the user says «беру».
-    if _chosen(plan) != _chosen(old) or not plan.timeline:
+    if _chosen(plan) != _chosen(old) or not old.offers:
         plan.timeline, plan.issues = build_timeline(plan)
         done.append("timeline")
     new_cart = cart
@@ -441,6 +441,16 @@ def _guests(s: TripSpec) -> str:
     return f"{s.adults} взр.{kids}"
 
 
+def own_tickets(s: TripSpec) -> str:
+    """«свои билеты, прилёт 14.11 01:30, вылет 18.11 15:00»; "" without own tickets (#408)."""
+    if not s.own_transport:
+        return ""
+    times = [
+        f"{w} {at:%d.%m %H:%M}" for w, at in (("прилёт", s.arrive_at), ("вылет", s.leave_at)) if at
+    ]
+    return ", ".join(["свои билеты", *times])
+
+
 def _refundable(v: bool | None) -> str:
     return {True: "бесплатная отмена", False: "невозвратный тариф", None: "не важно"}[v]
 
@@ -453,6 +463,7 @@ SPEC_VIEWS = {  # LABELS key -> TripSpec as text
     "guests": _guests,
     "pets": lambda s: "с питомцем" if s.pets else "без питомца",
     "modes": lambda s: ", ".join(MODES[m] for m in s.modes) or "любой",
+    "tickets": lambda s: own_tickets(s) or "подбираем",
     "budget_rub": lambda s: _rub(s.budget_rub) if s.budget_rub is not None else "не задан",
     "hotel_budget_rub": lambda s: (
         _rub(s.hotel_budget_rub) if s.hotel_budget_rub is not None else "не задан"
