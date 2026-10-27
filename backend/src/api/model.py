@@ -88,7 +88,11 @@ BOOK_RE = re.compile(r"\bподтверждаю\b")
 REFUSE_RE = re.compile(
     r"\bпромпт|system\s*prompt|(?:системн|служебн)\w*\s+инструкц"
     r"|\b(?:покаж|выведи|раскро|скаж|пришли|напиш|повтори|прочита|озвуч)\w*\s+(?:\w+\s+)?"
-    r"(?:свои|твои|ваши|скрыт\w+|исходн\w+|начальн\w+)\s+(?:\w+\s+)?инструкц"
+    # «ваши инструкции по багажу» asks for the rules of the trip, not for the prompt (#81);
+    # a hidden or initial instruction stays an attack with any topic
+    r"(?:(?:свои|твои|ваши)\s+(?:\w+\s+)?инструкц"
+    r"(?!\w*\s+(?:по|для)\s+(?:багаж|заселен|выселен|заезд|выезд|трансфер|прилет|вылет|отмен))"
+    r"|(?:скрыт\w+|исходн\w+|начальн\w+)\s+(?:\w+\s+)?инструкц)"
     r"|\bигнорир\w*\s+(?:\w+\s+){0,2}инструкц"
     r"|(?:постав|установ|сдела|измен|смен)\w*\s+(?:\w+\s+)?цен\w*\s+(?:на\s+|в\s+)?(?:0|н[оу]л\w*)\b"
     r"|\bцен\w*\s+должн\w*\s+быть\s+(?:0|н[оу]л\w*)\b"
@@ -96,7 +100,7 @@ REFUSE_RE = re.compile(
     r"|\bне\s+(?:спрашивай|запрашивай|проси|жди|требуй)\w*\s+(?:\w+\s+)?(?:подтвержд|согласи)"
     r"|\b(?:за)?(?:оформ|бронир|выда|выпиш)\w*\s+(?:\w+\s+){0,2}без\s+(?:\w+\s+)?"
     r"(?:подтвержд|оплат\w*\b(?!\s+(?:на\s+месте|на\s+ресепшен|при\s+(?:заселении|заезде)"
-    r"|в\s+отеле|заранее|сейчас)))"
+    r"|в\s+отеле|заранее)))"  # «без оплаты сейчас» is an order to skip the payment (#81)
     r"|\bсразу\s+(?:\w+\s+)?(?:выда|оформ|выпиш)\w*\s+(?:\w+\s+)?ваучер"
     r"|ваучер\w*\s+без\s+(?:\w+\s+)?(?:подтвержд|оплат)[^?]*$"  # a question is no order
 )
@@ -105,6 +109,25 @@ REFUSAL = (
     "Служебные инструкции не показываю."
 )
 NOT_BOOK_RE = re.compile(r"\bне\s+подтверждаю\b")
+# #81: a question at assemble or checkout is no edit: the spec and the cart stay. A question has
+# «?» or a question word; a request («хотим», «можно», «с нами едет»), a date move, a new place or
+# party size, or a budget makes it an edit. A bare «?» yields to a consent word; a question word
+# yields to a strong one («да», «беру»), not to «корзин…» (as in «сколько стоит корзина?»).
+QUESTION_WORD_RE = re.compile(r"\b(?:сколько|есть\s+ли|включен\w*|входит|входят|почему|зачем|ли)\b")
+STRONG_CONFIRM_RE = re.compile(r"\b(?:да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*)\b")
+# «нужен ли трансфер?» and «можно ли …?» ask; «нужен трансфер» and «можно с бассейном» order.
+# A comparative («подешевле», «ближе») or «а есть что-нибудь…» asks for other offers: an edit.
+REQUEST_RE = re.compile(
+    r"\b(?:можно|нужен|нужн\w+|надо)\b(?!\s+ли\b)"
+    r"|\b(?:хоч\w+|хотим|добав\w+|убер\w+|замен\w+|смен\w+|поменя\w+|измен\w+|перенес\w+"
+    r"|подвин\w+|сдвин\w+|исключ\w+|с\s+нами|поедем|планиру\w+"
+    r"|(?:по)?(?:дешевле|дороже|ближе|лучше|больше|меньше)"
+    r"|а\s+есть\s+(?:что-нибудь|что-то|вариант\w*|друг\w+))\b"
+)
+EDIT_KEYS = {
+    "destinations", "date_from", "date_to", "month", "nights", "adults", "children_ages",
+    "origin", "budget_rub", "hotel_budget_rub", "pets", "max_travel_hours",
+}  # fmt: skip
 # S5 (#90): a way out of any stage. «Начать заново» drops the plan and the cart; «другое
 # направление» drops the city and shows others from the catalogue.
 RESTART_RE = re.compile(
@@ -561,6 +584,43 @@ def _confirmed(text: str) -> bool:
     return bool(CONFIRM_RE.search(text)) and not NEGATION_RE.search(text)
 
 
+def is_question(low: str, found: dict) -> bool:
+    """A question about the plan or the cart, not an edit (#81). `low` is lower case, no «ё»."""
+    if (
+        BOOK_RE.search(low)
+        or REQUEST_RE.search(low)
+        or SHIFT_RE.search(low)
+        or DATE_EDIT_RE.search(low)
+        or OTHER_RE.search(low)
+        or OTHER_VARIANTS_RE.search(low)
+        or EDIT_KEYS & set(found)
+    ):
+        return False
+    if QUESTION_WORD_RE.search(low):
+        return not STRONG_CONFIRM_RE.search(low)
+    return "?" in low and not CONFIRM_RE.search(low)
+
+
+def _question_answer(old: ChatReply) -> str:
+    """The reply to a question at assemble or checkout: the facts of the plan or the cart only
+    (TRAP-4), the stage and the cart stay."""
+    head = "Это вопрос: план и корзину не меняю."
+    if old.stage == "assemble":
+        return f"{head}\n{_text_assemble(old.plan)}"
+    rows = [f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in old.cart.items]
+    cart = (
+        "В корзине:\n" + "\n".join(rows) + f"\nИтого {_rub(old.cart.total_rub)} (синтетика)."
+        if rows
+        else "Корзина пуста."
+    )
+    if old.plan.timeline:  # times come from the timeline tool, never from the model
+        cart += "\nПлан поездки:\n" + "\n".join(
+            f"{e.at:%d.%m %H:%M} — {e.title}" for e in old.plan.timeline
+        )
+    edit = "Чтобы изменить поездку, напишите, что поменять: например, «хотим с бассейном»."
+    return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
+
+
 def _tail(spec: TripSpec, hint: str) -> list[str]:
     head = ["Допущения: " + "; ".join(spec.assumptions) + "."] if spec.assumptions else []
     return head + [hint]
@@ -763,9 +823,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # S6 (#31): «возьми поезд», «второй рейс» pick offers of the plan. It goes to no model and is
     # no constraint: the spec stays, only plan.selected and the timeline change. A message that
     # also states trip fields or moves the dates («давай в Сочи поездом») is a re-plan, as before.
-    pure = set(extract(message, bool(old.plan.spec.destinations))[0]) <= {
-        "modes"
-    } and not SHIFT_RE.search(t.replace("ё", "е"))
+    rules_found = extract(message, bool(old.plan.spec.destinations))[0]
+    pure = set(rules_found) <= {"modes"} and not SHIFT_RE.search(t.replace("ё", "е"))
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
         plan, note = switch_transport(old.plan, message)
         if old.stage == "checkout" and (plan or note):
@@ -779,6 +838,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return old.model_copy(
                 update={"plan": plan or old.plan, "reply": text, "questions": [], "llm": False}
             )
+    if prev and old.stage in ("assemble", "checkout") and is_question(low, rules_found):
+        # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
+        text = _question_answer(old)
+        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     idx = _ordinal(message)
     deadline = llm.deadline()
     # A service turn («беру», «да», «подтверждаю», a number) goes to no model: a field it
