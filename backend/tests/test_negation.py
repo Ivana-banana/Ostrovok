@@ -9,7 +9,7 @@ import pytest
 
 from api.contracts import ChatRequest
 from api.extract import excluded_places, extract, is_excluded
-from api.fixtures import suggest_destinations
+from api.inspire import suggest_destinations
 from api.model import chat
 from api.store import SessionStore
 
@@ -100,22 +100,28 @@ def test_swapped_city_is_told_in_the_notes():
     assert any("Хургад" in n and "Шарм-эль-Шейх" in n for n in notes)
 
 
+SEA_NOV = {"origin": "Москва", "month": 11, "wishes": ["море"]}
+
+
 @pytest.mark.parametrize(
-    ("exclude", "gone"),
+    ("spec", "exclude"),
     [
-        (["Турция"], ["Анталия"]),
-        (["Египет"], ["Хургада"]),
-        (["Сочи"], ["Сочи"]),
-        (["Россия"], ["Сочи", "Казань", "Калининград", "Санкт-Петербург"]),
-        (["Анталия"], ["Анталия"]),
+        (SEA_NOV, ["Турция"]),
+        (SEA_NOV, ["Египет"]),
+        (SEA_NOV, ["Анталия"]),
+        ({}, ["Россия"]),
+        ({}, ["Нижний Новгород"]),
     ],
 )
-def test_suggestions_skip_excluded_places_and_their_country(exclude, gone):
+def test_suggestions_skip_excluded_places_and_their_country(spec, exclude):
     from api.contracts import TripSpec
 
-    shown = [d.name for d in suggest_destinations(TripSpec(), 10, exclude)]
-    assert shown and not set(shown) & set(gone)
-    assert set(gone) <= {d.name for d in suggest_destinations(TripSpec(), 10)}
+    spec = TripSpec(**spec)
+    every = suggest_destinations(spec, 10)
+    gone = [d.name for d in every if d.name in exclude or d.country in exclude]
+    shown = suggest_destinations(spec, 10, exclude)
+    assert gone and shown  # without the refusal the place is offered
+    assert not any(d.name in exclude or d.country in exclude for d in shown)
 
 
 @pytest.mark.parametrize("text", [REPRO_1, REPRO_2])

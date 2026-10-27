@@ -8,11 +8,18 @@ of a clarify question, then «1» / «беру» / «да» / «подтверж
 
 import pytest
 
+from api import catalog
 from api.contracts import ChatRequest, HotelOffer
 from api.extract import extract
-from api.fixtures import CATALOG
 from api.model import chat
 from api.store import SessionStore
+
+
+def in_catalog(name: str) -> bool:
+    """A place of catalog.json under its own name (#20: inspiration ranks the whole catalogue)."""
+    place = catalog.resolve(name)
+    return place is not None and place["name"] == name
+
 
 ANSWERS = {"inspire": "1", "compare": "беру", "assemble": "да", "checkout": "подтверждаю"}
 HANOI = "Кандалакша на 8 ночей, двое взрослых, бюджет 120 тысяч"
@@ -106,7 +113,7 @@ def test_trap_2_unknown_city_is_not_swapped_for_a_catalogue_city(store, text, ci
     assert r.plan.spec.destinations == [city]
     assert city in r.reply and "нет в каталоге" in r.reply
     options = r.questions[0].options
-    assert 2 <= len(options) <= 3 and set(options) <= set(CATALOG)
+    assert 2 <= len(options) <= 3 and all(in_catalog(o) for o in options)
     # Anything but a pick keeps the named city and books nothing.
     again = say(store, "подтверждаю", r.session_id)
     assert again.stage == "select" and again.plan.spec.destinations == [city]

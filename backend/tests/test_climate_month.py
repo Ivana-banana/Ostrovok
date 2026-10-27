@@ -1,14 +1,16 @@
 """#157: the climate of the trip month comes from catalog.json, and the answer shows its numbers.
 
 Rules only, no model (TRAP-1). Air and water are monthly means of the catalogue (TRAP-4: no
-invented numbers). Each sea place of fixtures.CATALOG has the water of every month.
+invented numbers). Inspiration ranks the whole catalogue (#20); a cold sea is checked on the
+card of a named place (inspire.card), as it no longer reaches the warm list.
 """
 
 import pytest
 
 from api import catalog
-from api.contracts import ChatRequest
-from api.fixtures import CATALOG
+from api.contracts import ChatRequest, TripSpec
+from api.fixtures import WARM_WATER_C, future_date
+from api.inspire import card
 from api.model import chat, suggest_destinations
 from api.store import SessionStore
 
@@ -33,16 +35,24 @@ def names(r):
 
 def everything(store, text):
     spec = say(store, text).plan.spec
-    return {d.name: d for d in suggest_destinations(spec, len(CATALOG))}
+    return {d.name: d for d in suggest_destinations(spec, 7)}
+
+
+def cards(month: int, *names: str) -> dict:
+    """Cards of named places for a warm-sea request of the month, from Москва."""
+    spec = TripSpec(origin="Москва", month=month, wishes=["море"])
+    spec = spec.model_copy(update={"date_from": future_date(month, 15)})
+    hub = catalog.resolve("Москва")
+    return {n: card(spec, hub, catalog.resolve(n)) for n in names}
 
 
 def test_trap_4_january_warm_water_ranks_above_cold_water(store):
-    """TRAP-4: Хургада 22.5 °C and Дубай 21.9 °C rank above every sea of January below 21.5 °C."""
-    got = list(everything(store, JANUARY))
-    for cold in ("Анталия", "Сочи", "Калининград"):
-        for warm in ("Хургада", "Дубай"):
-            assert got.index(cold) > got.index(warm), (cold, warm, got)
-    assert names(say(store, JANUARY))[:2] == ["Хургада", "Дубай"]
+    """TRAP-4: in January only seas from 21.5 °C are shown; Анталия 19.5 °C, Сочи, Калининград not."""
+    got = everything(store, JANUARY)
+    assert not {"Анталия", "Сочи", "Калининград"} & set(got), list(got)
+    for d in got.values():
+        assert d.water_c >= WARM_WATER_C and d.violates == [], d.name
+    assert "Хургада" in names(say(store, JANUARY))  # 22.5 °C, the cheapest warm sea
 
 
 def test_trap_4_january_climate_is_the_catalogue_month(store):
@@ -55,15 +65,15 @@ def test_trap_4_january_climate_is_the_catalogue_month(store):
     assert "вода 22.5 °C" in r.reply  # Хургада in January
 
 
-def test_trap_4_january_cold_sea_is_marked_by_the_january_water(store):
-    got = everything(store, JANUARY)
+def test_trap_4_january_cold_sea_is_marked_by_the_january_water():
+    got = cards(1, "Анталия", "Сочи", "Калининград", "Хургада", "Дубай")
     for name, water in (("Анталия", 19.5), ("Сочи", 11.2), ("Калининград", 0.6)):
         assert got[name].violates == [f"{COLD} {water:g} °C"], name
     assert got["Хургада"].violates == [] and got["Дубай"].violates == []
 
 
-def test_october_sea_is_marked_by_the_october_water(store):
-    got = everything(store, "Хочу тёплое море в октябре, недорого, 2 взрослых, из Москвы")
+def test_october_sea_is_marked_by_the_october_water():
+    got = cards(10, "Калининград", "Сочи", "Анталия")
     assert got["Калининград"].violates == [f"{COLD} 12.7 °C"]
     assert got["Сочи"].violates == [f"{COLD} 21.1 °C"]
     assert got["Анталия"].violates == []  # 26.1 °C in October
@@ -76,4 +86,5 @@ def test_november_sea_unchanged(store):
     for d in r.plan.destinations:
         assert not any(UNCHECKED in x.lower() for x in [*d.tradeoffs, *d.violates])
     assert UNCHECKED not in r.reply.lower()
-    assert names(r) == ["Анталия", "Хургада", "Дубай", "Санкт-Петербург"]
+    assert 2 <= len(r.plan.destinations) <= 4
+    assert all(d.water_c >= WARM_WATER_C and not d.violates for d in r.plan.destinations)

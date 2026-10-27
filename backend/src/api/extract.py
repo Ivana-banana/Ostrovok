@@ -110,7 +110,8 @@ def _two_word_places() -> None:
 
 
 _two_word_places()
-NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой"}
+NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой",
+              "европа", "европе", "европу", "европы"}  # fmt: skip
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
 # An unknown capitalized word counts only in main's narrow pattern: «Ухта, 3 ночи»,
 # «Калуга в мае», «Тула на 3 дня». Even then the lists below veto ordinary first words.
@@ -317,6 +318,9 @@ WISHES = [
     ("красиво", r"красив"),
     ("романтика", r"романт"),
     ("командировка", r"командиров"),
+    # #20: region words narrow the inspiration (api/inspire.py); «Европа» is no destination
+    ("Европа", r"\bевроп[аеуы]\b"),
+    ("юг", r"\bна\s+юг\b"),
 ]
 PRIORITY_RE = re.compile(r"\b(?:важн\w*|главн\w*|приоритет\w*|в первую очередь|прежде всего)")
 PRIORITIES = [
