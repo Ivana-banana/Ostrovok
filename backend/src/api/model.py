@@ -45,6 +45,7 @@ from api.dag import (
     shift_matches,
 )
 from api.extract import (
+    ASKING_NOTE,
     DATE_KEYS,
     DEFAULT_NIGHTS,
     HOTEL_NOTE,
@@ -53,6 +54,7 @@ from api.extract import (
     PER_NIGHT_NOTE_RE,
     excluded_places,
     extract,
+    is_child_question,
     is_chip_message,
     is_excluded,
     is_past_note,
@@ -790,6 +792,21 @@ HINTS: dict[Stage, str] = {
 }
 
 
+PLAN_STAGES = ("inspire", "select", "compare", "assemble", "checkout")
+
+
+def _text_kids_question(old: ChatReply) -> str:
+    """The answer to «А дети бесплатно?» (#179): the party stays, the data has no free places."""
+    spec = old.plan.spec
+    kids = f" + дети {', '.join(map(str, spec.children_ages))} лет." if spec.children_ages else ""
+    return (
+        f"Состав не меняю: {spec.adults} взр.{kids or ''} "
+        "Отдельной строки «дети бесплатно» в данных нет: "
+        "в расчёте цена ребёнка зависит от его возраста (синтетика). "
+        "Чтобы добавить ребёнка, напишите возраст: «с ребёнком 5 лет». " + HINTS.get(old.stage, "")
+    ).strip()
+
+
 def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) -> ChatReply:
     """One user message -> the next ChatReply of the session.
 
@@ -825,7 +842,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # S6 (#31): «возьми поезд», «второй рейс» pick offers of the plan. It goes to no model and is
     # no constraint: the spec stays, only plan.selected and the timeline change. A message that
     # also states trip fields or moves the dates («давай в Сочи поездом») is a re-plan, as before.
-    rules_found = extract(message, bool(old.plan.spec.destinations))[0]
+    # #179: «А дети бесплатно?» at a built plan is a question, not a party: nobody is added.
+    asking = old.stage in PLAN_STAGES and is_child_question(message)
+    rules_found, rules_notes = extract(message, bool(old.plan.spec.destinations), asking=asking)
     pure = set(rules_found) <= {"modes"} and not SHIFT_RE.search(t.replace("ё", "е"))
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
         plan, note = switch_transport(old.plan, message)
@@ -842,7 +861,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             )
     if prev and old.stage in ("assemble", "checkout") and is_question(low, rules_found):
         # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
-        text = _question_answer(old)
+        kids_only = asking and ASKING_NOTE in rules_notes and not rules_found
+        text = _text_kids_question(old) if kids_only else _question_answer(old)
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     idx = _ordinal(message)
     deadline = llm.deadline()
@@ -860,7 +880,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         bool(old.plan.spec.destinations),
         old.plan.spec.nights or DEFAULT_NIGHTS,
         old.plan.spec.adults,
+        asking,
     )
+    if asking and ASKING_NOTE in notes and not found:
+        return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
     # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
@@ -886,6 +909,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if service or other or not use_llm or is_chip_message(message)  # chips: S9, #76
         else llm.extract_spec(message, old.plan.spec, deadline)
     )
+    if llm_found and ASKING_NOTE in notes:
+        llm_found.pop("children_ages", None)  # a question names no child (#179)
     if shifts:
         if (
             found.pop("nights", None) is not None
