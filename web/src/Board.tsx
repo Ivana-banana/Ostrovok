@@ -683,12 +683,22 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   );
 }
 
+const BOOKING_STATUS: Record<Voucher["status"], string> = {
+  created: "создана, ждёт подтверждения",
+  confirmed: "подтверждена",
+  cancelled: "отменена",
+};
+
 function VoucherView({ voucher }: { voucher: Voucher }) {
   const s = voucher.spec;
   return (
     <section className="card voucher" aria-label="Ваучер">
       <h2>Ваучер {voucher.booking_id}</h2>
-      <p className="warn">Бронь и оплата имитированы. Это не настоящий заказ.</p>
+      {voucher.simulated ? (
+        <p className="warn">Бронь и оплата имитированы. Это не настоящий заказ.</p>
+      ) : (
+        <p>Статус брони: {BOOKING_STATUS[voucher.status]}.</p>
+      )}
       <dl className="spec">
         <div>
           <dt>Номер брони</dt>
