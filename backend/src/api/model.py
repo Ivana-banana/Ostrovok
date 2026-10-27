@@ -267,8 +267,8 @@ PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
 EXCLUDED = "исключено"
 
 
-# #114: «тепло» in the wishes. Estimate without a source, like the climate of the catalogue:
-# in the cold half of the year a destination counts as warm if its November air is this warm.
+# #114: «тепло» in the wishes. Estimate without a source: in the cold half of the year
+# a destination counts as warm if its air of the month (catalog.json) is this warm.
 WARM_AIR_C = 15.0
 
 
@@ -279,7 +279,7 @@ def suggest_destinations(spec: TripSpec, limit: int = 4, exclude: list[str] | No
     if "тепло" not in spec.wishes or spec.month not in COLD_MONTHS:
         return catalog_destinations(spec, limit, exclude)
     ranked = catalog_destinations(spec, len(CATALOG), exclude)
-    warm = [d for d in ranked if (CATALOG[d.name]["nov"][0] or 0) >= WARM_AIR_C]
+    warm = [d for d in ranked if (d.air_c or 0) >= WARM_AIR_C]
     if warm:
         return warm[:limit]
     note = "не тёплое направление: «тепло» в пожеланиях, а тёплых мест не осталось"
@@ -1155,16 +1155,6 @@ def _text_inspire(plan: Plan) -> str:
         if d.violates:
             line += f" Нарушает требования: {'; '.join(d.violates)}."
         lines.append(line)
-    if "тепло" in spec.wishes and spec.month in COLD_MONTHS and spec.month != 11:
-        lines.append(
-            "Тепло оцениваю по климату ноября из каталога: других месяцев в данных нет, "
-            "в вашем месяце может быть холоднее."
-        )
-    elif "море" in spec.wishes and spec.month != 11:
-        lines.append(
-            "Климат месяца не проверен: в данных только ноябрь. Море оцениваю по ноябрьской "
-            "воде, в вашем месяце может быть иначе."
-        )
     return "\n".join(lines + _tail(spec, "Напишите номер или название направления."))
 
 

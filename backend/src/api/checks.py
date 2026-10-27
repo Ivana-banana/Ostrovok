@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
-from api import dag, fixtures
+from api import catalog, dag
 from api.contracts import (
     Bundle,
     Cancellation,
@@ -111,16 +111,37 @@ def _record(run: Run) -> Run:
     return run
 
 
+GEOCODER_FILE = Path(__file__).resolve().parents[3] / "eval" / "geocoder_answers.json"
+_recording: Callable[[str, dict], dict] | None = None  # set by record_geocoder only
+
+
+def _recorded(url: str, params: dict) -> dict:
+    """Open-Meteo answers recorded once (record_geocoder), not the network (TRAP-6)."""
+    if _recording:
+        return _recording(url, params)
+    try:
+        answers = json.loads(GEOCODER_FILE.read_text(encoding="utf-8"))["answers"]
+        return answers[catalog.request_url(url, params)]
+    except (OSError, KeyError) as e:
+        raise OSError(f"no recorded answer: {e}") from e
+
+
 @contextmanager
 def _api() -> Iterator[tuple[TestClient, SessionStore]]:
-    """A client on a temporary store; the directory and our own override go away after."""
+    """A client on a temporary store and the recorded geocoder; all of it goes away after."""
     with tempfile.TemporaryDirectory(prefix="eval-") as tmp:
         store = SessionStore(Path(tmp) / "eval.db")
         previous = app.dependency_overrides.get(get_store)
         app.dependency_overrides[get_store] = lambda: store
+        saved = catalog._get, catalog.ONLINE_CACHE, dict(catalog._online)
+        catalog._get, catalog.ONLINE_CACHE = _recorded, Path(tmp) / "online_places.json"
+        catalog._online.clear()
         try:
             yield TestClient(app, raise_server_exceptions=False), store
         finally:
+            catalog._get, catalog.ONLINE_CACHE = saved[:2]
+            catalog._online.clear()
+            catalog._online.update(saved[2])
             if previous is None:
                 app.dependency_overrides.pop(get_store, None)
             else:
@@ -724,8 +745,11 @@ def check_S4(case: dict) -> tuple[bool, str]:
 
 
 def known_place(name: str) -> bool:
-    """The agent knows the place: it is in places.json (names, aliases) or in osm_hotels.json."""
-    return resolve_place(name) is not None or name in osm_hotels()
+    """The team seeded the place: it is in catalog.json (names, aliases) or in osm_hotels.json.
+
+    Snapshot only: a place the geocoder finds online is not seeded (human decision on #8, D-017).
+    """
+    return catalog.resolve(name) is not None or name in osm_hotels()
 
 
 def _reached_booking(run: Run, minutes: float) -> bool:
@@ -742,7 +766,9 @@ def check_S5(case: dict) -> tuple[bool, str]:
        (the case asks ≥ 4 of 5; the pool of 10 gets the same share). The agent was tuned on it.
     b) The case says "at least 1 of 5 names a city the team did not seed". The visible pool has
        none, so the separate pool eval/cases_unseen.json (#89) decides: at least one query that
-       names a city outside places.json and osm_hotels.json must be booked in that city.
+       names a city outside catalog.json and osm_hotels.json must be booked in that city. The agent
+       finds such a city with the geocoder; eval gives it recorded answers, so the result is the
+       same on every machine. No file of recorded answers: "не проверено", not a pass.
     """
     pool = _quotes(case)
     booked, outside, failed = 0, 0, []
@@ -759,7 +785,7 @@ def check_S5(case: dict) -> tuple[bool, str]:
     need = math.ceil(0.8 * len(pool))
     note = (
         f"а) пул-образец из cases.json (видимый, на нём шла настройка): до брони {booked} "
-        f"из {len(pool)} (нужно ≥ {need}); вне places.json и osm_hotels.json {outside}"
+        f"из {len(pool)} (нужно ≥ {need}); вне catalog.json и osm_hotels.json {outside}"
     )
     if failed:
         note += "; не дошли: " + ", ".join(failed)
@@ -768,7 +794,12 @@ def check_S5(case: dict) -> tuple[bool, str]:
         return False, note + f"; б) нет файла пула {UNSEEN_FILE.name}"
     named = [r for r in results if r["outside"]]
     kept = [r for r in named if r["kept"]]
-    note += f"; б) вне данных: бронь в названном городе {len(kept)} из {len(named)}"
+    note += f"; б) вне catalog.json и osm_hotels.json: бронь в названном городе {len(kept)} из {len(named)}"
+    if not GEOCODER_FILE.is_file():
+        return (
+            False,
+            note + f" — не проверено: нет записанных ответов геокодера ({GEOCODER_FILE.name})",
+        )
     if booked < need:
         return False, note
     if not kept:
@@ -789,7 +820,7 @@ EXPECT_KEYS = {
 def _same_name(value: str, names: list[str]) -> bool:
     """A name as the offers write it is one of the names the user may mean.
 
-    Same place in places.json (aliases, case endings), or the same full normalised name.
+    Same place in catalog.json (aliases, case endings), or the same full normalised name.
     No prefix guess: Самара is not Самарканд.
     """
     mine = resolve_place(value)
@@ -823,8 +854,8 @@ def _over_budget_with_note(reply: ChatReply, budget: int, total: int) -> bool:
 def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
     """(constraint, OK | VIOLATED | UNKNOWN, why) for the final plan of a booked session.
 
-    Every verdict comes from the voucher and from data the system has: places.json, the
-    November climate of the catalogue, the offers. No data - UNKNOWN, never OK.
+    Every verdict comes from the voucher and from data the system has: catalog.json, the
+    climate of the booking month in it, the offers. No data - UNKNOWN, never OK.
     """
     unknown = set(expect) - EXPECT_KEYS
     if unknown:
@@ -875,18 +906,18 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
         )
     if expect.get("warm_sea"):
         place = resolve_place(first.city)
-        dest = next((c for n, c in fixtures.CATALOG.items() if _same_name(first.city, [n])), None)
         month = first.date_in.month  # the month of the booking, not the one asked for
+        water = catalog.month_climate(place, month)[1] if place else None
         if place is None:
-            out.append(("тёплое море", UNKNOWN, "города нет в places.json"))
+            out.append(("тёплое море", UNKNOWN, "города нет в catalog.json и у геокодера"))
         elif not place["sea"]:
-            put("тёплое море", False, f"{first.city}: моря нет (places.json)")
-        elif month == 11 and dest and dest["nov"][1] is not None:
-            put("тёплое море", dest["nov"][1] >= WARM_WATER_C, f"вода {dest['nov'][1]} °C")
+            put("тёплое море", False, f"{first.city}: моря нет (catalog.json)")
+        elif water is not None:
+            put("тёплое море", water >= WARM_WATER_C, f"вода {water:g} °C")
         else:
             out.append(("тёплое море", UNKNOWN, "море есть, температуры в этом месяце нет"))
     if expect.get("ski"):
-        out.append(("лыжи", UNKNOWN, "в places.json нет признака лыжного курорта"))
+        out.append(("лыжи", UNKNOWN, "проверка лыж по catalog.json не сделана (#111)"))
     if expect.get("cheap_without_sum"):
         out.append(("«недорого»", UNKNOWN, "сумма не названа, порога нет"))
     return out
@@ -912,11 +943,12 @@ def _unseen_results(_case: dict | None = None) -> list[dict] | None:
             booked = _reached_booking(run, minutes)
             found = unseen_findings(run, q["expect"]) if booked else []
             wrong = any(n in ("город", "отель") and st == VIOLATED for n, st, _ in found)
+            named = q["expect"].get("destination") or []
+            outside = bool(named) and not any(known_place(d) for d in named)
             results.append(
                 {
                     "text": q["text"],
-                    "outside": bool(q["expect"].get("destination"))
-                    and not any(known_place(d) for d in q["expect"]["destination"]),
+                    "outside": outside,
                     "booked": booked,
                     "kept": booked and not wrong,
                     "stage": run.last.stage if run.replies else run.codes,
@@ -924,6 +956,46 @@ def _unseen_results(_case: dict | None = None) -> list[dict] | None:
                 }
             )
     return results
+
+
+def record_geocoder() -> None:
+    """Record the Open-Meteo answers the agent asks for on the unseen pool into GEOCODER_FILE.
+
+        cd backend && uv run python -c "from api import checks; checks.record_geocoder()"
+
+    The pool goes through the API as in make eval; each request goes to the network once and is
+    saved under its URL. So eval replays what the agent asked, in its own spelling («Бледе»).
+    A failed request (Open-Meteo 429) is printed and not saved: run it again later.
+    """
+    global _recording
+    old = json.loads(GEOCODER_FILE.read_text("utf-8"))["answers"] if GEOCODER_FILE.is_file() else {}
+    answers, errors, network = dict(old), [], catalog._get
+
+    def fetch(url: str, params: dict) -> dict:
+        key = catalog.request_url(url, params)
+        if key not in answers:
+            try:
+                answers[key] = network(url, params)
+            except OSError as e:
+                errors.append(f"{e}: {key}")
+                raise
+        return answers[key]
+
+    _recording = fetch
+    try:
+        _unseen_results({})
+    finally:
+        _recording = None
+    note = (
+        f"Ответы Open-Meteo (Geocoding, Historical Weather, Marine; CC BY 4.0), записаны "
+        f"{datetime.now():%Y-%m-%d} checks.record_geocoder: запросы агента на пуле незнакомых. "
+        "make eval отдаёт их геокодеру агента вместо сети (#8)."
+    )
+    data = {"_note": note, "answers": answers}
+    GEOCODER_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+    )
+    print(*errors, f"новых ответов {len(answers) - len(old)}, всего {len(answers)}", sep="\n")
 
 
 @rules_mode
@@ -961,7 +1033,7 @@ def unseen_metric(_case: dict | None = None) -> dict:
         "(режим правил, без LLM, без сети; "
         f"бронь не в тот город {wrong_city}, не считается; с нарушением {violated}; "
         f"часть ограничений не проверить по данным: {unknown}; "
-        f"вне данных (places.json, osm_hotels.json): бронь в названном городе "
+        f"вне catalog.json и osm_hotels.json: бронь в названном городе "
         f"{sum(r['kept'] for r in named)} из {len(named)}; "
         f"пул eval/{UNSEEN_FILE.name}, на нём агента не настраивали)"
     )

@@ -456,7 +456,7 @@ COUNTRY_STEMS = {"Египет": "египе?т", "Таиланд": "т(?:аи|�
 
 
 def _country_res() -> list[tuple[str, re.Pattern]]:
-    names = {p["country"] for p in places()} | {c["country"] for c in CATALOG.values()}
+    names = {p["country"] for p in places()}
     out = []
     for name in sorted(names):
         if name in COUNTRY_STEMS:
@@ -680,7 +680,7 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
 def is_excluded(name: str, excluded: list[str]) -> bool:
     """The place, or the country of the place, is refused («Турция» refuses Анталия)."""
     place = resolve_place(name)
-    country = place["country"] if place else CATALOG.get(name, {}).get("country")
+    country = place["country"] if place else None
     return name in excluded or country in excluded or bool(place and place["name"] in excluded)
 
 

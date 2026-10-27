@@ -202,6 +202,6 @@ def test_off_catalogue_reply_is_no_pets_dead_end(store):
     from api.checks import _is_pets_dead_end
     from api.model import NOT_IN_CATALOG
 
-    r = say(store, "Ханой, 5 ночей с 14 ноября, двое взрослых, из Москвы, с собакой")
+    r = say(store, "Пномпень, 5 ночей с 14 ноября, двое взрослых, из Москвы, с собакой")
     assert NOT_IN_CATALOG in r.reply
     assert not _is_pets_dead_end(r)

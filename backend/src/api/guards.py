@@ -37,7 +37,7 @@ def resolve_destination(
     geocode: Callable[[str], dict | None],
     snapshot: dict[str, dict] | None = None,
 ) -> dict | None:
-    """Направление из каталога, иначе — геокодер (TRAP-2), при сбое сети — снапшот (TRAP-6).
+    """Направление из каталога, иначе — геокодер (TRAP-2), при сбое или пустом ответе — снапшот (TRAP-6).
 
     Результат помечен источником: catalog | geocoder | snapshot.
     """
@@ -46,12 +46,12 @@ def resolve_destination(
         return {**catalog[canon], "name": canon, "source": "catalog"}
     try:
         found = geocode(canon)
-    except OSError:
+    except Exception:  # noqa: BLE001  любой сбой геокодера: таймаут, HTTP, разбор ответа
         found = None
-        if snapshot and canon in snapshot:
-            return {**snapshot[canon], "name": canon, "source": "snapshot"}
     if found:
         return {**found, "name": canon, "source": "geocoder"}
+    if snapshot and canon in snapshot:
+        return {**snapshot[canon], "name": canon, "source": "snapshot"}
     return None
 
 

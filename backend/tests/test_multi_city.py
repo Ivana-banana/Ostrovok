@@ -109,7 +109,7 @@ def test_stay_lengths_in_words_make_a_route(store, text):
 
 
 def test_route_gives_no_chip_for_a_city_without_offers(store):
-    r = say(store, "Из Москвы в Питер на 2 ночи, потом в Ханой на 5 ночей")
+    r = say(store, "Из Москвы в Питер на 2 ночи, потом в Пномпень на 5 ночей")
     assert r.stage == "compare"
     assert "В плане только: Санкт-Петербург" in r.reply
-    assert not [q for q in r.questions if q.options and "План: Ханой" in q.options]
+    assert not [q for q in r.questions if q.options and "План: Пномпень" in q.options]
