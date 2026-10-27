@@ -122,3 +122,55 @@ def test_guessed_dates_move_as_before(store):
     assert any("точных дат не было" in a for a in s.assumptions)  # still a guess
     assert s.date_from.weekday() == 5  # the guess picks a Saturday
     agree(r)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "не в январе, а в декабре",
+        "только не в январе",
+        "а в январе там холодно?",
+        "в январе мы уже были в Сочи",
+    ],
+)
+def test_a_month_that_is_no_request_changes_neither_dates_nor_month(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.nights, s.month) == (
+        date(2026, 12, 3),
+        date(2026, 12, 8),
+        5,
+        12,
+    )
+    assert not any(c.what in ("даты", "месяц") for c in r.plan.changes)
+    agree(r)
+
+
+def test_a_move_drops_the_old_notes_about_the_dates(store):
+    first = named(store, "с 20 по 25 октября")  # a slip: the day passed a week ago
+    assert any("уже прошло" in a for a in first.plan.spec.assumptions)
+    r = say(store, "лучше в январе", first.session_id)
+    s = r.plan.spec
+    assert s.date_from == date(2027, 1, 20)
+    assert not any("уже прошло" in a for a in s.assumptions)
+    assert not any(a.startswith("даты:") for a in s.assumptions)
+
+
+def test_a_move_drops_the_shift_note(store):
+    first = named(store)
+    r = say(store, "на неделю позже", first.session_id)
+    assert any("сдвинуты" in a for a in r.plan.spec.assumptions)
+    r = say(store, "лучше в январе", r.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 10)
+    assert not any("сдвинуты" in a for a in r.plan.spec.assumptions)
+
+
+def test_a_slip_into_the_past_by_a_move_says_so(store):
+    first = named(store)
+    r = say(store, "лучше в октябре", first.session_id)  # 03.10 passed three weeks ago
+    s = r.plan.spec
+    assert s.date_from == date(2027, 10, 3)
+    assert "даты: 03.10 уже прошло — взят 2027 год" in s.assumptions
+    r = say(store, "на 4 ночи", r.session_id)  # the named dates stay named
+    assert r.plan.spec.date_from == date(2027, 10, 3)

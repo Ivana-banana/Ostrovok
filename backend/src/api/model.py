@@ -51,8 +51,11 @@ from api.extract import (
     DEFAULT_NIGHTS,
     HOTEL_NOTE,
     MAX_NIGHTS,
+    MONTH,
     MONTH_NAMES,
+    PAST_WINDOW,
     PER_NIGHT_NOTE_RE,
+    SEASONS,
     excluded_places,
     extract,
     is_child_question,
@@ -61,6 +64,7 @@ from api.extract import (
     is_past_note,
     is_too_long_note,
     llm_past_dates,
+    past_year_note,
     too_long_note,
     with_llm,
 )
@@ -270,14 +274,36 @@ def _noted(spec: TripSpec, label: str) -> bool:
     return any(_label(a) == label for a in spec.assumptions)
 
 
-def in_month(day: date, month: int) -> date:
-    """The same day of the next such month, not in the past; the last day if the month is short."""
+def in_month(day: date, month: int) -> tuple[date, str | None]:
+    """The same day of the next such month, not in the past; the last day if the month is short.
+
+    The note (#159) comes when the day passed in the last month: that may be a slip.
+    """
     today = date.today()
     for year in (today.year, today.year + 1):
         moved = date(year, month, min(day.day, monthrange(year, month)[1]))
         if moved >= today:
-            return moved
-    return moved
+            break
+    here = date(today.year, month, min(day.day, monthrange(today.year, month)[1]))
+    slip = moved.year > today.year and today - PAST_WINDOW <= here < today
+    return moved, past_year_note(here, moved.year) if slip else None
+
+
+def dates_named(spec: TripSpec) -> bool:
+    """The dates are the user's own: there is a day, and no note says it was a guess."""
+    return bool(spec.date_from) and not any(
+        _label(a) == "даты" and not is_shift_note(a) and not is_past_note(a)
+        for a in spec.assumptions
+    )
+
+
+def asks_month(text: str) -> bool:
+    """«Лучше в январе» is a request. A negation, a question or a past tense is not (#190)."""
+    t = text.lower().replace("ё", "е")
+    when = rf"(?:{MONTH}|{'|'.join(SEASONS)})"
+    if "?" in t or re.search(r"\b(?:был|была|были|было|побывал\w*)\b", t):
+        return False
+    return not re.search(rf"\b(?:не|кроме|без)\s+(?:\S+\s+){{0,2}}?{when}", t)
 
 
 def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
@@ -302,7 +328,9 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
         elif "даты" not in stated and data["date_from"] and found.get("month"):
             # Named dates move to the new month, day and length kept (#190).
             if data["date_from"].month != found["month"]:
-                data["date_from"] = in_month(data["date_from"], found["month"])
+                data["date_from"], past = in_month(data["date_from"], found["month"])
+                stated.add("даты")  # the old notes about the old dates go
+                notes = [*notes, *([past] if past else [])]
     if any(is_too_long_note(n) for n in notes):
         stated.add("длительность")  # a length not taken: its note replaces the old one (#160)
     kept = [a for a in data["assumptions"] if _label(a) not in stated]
@@ -926,6 +954,18 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     )
     if llm_found and ASKING_NOTE in notes:
         llm_found.pop("children_ages", None)  # a question names no child (#179)
+    if (
+        prev is not None
+        and "month" in found
+        and not {"date_from", "date_to"} & found.keys()
+        and dates_named(old.plan.spec)
+        and not asks_month(message)
+    ):
+        # «не в январе», «а в январе там холодно?», «в январе уже были»: no new month (#190)
+        found.pop("month")
+        notes[:] = [n for n in notes if _label(n) != "когда"]
+        for k in DATE_KEYS:
+            (llm_found or {}).pop(k, None)
     if shifts:
         if (
             found.pop("nights", None) is not None
