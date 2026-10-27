@@ -1413,9 +1413,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             elif target == now.date_from.month:
                 month_verdict = ""  # the dates are in that month: nothing to move
     # What the user is told about the dates; the other fields of the message are applied (#197).
-    month_note = None
+    month_target, month_note = target, None
     if month_verdict in ("ask", "stay"):
-        month_note = month_reply(now, target if month_verdict == "ask" else now.date_from.month, "")
+        month_target = target if month_verdict == "ask" else now.date_from.month
+        month_note = month_reply(now, month_target, "")
     refused_month = month_verdict in ("ask", "stay", "skip")
     idx = _ordinal(message)
     deadline = llm.deadline()
@@ -1459,13 +1460,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
     # «беру, на месяц вперёд спасибо» is a consent: shift_matches skips a remark after a booking.
     shifts = bool(shift_matches(t.replace("ё", "е"), prev is not None))
-    yes = (
-        _confirmed(t)
-        and not asks_length
-        and not shifts
-        and not rebuild
-        and not refused_month
-    )
+    yes = _confirmed(t) and not asks_length and not shifts and not rebuild and not refused_month
     service = prev is not None and (
         pick or (consent and not asks_length and not shifts and not rebuild)
     )
@@ -1484,7 +1479,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         found["destinations"] = []
     llm_found = (
         None
-        if service or other or not use_llm or is_chip_message(message)  # chips: S9, #76
+        if service
+        or other
+        or not use_llm
+        or is_chip_message(message)  # chips: S9, #76
+        or (refused_month and old.stage == "checkout")  # the cart stays (#197)
         else llm.extract_spec(message, old.plan.spec, deadline)
     )
     if llm_found and ASKING_NOTE in notes:
@@ -1574,9 +1573,12 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         route = next((k for k in (ROUTE, CANDIDATES) if _noted(spec, k)), None)
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
-        if month_note:  # the dates stay: the answer says so, and the question has its button
-            text = f"{text}\n{month_note[0]}"
-            kw["questions"] = [*month_note[1], *kw.get("questions", [])]
+        if month_note and plan.spec.date_to:
+            # The dates stay: the line is built from the final plan, not from the old dates. The
+            # general question is only for a message that changed nothing; here the dates stay.
+            line, chips = month_reply(plan.spec, month_target or plan.spec.date_from.month, "")
+            text = f"{text}\n{line}"
+            kw["questions"] = [*chips, *kw.get("questions", [])]
         return ChatReply(
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
         )

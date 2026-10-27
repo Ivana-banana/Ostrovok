@@ -124,8 +124,10 @@ def test_a_length_in_a_contrast_is_applied(store):
     s = r.plan.spec
     assert s.nights == 7 and s.date_from == date(2026, 12, 3) and s.date_to == date(2026, 12, 10)
     assert s.month == 12 and r.stage == "compare" and not r.cart.items
-    assert "Назовите нужные даты или месяц" in r.reply  # the general question stays
-    assert "Было → стало" in r.reply and "вы назвали сами" in r.reply
+    assert "Было → стало" in r.reply
+    assert "Даты 03.12–10.12 вы назвали сами. Они остаются." in r.reply  # the new period
+    assert "Назовите нужные даты или месяц" not in r.reply  # something changed: no general ask
+    assert "03.12–08.12 вы назвали" not in r.reply
 
 
 def test_a_rejection_applies_the_other_fields_too(store):
@@ -177,3 +179,39 @@ def test_such_a_message_is_no_consent(store, text):
     r = say(store, text, first.session_id)
     dates_stay(r)
     assert r.plan.spec.budget_rub == 100_000
+
+
+def test_the_line_names_the_new_period_after_a_length_change(store):
+    first = named(store)
+    r = say(store, "может в январе? на 10 ночей", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.nights) == (date(2026, 12, 3), date(2026, 12, 13), 10)
+    assert "Даты 03.12–13.12 вы назвали сами. Перенести на январь (тот же день и длина)" in r.reply
+    assert "03.12–08.12 вы назвали" not in r.reply
+    r = say(store, r.questions[0].options[0], r.session_id)  # the button moves the new dates
+    assert (r.plan.spec.date_from, r.plan.spec.date_to) == (date(2027, 1, 3), date(2027, 1, 13))
+
+
+def test_the_line_names_the_new_period_after_a_shift(store):
+    first = named(store)
+    r = say(store, "может в январе? бюджет 100 тысяч, на два дня позже", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.budget_rub) == (
+        date(2026, 12, 5),
+        date(2026, 12, 10),
+        100_000,
+    )
+    assert "Даты 05.12–10.12 вы назвали сами." in r.reply
+    assert "03.12–08.12 вы назвали" not in r.reply
+
+
+def test_a_month_question_at_checkout_does_not_reach_the_model(store, model):
+    first = named(store)
+    r = say(store, "беру", first.session_id)
+    r = say(store, "да", r.session_id)
+    assert r.stage == "checkout" and r.cart.total_rub == 45_100
+    model.patch = {"budget_rub": 50_000}
+    r = say(store, "подтверждаю, может в январе?", r.session_id)
+    assert r.stage == "checkout" and r.cart.total_rub == 45_100 and not r.voucher
+    assert r.plan.spec.budget_rub is None and r.llm is False
+    asks_to_move(r)
