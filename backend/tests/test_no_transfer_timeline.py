@@ -3,12 +3,15 @@
 «без трансфера» takes the transfers out of `plan.selected` (#193). The checker must not bring
 them back by the pair «hotel + leg»: no transfer event, no check-in time from the transfer
 arrival. The guest gets to the hotel on their own; the check-in is not earlier than the
-arrival plus a stated time on the road (OWN_WAY). The refusal lives in `plan.selected` itself:
+arrival plus the road by data: the time of the pair's transfer offer, which offers.py derives
+from the distance to the hub, never under OWN_WAY. The text names the road and the distance.
+The refusal lives in `plan.selected` itself:
 a selected hotel and leg whose transfer is offered but not selected. So it survives
 /api/cart (an upsell, a new flight or hotel) and a page reload.
 """
 
-from datetime import date
+import re
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +26,7 @@ from api.timeline import OWN_WAY, build_timeline
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч, нужен завтрак"
 KAZAN = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."
+DOMBAI = "Домбай из Москвы, 3 ночи с 20 января"  # the airport is ≈200 km away
 
 
 @pytest.fixture
@@ -88,14 +92,25 @@ def assert_own_way_check_in(r: ChatReply) -> None:
     events = r.plan.timeline
     check_in = next(e for e in events if e.title.startswith("Заселение"))
     pair = by_id(r)[transfer_id(hotel.offer_id, out.offer_id)]
-    assert check_in.at != pair.arrive_at
-    assert check_in.at >= out.arrive_at + OWN_WAY[out.mode]
+    road = max(OWN_WAY[out.mode], pair.arrive_at - out.arrive_at)
+    assert road >= timedelta(minutes=30)  # the road is never zero
+    at_hotel = next((e.at for e in events if e.title.startswith("Приезд в отель")), check_in.at)
+    assert at_hotel == out.arrive_at + road and check_in.at >= at_hotel
     own = next(e for e in events if "до отеля добираетесь сами" in e.title.lower())
     assert own.at == out.arrive_at and own.offer_id == out.offer_id
+    km = re.search(r"≈\S+ км", pair.title)
+    assert km and km.group(0) in own.title
+    hours, minutes = divmod(int(road.total_seconds() // 60), 60)
+    if hours and minutes:
+        span = f"{hours} ч {minutes:02d} мин"
+    else:
+        span = f"{hours} ч" if hours else f"{minutes} мин"
+    assert own.title.endswith(f"на дорогу закладываем {span}")
 
 
 def test_trap_5_without_transfer_the_timeline_says_own_way_and_no_transfer_time(client):
-    """Sochi: the flight lands 17:40; «Заселение 19:25» was the arrival of the removed transfer."""
+    """Sochi: the flight lands 17:40. «Заселение 19:25» came from the removed transfer with no
+    word about it; now the timeline says the guest goes alone and names the road and the km."""
     _, store = client
     r = at(store, "assemble")
     assert selected(r, "transfer")
@@ -103,7 +118,8 @@ def test_trap_5_without_transfer_the_timeline_says_own_way_and_no_transfer_time(
     assert_no_transfer(r2)
     assert_own_way_check_in(r2)
     back = next(x for x in selected(r2, "transport") if x.destination == r2.plan.spec.origin)
-    leave = next(e for e in r2.plan.timeline if e.title.startswith("Выезд в "))
+    hubs = ("Выезд в аэропорт", "Выезд на вокзал")
+    leave = next(e for e in r2.plan.timeline if e.title.startswith(hubs))
     assert "добираетесь сами" in leave.title and leave.offer_id == back.offer_id
     assert leave.at < back.depart_at
 
@@ -214,6 +230,29 @@ def test_trap_5_refusal_survives_a_direct_flight_in_the_chat(client):
     assert all(x.changes == 0 for x in selected(r2, "transport"))
     assert_no_transfer(r2)
     assert_own_way_check_in(r2)
+
+
+def test_trap_5_far_airport_keeps_the_road_by_data_and_the_night_check_in(client):
+    """Домбай: the airport is ≈200 km away. Without the transfer the road is still ≈3-4 h, not
+    a flat 1 h 30 min: the check-in comes after midnight, and the late check-in warning stays."""
+    _, store = client
+    r = at(store, "assemble", DOMBAI)
+    with_transfer = r.plan.timeline
+    r2 = say(store, "давайте без трансфера", r.session_id)
+    assert_no_transfer(r2)
+    assert_own_way_check_in(r2)
+    hotel = selected(r2, "hotel")[0]
+    out = next(x for x in selected(r2, "transport") if x.destination == hotel.city)
+    own = next(e for e in r2.plan.timeline if "добираетесь сами" in e.title)
+    assert "≈2" in own.title and "км" in own.title  # ≈200 km
+    check_in = next(e for e in r2.plan.timeline if e.title.startswith("Заселение"))
+    assert check_in.at - out.arrive_at > OWN_WAY[out.mode] + timedelta(hours=1)
+    was = next(e for e in with_transfer if e.title.startswith("Заселение"))
+    assert check_in.at == was.at  # the same road, from the same distance
+    assert any("поздний заезд" in i.text for i in r2.plan.issues)
+    back = next(x for x in selected(r2, "transport") if x.origin == hotel.city)
+    leave = next(e for e in r2.plan.timeline if e.title.startswith("Выезд в аэропорт"))
+    assert back.depart_at - leave.at > timedelta(hours=2) + OWN_WAY[back.mode]
 
 
 def plan_without_transfers(city: str, day_in: date, day_out: date) -> Plan:

@@ -9,8 +9,10 @@ constants below. `fixes` hold offer_id from plan.offers only (TRAP-4): add-ons o
 flight). Luggage storage is not an offer: the text only advises to ask the hotel.
 
 A transfer counts only when it is selected (#200). Without it the guest goes on their own:
-the timeline says so and adds OWN_WAY to the arrival (or before the departure), never the
-time of a transfer that is not taken.
+the timeline says so and adds the road to the arrival (or before the departure). The road is
+the time of the pair's transfer offer (offers.py derives it from the distance to the hub, with
+the way out after an arrival), never shorter than OWN_WAY; never the time of a transfer that
+is not taken.
 
 Extra kind comes from the offer_id suffix (-early, -late, -prev, see api/offers.py); the
 time of an add-on comes from its title («с 06:00», «до 18:00»).
@@ -40,8 +42,10 @@ NIGHT_FROM, NIGHT_TO = time(23, 0), time(5, 0)  # reception and transfers may no
 BUFFER = {"flight": timedelta(minutes=30), "train": timedelta(minutes=10), "car": timedelta()}
 # Arrive at the airport or station this long before the departure.
 MARGIN = {"flight": timedelta(hours=2), "train": timedelta(minutes=40), "car": timedelta()}
+# BUFFER, MARGIN and OWN_WAY are team estimates without a source, as the limits above.
 # Without a selected transfer the guest goes between the hub and the hotel on their own: the
-# way out of the airport or the station and a taxi. The car drives to the hotel itself.
+# way out of the airport or the station and a taxi. The minimum; a far hub takes longer
+# (_Trip.own_way). The car drives to the hotel itself.
 OWN_WAY = {
     "flight": timedelta(hours=1, minutes=30),
     "train": timedelta(minutes=45),
@@ -53,9 +57,10 @@ VERBS = {
     "train": ("Отправление", "Прибытие"),
     "car": ("Старт на машине", "Приезд на машине"),
 }
-HUBS = {"flight": "аэропорт", "train": "вокзал"}
+HUBS = {"flight": "в аэропорт", "train": "на вокзал"}  # with the preposition: «на вокзал»
 DEPARTURE_OF = {"flight": "вылета", "train": "отправления", "car": "старта"}
 TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+KM_RE = re.compile(r"≈\s*(\d+(?:[.,]\d+)?)\s*км")  # the distance in a transfer title (offers.py)
 
 
 def _utc(dt: datetime) -> datetime:
@@ -179,6 +184,18 @@ class _Trip:
             return x if x.offer_id in self.picked else None
         return None if self.refused(leg) else x
 
+    def own_way(self, leg: TransportOffer) -> tuple[timedelta, str]:
+        """The road between the hub of `leg` and the hotel without a transfer, and its distance
+        text. The time of the pair's transfer offer comes from the distance (offers.py): after an
+        arrival from the landing to the hotel, before a departure the ride. Not under OWN_WAY."""
+        x = self.offered(leg)
+        if x is None:
+            return OWN_WAY[leg.mode], ""
+        start = leg.arrive_at if self.hotel and leg.destination == self.hotel.city else x.depart_at
+        m = KM_RE.search(x.title)
+        km = f", ≈{m.group(1)} км" if m else ""
+        return max(OWN_WAY[leg.mode], _utc(x.arrive_at) - _utc(start)), km
+
     def stay_day(self, dt: datetime):
         """The calendar day of the stay: the small hours still belong to the day before."""
         local = dt.astimezone(self.room()[1])
@@ -211,9 +228,9 @@ def _fixes(t: _Trip, tags: tuple[str, ...], leg: TransportOffer, check, fixes: b
     return extras + t.alternatives(leg, check, clean=True)
 
 
-def _hotel_at(tr: TransferOffer | None, leg: TransportOffer) -> datetime:
+def _hotel_at(t: _Trip, tr: TransferOffer | None, leg: TransportOffer) -> datetime:
     """When the guest is at the hotel after `leg`: the transfer arrival, or the own way."""
-    return _utc(tr.arrive_at) if tr else _utc(leg.arrive_at) + OWN_WAY[leg.mode]
+    return _utc(tr.arrive_at) if tr else _utc(leg.arrive_at) + t.own_way(leg)[0]
 
 
 def _reach(tr: TransferOffer | None, leg: TransportOffer, shown: datetime) -> str:
@@ -241,7 +258,7 @@ def _arrival_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[T
                 fixes=_alt(t, leg, _arrival_issues, fixes, clean=False),
             )
         ]
-    at_hotel = _hotel_at(tr, leg)
+    at_hotel = _hotel_at(t, tr, leg)
     stay = t.stay_day(at_hotel)
     if stay > h.date_in:
         text = (
@@ -317,24 +334,24 @@ def _return_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[Ti
     if tr and _utc(tr.arrive_at) > depart - margin:
         left = depart - _utc(tr.arrive_at)
         text = (
-            f"Трансфер приедет в {hub} в {_hm(tr.arrive_at.astimezone(tz))}, до {DEPARTURE_OF[leg.mode]} "
+            f"Трансфер приедет {hub} в {_hm(tr.arrive_at.astimezone(tz))}, до {DEPARTURE_OF[leg.mode]} "
             f"({_hm(depart.astimezone(tz))}) останется {_span(left)} — нужно не меньше "
             f"{_span(margin)}."
         )
         return [TimelineIssue(severity="error", text=text, fixes=alt(clean=False))]
-    leave = _utc(tr.depart_at) if tr else depart - margin - OWN_WAY[leg.mode]
+    leave = _utc(tr.depart_at) if tr else depart - margin - t.own_way(leg)[0]
     out = t.leave_by()
     gap = leave - _utc(out)
     found: list[TimelineIssue] = []
     if tr and _night(tr.depart_at.astimezone(tz)):
         text = (
-            f"Ночной трансфер в {hub}: выезд из отеля в {_hm(tr.depart_at.astimezone(tz))}. "
+            f"Ночной трансфер {hub}: выезд из отеля в {_hm(tr.depart_at.astimezone(tz))}. "
             "Подтвердите его заранее."
         )
         found.append(TimelineIssue(severity="warn", text=text, fixes=alt()))
     if gap > LATE_WAIT:  # a night transfer can come with a long wait after the check-out
         text = (
-            f"Выезд из отеля в {_hm(out)}, а в {hub or 'пункт отправления'} нужно выехать только "
+            f"Выезд из отеля в {_hm(out)}, а {hub or 'в пункт отправления'} нужно выехать только "
             f"в {_hm(leave.astimezone(tz))}: ждать {_span(gap)}. "
             "Вещи можно оставить на хранение — уточните у отеля."
         )
@@ -389,15 +406,16 @@ def _events(t: _Trip) -> list[TimelineEvent]:
                 )
             )
         if t.out and not tr_in and t.out.mode != "car":
+            way, km = t.own_way(t.out)
             events.append(
                 TimelineEvent(
                     at=t.out.arrive_at.astimezone(tz),
-                    title="До отеля добираетесь сами: трансфер не выбран, на дорогу закладываем "
-                    f"{_span(OWN_WAY[t.out.mode])}",
+                    title=f"До отеля добираетесь сами: трансфер не выбран{km}, "
+                    f"на дорогу закладываем {_span(way)}",
                     offer_id=t.out.offer_id,
                 )
             )
-        arrive = _hotel_at(tr_in, t.out) if t.out else None
+        arrive = _hotel_at(t, tr_in, t.out) if t.out else None
         if arrive and arrive < _utc(ready):
             events.append(
                 TimelineEvent(
@@ -426,12 +444,12 @@ def _events(t: _Trip) -> list[TimelineEvent]:
                 )
             )
         elif t.back and t.back.mode != "car":
-            way = MARGIN[t.back.mode] + OWN_WAY[t.back.mode]
+            way, km = t.own_way(t.back)
             events.append(
                 TimelineEvent(
-                    at=(_utc(t.back.depart_at) - way).astimezone(tz),
-                    title=f"Выезд в {HUBS[t.back.mode]}: добираетесь сами, трансфер не выбран, "
-                    f"на дорогу закладываем {_span(OWN_WAY[t.back.mode])}",
+                    at=(_utc(t.back.depart_at) - MARGIN[t.back.mode] - way).astimezone(tz),
+                    title=f"Выезд {HUBS[t.back.mode]}: добираетесь сами, трансфер не выбран{km}, "
+                    f"на дорогу закладываем {_span(way)}",
                     offer_id=t.back.offer_id,
                 )
             )
