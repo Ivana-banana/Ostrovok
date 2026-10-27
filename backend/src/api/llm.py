@@ -269,12 +269,23 @@ def _ask(url: str, payload: dict, env: Mapping[str, str], timeout: float, until:
     return _post(url, _gigachat_token(env, timeout, until), payload, _wait(timeout, until))
 
 
+FORMAT_RE = re.compile(r"response_format|schema|json", re.IGNORECASE)
+
+
 def _detail(e: urllib.error.HTTPError) -> str:
-    """The start of the error body: GigaChat says there why it rejects a request."""
+    """The `message` of the error body, at most 120 characters; never the raw body.
+
+    GigaChat writes {"status", "message"}, OpenAI {"error": {"message"}}.
+    """
     try:
-        return " ".join(e.read(300).decode("utf-8", "replace").split())
+        body = json.loads(e.read(4096).decode("utf-8", "replace"))
     except (OSError, AttributeError, ValueError):
         return ""
+    if not isinstance(body, dict):
+        return ""
+    inner = body.get("error")
+    message = inner.get("message") if isinstance(inner, dict) else body.get("message")
+    return " ".join(message.split())[:120] if isinstance(message, str) else ""
 
 
 def _formats(name: str, schema: dict) -> list[tuple[str, dict]]:
@@ -353,7 +364,8 @@ def _complete(system: str, data: dict, name: str, schema: dict, until: float) ->
             return None
         except urllib.error.HTTPError as e:
             detail = _detail(e)
-            if e.code in (400, 422) and i + 1 < len(formats):
+            # Only a rejected response_format moves on; another 400 is about the request.
+            if e.code in (400, 422) and FORMAT_RE.search(detail) and i + 1 < len(formats):
                 log.warning(
                     "LLM: response_format %s rejected (HTTP %s: %s), next: %s",
                     label, e.code, detail, formats[i + 1][0],

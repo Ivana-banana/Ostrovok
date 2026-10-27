@@ -5,6 +5,7 @@ LLM_LIVE=1 and GIGACHAT_AUTH_KEY, LLM_BASE_URL, LLM_MODEL in the environment.
 """
 
 import hashlib
+import io
 import json
 import logging
 import os
@@ -42,8 +43,12 @@ class Resp:
         return False
 
 
-def http_error(url: str, code: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError(url, code, "x", {}, None)
+def http_error(url: str, code: int, message: str = "") -> urllib.error.HTTPError:
+    body = json.dumps({"status": code, "message": message}).encode()
+    return urllib.error.HTTPError(url, code, "x", {}, io.BytesIO(body) if message else None)
+
+
+EMPTY_SCHEMA = "Empty schema with json format type is not supported"  # GigaChat, OpenAI form
 
 
 class FakeGiga:
@@ -209,7 +214,7 @@ def test_response_format_order_and_memory(giga, caplog):
 
     def chat(auth, payload):
         if "json_schema" in payload["response_format"]:
-            return http_error(CHAT, 400)
+            return http_error(CHAT, 400, EMPTY_SCHEMA)
         return Resp({"choices": [{"message": {"content": json.dumps(NULLS)}}]})
 
     giga.on_chat = chat
@@ -225,7 +230,7 @@ def test_response_format_order_and_memory(giga, caplog):
 
 
 def test_every_format_rejected_is_logged_with_its_name(giga, caplog):
-    giga.on_chat = lambda auth, payload: http_error(CHAT, 400)
+    giga.on_chat = lambda auth, payload: http_error(CHAT, 400, "Unknown type in response_format")
     with caplog.at_level(logging.WARNING, logger="api.llm"):
         assert ask() is None
     kinds = [p["response_format"] for _, p in giga.chat]
@@ -236,6 +241,27 @@ def test_every_format_rejected_is_logged_with_its_name(giga, caplog):
     ]
     for name in ("json_schema/openai", "json_schema/gigachat", "json_object"):
         assert name in caplog.text
+
+
+@pytest.mark.parametrize(
+    "message", ["", "Invalid params: messages too long", "<html>bad request</html>"]
+)
+def test_400_without_a_format_reason_keeps_the_format(giga, caplog, message):
+    """Review of #117: only a 400 about response_format moves to the next format."""
+    giga.on_chat = lambda auth, payload: http_error(CHAT, 400, message)
+    with caplog.at_level(logging.WARNING, logger="api.llm"):
+        assert ask() is None
+    assert len(giga.chat) == 1 and llm._state["format"] == {}
+    assert llm._state["down_until"] - llm._now() > llm.RATE_PAUSE_S  # the usual pause
+
+
+def test_error_log_has_the_code_and_the_message_only(giga, caplog):
+    text = "Unknown type in response_format " + "x" * 300
+    giga.on_chat = lambda auth, payload: http_error(CHAT, 400, text)
+    with caplog.at_level(logging.WARNING, logger="api.llm"):
+        ask()
+    assert "x" * 120 not in caplog.text and "Unknown type in response_format" in caplog.text
+    assert '"status"' not in caplog.text  # not the raw body
 
 
 def test_429_is_a_short_pause(giga):

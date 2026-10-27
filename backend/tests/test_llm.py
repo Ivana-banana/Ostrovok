@@ -1,5 +1,6 @@
 """LLM client (T11, #15): the HTTP layer is a fake urlopen, no network in tests."""
 
+import io
 import json
 import sqlite3
 import urllib.error
@@ -42,8 +43,9 @@ def answer(obj) -> Resp:
     return Resp({"choices": [{"message": {"content": content}}]})
 
 
-def http_error(code: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError("http://llm.test/v1/chat/completions", code, "x", {}, None)
+def http_error(code: int, message: str = "") -> urllib.error.HTTPError:
+    body = io.BytesIO(json.dumps({"error": {"message": message}}).encode()) if message else None
+    return urllib.error.HTTPError("http://llm.test/v1/chat/completions", code, "x", {}, body)
 
 
 class FakeLLM:
@@ -156,7 +158,7 @@ def test_schema_rejected_falls_back_to_json_object(store, fake):
 
     def spec(p):
         if p["response_format"]["type"] == "json_schema":
-            return http_error(400)
+            return http_error(400, "response_format json_schema is not supported")
         return answer({**NULLS, "wishes": ["тепло"]})
 
     fake.spec = spec
