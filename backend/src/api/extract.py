@@ -459,6 +459,9 @@ NEG_AFTER = re.compile(
 LIST_FORWARD = re.compile(r"\s*(?:,\s*(?:ни\s+)?|\s+и\s+|\s+или\s+|\s+ни\s+)(?:(?:в|во|на)\s+)?")
 LIST_BACK = re.compile(r"\s+и\s+(?:(?:в|во|на)\s+)?")
 SENTENCE_END = re.compile(r"[.!?;\n]")
+# #127: «Турцию не хочу, Египет тоже»: the verb is dropped, the refusal goes on.
+ELLIPSIS_GAP = re.compile(r"\s*(?:,\s*(?:(?:а|и)\s+)?|(?:а|и)\s+)(?:(?:в|во|на)\s+)?")
+ELLIPSIS_TAIL = re.compile(r"\s*(?:тоже|также)(?=\s*(?:[,.!?;\n]|$))")
 
 
 def _word_end(t: str, pos: int) -> int:
@@ -466,11 +469,16 @@ def _word_end(t: str, pos: int) -> int:
     return m.end() if m else pos
 
 
-def _sentence(t: str, start: int, end: int) -> str:
-    """The sentence (up to «.!?;») around the mention."""
+def _sentence_span(t: str, start: int, end: int) -> tuple[int, int]:
     before = [m.end() for m in SENTENCE_END.finditer(t, 0, start)]
     stop = SENTENCE_END.search(t, end)
-    return t[before[-1] if before else 0 : stop.start() if stop else len(t)]
+    return (before[-1] if before else 0), (stop.start() if stop else len(t))
+
+
+def _sentence(t: str, start: int, end: int) -> str:
+    """The sentence (up to «.!?;») around the mention."""
+    a, b = _sentence_span(t, start, end)
+    return t[a:b]
 
 
 def _adds_place(t: str, spans: list[tuple[int, int]], i: int, refused: list[bool]) -> bool:
@@ -511,14 +519,34 @@ def _wanted_pair(t: str, spans: list[tuple[int, int]], i: int) -> bool:
     return any(re.match(r"[\w-]*[ая]\b", t[spans[j][0] :]) for j in group)
 
 
-def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
+def _mask(sentence: str, base: int, spans: list[tuple[int, int]]) -> str:
+    """The sentence without the given absolute spans (blanked, the length stays)."""
+    for a, b in spans:
+        if base <= a < base + len(sentence):
+            sentence = sentence[: a - base] + " " * (b - a) + sentence[b - base :]
+    return sentence
+
+
+def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None) -> list[bool]:
     """Which of the place mentions (start, end; sorted) a negation refuses.
 
     «кроме X» refuses X unless the sentence adds a place («ещё в Казань»). «уже были в X» refuses
     X only with a dislike in the sentence («не хочется», «надоело») or another place wanted
-    next to it, and never with «снова», «ещё раз», «понравилось»."""
+    next to it, and never with «снова», «ещё раз», «понравилось». A marker stands for its own
+    mention (#127): the dislike «в Анапу не хотим» and the wish «опять в Сочи» are not meant for
+    the other places of the sentence. keys[i] is the name of the mention (the same place twice)."""
     n = len(spans)
-    strong = [bool(NEG_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
+    keys = keys or [t[s:e] for s, e in spans]
+    strong = [False] * n
+    own: list[list[tuple[int, int]]] = [[] for _ in range(n)]  # marker spans of the mention
+    anchor: list[int | None] = [None] * n  # where the marker of the mention ends
+    for i, (s, _) in enumerate(spans):
+        w0 = max(0, s - 60)
+        before = NEG_BEFORE.search(t[w0:s])
+        strong[i] = bool(before)
+        if before:
+            own[i].append((w0 + before.start(), w0 + before.end()))
+            anchor[i] = spans[i][1]
     exc = [bool(EXCEPT_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     weak = [bool(WEAK_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     for i in reversed(range(n)):
@@ -532,8 +560,18 @@ def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
             if after and not re.fullmatch(r"\s+(?:в|во|на)\s*", area[after.end() :]):
                 if rx is NEG_AFTER:
                     strong[i] = True
+                    anchor[i] = e + after.end()
+                    own[i].append((e, e + after.end()))
                 else:
                     weak[i] = True
+    # «Турцию не хочу, Египет тоже»: «тоже» with no verb goes on the refusal of the mention before.
+    for i in range(1, n):
+        gap = ELLIPSIS_GAP.fullmatch(t[anchor[i - 1] : spans[i][0]]) if anchor[i - 1] else None
+        tail = ELLIPSIS_TAIL.match(t, spans[i][1]) if gap else None
+        if tail and not strong[i]:
+            strong[i] = True
+            anchor[i] = tail.end()
+            own[i].append((spans[i][1], tail.end()))
     neg = [False] * n
     for i in range(n):
         in_list = i > 0 and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : spans[i][0]]))
@@ -544,14 +582,41 @@ def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
             or (in_list and neg[i - 1])
         )
         weak[i] = weak[i] or (in_list and weak[i - 1])
+        if in_list and neg[i - 1] and not own[i]:
+            own[i] = own[i - 1]
     for i, (s, e) in enumerate(spans):
         if weak[i] and not neg[i]:
-            sentence = _sentence(t, s, e)
-            wanted = any(j != i and not weak[j] and not neg[j] for j in range(n))
-            neg[i] = not WISH_AGAIN.search(sentence) and (bool(DISLIKE.search(sentence)) or wanted)
+            base, stop = _sentence_span(t, s, e)
+            sentence = t[base:stop]
+            # The markers of the other refused places are not meant for this one.
+            other = [
+                x for j in range(n) if j != i and neg[j] and keys[j] != keys[i] for x in own[j]
+            ]
+            sentence = _mask(sentence, base, other)
+            # A wish right before another place («опять в Сочи») is for that place only.
+            wish = [
+                m
+                for m in WISH_AGAIN.finditer(sentence)
+                if not any(
+                    keys[j] != keys[i]
+                    and re.fullmatch(r"\s*(?:(?:в|во|на)\s+)?", t[base + m.end() : spans[j][0]])
+                    for j in range(n)
+                    if j != i and spans[j][0] >= base + m.end()
+                )
+            ]
+            wanted = any(
+                j != i and not weak[j] and not neg[j] and keys[j] != keys[i] for j in range(n)
+            )
+            neg[i] = not wish and (bool(DISLIKE.search(sentence)) or wanted)
     # A list shares the refusal: «кроме Турции и Египта», «В Турции и Египте уже были».
+    # Not when the same place is wanted again in the sentence: «были в Сочи и в Анапе, хотим в Сочи».
     for i in reversed(range(n - 1)):
-        if neg[i + 1] and LIST_BACK.fullmatch(t[spans[i][1] : spans[i + 1][0]]):
+        wanted_again = any(j != i and keys[j] == keys[i] and not neg[j] for j in range(n))
+        if (
+            neg[i + 1]
+            and not wanted_again
+            and LIST_BACK.fullmatch(t[spans[i][1] : spans[i + 1][0]])
+        ):
             neg[i] = True
     return neg
 
@@ -717,7 +782,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             e, name, _ = mentions.get(m.start(), (m.end(), None, None))
             mentions[m.start()] = (max(e, m.end()), name, country)
     starts = sorted(mentions)
-    neg = _negated(t, [(s, mentions[s][0]) for s in starts])
+    neg = _negated(t, [(s, mentions[s][0]) for s in starts], [mentions[s][2] for s in starts])
     refused_at = {s for s, n in zip(starts, neg, strict=True) if n}
     refused = list(dict.fromkeys(mentions[s][2] for s in starts if s in refused_at))
     dests = []
@@ -753,7 +818,10 @@ def _capital(text: str, pos: int) -> str | None:
     m = re.match(r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*", text[pos:])
     if not m or m.group(0).lower() in NOT_PLACES or re.match(MONTH, m.group(0).lower()):
         return None
-    return _known(m.group(0)) or _nominative(m.group(0))
+    word = m.group(0)
+    low = word.lower().replace("ё", "е")
+    country = next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None)
+    return _known(word) or country or _nominative(word)  # «Египте» is Египет, not a new city
 
 
 def _nominative(word: str) -> str:
