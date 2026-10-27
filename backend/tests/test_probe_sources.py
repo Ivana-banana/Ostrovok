@@ -4,6 +4,7 @@ Headers and bodies copy the signatures seen in the #119 recon (27.10) with made-
 """
 
 import importlib.util
+import json
 from pathlib import Path
 
 _path = Path(__file__).resolve().parents[2] / "scripts" / "probe_sources.py"
@@ -28,8 +29,15 @@ def test_qrator_that_lets_the_page_through_is_not_a_refusal():
 
 def test_captcha_script_on_a_big_page_is_not_a_refusal():
     # 101hotels city pages load SmartCaptcha scripts; collect_prices.py uses the same rule
-    seen = ps.protection(200, {}, BIG_PAGE.replace("smartcaptcha", "captcha"))
-    assert seen == []
+    seen = ps.protection(200, {}, BIG_PAGE)
+    assert ps.verdict(200, seen) == "ок"
+
+
+def test_vendor_cookie_on_a_page_that_came_through_is_not_a_refusal():
+    # DataDome, Variti and ServicePipe set cookies on the answers they let through too
+    for cookie in ("datadome=abc", "variti=1", "spsc=1"):
+        seen = ps.protection(200, {"set-cookie": cookie}, "<html>" + "x" * 60_000)
+        assert ps.verdict(200, seen) == "ок", cookie
 
 
 def test_small_captcha_page_is_a_refusal():
@@ -166,3 +174,56 @@ def test_timeout_and_reset_are_told_apart():
     assert ps._short("ConnectionResetError: [Errno 104] Connection reset by peer") == (
         "сброс соединения"
     )
+
+
+def test_cloudflare_scripts_on_a_normal_page_are_not_a_challenge():
+    body = '<script src="/cdn-cgi/challenge-platform/x.js">' + "x" * 60_000
+    seen = ps.protection(200, {"cf-ray": "1-ARN", "server": "cloudflare"}, body)
+    assert seen == ["Cloudflare"]
+    assert ps.verdict(200, seen) == "ок"
+
+
+def test_robots_txt_own_group_wins_like_the_collector():
+    robots = "User-agent: *\nDisallow: /\n\nUser-agent: nedovost-price-probe\nDisallow: /search\n"
+    assert ps.robots_allows(robots, "/main/cities/sochi")
+    assert not ps.robots_allows(robots, "/search")
+
+
+def test_sample_page_is_skipped_when_robots_txt_is_not_obtained(monkeypatch):
+    # RFC 9309: robots.txt unreachable or 5xx means everything is disallowed
+    calls = []
+
+    def fake_get(url, headers=None):
+        calls.append(url)
+        if url.endswith("/robots.txt"):
+            return {"url": url, "status": 503, "ms": 5, "_text": ""}
+        return {"url": url, "status": 200, "ms": 5, "_text": "<html>ok</html>"}
+
+    monkeypatch.setattr(ps, "get", fake_get)
+    monkeypatch.setattr(ps, "connect", lambda host: {"dns_ms": 1})
+    res = ps.probe_site(ps.SITES[0], 0)
+    assert res["page"]["verdict"] == "robots.txt не получен"
+    assert not any("/main/cities/" in u for u in calls)
+
+
+def test_api_key_echoed_by_the_server_is_hidden(monkeypatch):
+    key = "secret-token-123"
+
+    def fake_get(url, headers=None):
+        echo = f"bad token {next(iter(headers.values()))}" if headers else "no token"
+        return {"url": url, "status": 401, "ms": 5, "_text": json.dumps({"error": echo})}
+
+    monkeypatch.setattr(ps, "get", fake_get)
+    monkeypatch.setattr(ps, "PAUSE_S", 0)
+    monkeypatch.setenv(ps.APIS[0]["env"], key)
+    res = ps.probe_api(ps.APIS[0])
+    assert key not in str(res)
+    assert "***" in res["with_key"]["answer"]
+
+
+def test_broken_http_answer_is_an_error_not_a_crash(monkeypatch):
+    def broken(*a, **k):
+        raise ps.http.client.IncompleteRead(b"")
+
+    monkeypatch.setattr(ps.urllib.request, "urlopen", broken)
+    assert "IncompleteRead" in ps.get("https://example.ru/")["error"]

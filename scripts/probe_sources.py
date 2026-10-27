@@ -25,6 +25,7 @@ probe-<time>.json with the details. Standard library only, Python 3.8+.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -34,7 +35,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import urllib.robotparser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -50,6 +50,8 @@ READ_MAX = 3_000_000
 CHALLENGE_MAX = 50_000
 REFUSAL = ("вы не робот", "проверяем, что вы не бот", "подтвердите, что вы не робот")
 REFUSAL_CODES = {401, 403, 429, 432, 498, 503}
+# Protection names that mean «the page did not come through» on their own
+BLOCKING = ("SmartCaptcha", "Cloudflare (челлендж)", "страница «вы не робот»")
 
 # Sources of the #119 recon table; `lv` is what the recon saw from the Latvian IP (27.10).
 SITES = [
@@ -118,23 +120,28 @@ def protection(status: int, headers: dict[str, str], body: str, url: str = "") -
     server = headers.get("server", "").lower()
     cookies = headers.get("set-cookie", "").lower()
     low = body.lower()
+    # Normal pages carry the vendors' scripts and cookies too: a name in a header or a cookie
+    # only names the layer; a refusal is the code, a small page or a captcha redirect (verdict).
+    small = len(body) < CHALLENGE_MAX
     seen = []
     if "qrator" in server or "qrator" in cookies or "qrator" in low[:CHALLENGE_MAX]:
         seen.append("Qrator")
     if "ddos-guard" in server or "__ddg" in cookies:
         seen.append("DDoS-Guard")
     if "cf-ray" in headers or "cloudflare" in server:
-        challenge = "challenge-platform" in low or "cf-chl" in low or status in (403, 503)
+        challenge = status in (403, 503) or (
+            small and ("challenge-platform" in low or "cf-chl" in low)
+        )
         seen.append("Cloudflare (челлендж)" if challenge else "Cloudflare")
     if "x-datadome" in headers or "datadome" in cookies or "captcha-delivery.com" in low:
         seen.append("DataDome")
-    if "smartcaptcha" in low or "showcaptcha" in url.lower() or "showcaptcha" in low:
+    if "showcaptcha" in url.lower() or (small and ("smartcaptcha" in low or "showcaptcha" in low)):
         seen.append("SmartCaptcha")
     if "variti" in low or "variti" in cookies:
         seen.append("Variti")
     if "servicepipe" in low or "spsc" in cookies:
         seen.append("ServicePipe")
-    if any(w in low for w in REFUSAL) or (len(body) < CHALLENGE_MAX and "captcha" in low):
+    if any(w in low for w in REFUSAL) or (small and "captcha" in low):
         seen.append("страница «вы не робот»")
     return seen
 
@@ -145,9 +152,9 @@ def verdict(status: int | None, seen: list[str], error: str = "") -> str:
         return f"ошибка: {error}"
     if status is None:
         return "нет ответа"
-    blocking = [s for s in seen if s not in ("Qrator", "Cloudflare", "DDoS-Guard")]
-    if status in REFUSAL_CODES or status == 202 or blocking:
-        return f"отказ: {status}" + (f", {', '.join(blocking)}" if blocking else "")
+    named = [s for s in seen if s not in ("Qrator", "Cloudflare", "DDoS-Guard")]
+    if status in REFUSAL_CODES or status == 202 or any(s in BLOCKING for s in seen):
+        return f"отказ: {status}" + (f", {', '.join(named)}" if named else "")
     if status >= 400:
         return f"HTTP {status}"
     return "ок"
@@ -157,10 +164,47 @@ def facts(body: str, pattern: str) -> int:
     return len(re.findall(pattern, body))
 
 
-def robots_allows(robots_txt: str, path: str) -> bool:
-    rp = urllib.robotparser.RobotFileParser()
-    rp.parse(robots_txt.splitlines())
-    return rp.can_fetch(AGENT, path)
+# robots.txt: a copy of collect_prices.allowed() (Google semantics: * and $, longest rule wins,
+# Allow wins a tie), so the probe and the collector agree; the probe is one file to copy.
+
+
+def _groups(text: str) -> dict[str, list[tuple[bool, str]]]:
+    groups: dict[str, list[tuple[bool, str]]] = {}
+    agents: list[str] = []
+    in_rules = False
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key, value = key.strip().lower(), value.strip()
+        if key == "user-agent":
+            if in_rules:
+                agents, in_rules = [], False
+            agents.append(value.lower())
+            groups.setdefault(value.lower(), [])
+        elif key in ("allow", "disallow") and agents:
+            in_rules = True
+            for agent in agents:
+                groups[agent].append((key == "allow", value))
+    return groups
+
+
+def robots_allows(robots_txt: str, path: str, agent: str = AGENT) -> bool:
+    groups = _groups(robots_txt)
+    specific = [a for a in groups if a not in ("*", "") and agent.lower().startswith(a)]
+    rules = groups[max(specific, key=len)] if specific else groups.get("*", [])
+    best_len, ok = -1, True
+    for is_allow, pattern in rules:
+        if pattern == "":
+            continue
+        anchored = pattern.endswith("$")
+        body = re.escape(pattern.rstrip("$")).replace(r"\*", ".*") + ("$" if anchored else "")
+        if re.match(body, path) and (
+            len(pattern) > best_len or (len(pattern) == best_len and is_allow)
+        ):
+            best_len, ok = len(pattern), is_allow
+    return ok
 
 
 # --- network ---
@@ -203,12 +247,22 @@ def connect(host: str) -> dict:
     return out
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # the 3xx comes back as HTTPError with its code
+
+
 def get(url: str, headers: dict[str, str] | None = None) -> dict:
-    """One GET; the body is kept only for the checks and is not written to the report."""
+    """One GET; the body is kept only for the checks and is not written to the report.
+
+    With extra headers (an API key) redirects are not followed: urllib would send the key
+    to the new host.
+    """
     req = urllib.request.Request(url, headers={"User-Agent": UA, **(headers or {})})
+    opener = urllib.request.build_opener(_NoRedirect).open if headers else urllib.request.urlopen
     t0 = time.monotonic()
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+        with opener(req, timeout=TIMEOUT_S) as r:
             status, final, hdrs, body = r.status, r.geturl(), r.headers, r.read(READ_MAX)
     except urllib.error.HTTPError as e:
         status, final, hdrs = e.code, e.geturl(), e.headers
@@ -216,7 +270,9 @@ def get(url: str, headers: dict[str, str] | None = None) -> dict:
             body = e.read(READ_MAX)
         except OSError:
             body = b""
-    except (OSError, ssl.SSLError) as e:
+    except (OSError, ssl.SSLError, http.client.HTTPException) as e:
+        # HTTPException (IncompleteRead, BadStatusLine) is not an OSError: one odd host
+        # must not stop the run before the report is written
         return {"url": url, "error": _err(e), "ms": _ms(t0)}
     text = body.decode("utf-8", "replace")
     low_headers = {k.lower(): v for k, v in hdrs.items()} if hdrs else {}
@@ -258,7 +314,11 @@ def probe_site(site: dict, pause: float) -> dict:
     res["robots"] = robots
     page = site.get("page")
     if page:
-        if robots_txt and not robots_allows(robots_txt, page):
+        # RFC 9309: 4xx — no rules; no answer or 5xx — everything is disallowed
+        status = robots.get("status") or 0
+        if status != 200 and not 400 <= status < 500:
+            res["page"] = {"url": f"https://{host}{page}", "verdict": "robots.txt не получен"}
+        elif robots_txt and not robots_allows(robots_txt, page):
             res["page"] = {"url": f"https://{host}{page}", "verdict": "запрещено robots.txt"}
         else:
             time.sleep(pause)
@@ -276,8 +336,13 @@ def probe_api(api: dict) -> dict:
     key = os.environ.get(api["env"], "").strip()
     if key:
         time.sleep(PAUSE_S)
-        res["with_key"] = _api_get(url, {api["header"]: key}, api)
+        res["with_key"] = _hide(_api_get(url, {api["header"]: key}, api), key)
     return res
+
+
+def _hide(r: dict, key: str) -> dict:
+    """The key must not reach the report even if the server echoes it in an error text."""
+    return {k: v.replace(key, "***") if isinstance(v, str) else v for k, v in r.items()}
 
 
 def _api_get(url: str, headers: dict[str, str], api: dict) -> dict:
@@ -415,8 +480,12 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(args.pause)
     report["requests"] = (
         1
-        + sum(2 + bool(s.get("page")) for s in sites)
-        + sum(1 + bool(os.environ.get(a["env"])) for a in APIS if not only or a["host"] in only)
+        + sum(2 + ("ms" in r.get("page", {})) for r in report["sites"])
+        + sum(
+            1 + bool(os.environ.get(a["env"], "").strip())
+            for a in APIS
+            if not only or a["host"] in only
+        )
     )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
