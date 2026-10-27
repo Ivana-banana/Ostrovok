@@ -174,3 +174,89 @@ def test_a_slip_into_the_past_by_a_move_says_so(store):
     assert "даты: 03.10 уже прошло — взят 2027 год" in s.assumptions
     r = say(store, "на 4 ночи", r.session_id)  # the named dates stay named
     assert r.plan.spec.date_from == date(2027, 10, 3)
+
+
+def stays(r, first, stage="compare"):
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.nights, s.month) == (
+        date(2026, 12, 3),
+        date(2026, 12, 8),
+        5,
+        12,
+    )
+    assert not any(c.what in ("даты", "месяц") for c in r.plan.changes)
+    assert r.stage == stage and not r.cart.items and r.plan.spec == first.plan.spec
+
+
+@pytest.mark.parametrize(
+    "text", ["январь не подходит", "в январе не получится", "в январе нельзя", "кроме января"]
+)
+def test_a_rejection_after_the_month_keeps_the_dates_and_is_no_consent(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    stays(r, first)
+    assert "03.12–08.12" in r.reply and "остаются" in r.reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "давай в январе?",
+        "может, в январе?",
+        "можно в январе?",
+        "в январе мы уже были в Сочи",
+        "не в декабре, лучше в январе",
+        "а в январе там холодно?",
+    ],
+)
+def test_an_unclear_month_asks_and_is_no_consent(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    stays(r, first)
+    assert "03.12–08.12 вы назвали сами" in r.reply and "Перенести на январь" in r.reply
+    assert r.stage != "assemble"
+
+
+def test_the_question_has_a_chip_that_moves_the_dates(store):
+    first = named(store)
+    r = say(store, "давай в январе?", first.session_id)
+    assert "Перенести на январь (тот же день и длина) или назовёте даты?" in r.reply
+    chip = r.questions[0].options[0]
+    r = say(store, chip, r.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 3) and r.plan.spec.nights == 5
+
+
+def test_a_contrast_asks_about_the_month_after_the_comma(store):
+    first = named(store)
+    r = say(store, "не в январе, а в феврале", first.session_id)
+    stays(r, first)
+    assert "Перенести на февраль" in r.reply and "январь" not in r.reply
+
+
+def test_a_contrast_with_the_own_month_keeps_the_dates(store):
+    first = named(store)
+    r = say(store, "не в январе, а в декабре", first.session_id)
+    stays(r, first)
+    assert "остаются" in r.reply
+
+
+def test_a_month_among_other_words_is_still_a_request(store):
+    first = named(store)
+    r = say(store, "давай без пересадок, в январе", first.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 3) and r.stage == "compare"
+
+
+def test_dates_that_reach_into_the_month_are_not_moved(store):
+    first = named(store, "с 30 декабря по 4 января")
+    r = say(store, "лучше в январе", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to) == (date(2026, 12, 30), date(2027, 1, 4))
+    assert "заходят в январь" in r.reply and r.stage == "compare"
+
+
+@pytest.mark.parametrize("text", ["отпуск до января", "после января"])
+def test_a_limit_word_before_the_month_is_no_request(store, text):
+    first = named(store)
+    r = say(store, f"бюджет 100 тысяч, {text}", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)

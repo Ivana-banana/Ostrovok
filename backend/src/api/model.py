@@ -53,6 +53,7 @@ from api.extract import (
     MAX_NIGHTS,
     MONTH,
     MONTH_NAMES,
+    MONTHS,
     PAST_WINDOW,
     PER_NIGHT_NOTE_RE,
     SEASONS,
@@ -297,13 +298,53 @@ def dates_named(spec: TripSpec) -> bool:
     )
 
 
-def asks_month(text: str) -> bool:
-    """«Лучше в январе» is a request. A negation, a question or a past tense is not (#190)."""
+def _month_number(word: str) -> int:
+    return next(n for k, n in MONTHS.items() if word.startswith(k))  # «март» before «ма»
+
+
+def month_call(text: str, month: int) -> tuple[str, int | None]:
+    """What a month in the message means for dates the user named (#190).
+
+    Returns (verdict, month): "move" is a clear request; "stay" is a rejection («не в январе»,
+    «январь не подходит»); "ask" is unclear (a question, «может», a past tense, «не в X, а в Y»),
+    the month is the one to ask about; "skip" is no wish for a month («отпуск до января»).
+    """
     t = text.lower().replace("ё", "е")
-    when = rf"(?:{MONTH}|{'|'.join(SEASONS)})"
-    if "?" in t or re.search(r"\b(?:был|была|были|было|побывал\w*)\b", t):
-        return False
-    return not re.search(rf"\b(?:не|кроме|без)\s+(?:\S+\s+){{0,2}}?{when}", t)
+    m = re.search(rf"\b{MONTH}", t) or re.search(rf"\b({'|'.join(SEASONS)})\b", t)
+    if not m:
+        return "move", month
+    before, rest = t[: m.start()], t[m.end() :]
+    if re.search(r"\b(?:до|после|с|со|перед)\s+$", before):
+        return "skip", month
+    negated = bool(re.search(r"\b(?:не|кроме)\s+(?:\S+\s+){0,2}$|\bбез\s+$", before))
+    if negated and re.match(r"\s*,?\s*(?:а|но|лучше|давай)\b", rest):
+        other = re.search(rf"\b{MONTH}", rest)  # «не в январе, а в феврале»: the month to ask about
+        return "ask", _month_number(other.group(1)) if other else None
+    unclear = (
+        r"\bможет\b|\bможно\b|\bа если\b|\bчто если\b|\bкак насч|\b(?:был|была|были|было)\b|побывал"
+    )
+    if "?" in t or re.search(unclear, t):
+        return "ask", month
+    clause = re.split(r"[.;!?]", rest)[0]
+    gone = r"\s*(?:\S+\s+){0,2}?(?:не\b|нельзя|отпадает|отпадают|исключен|невозможн)"
+    if negated or re.match(gone, clause):
+        return "stay", month
+    return "move", month
+
+
+def month_reply(spec: TripSpec, target: int | None, hint: str) -> tuple[str, list[Question]]:
+    """The reply to a month that moves nothing: the dates stay, or a question about the move."""
+    own = f"Даты {period(spec)} вы назвали сами."
+    if target is None:
+        return f"{own} Назовите нужные даты или месяц, на который перенести.", []
+    name = MONTH_NAMES[target - 1]
+    if target == spec.date_from.month:
+        return f"{own} Они остаются. {hint}".strip(), []
+    if target == spec.date_to.month:
+        return f"{own} Они уже заходят в {name}. Если нужны другие, назовите даты.", []
+    move = f"Перенести на {name}"
+    text = f"{own} {move} (тот же день и длина) или назовёте даты?"
+    return text, [Question(text="Что сделать с датами?", options=[move])]
 
 
 def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
@@ -907,6 +948,28 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         kids_only = asking and ASKING_NOTE in rules_notes and not rules_found
         text = _text_kids_question(old) if kids_only else _question_answer(old)
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    # A month after dates the user named (#190): a clear request moves them below (merge);
+    # a refusal or a doubt moves nothing and is never a consent («давай в январе?»).
+    month_verdict, target, now = "", None, old.plan.spec
+    if (
+        prev is not None
+        and "month" in rules_found
+        and not {"date_from", "date_to"} & rules_found.keys()
+        and dates_named(now)
+    ):
+        month_verdict, target = month_call(message, rules_found["month"])
+        if month_verdict == "move":
+            if target == now.date_to.month != now.date_from.month:
+                month_verdict = "ask"  # the stay already reaches into that month
+            elif target == now.date_from.month:
+                month_verdict = ""  # the dates are in that month: nothing to move
+        if month_verdict == "ask":
+            text, questions = month_reply(now, target, "")
+            plan = old.plan.model_copy(update={"changes": []})
+            return old.model_copy(
+                update={"plan": plan, "reply": text, "questions": questions, "llm": False}
+            )
+    refused_month = month_verdict in ("stay", "skip")
     idx = _ordinal(message)
     deadline = llm.deadline()
     # A service turn («беру», «да», «подтверждаю», a number) goes to no model: a field it
@@ -914,8 +977,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # checkout («хотим с бассейном») is a wish: the model reads it and the DAG re-plans (#49).
     # The stage decides: «оформи мне отдых на Алтае» on the first turn is a request, not consent.
     # A new session, clarify and select are never service turns.
-    consent = old.stage in ("compare", "assemble", "checkout") and (
-        _confirmed(t) or bool(BOOK_RE.search(t))
+    consent = (
+        old.stage in ("compare", "assemble", "checkout")
+        and month_verdict != "stay"
+        and (_confirmed(t) or bool(BOOK_RE.search(t)))
     )
     pick = old.stage in ("inspire", "compare") and idx is not None
     found, notes = extract(
@@ -927,12 +992,21 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     )
     if asking and ASKING_NOTE in notes and not found:
         return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
+    if refused_month:
+        found.pop("month", None)  # «не в январе», «отпуск до января»: no new month (#190)
+        notes[:] = [n for n in notes if _label(n) != "когда"]
+        if month_verdict == "stay" and not found:
+            text, _ = month_reply(now, now.date_from.month, HINTS.get(old.stage, ""))
+            plan = old.plan.model_copy(update={"changes": []})
+            return old.model_copy(
+                update={"plan": plan, "reply": text, "questions": [], "llm": False}
+            )
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
     # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
     # «беру, на месяц вперёд спасибо» is a consent: shift_matches skips a remark after a booking.
     shifts = bool(shift_matches(t.replace("ё", "е"), prev is not None))
-    yes = _confirmed(t) and not asks_length and not shifts
+    yes = _confirmed(t) and not asks_length and not shifts and month_verdict != "stay"
     service = prev is not None and (pick or (consent and not asks_length and not shifts))
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
@@ -954,17 +1028,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     )
     if llm_found and ASKING_NOTE in notes:
         llm_found.pop("children_ages", None)  # a question names no child (#179)
-    if (
-        prev is not None
-        and "month" in found
-        and not {"date_from", "date_to"} & found.keys()
-        and dates_named(old.plan.spec)
-        and not asks_month(message)
-    ):
-        # «не в январе», «а в январе там холодно?», «в январе уже были»: no new month (#190)
-        found.pop("month")
-        notes[:] = [n for n in notes if _label(n) != "когда"]
-        for k in DATE_KEYS:
+    if refused_month:
+        for k in DATE_KEYS:  # the model may not bring the month back (#190)
             (llm_found or {}).pop(k, None)
     if shifts:
         if (
