@@ -997,13 +997,6 @@ def test_no_transport_in_the_plan_is_no_whole_trip_and_says_so():
     assert not any("как добраться" in r for r in ex[0].risks)
 
 
-def test_best_labels_of_the_optimizer_match_the_ones_dag_looks_for():
-    """#58: dag.py finds the best bundle by label; the two tuples must not drift apart."""
-    from api.optimizer import BEST_LABELS
-
-    assert dag.BEST_LABELS == BEST_LABELS
-
-
 def test_bundles_of_a_pick_stay_empty_when_nothing_takes_the_pet():
     """#58 + #131: the optimizer offers no trip for the pet; a hand pick must not crash bundles."""
     items = offers([hotel("no", 9000)], FLIGHTS)

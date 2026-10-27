@@ -109,6 +109,16 @@ def test_checkout_refuses_a_switch(store):
     assert again.cart == r.cart
 
 
+def test_hotel_in_the_message_at_checkout_says_the_hotel_is_chosen(store):
+    r = say(store, SOCHI)
+    r = say(store, "да", say(store, "беру", r.session_id).session_id)
+    assert r.stage == "checkout"
+    again = say(store, "беру второй отель и поезд", r.session_id)
+    assert again.stage == "checkout" and again.plan.selected == r.plan.selected
+    assert "Отель уже выбран, сменить его можно на шаге сравнения." in again.reply
+    assert "Корзина уже собрана" in again.reply
+
+
 def rub(n):
     return f"{n:,} ₽".replace(",", " ")
 
@@ -294,6 +304,9 @@ def test_plain_hotel_pick_updates_the_why_and_keeps_the_ranked_bundle_first(stor
         "отель 5 км от центра",
         "возьми поезд до отеля 2 часа",
         "отель 10 минут от вокзала, возьми поезд",
+        "возьми поезд, отель 4.5 и выше",
+        "возьми поезд и отель 3 и 4 звезды",
+        "возьми поезд, отель 8,5 рейтинг",
     ],
 )
 def test_a_number_after_hotel_that_is_not_a_row_does_not_pick_a_hotel(store, text):

@@ -650,8 +650,10 @@ LegCommand = tuple[str, str | int, str | None]
 HOTEL_ROW_RES = (
     re.compile(rf"\b({LEG_ORDINAL})\s+отел\w*"),
     # A digit is a row only when it ends the clause: «отель 3 звезды», «отель 4*», «отель 5 км
-    # от центра», «до отеля 2 часа» state a need and name no row.
-    re.compile(r"\bотел\w*\s+(?:№\s*|номер\s+)?(\d{1,2})(?=\s*(?:$|[,;.!?]|и\b))"),
+    # от центра», «до отеля 2 часа», «отель 4.5 и выше», «отель 3 и 4 звезды» state a need.
+    re.compile(
+        r"\bотел\w*\s+(?:№\s*|номер\s+)?(\d{1,2})(?![.,]\d)(?=\s*(?:$|[,;.!?]|и\b(?!\s*\d)))"
+    ),
 )
 
 
@@ -1655,6 +1657,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return done.model_copy(update={"reply": f"{note}\n{done.reply}"})
         if old.stage == "checkout" and (plan or note):
             note = "Корзина уже собрана, транспорт в ней не меняю."
+            if row is not None:
+                note = f"Отель уже выбран, сменить его можно на шаге сравнения. {note}"
             hint = HINTS["checkout"]
             return old.model_copy(update={"reply": f"{note} {hint}", "questions": [], "llm": False})
         if plan or note:
