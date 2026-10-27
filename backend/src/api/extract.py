@@ -148,6 +148,14 @@ LENGTH_NEXT = re.compile(r"\s*,\s*\d+\s*(?:ноч|дн|недел)")
 CHILD_RE = re.compile(
     rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*)"
 )
+# #195: «без детей», «без маленьких детей», «без мужа и детей», «без двоих детей» say there
+# are no children. Between «без» and the child stand only «X и» or one word in -их/-ых
+# («без пересадок двое детей 5 и 8 лет» has children). Only a genitive form can be refused.
+NO_CHILD_BEFORE = re.compile(r"\bбез\s+(?:\w+\s+и\s+|\w+[иы]х\s+)?$")
+# A number word or a number right after the child noun: the children are named. A negation
+# later in the clause is a double negation («без детей не поедем»): the children stay.
+NO_CHILD_AFTER = re.compile(r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)|[^,.;!?]*\b(?:не|ни\w*)\b")
+NO_CHILD_FORM = ("детей", "ребенка", "сына", "дочери", "малыша")
 # #112: the party. A number word names a person only in a few forms; «одна ночь», «один из
 # вариантов», «один и тот же отель» are not a party. A solo word needs a stop, a preposition
 # or a verb of the trip after it (or a verb of the trip before it).
@@ -1224,7 +1232,15 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     asking: the message is a question at a built plan; a child without a number or an age in
     it adds nobody (#179)."""
     ages: list[int] = []
+    no_kids = False
     for m in CHILD_RE.finditer(t):
+        if (
+            m.group(0).endswith(NO_CHILD_FORM)
+            and NO_CHILD_BEFORE.search(t[: m.start()])
+            and not NO_CHILD_AFTER.match(t, m.end())
+        ):
+            no_kids = True  # «без детей»: nobody is added (#195)
+            continue
         a = AGES_RE.match(t, m.end())
         if asking and a and THRESHOLD_RE.search(t[m.end() : a.start(1)]):
             a = None  # «детям до 12 лет скидка?»: 12 is a limit of a fare, not an age
@@ -1241,6 +1257,11 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
         ages += (said + [7] * count)[:count]
     if ages:
         found["children_ages"] = ages
+    elif no_kids and asking:  # a question «а без детей можно?» changes nothing (#179)
+        if ASKING_NOTE not in notes:
+            notes.append(ASKING_NOTE)
+    elif no_kids:
+        found["children_ages"] = []
     if m := re.search(rf"\b{NUM}\s*взросл\w*", t):
         if _num(m.group(1)) < 1:
             notes.append(f"взрослых: «{m.group(0)}» не бывает, состав прежний")
