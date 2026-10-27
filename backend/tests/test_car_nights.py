@@ -3,8 +3,9 @@
 1. «Допущения» name the earlier start and the later return home.
 2. Inspiration counts a car by the hours at the wheel, not by the hours with the nights.
 3. A timeline error with a fix «рейс N»: the pick clears the error and «беру» goes on.
-4-5. The daily limit MAX_DRIVE is 10 h (Regulation (EC) 561/2006, research/domain.md), no
-   tolerance: Москва → Казань (12 h 50 min at the wheel by the offers model) takes 2 days.
+4-5. The daily limit MAX_DRIVE is 12 h, a team estimate (D-026; professional drivers in the
+   EU: 9-10 h, Regulation (EC) 561/2006). Москва → Санкт-Петербург (11.3 h) is one day;
+   Москва → Казань (12 h 50 min by the offers model) takes 2 days: a known compromise.
 Offline, without an LLM key (TRAP-1); dates, times and ids only from offers (TRAP-4).
 """
 
@@ -74,21 +75,34 @@ def test_TRAP_5_inspiration_filters_a_car_by_hours_at_the_wheel(store):
     r = say(store, SEA)
     assert r.stage == "inspire" and r.plan.spec.max_travel_hours == 20
     yeysk = next(d for d in r.plan.destinations if d.name == "Ейск")
-    assert yeysk.travel_hours <= 20 and not yeysk.violates  # 18 h at the wheel, not 33 h
-    assert any("за рулём, 1 ночёвка в пути" in t for t in yeysk.tradeoffs)
+    assert not yeysk.violates  # 18 h at the wheel pass «не больше 20 часов»
+    assert yeysk.travel_hours > 24  # door to door with the night, as before #321
+    road = [t for t in yeysk.tradeoffs if t.startswith("за рулём ")]
+    assert road and road[0].endswith(" ч, 1 ночёвка в пути")
+    card = next(x for x in r.reply.splitlines() if "Ейск" in x)
+    assert road[0] in card and f"в пути {yeysk.travel_hours:g} ч" not in card
+    assert card.count("за рулём") == 1  # not again in the minuses
 
 
-def test_TRAP_5_moscow_kazan_takes_two_days_without_a_tolerance():
+def test_TRAP_5_moscow_kazan_takes_two_days_a_known_compromise():
+    """The offers model drives 12 h 50 min (the road is 1.3 x the straight line): just over
+    MAX_DRIVE, so one night on the road. No tolerance on top of the estimate (D-026)."""
     for leg in car("Москва", "Казань"):
-        assert drive_time(leg) > MAX_DRIVE  # 12 h 50 min by the offers model
+        assert drive_time(leg) > MAX_DRIVE
         assert road_nights(leg) == 1
         assert drive_time(leg) / 2 <= MAX_DRIVE
 
 
-def test_TRAP_5_a_drive_within_the_daily_limit_is_one_day():
-    for leg in car("Москва", "Нижний Новгород"):
+@pytest.mark.parametrize("place", ["Санкт-Петербург", "Нижний Новгород"])
+def test_TRAP_5_a_drive_within_the_daily_limit_is_one_day(place):
+    for leg in car("Москва", place):
         assert drive_time(leg) <= MAX_DRIVE and road_nights(leg) == 0
         assert leg.depart_at.date() == leg.arrive_at.date()
+        assert "ночёв" not in leg.title
+
+
+def test_TRAP_5_max_drive_is_12_hours():
+    assert MAX_DRIVE == timedelta(hours=12)
 
 
 class _NonstopFirst:

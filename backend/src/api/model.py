@@ -84,7 +84,7 @@ from api.extract import (
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
-from api.inspire import suggest_destinations
+from api.inspire import ROAD_LINE, suggest_destinations
 from api.offers import find_offers, resolve_place, road_nights
 from api.optimizer import (
     _hotel_why,
@@ -1297,12 +1297,15 @@ def _text_inspire(plan: Plan) -> str:
         climate = "".join(
             f", {label} {v:g} °C" for label, v in (("днём", d.air_c), ("вода", d.water_c)) if v
         )
+        # #321: a car with nights on the road shows its hours at the wheel (inspire.ROAD_LINE).
+        road = next((t for t in d.tradeoffs if t.startswith(ROAD_LINE)), None)
+        minuses = [t for t in d.tradeoffs if t != road]
         line = (
             f"{i}. {d.name} ({d.country}) — от {_rub(d.est_total_rub)} на {guests} чел., "
-            f"в пути {d.travel_hours:g} ч{climate}. {_cap(d.why)}."
+            f"{road or f'в пути {d.travel_hours:g} ч'}{climate}. {_cap(d.why)}."
         )
-        if d.tradeoffs:
-            line += f" Минусы: {'; '.join(d.tradeoffs)}."
+        if minuses:
+            line += f" Минусы: {'; '.join(minuses)}."
         if d.violates:
             line += f" Нарушает требования: {'; '.join(d.violates)}."
         lines.append(line)

@@ -10,6 +10,7 @@ places closer than SPREAD_KM to a shown one wait for a free slot.
 """
 
 from collections import Counter
+from datetime import timedelta
 
 from api import catalog
 from api import offers as ports  # TRANSPORT is read at call time: a test may swap it
@@ -113,19 +114,26 @@ def _why(spec: TripSpec, place: dict, water: float | None) -> str:
     return ", ".join(parts) or ("природа" if "nature" in place["tags"] else "город")
 
 
-def _road(spec: TripSpec, hub: dict, place: dict) -> tuple[float, int]:
-    """The fastest way there by the transport port (offers.TRANSPORT): hours and nights on the
-    road. A car counts the time at the wheel without its nights (#321); 0 at the origin."""
+def _road(spec: TripSpec, hub: dict, place: dict) -> tuple[float, float, int]:
+    """The way there by the transport port (offers.TRANSPORT), hours: door to door (the
+    fastest leg, as Destination.travel_hours), at the wheel (#321: a car without its nights on
+    the road, any other leg door to door), and the nights on the road of that leg. 0 at the
+    origin."""
     probe = (
         spec
         if spec.date_from
         else spec.model_copy(update={"date_from": future_date(spec.month or 1, 15)})
     )
     legs = [x for x in ports.TRANSPORT.legs(probe, hub, place) if x.origin == hub["name"]]
-    best: TransportOffer | None = min(legs, key=drive_time, default=None)
-    if best is None:
-        return 0, 0
-    return round(drive_time(best).total_seconds() / 3600, 1), road_nights(best)
+    if not legs:
+        return 0, 0, 0
+    door = min(_hours(x.arrive_at - x.depart_at) for x in legs)
+    best: TransportOffer = min(legs, key=drive_time)
+    return door, _hours(drive_time(best)), road_nights(best)
+
+
+def _hours(delta: timedelta) -> float:
+    return round(delta.total_seconds() / 3600, 1)
 
 
 def _nights_word(n: int) -> str:
@@ -136,18 +144,26 @@ def _nights_word(n: int) -> str:
     return f"{n} ночёвок"
 
 
-def _road_text(hours: float, nights: int) -> str:
+# A tradeoff that starts with ROAD_LINE is the road of a car with nights on the road (#321):
+# model._text_inspire and web Board.tsx show it in place of «в пути N ч».
+ROAD_LINE = "за рулём "
+
+
+def _road_text(door: float, wheel: float, nights: int) -> str:
     if not nights:
-        return f"дорога {hours:g} ч"
-    return f"дорога {hours:g} ч за рулём, {_nights_word(nights)} в пути"
+        return f"дорога {door:g} ч"
+    return f"{ROAD_LINE}{wheel:g} ч, {_nights_word(nights)} в пути"
 
 
-def _minuses(place: dict, month: int | None, hours: float, note: str, nights: int = 0) -> list[str]:
+def _minuses(
+    place: dict, month: int | None, road: tuple[float, float, int], note: str
+) -> list[str]:
     air, water = catalog.month_climate(place, month) if month else (None, None)
     rain = place["climate"]["rain"][month - 1] if month else None
+    door, wheel, nights = road
     out = []
-    if hours >= LONG_ROAD_H:
-        out.append(_road_text(hours, nights))
+    if door >= LONG_ROAD_H:
+        out.append(_road_text(door, wheel, nights))
     if water is not None and place["sea"] and WARM_WATER_C <= water < WARM_WATER_C + 2:
         out.append(f"вода {water:g} °C — на границе комфорта")
     if air is not None and air >= HOT_C:
@@ -157,14 +173,15 @@ def _minuses(place: dict, month: int | None, hours: float, note: str, nights: in
     if (place["airport_km"] or 0) > FAR_AIRPORT_KM:
         out.append(f"от аэропорта {place['airport_km']} км")
     out += [note] * bool(note)
-    return out or [_road_text(hours, nights)]
+    return out or [_road_text(door, wheel, nights)]
 
 
 def card(spec: TripSpec, hub: dict, place: dict, note: str = "") -> Destination:
     """One destination: price and travel time from api/offers.py, the rest from catalog.json."""
     month = _month(spec)
     air, water = catalog.month_climate(place, month) if month else (None, None)
-    hours, nights = _road(spec, hub, place)  # a car: hours at the wheel (#321)
+    road = _road(spec, hub, place)
+    hours, wheel, nights = road
     offers = find_offers(spec, place["name"])
     cost = trip_cost(spec, offers)
     violates = _rule_breaks(spec, place, hub, month)
@@ -173,9 +190,10 @@ def card(spec: TripSpec, hub: dict, place: dict, note: str = "") -> Destination:
         violates.append(f"{'/'.join(MODES[m] for m in spec.modes)} {NO_WAY}")
     if not pets_possible(spec, offers):
         violates.append(NO_PETS)
-    if spec.max_travel_hours and hours > spec.max_travel_hours:
+    # #321: a car is filtered by the hours at the wheel, its nights on the road do not count.
+    if spec.max_travel_hours and wheel > spec.max_travel_hours:
         what = "за рулём" if nights else "в пути"
-        violates.append(f"{what} {hours:g} ч — дольше {spec.max_travel_hours:g} ч")
+        violates.append(f"{what} {wheel:g} ч — дольше {spec.max_travel_hours:g} ч")
     if spec.budget_rub is not None and cost > spec.budget_rub:
         violates.append(f"дороже бюджета: {cost:,} ₽ при {spec.budget_rub:,} ₽".replace(",", " "))
     return Destination(
@@ -188,7 +206,7 @@ def card(spec: TripSpec, hub: dict, place: dict, note: str = "") -> Destination:
         air_c=air,
         water_c=water,
         travel_hours=hours,
-        tradeoffs=_minuses(place, month, hours, note, nights),
+        tradeoffs=_minuses(place, month, road, note),
         violates=violates,
     )
 

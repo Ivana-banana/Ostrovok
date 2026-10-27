@@ -63,11 +63,11 @@ NO_DIRECT = {"Италия", "Франция", "Испания", "Чехия", "
 OUT_FLIGHTS = [(time(10, 30), 1.0), (time(17, 40), 0.9)]  # arrival, local to the place
 # A car (#276, #321): at most MAX_DRIVE at the wheel a day, then a night on the road. Every
 # driving day starts at the same clock time: there at CAR_OUT, so that the car comes on the
-# check-in day; back at CAR_BACK, the hotel check-out (HotelOffer.check_out). MAX_DRIVE: the
-# daily driving limit of a professional driver in Regulation (EC) 561/2006, 9 h, twice a week
-# 10 h (research/domain.md); no tolerance above it. A night on the road costs ROAD_NIGHT_RUB a
-# room, one room per car: a team estimate without a source (D-026).
-MAX_DRIVE = timedelta(hours=10)
+# check-in day; back at CAR_BACK, the hotel check-out (HotelOffer.check_out). MAX_DRIVE and
+# ROAD_NIGHT_RUB (a room, one room per car) are team estimates without a source (D-026). For
+# reference: Regulation (EC) 561/2006 lets a professional driver drive 9-10 h a day; a private
+# driver has no limit (research/domain.md).
+MAX_DRIVE = timedelta(hours=12)
 CAR_OUT, CAR_BACK = time(8, 0), time(12, 0)
 ROAD_NIGHT_RUB = 3500
 BACK_FLIGHTS = [(time(15, 20), 1.0), (time(21, 5), 0.9)]  # departure, local to the place
