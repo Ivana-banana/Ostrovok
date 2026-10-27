@@ -1199,6 +1199,13 @@ def llm_past_dates(llm_found: dict, today: date | None = None) -> str | None:
     return f"даты: от модели {start:%d.%m.%Y} {PAST_GONE_MARK} — не применены"
 
 
+# The day of the return after the start: «улетаем 18-го», «обратно 3 декабря»; not «в 18:30».
+BACK_DAY_RE = re.compile(
+    rf"\b(?:улета\w*|уезжа\w*|возвраща\w*|обратно)\s+(\d{{1,2}})(?![\d:.]|\s*(?:ноч|дн|сут|недел|час|чел))(?:-?(?:го|е)\b)?"
+    rf"(?:\s+{MONTH})?"
+)
+
+
 def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
     """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day.
 
@@ -1223,6 +1230,12 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         m2 = m1
     elif m := re.search(rf"\b{d}\s+{MONTH}", t):
         (d1, m1), d2, m2 = m.groups(), None, None
+        # C5 (#363): «прилетаем 14 ноября, улетаем 18-го» — the return day ends the stay.
+        # A day alone at or before the start is in the next month: «с 28 ноября, улетаем 3-го».
+        if back := BACK_DAY_RE.search(t, m.end()):
+            d2, m2 = back.group(1), back.group(2) or m1
+            if not back.group(2) and int(d2) <= int(d1):
+                m2 = MONTH_NAMES[_month(m1) % 12]
     else:
         today = date.today()
         if m := re.search(r"\b(сегодня|завтра|послезавтра)\b", t):
@@ -1411,7 +1424,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(r"\bна\s+(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
         found["nights"] = MAX_NIGHTS + 1  # too long, the 3 digits are no number the rules read
-    elif m := re.search(rf"\b{NUM}\s*ноч\w*", t):
+    elif m := re.search(rf"(?<![:.])\b{NUM}\s*ноч\w*", t):  # «в 01:30 ночи» is a time (C5)
         n = _num(m.group(1))
         if n >= 1:
             found["nights"] = n
