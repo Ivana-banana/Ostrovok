@@ -236,6 +236,35 @@ def test_checkout_issues_voucher_and_session_keeps_it(client, at_checkout):
     assert again.status_code == 200 and again.json()["booking_id"] == v["booking_id"]
 
 
+def test_checkout_puts_the_guest_into_the_voucher(client, at_checkout):
+    r = at_checkout
+    guest = {"name": "Иван Петров", "contact": "ivan@example.com"}
+    body = {"session_id": r.session_id, "confirm_total_rub": r.cart.total_rub, "guest": guest}
+    assert client.post("/api/checkout", json=body).json()["guest"] == guest
+    reloaded = client.get(f"/api/session/{r.session_id}").json()
+    assert reloaded["voucher"]["guest"] == guest
+
+
+def test_checkout_without_guest_leaves_it_empty(client, at_checkout):
+    r = at_checkout
+    body = {"session_id": r.session_id, "confirm_total_rub": r.cart.total_rub}
+    assert client.post("/api/checkout", json=body).json()["guest"] is None
+
+
+def test_c23_checkout_hint_names_the_form_and_the_simulation(at_checkout):
+    assert "форме оформления" in at_checkout.reply and "не обязательны" in at_checkout.reply
+
+
+def test_c23_guest_data_after_booking_gets_an_honest_reply(store, at_checkout):
+    booked = say(store, "подтверждаю", at_checkout.session_id)
+    r = say(store, "Иван Петров, +70001234567, ivan@example.com", booked.session_id)
+    assert booked.voucher.booking_id in r.reply and "уже оформлена" in r.reply
+    assert "имитирована" in r.reply and "форме оформления" in r.reply
+    assert r.voucher == booked.voucher
+    plain = say(store, "спасибо", booked.session_id)
+    assert "имитирована" not in plain.reply
+
+
 def test_trap_7_voucher_prices_are_synthetic(client, at_checkout):
     """TRAP-7: every voucher item stays marked synthetic."""
     r = at_checkout

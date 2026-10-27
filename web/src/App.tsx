@@ -3,7 +3,7 @@ import { ApiError, cartAction, chat, checkout, getSession } from "./api";
 import { Board, Destinations, destinationsInChat } from "./Board";
 import { PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, StagePills, Thinking } from "./Chat";
-import type { ChatReply, Offer } from "./contracts";
+import type { ChatReply, Guest, Offer } from "./contracts";
 import { SOURCES, cartLine, describe } from "./format";
 import {
   type ChatEntry,
@@ -292,13 +292,17 @@ export function App() {
     }
   }
 
-  async function onCheckout() {
+  async function onCheckout(guest: Guest | null) {
     if (!reply || busy) return;
     setBusy(true);
     setError(null);
     const id = reply.session_id;
     try {
-      const voucher = await checkout({ session_id: id, confirm_total_rub: reply.cart.total_rub });
+      const voucher = await checkout({
+        session_id: id,
+        confirm_total_rub: reply.cart.total_rub,
+        ...(guest && { guest }),
+      });
       const fresh = await getSession(id).catch(() => null);
       setReply(fresh?.voucher ? fresh : { ...reply, stage: "booked", voucher });
       const text = `Бронь ${voucher.booking_id} оформлена. ${voucher.simulated ? "Оплата имитирована." : "Оплата принята."}`;

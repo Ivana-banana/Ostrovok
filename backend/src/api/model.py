@@ -1660,11 +1660,16 @@ def _no_offers(plan: Plan, text: str, skip: list[str] | None = None) -> tuple[st
     return text + options, [Question(text="Куда поедем вместо этого?", options=names)]
 
 
+GUEST_DATA_RE = re.compile(r"@|\+?\d[\d\s()-]{6,}")  # an e-mail or a phone in the message
+
 HINTS: dict[Stage, str] = {
     "select": "Выберите другое направление.",
     "compare": "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».",
     "assemble": "Напишите «да», чтобы положить план в корзину.",
-    "checkout": "Чтобы оформить бронь, напишите «подтверждаю».",
+    "checkout": (
+        "Имя гостя можно ввести в форме оформления; в имитации данные гостя не обязательны. "
+        "Чтобы оформить бронь, напишите «подтверждаю»."
+    ),
 }
 
 
@@ -1731,6 +1736,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return fresh.model_copy(update={"reply": f"Начинаем заново.{kept} {fresh.reply}"})
     if prev and prev.voucher:
         text = f"Бронь {prev.voucher.booking_id} уже оформлена."
+        if GUEST_DATA_RE.search(message):  # #367: a name or a contact after the booking
+            text += (
+                " Она имитирована, данные гостя я не сохраняю. Имя можно ввести в форме "
+                "оформления до подтверждения."
+            )
         return prev.model_copy(update={"reply": text, "questions": [], "llm": False})
     old = prev or ChatReply(
         session_id=sid,

@@ -5,6 +5,7 @@ import type {
   Cart,
   ChatReply,
   Destination,
+  Guest,
   HotelOffer,
   Offer,
   Plan,
@@ -39,7 +40,7 @@ export type BoardProps = {
   removed: Offer[]; // items removed from the cart in this session, to put back
   onSend: (text: string) => void;
   onCart: (action: "add" | "remove", offerId: string) => void;
-  onCheckout: () => void;
+  onCheckout: (guest: Guest | null) => void;
 };
 
 // Every price carries the "синтетика" label when the data is mock (TRAP-7).
@@ -646,8 +647,10 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   removed: Offer[];
   busy: boolean;
   onCart: BoardProps["onCart"];
-  onCheckout: () => void;
+  onCheckout: BoardProps["onCheckout"];
 }) {
+  const [guestName, setGuestName] = useState("");
+  const [guestContact, setGuestContact] = useState("");
   const editable = stage === "checkout";
   const shownTotal = useCountUp(cart.total_rub);
   const back = removed.filter((r) => !cart.items.some((o) => o.offer_id === r.offer_id));
@@ -717,7 +720,40 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
         </p>
       )}
       {editable && cart.items.length > 0 && (
-        <button type="button" className="primary" disabled={busy} onClick={onCheckout}>
+        <div className="guest-form">
+          <label>
+            Имя гостя (необязательно)
+            <input
+              type="text"
+              maxLength={100}
+              autoComplete="name"
+              value={guestName}
+              onChange={(e) => setGuestName(e.target.value)}
+            />
+          </label>
+          <label>
+            Контакт: телефон или e-mail (необязательно)
+            <input
+              type="text"
+              maxLength={100}
+              autoComplete="off"
+              value={guestContact}
+              onChange={(e) => setGuestContact(e.target.value)}
+            />
+          </label>
+          <span className="sub">имитация: данные попадут только в ваучер, в систему бронирования не уходят</span>
+        </div>
+      )}
+      {editable && cart.items.length > 0 && (
+        <button
+          type="button"
+          className="primary"
+          disabled={busy}
+          onClick={() => {
+            const name = guestName.trim();
+            onCheckout(name ? { name, contact: guestContact.trim() } : null);
+          }}
+        >
           Подтвердить бронь на {rub(cart.total_rub)}
           {synthetic && " (синтетика)"} · оплата имитируется
         </button>
@@ -762,6 +798,12 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
           <dd>{localTime(voucher.created_at)}</dd>
         </div>
       </dl>
+      <p className="guest-line">
+        Гость:{" "}
+        {voucher.guest
+          ? [voucher.guest.name, voucher.guest.contact].filter(Boolean).join(", ")
+          : "не указан (имитация, данные не собираем)"}
+      </p>
       <ul className="plain">
         {voucher.items.map((o) => (
           <li key={o.offer_id} className="row">
