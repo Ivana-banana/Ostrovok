@@ -62,3 +62,29 @@ def test_c18_question_is_no_budget_edit(store, text):
     second = say(store, text, first.session_id)
     assert second.plan.spec.budget_rub is None
     assert re.search(r"\S", second.reply)
+
+
+def test_c310_budget_never_below_the_cheapest_total(store):
+    first = say(store, START)
+    second = say(store, "бюджет поменьше", first.session_id)
+    assert second.plan.spec.budget_rub >= total_of(second)
+    assert "Снизил итог до" in second.reply and "не уложиться" not in second.reply
+    third = say(store, "бюджет поменьше", second.session_id)
+    assert third.plan.spec.budget_rub == second.plan.spec.budget_rub  # nothing cheaper: unchanged
+    assert "Дешевле в предложениях нет" in third.reply
+    assert f"{total_of(third):,}".replace(",", " ") in third.reply
+
+
+@pytest.mark.parametrize("text", ["не надо дешевле", "дешевле не надо", "не нужно подешевле"])
+def test_c310_negation_lowers_no_budget(store, text):
+    first = say(store, START)
+    second = say(store, text, first.session_id)
+    assert second.plan.spec.budget_rub is None
+
+
+@pytest.mark.parametrize("text", ["можно ли подешевле?", "а можно ли подешевле"])
+def test_c310_can_i_cheaper_is_a_request(store, text):
+    first = say(store, START)
+    second = say(store, text, first.session_id)
+    assert second.plan.spec.budget_rub is not None
+    assert total_of(second) < total_of(first)

@@ -801,12 +801,17 @@ CHEAPER_RE = re.compile(
 )
 CHEAPER_ASK_RE = re.compile(
     r"\b(?:дешевле|экономнее)\s*,?\s*(?:чем|ли)\b|\bли\b|\bпочему\b|\bсколько\b"
+    # #310: «не надо дешевле», «дешевле не надо» refuse it
+    r"|\bне\s+(?:надо|нужно|нужн\w+|хочу|хотим|стоит|(?:по)?дешевле|экономнее)\b"
+    r"|\b(?:по)?дешевле\s+не\b|\bэкономнее\s+не\b"
 )
 BUDGET_STEP = 15  # percent off the current total per «подешевле»
 
 
 def asks_cheaper(low: str) -> bool:
-    return bool(CHEAPER_RE.search(low) and not CHEAPER_ASK_RE.search(low))
+    """«Можно ли подешевле?» is a request; «дешевле ли …?», «дешевле, чем …?» and a refusal are not."""
+    clean = re.sub(r"\bможно\s+ли\b", "можно", low)
+    return bool(CHEAPER_RE.search(clean) and not CHEAPER_ASK_RE.search(clean))
 
 
 def is_rebuild(low: str) -> bool:
@@ -814,15 +819,23 @@ def is_rebuild(low: str) -> bool:
     return bool(pick_kinds(low) or NO_FLIGHT_RE.search(low) or stay_delta(low))
 
 
-def lower_budget(plan: Plan, found: dict, notes: list[str]) -> None:
+def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
     """«Бюджет поменьше» at a built plan: the trip budget is one step (15 %) under the current
-    total, rounded down to 100 ₽. The DAG then re-plans the ranking only (#278)."""
+    total, rounded down to 100 ₽. The DAG then re-plans the ranking only (#278).
+
+    The budget never goes under the cheapest total the offers give (#310): a trial re-plan finds
+    it. If that is the target or more, the budget is the cheapest total; if nothing is cheaper
+    than the plan, the budget stays."""
     total = _selected_total(plan)
     if total <= 0 or "budget_rub" in found:
         return
     target = total * (100 - BUDGET_STEP) // 100 // 100 * 100
-    found["budget_rub"] = target
-    notes.append(f"бюджет: {_rub(target)} (на {BUDGET_STEP}% ниже итога {_rub(total)})")
+    trial, _, _ = replan(plan, plan.spec.model_copy(update={"budget_rub": target}), cart)
+    cheapest = _selected_total(trial)
+    if cheapest >= total:
+        return
+    found["budget_rub"] = max(target, cheapest)
+    notes.append(f"бюджет: {_rub(found['budget_rub'])} (ниже итога {_rub(total)})")
 
 
 def cheaper_line(old: Plan, new: Plan) -> str:
@@ -831,13 +844,13 @@ def cheaper_line(old: Plan, new: Plan) -> str:
     goal = new.spec.budget_rub
     if b >= a:
         return (
-            f"Дешевле набора в предложениях нет: сейчас {_rub(b)} — это минимум (синтетика). "
-            "Если назовёте сумму, подберу ближайшее к ней."
+            f"Дешевле в предложениях нет: сейчас {_rub(b)} — это минимум (синтетика). "
+            "Назовите сумму, если нужно другое."
         )
-    if goal is not None and b > goal:
+    if goal is not None and b >= goal:
         return (
-            f"В {_rub(goal)} не уложиться: самый дешёвый набор в предложениях — {_rub(b)} "
-            "(синтетика). Если назовёте другую сумму, пересоберу под неё."
+            f"Снизил итог до {_rub(b)} — это минимум в предложениях (синтетика). "
+            "Назовите сумму, если нужно другое."
         )
     return ""
 
@@ -1597,7 +1610,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         rebuild_spec_edit(old.plan.spec, old.plan, low, found, notes, lines) if planned else None
     )
     if cheaper:
-        lower_budget(old.plan, found, notes)  # #278
+        lower_budget(old.plan, old.cart, found, notes)  # #278
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
     # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
