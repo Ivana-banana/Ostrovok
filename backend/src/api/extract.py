@@ -865,11 +865,43 @@ WEEKDAYS = ("понедельник", "вторник", "среду", "четв�
 
 
 PAST_MARK = "уже прошло"  # in the note about a named day moved to next year
+PAST_GONE_MARK = "уже прошли"  # in the note about model dates too far back to take
 PAST_WINDOW = timedelta(days=31)  # only a day this recent counts as a slip
 
 
 def is_past_note(assumption: str) -> bool:
-    return PAST_MARK in assumption
+    return PAST_MARK in assumption or PAST_GONE_MARK in assumption
+
+
+def past_year_note(day: date, year: int) -> str:
+    return f"даты: {day:%d.%m} {PAST_MARK} — взят {year} год"
+
+
+def llm_past_dates(llm_found: dict, today: date | None = None) -> str | None:
+    """Model dates go through the same check as the rules' dates (#164); returns the note.
+
+    A day in the last PAST_WINDOW moves to next year, the length stays (#159).
+    Dates further back are not taken: the model's dates leave `llm_found`.
+    """
+    start = llm_found.get("date_from")
+    today = today or date.today()
+    if start is None or start >= today:
+        return None
+    if start >= today - PAST_WINDOW:
+        try:
+            moved = start.replace(year=start.year + 1)
+        except ValueError:  # 29 February
+            moved = start.replace(year=start.year + 1, day=28)
+        end = llm_found.get("date_to")
+        llm_found["date_from"] = moved
+        if end is not None:
+            llm_found["date_to"] = end + (moved - start)
+        if "month" in llm_found:
+            llm_found["month"] = moved.month
+        return past_year_note(start, moved.year)
+    for k in DATE_KEYS:
+        llm_found.pop(k, None)
+    return f"даты: от модели {start:%d.%m.%Y} {PAST_GONE_MARK} — не применены"
 
 
 def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
@@ -933,7 +965,7 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         return
     # A day passed in the last month may be a slip: say so (#159). «8 марта» in October is next year.
     if start.year > today.year and date(today.year, start.month, start.day) >= today - PAST_WINDOW:
-        notes.append(f"даты: {start:%d.%m} {PAST_MARK} — взят {start.year} год")
+        notes.append(past_year_note(start, start.year))
     found["date_from"] = start
     if d2 is None:
         return
