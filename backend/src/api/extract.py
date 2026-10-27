@@ -280,6 +280,8 @@ def _ages_of(a: re.Match) -> list[int]:
         elif int(n) <= 17:
             ages.append(int(n))
     return ages
+
+
 # #193: «дети с нами — двое, 5 и 8 лет»: a dash or a colon, an optional count word, the ages.
 AGES_LIST_RE = re.compile(
     r"\s*(?:с\s+нами\s*)?[—–:-]\s*(?:[а-я]+\s*,\s*)?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)"
@@ -1448,7 +1450,9 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
             bare = [int(x) for x in re.findall(r"\d+", b.group(1))]
             if max(bare) <= 17 and (not m.group(1) or _num(m.group(1)) == len(bare)):
                 said = bare
-        single = not m.group(1) and not m.group("twin") and not m.group(0).split()[-1].startswith("дет")
+        single = (
+            not m.group(1) and not m.group("twin") and not m.group(0).split()[-1].startswith("дет")
+        )
         if not said and not asking and single and (o := AGE_ONE_RE.match(t, m.end())):
             said = [int(o.group(1))] if int(o.group(1)) <= 17 else []
         if not said and m.group("adj"):
