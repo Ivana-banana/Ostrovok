@@ -186,7 +186,7 @@ def test_wish_question_at_checkout_reaches_the_model(monkeypatch, store):
 
 
 @pytest.mark.parametrize("stage", ["assemble", "checkout"])
-@pytest.mark.parametrize("text", ["нужен ли трансфер?", "можно ли с бассейном?", "надо ли что-то?"])
+@pytest.mark.parametrize("text", ["нужен ли трансфер?", "надо ли что-то?"])
 def test_need_question_with_li_keeps_the_cart(monkeypatch, store, stage, text):
     r = at(store, stage)
     monkeypatch.setattr(

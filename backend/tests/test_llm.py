@@ -552,7 +552,9 @@ def test_free_text_on_checkout_goes_to_the_model(monkeypatch, store, fake):
     assert r.stage == "checkout"
     calls = []
     monkeypatch.setattr(llm, "extract_spec", lambda m, s, until=None, today=None: calls.append(m))
-    say(store, "хотим что-нибудь с бассейном", r.session_id)  # a question goes to no model (#81)
+    say(
+        store, "хотим что-нибудь с бассейном", r.session_id
+    )  # a wish («хотим…») is no question: the model reads it (#81)
     assert calls == ["хотим что-нибудь с бассейном"]
 
 
