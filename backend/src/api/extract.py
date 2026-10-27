@@ -426,6 +426,10 @@ def _wanted_pair(t: str, spans: list[tuple[int, int]], i: int) -> bool:
         r"\s+(?:или|либо)\s+", t[spans[group[-1]][1] : spans[group[-1] + 1][0]]
     ):
         group.append(group[-1] + 1)
+    stop = SENTENCE_END.search(t, spans[group[-1]][1])
+    rest = t[spans[group[-1]][1] : stop.start() if stop else len(t)]
+    if len(group) < 2 or re.search(r"\b(?:тоже|также|нет|не)\b", rest):
+        return False  # «Турция, Кипр», «Турция или Кипр тоже»: the refused list goes on
     return any(re.match(r"[\w-]*[ая]\b", t[spans[j][0] :]) for j in group)
 
 
@@ -510,6 +514,13 @@ NOT_PAIR_PLACE = re.compile(
     r"|сын|доч|внук|семь)"
 )
 NAME_WORD = r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*"
+# The first words of two-word names outside the catalogue (lower, «е» for «ё»): «Новый Афон».
+# A list, not adjective endings: «Летний Ханой» is no name.
+NAME_LEADS = {
+    "новый", "новая", "новое", "старый", "старая", "роза", "красная", "красный", "красное",
+    "большой", "большая", "малый", "малая", "верхний", "великий", "белый", "белая", "черный",
+    "золотой", "горный", "южный", "северный", "санта", "сан", "нью", "лас", "лос", "абу", "форт",
+}  # fmt: skip
 
 
 def _ordinary(word: str, low: str) -> bool:
@@ -540,10 +551,10 @@ def _two_word_name(text: str, t: str, s: int, e: int, side: int) -> tuple[int, s
     if not m or not text[s].isupper():
         return None
     (a, b), (hs, he) = ((m.start(1), m.end(1)), (s, e)) if side == 0 else ((s, e), m.span(1))
-    first, low = text[a:b], t[a:b]
-    if _ordinary(first, low) and low not in NOT_PLACES or re.search(r"(?:ом|ем|ть)$", low):
-        return None  # «Хочу Ханой», «Летом Ханой»; «Новый» of NOT_PLACES may lead a name
-    if _known(first) or (name := _pair_name(text[hs:he], t[hs:he])) is None:
+    first, head = text[a:b], t[hs:he]
+    if t[a:b] not in NAME_LEADS or any(rx.fullmatch(head) for _, rx in COUNTRY_RES):
+        return None  # «Отпуск Ханой», «Ханой Пожалуйста», «Ханой Вьетнам»
+    if (name := _pair_name(text[hs:he], head)) is None:
         return None
     return a, f"{first} {name}", he
 
@@ -638,7 +649,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         if s in pair_sides and name in COUNTRIES and (city := resolve_place(name)):
             name = city["name"]  # «Египет или Турция»: the city of the catalogue for the country
         place = resolve_place(name)
-        if place and place["country"] in refused:
+        if s in pair_sides and place and place["country"] in refused:
             continue  # «Турция или Египет, в Египте уже были»: no Хургада (#151)
         if place and mentions[s][2] in COUNTRIES and place["name"] in refused:
             # The country is named, its city is refused: another city of the country.

@@ -131,3 +131,39 @@ def test_refused_place_of_the_pair_gets_no_chip_trap_2(store):
 
 def test_refusal_in_the_case_of_the_preposition_takes_the_whole_list_trap_2():
     assert excluded_places("Не хочу в Египет, Турцию или Кипр") == ["Египет", "Турция", "Кипр"]
+
+
+# #151 review: the wish after the comma needs a pair «или» and no «тоже» behind it.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Не хочу в Египет, Турция тоже",
+        "Не хочу в Египет, Турция, Кипр",
+        "Не хочу в Египет, Турция или Кипр тоже",
+    ],
+)
+def test_refusal_list_without_a_wanted_pair_is_whole_trap_2(store, text):
+    assert excluded_places(text)[:2] == ["Египет", "Турция"]
+    r = say(store, text)
+    assert "Анталия" not in (r.plan.spec.destinations if r.plan else [])
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Отпуск Ханой или Сочи",
+        "Варианты Ханой или Сочи",
+        "Летний Ханой или Сочи",
+        "Сочи или Ханой Пожалуйста",
+        "Казань или Ханой Вьетнам",
+    ],
+)
+def test_ordinary_word_next_to_a_name_is_not_glued_trap_3(store, text):
+    r = say(store, text)
+    assert "Ханой" in r.plan.spec.destinations
+    assert not any(" " in d for d in r.plan.spec.destinations)
+
+
+def test_refused_country_keeps_its_city_outside_a_pair_trap_2(store):
+    r = say(store, "В Турции уже были, хотим в Аланью")
+    assert [d[:5] for d in r.plan.spec.destinations] == ["Алань"]
