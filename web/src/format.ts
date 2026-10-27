@@ -51,8 +51,9 @@ export function rub(n: number): string {
   return `${String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} ₽`;
 }
 
-// «1 год», «2 года», «5 лет», «11 лет», «21 год».
+// «1 год», «2 года», «5 лет», «11 лет», «21 год»; age 0 (the backend turns months into 0): «до 1 года».
 export function yearsText(n: number): string {
+  if (n === 0) return "до 1 года";
   const m100 = n % 100;
   const m10 = n % 10;
   const word = m100 > 10 && m100 < 15 ? "лет" : m10 === 1 ? "год" : m10 > 1 && m10 < 5 ? "года" : "лет";
