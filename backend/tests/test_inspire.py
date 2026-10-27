@@ -175,6 +175,9 @@ def test_nature_wish_with_banned_flight_gives_nature_places_without_big_cities()
         "не хочу лететь больше 4 часов",
         "не хочу лететь с пересадками",
         "без авиабилетов, у нас уже есть",
+        "не авиакомпанией Победа",
+        "не Аэрофлотом, а Победой",
+        "не лоукостером",
     ],
 )
 def test_c17_long_flight_or_owned_tickets_is_no_flight_ban(text):
@@ -194,3 +197,8 @@ def test_c17_warm_sea_with_quiet_rest_keeps_the_sea_pool(store):
         store, "Хочу тихий отдых на тёплом море в ноябре с ребёнком 5 лет, из Москвы, тысяч 150"
     )
     assert all(d.water_c is not None and d.water_c >= WARM_WATER_C for d in dests)
+
+
+def test_c17_no_flight_phrases_still_ban_the_plane():
+    assert extract("не на самолёте, дорого")[0]["modes"] == ["train", "car"]
+    assert extract("без самолётов")[0]["modes"] == ["train", "car"]
