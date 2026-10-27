@@ -12,6 +12,7 @@ import re
 from datetime import date, timedelta
 
 from api.fixtures import CATALOG, future_date
+from api.guards import name_candidates
 from api.offers import places, resolve_place
 
 MONTHS = {
@@ -824,8 +825,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     hits += [(m.start(), name, m.end()) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
     for m in re.finditer(r"(?:^|[\s,(])(?:[вВ]о?|[нН]а)\s+(?=[А-ЯЁ])", text):
         free = t[m.end()] != " " and not _place_at(text, t, m.end())  # " ": the origin span
-        if free and (name := _capital(text, m.end())):
-            hits.append((m.end(), name, _word_end(t, m.end())))
+        if free and (span := _capital_span(text, m.end())):
+            hits.append((m.end(), *span))
     for m in re.finditer(r"(?:^|[\s,(])(?:во?|на)\s+([а-яе-]+)", t):  # «в иркутск», «в Иркутске»
         if (
             t[m.start(1)] != " "
@@ -859,6 +860,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         if s in pair_sides and name in COUNTRIES and (city := resolve_place(name)):
             name = city["name"]  # «Египет или Турция»: the city of the catalogue for the country
         place = resolve_place(name)
+        if place and place.get("source") == "online":
+            name = place["name"]  # the geocoder's name: «Бледе» is the place «Блед» (TRAP-3)
         if s in pair_sides and place and place["country"] in refused:
             continue  # «Турция или Египет, в Египте уже были»: no Хургада (#151)
         if place and mentions[s][2] in COUNTRIES and place["name"] in refused:
@@ -880,22 +883,46 @@ def excluded_places(text: str) -> list[str]:
     return _places(text, text.lower().replace("ё", "е"), {}, [], True)
 
 
-def _capital(text: str, pos: int) -> str | None:
-    """A capitalized word that is not a month: kept as written, «Грузию» -> «Грузия»."""
+# The first word of a name outside the catalogue that is an adjective in a case: «Старую
+# Ладогу», «Чешском Крумлове», «Новой Ухты». NAME_LEADS adds the nominative («Новый Афон»).
+ADJ_CASE = re.compile(r"(?:ую|юю|ой|ей|ого|его|ом|ем|ым|им|ая|яя|ый|ий|ое|ее)$")
+
+
+def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
+    """A capitalized name: kept as written, «Грузию» -> «Грузия»; and where it ends in the text.
+
+    Two capitalized words are one name when the first is an adjective: «Старую Ладогу» ->
+    «Старая Ладога» (TRAP-3). The geocoder gets the whole name, not «Старую»."""
     m = re.match(r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*", text[pos:])
     if not m or m.group(0).lower() in NOT_PLACES or re.match(MONTH, m.group(0).lower()):
         return None
     word = m.group(0)
+    end = pos + m.end()
     low = word.lower().replace("ё", "е")
     country = next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None)
-    return _known(word) or country or _nominative(word)  # «Египте» is Египет, not a new city
+    if known := _known(word) or country:  # «Египте» is Египет, not a new city
+        return known, end
+    second = re.compile(rf" ({NAME_WORD})(?![а-яё-])").match(text, end)
+    if second and (ADJ_CASE.search(low) and len(low) > 3 or low in NAME_LEADS):
+        tail, tail_low = second.group(1), second.group(1).lower().replace("ё", "е")
+        if not (_ordinary(tail, tail_low) or NOT_CITY_END.search(tail_low) or _known(tail)):
+            return name_candidates(f"{word} {tail}")[0], second.end()
+    return _nominative(word), end
+
+
+def _capital(text: str, pos: int) -> str | None:
+    span = _capital_span(text, pos)
+    return span[0] if span else None
 
 
 def _nominative(word: str) -> str:
-    """Unknown names: «Грузию» -> «Грузия», «Иркутске» -> «Иркутск», «Аляске» -> «Аляска»."""
+    """Unknown names: «Грузию» -> «Грузия», «Иркутске» -> «Иркутск», «Аляске» -> «Аляска»,
+    «Сиену» -> «Сиена» (after «в» the ending -у/-ю is the accusative of -а/-я)."""
     word = re.sub(r"и[ию]$", "ия", word)
     if re.search(r"[аеёиоуыэюя]ск[еу]$", word):
         return word[:-1] + "а"  # «Аляске» -> «Аляска»; «Иркутске» has a consonant before «ск»
+    if re.search(r"[бвгджзклмнпрстфхцчшщ][ую]$", word) and len(word) >= 5:
+        return word[:-1] + ("а" if word[-1] == "у" else "я")
     return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
 
 

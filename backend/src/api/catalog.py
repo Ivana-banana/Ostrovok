@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable
 from functools import cache
 from pathlib import Path
 
-from api.guards import normalize_toponym
+from api.guards import name_candidates, normalize_toponym
 
 HERE = Path(__file__).parent
 ONLINE_CACHE = HERE.parents[2] / "data" / "online_places.json"  # /app/data in the container
@@ -215,15 +215,29 @@ def _monthly(days: list[str], values: list, how=statistics.fmean) -> list[float 
     return [round(how(by_month[m]), 1) if m in by_month else None for m in range(1, 13)]
 
 
-def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
+def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
+    """The geocoder's answer for a name in any case: the nominative guesses are asked in order.
+
+    «Старую Ладогу» asks «Старая Ладога», «Бледе» asks «Блед», «Бледа», «Бледь» (TRAP-3). A guess
+    is taken only if its answer is the same words as the name up to a case ending: «Старую» is
+    not a case of «Стара-Загора». The name as written is asked last and is taken as it comes.
+    """
     ask = {"count": 1, "language": "ru", "format": "json"}
-    found = fetch(GEOCODE, {**ask, "name": name}).get("results")
-    if not found and _stems(name) != name:  # «Бледе»: the geocoder knows only «Блед» (TRAP-3)
-        found = fetch(GEOCODE, {**ask, "name": _stems(name)}).get("results")
-        found = [g for g in found or [] if _same_words(norm(name).split(), norm(g["name"]).split())]
-    if not found:
+    for guess in name_candidates(name):
+        found = fetch(GEOCODE, {**ask, "name": guess}).get("results")
+        if guess != name.strip():
+            found = [
+                g for g in found or [] if _same_words(norm(name).split(), norm(g["name"]).split())
+            ]
+        if found:
+            return found[0]
+    return None
+
+
+def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
+    g = _geocode(name, fetch)
+    if g is None:
         return None
-    g = found[0]
     lat, lon = round(g["latitude"], 4), round(g["longitude"], 4)
     span = {"latitude": lat, "longitude": lon, "start_date": f"{YEAR}-01-01",
             "end_date": f"{YEAR}-12-31", "timezone": "auto"}  # fmt: skip
@@ -281,9 +295,13 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
         return None  # not in _online: after FAILED_S the geocoder is asked again
     _online[key] = place
     if place is not None:
+        keys = {key, norm(place["name"])}  # «Бледе» and «Блед» are one place
+        _online.update(dict.fromkeys(keys, place))
         try:
             ONLINE_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            ONLINE_CACHE.write_text(json.dumps({**disk, key: place}, ensure_ascii=False), "utf-8")
+            ONLINE_CACHE.write_text(
+                json.dumps({**disk, **dict.fromkeys(keys, place)}, ensure_ascii=False), "utf-8"
+            )
         except OSError:
             pass  # read-only file system: the process cache is enough
     return place
