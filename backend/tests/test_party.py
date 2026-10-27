@@ -404,3 +404,40 @@ def test_next_to_grandparents_is_a_hotel_wish_not_a_party(store):
     r = say(store, "Едем 4 взрослых в Сочи на 5 ночей с 1 июля")
     r = say(store, "Хочу отель рядом с бабушкой и дедушкой", r.session_id)
     assert r.plan.spec.adults == 4
+
+
+# --- #322: «его/её/их» inside the chain; ages without «лет» ---
+
+
+@pytest.mark.parametrize(
+    "text, adults",
+    [
+        ("Мы с женой и с её родителями едем в Сочи", 4),
+        ("Едем с другом и его женой в Сочи", 3),
+        ("Я с подругой и её мамой летим в Сочи", 3),
+        ("Едем с сестрой и её мужем в Сочи", 3),
+    ],
+)
+def test_possessive_does_not_break_the_chain(text, adults):
+    found, _ = extract(text)
+    assert found["adults"] == adults
+
+
+def test_ages_without_a_unit_after_a_counted_child():
+    found, _ = extract("Трое детей 3, 5 и 8, едем в Сочи")
+    assert found["children_ages"] == [3, 5, 8]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Трое детей, 5 ночей в Сочи",
+        "Двое детей, бюджет 100 тысяч",
+        "Дети 2 и 3 класса, Сочи",
+        "Двое детей 5, 8 ночей в Сочи",
+        "Трое детей 5 и 8, Сочи",
+    ],
+)
+def test_numbers_that_are_not_ages_stay_default(text):
+    found, _ = extract(text)
+    assert set(found.get("children_ages", [])) <= {7}
