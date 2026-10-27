@@ -1732,10 +1732,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             # Its coordinates are unknown, so the variants are not «nearby»: the reply says why.
             text = (
                 f"Направления «{spec.destinations[0]}» пока {NOT_IN_CATALOG}, "
-                "и геокодер его не нашёл (или нет сети). Где это место, не знаю: "
-                "напишите другой город или ближайший к нему крупный город. "
-                f"{HINTS['select']} Ниже — направления под ваши даты и пожелания, "
-                "не по близости к этому месту."
+                "и геокодер его не нашёл (или нет сети). Где это место, не знаю. "
+                f"{HINTS['select']} Подойдёт и ближайший к нему крупный город. "
+                "Ниже — направления под ваши даты и пожелания, не по близости к этому месту."
             )
             text, questions = _no_offers(plan, text)
             # «Ханой или Сочи»: Сочи is named (#142)
