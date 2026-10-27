@@ -1,7 +1,8 @@
 """Timeline checker (T8, #14): arrival -> transfer -> check-in -> check-out -> transfer -> return.
 
-Deterministic, no network, no LLM. Reads only plan.selected and plan.offers, never the spec
-(api/dag.py relies on it). Every time is computed in UTC and shown in the local zone of the
+Deterministic, no network, no LLM. Reads only plan.selected and plan.offers, and of the spec
+only the own tickets (C5, #408: offers.own_legs); an edit of them re-runs the offers node of
+api/dag.py, so the timeline still follows its inputs. Every time is computed in UTC and shown in the local zone of the
 event place (TRAP-5): the same ZoneInfo on both sides would subtract wall clocks and lose or
 gain an hour at a DST change. Texts are Russian; numbers come from offers or from the
 constants below. `fixes` hold offer_id from plan.offers only (TRAP-4): add-ons of the hotel
@@ -34,7 +35,7 @@ from api.contracts import (
     TransferOffer,
     TransportOffer,
 )
-from api.offers import MAX_DRIVE, drive_time, resolve_place, road_nights, transfer_id
+from api.offers import MAX_DRIVE, drive_time, own_legs, resolve_place, road_nights, transfer_id
 
 EARLY_WAIT = timedelta(hours=3)  # arrival earlier than this before check-in is an issue
 LATE_WAIT = timedelta(hours=3)  # time between check-out and leaving for the station or airport
@@ -112,6 +113,12 @@ class _Trip:
         city = self.hotel.city if self.hotel else None
         self.out = next((x for x in self.legs if x.destination == city), None)
         self.back = next((x for x in self.legs if x.origin == city), None)
+        # Own tickets: legs of the timeline, not of the cart; "picked" so that only a selected
+        # transfer counts (transfer()).
+        self.own = own_legs(plan.spec, city) if city else []
+        self.picked |= {x.offer_id for x in self.own}
+        self.out = self.out or next((x for x in self.own if x.destination == city), None)
+        self.back = self.back or next((x for x in self.own if x.origin == city), None)
 
     def room(self) -> tuple[HotelOffer, ZoneInfo]:
         """The hotel and its zone. Callers check the hotel first; no hidden server zone."""
@@ -408,10 +415,20 @@ def _leg_events(leg: TransportOffer, t: _Trip) -> list[TimelineEvent]:
     ]
 
 
+def _leg_id(t: _Trip, leg: TransportOffer) -> str | None:
+    """offer_id of an event of `leg`; own tickets are no offer."""
+    return None if leg in t.own else leg.offer_id
+
+
 def _events(t: _Trip) -> list[TimelineEvent]:
     events: list[TimelineEvent] = []
     for leg in t.legs:
         events += _leg_events(leg, t)
+    for leg in t.own:
+        verb = VERBS[leg.mode][1 if leg is t.out else 0]
+        events.append(
+            TimelineEvent(at=leg.arrive_at.astimezone(t.room()[1]), title=f"{verb}: свои билеты")
+        )
     if t.hotel:
         h, tz = t.room()
         ready = t.ready()
@@ -429,7 +446,7 @@ def _events(t: _Trip) -> list[TimelineEvent]:
                     at=t.out.arrive_at.astimezone(tz),
                     title=f"До отеля добираетесь сами: трансфер не выбран{km}, "
                     f"на дорогу закладываем {_span(way)}",
-                    offer_id=t.out.offer_id,
+                    offer_id=_leg_id(t, t.out),
                 )
             )
         arrive = _hotel_at(t, tr_in, t.out) if t.out else None
@@ -467,7 +484,7 @@ def _events(t: _Trip) -> list[TimelineEvent]:
                     at=(_utc(t.back.depart_at) - MARGIN[t.back.mode] - way).astimezone(tz),
                     title=f"Выезд {HUBS[t.back.mode]}: добираетесь сами, трансфер не выбран{km}, "
                     f"на дорогу закладываем {_span(way)}",
-                    offer_id=t.back.offer_id,
+                    offer_id=_leg_id(t, t.back),
                 )
             )
 

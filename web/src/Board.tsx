@@ -22,6 +22,7 @@ import {
   clock,
   duration,
   fieldLabel,
+  guestsText,
   hours,
   localDate,
   localTime,
@@ -86,13 +87,6 @@ const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
 
-function guests(spec: TripSpec): string {
-  const kids = spec.children_ages.length
-    ? `, дети: ${spec.children_ages.map((a) => `${a} лет`).join(", ")}`
-    : "";
-  return `${spec.adults} взр.${kids}`;
-}
-
 // Origin, dates, guests and budget are the chips of ParamsBar; the rows keep the rest.
 function SpecSummary({ spec, locked, onSend }: {
   spec: TripSpec;
@@ -103,6 +97,13 @@ function SpecSummary({ spec, locked, onSend }: {
   if (spec.destinations.length) rows.push(["Куда", spec.destinations.join(", ")]);
   if (spec.nights) rows.push(["Ночей", String(spec.nights)]);
   if (spec.pets) rows.push(["Питомец", "да"]);
+  if (spec.own_transport) {
+    const times = [
+      spec.arrive_at && `прилёт ${localTime(spec.arrive_at)}`,
+      spec.leave_at && `вылет ${localTime(spec.leave_at)}`,
+    ].filter(Boolean);
+    rows.push(["Билеты", ["свои", ...times].join(", ")]);
+  }
   if (spec.hotel_budget_rub !== null) rows.push(["Бюджет отеля", rub(spec.hotel_budget_rub)]);
   if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
   if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);
@@ -666,6 +667,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   return (
     <section className="sec" aria-label="Корзина">
       <h2>Корзина</h2>
+      <p className="muted">Гости: {guestsText(spec)}</p>
       <ul className="plain">
         {cart.items.map((o) => (
           <li key={o.offer_id} className="row">
@@ -801,7 +803,7 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
         </div>
         <div>
           <dt>Гости</dt>
-          <dd>{guests(s)}</dd>
+          <dd>{guestsText(s)}</dd>
         </div>
         <div>
           <dt>Оформлено</dt>

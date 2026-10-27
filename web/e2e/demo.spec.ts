@@ -80,6 +80,8 @@ test("S6: запрос → сравнение → план → корзина �
 
   // Выбор другого отеля — один клик; агент собирает план с таймлайном.
   await hotels.getByRole("button", { name: /^Выбрать/ }).first().click();
+  // Таймлайн виден уже на сравнении; этап сборки — кнопка «Положить в корзину» (на сравнении «Собрать план»).
+  await expect(page.getByRole("button", { name: "Положить в корзину" })).toBeVisible();
   const timeline = page.getByRole("region", { name: "Таймлайн" });
   await expect(timeline).toBeVisible();
 
@@ -196,11 +198,15 @@ test("ширина телефона: длинная подпись мест се
   const flights = cart.locator("ul.plain").first().locator("li").filter({ hasText: label });
   await expect(flights).toHaveCount(2); // туда и обратно
   expect(await noPageScroll(page)).toBe(false);
-  // Строка не вылезает за край корзины: длинная подпись переносится.
+  // Подпись не обрезана: переносится, а не прячется за overflow (scrollWidth <= clientWidth).
   const box = await cart.boundingBox();
   for (const row of await flights.all()) {
     const r = await row.boundingBox();
     expect(r && box && r.x + r.width <= box.x + box.width + 1).toBe(true);
+    const clipped = await row
+      .locator(":scope > span:first-child")
+      .evaluate((e) => e.scrollWidth > e.clientWidth);
+    expect(clipped, "подпись мест обрезана").toBe(false);
   }
 });
 
