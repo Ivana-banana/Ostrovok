@@ -7,8 +7,9 @@ catalogue (api/catalog.py, #8) and the transport formula of api/offers.py.
 
 from datetime import date
 
+from api import offers as ports  # TRANSPORT is read at call time: a test may swap it
 from api.contracts import Offer, TripSpec
-from api.offers import find_offers, transport_offers  # noqa: F401  find_offers: api/dag.py
+from api.offers import find_offers  # noqa: F401  find_offers: api/dag.py
 from api.optimizer import rank  # noqa: F401  T7 (#13): the seam is the optimizer now
 from api.timeline import build_timeline  # noqa: F401  # T8 (#14) lives in api/timeline.py
 
@@ -63,13 +64,13 @@ def trip_cost(spec: TripSpec, offers: list[Offer]) -> int:
 
 
 def travel_hours(spec: TripSpec, origin: dict, place: dict) -> float:
-    """The fastest way there by api/offers.py, hours; 0 when the place is the origin."""
+    """The fastest way there by the transport port (offers.TRANSPORT), hours; 0 at the origin."""
     probe = (
         spec
         if spec.date_from
         else spec.model_copy(update={"date_from": future_date(spec.month or 1, 15)})
     )
-    legs = [x for x in transport_offers(probe, origin, place) if x.origin == origin["name"]]
+    legs = [x for x in ports.TRANSPORT.legs(probe, origin, place) if x.origin == origin["name"]]
     return min(
         (round((x.arrive_at - x.depart_at).total_seconds() / 3600, 1) for x in legs), default=0
     )

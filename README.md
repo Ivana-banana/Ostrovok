@@ -94,6 +94,8 @@ make demo     # собирает web и поднимает http://localhost:8080
 - Без ключа LLM работают экстрактор на правилах и шаблонные объяснения (TRAP-1).
 - Стек: Python 3.12, FastAPI, pydantic, SQLite (сессии); React, Vite, TypeScript. Один контейнер, multi-stage `Dockerfile`, пользователь не root, `HEALTHCHECK`.
 
+**Как подключить своего провайдера.** Источники данных — порты (`docs/adr/ADR-0002-porty-i-adaptery.md`). Интерфейсы `HotelProvider`, `TransportProvider` и `TransferProvider` — раздел «Порты» в `backend/src/api/contracts.py`. Напишите класс с методом порта: `hotels`, `legs` или `transfers`. Присвойте его объект переменной модуля `backend/src/api/offers.py`: `HOTELS`, `TRANSPORT` или `TRANSFERS`. Присваивание делают при старте (`main.py`) или в тесте. Сейчас там адаптеры `OsmOrSynthetic`, `SyntheticTransport`, `SyntheticTransfers`. Затем запустите `make check`: тест `backend/tests/test_ports.py` проверяет инварианты, которые читает ядро (город рейса равен городу отеля, сначала рейсы «туда», id трансфера). Пустой ответ провайдера — «нет предложений», синтетикой он не заменяется.
+
 Все решения — `docs/decisions.md` (D-001…D-010).
 
 ## Данные
