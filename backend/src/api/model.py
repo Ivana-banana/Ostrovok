@@ -85,7 +85,7 @@ from api.extract import (
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
 from api.inspire import suggest_destinations
-from api.offers import find_offers, resolve_place
+from api.offers import find_offers, resolve_place, road_nights
 from api.optimizer import (
     _hotel_why,
     _leg_why,
@@ -1256,9 +1256,33 @@ def _question_answer(
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
 
 
-def _tail(spec: TripSpec, hint: str) -> list[str]:
-    head = ["Допущения: " + "; ".join(spec.assumptions) + "."] if spec.assumptions else []
+def _tail(spec: TripSpec, hint: str, extra: list[str] | None = None) -> list[str]:
+    said = [*spec.assumptions, *(extra or [])]
+    head = ["Допущения: " + "; ".join(said) + "."] if said else []
     return head + [hint]
+
+
+def _road_note(plan: Plan) -> list[str]:
+    """#321: nights on the road move the car start before the check-in and the return home
+    after the check-out. The dates and the nights come from the selected legs (TRAP-4)."""
+    by_id = {o.offer_id: o for o in plan.offers}
+    cars = sorted(
+        (
+            o
+            for i in plan.selected
+            if isinstance(o := by_id.get(i), TransportOffer) and o.mode == "car"
+        ),
+        key=lambda o: o.depart_at,
+    )
+    if len(cars) != 2 or not any(map(road_nights, cars)):
+        return []
+    there, back = cars
+    n_there, n_back = road_nights(there), road_nights(back)
+    nights = (
+        f"{n_there} в каждую сторону" if n_there == n_back else f"туда {n_there}, обратно {n_back}"
+    )
+    days = f"выезд {there.depart_at:%d.%m}, возврат {back.arrive_at:%d.%m}"
+    return [f"дорога: {days}, ночёвок в пути: {nights} (оценка)"]
 
 
 def _text_clarify(questions: list[Question]) -> str:
@@ -1343,7 +1367,11 @@ def _text_compare(plan: Plan) -> str:
         lines.append(f"Изменено {c.what}: {c.before} → {c.after}.")
     return "\n".join(
         lines
-        + _tail(spec, "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».")
+        + _tail(
+            spec,
+            "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».",
+            _road_note(plan),
+        )
     )
 
 
