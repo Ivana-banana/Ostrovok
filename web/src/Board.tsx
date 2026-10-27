@@ -441,9 +441,13 @@ function Bundles({ plan }: { plan: Plan }) {
   const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? id;
   const synthetic = (b: Bundle) =>
     isSynthetic(plan.offers.filter((o) => b.offer_ids.includes(o.offer_id)));
+  const kind = (id: string) => plan.offers.find((o) => o.offer_id === id)?.kind;
+  const heading = plan.bundles.every((b) => b.offer_ids.some((id) => kind(id) === "transport"))
+    ? "Варианты поездки целиком"
+    : "Варианты проживания: дороги в плане нет";
   return (
-    <section aria-label="Варианты поездки целиком">
-      <h2>Варианты поездки целиком</h2>
+    <section aria-label={heading}>
+      <h2>{heading}</h2>
       <div className="cards">
         {plan.bundles.map((b) => (
           <article key={b.bundle_id} className="card">
