@@ -103,6 +103,13 @@ function SpecSummary({ spec, locked, onSend }: {
   if (spec.destinations.length) rows.push(["Куда", spec.destinations.join(", ")]);
   if (spec.nights) rows.push(["Ночей", String(spec.nights)]);
   if (spec.pets) rows.push(["Питомец", "да"]);
+  if (spec.own_transport) {
+    const times = [
+      spec.arrive_at && `прилёт ${localTime(spec.arrive_at)}`,
+      spec.leave_at && `вылет ${localTime(spec.leave_at)}`,
+    ].filter(Boolean);
+    rows.push(["Билеты", ["свои", ...times].join(", ")]);
+  }
   if (spec.hotel_budget_rub !== null) rows.push(["Бюджет отеля", rub(spec.hotel_budget_rub)]);
   if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
   if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);

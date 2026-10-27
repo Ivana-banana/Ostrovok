@@ -824,9 +824,44 @@ def offers_for_place(
     now = now or datetime.now(UTC)  # only the cancellation state depends on it
     pairs = HOTELS.hotels(spec, place, now)
     hotels = [h for h, _ in pairs]
-    legs = TRANSPORT.legs(spec, _complete(origin), place) if origin else []
-    transfers = TRANSFERS.transfers(spec, place, hotels, legs)
+    legs = (
+        TRANSPORT.legs(spec, _complete(origin), place) if origin and not spec.own_transport else []
+    )
+    own = own_legs(spec, place["name"])
+    transfers = TRANSFERS.transfers(spec, place, hotels, legs + own)
     return [*hotels, *legs, *transfers, *(x for _, extras in pairs for x in extras)]
+
+
+OWN_THERE, OWN_BACK = "own-there", "own-back"  # leg_id of the user's own tickets (C5, #408)
+
+
+def own_legs(spec: TripSpec, city: str) -> list[TransportOffer]:
+    """The user's own arrival and departure as legs for the transfers and the timeline only.
+
+    They are never offers: nothing to buy. A leg there is spec.arrive_at, a leg back
+    spec.leave_at; a train when the user named only the train, else a flight.
+    """
+    if not spec.own_transport:
+        return []
+    mode: Mode = "train" if spec.modes == ["train"] else "flight"
+    out = []
+    for leg_id, at, there in ((OWN_THERE, spec.arrive_at, True), (OWN_BACK, spec.leave_at, False)):
+        if at is None:
+            continue
+        ends = (spec.origin or "", city) if there else (city, spec.origin or "")
+        out.append(
+            TransportOffer(
+                offer_id=leg_id,
+                title="Свои билеты",
+                mode=mode,
+                origin=ends[0],
+                destination=ends[1],
+                depart_at=at,
+                arrive_at=at,
+                price_rub=1,  # never shown or summed: not an offer
+            )
+        )
+    return out
 
 
 def find_offers(spec: TripSpec, name: str, now: datetime | None = None) -> list[Offer]:

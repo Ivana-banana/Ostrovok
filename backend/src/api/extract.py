@@ -9,7 +9,8 @@ Invalid values (31 ноября, 0 ночей) are skipped with a note, never an
 
 import functools
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from api import catalog
 from api.fixtures import CATALOG, future_date
@@ -1411,6 +1412,33 @@ def _holiday_end(said: str, found: dict, notes: list[str]) -> None:
     )
 
 
+# C5 (#408): «билеты у нас уже куплены», «свои билеты», «уже купили билеты».
+OWN_TICKETS_RE = re.compile(
+    r"\bбилет\w*\s+(?:у\s+(?:нас|меня)\s+)?(?:уже\s+)?(?:есть|куплен\w*|взят\w*)"
+    r"|\bсво\w+\s+билет\w*|\bуже\s+(?:купил\w*|взял\w*)\s+билет\w*"
+)
+# The clock time of the own arrival and departure in one clause: «прилетаем 14 ноября в 01:30».
+CLOCK = r"[^.,;!?]*?\bв\s+(\d{1,2})[:.](\d{2})\b"
+ARRIVE_RE = re.compile(rf"\b(?:прилет|приезж|прибыв|приезд|прибыт)\w*{CLOCK}")
+LEAVE_RE = re.compile(rf"\b(?:улет|уезжа|отъезд|обратн)\w*{CLOCK}")
+
+
+def _own_tickets(t: str, found: dict) -> None:
+    """Own tickets and their times at the destination of this message (offers.own_legs)."""
+    if not OWN_TICKETS_RE.search(t):
+        return
+    found["own_transport"] = True
+    place = resolve_place(found["destinations"][0]) if found.get("destinations") else None
+    if place is None:
+        return  # no zone for the clock time
+    tz = ZoneInfo(place["tz"])
+    for key, day, rx in (("arrive_at", "date_from", ARRIVE_RE), ("leave_at", "date_to", LEAVE_RE)):
+        m = rx.search(t)
+        if m and found.get(day) and int(m.group(1)) < 24 and int(m.group(2)) < 60:
+            at = time(int(m.group(1)), int(m.group(2)))
+            found[key] = datetime.combine(found[day], at, tz)
+
+
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на месяц» (30), «на выходные» (пятница–воскресенье).
 
@@ -1904,6 +1932,7 @@ def extract(
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     if holiday:
         _holiday_end(holiday, found, notes)
+    _own_tickets(t, found)
     _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
     if re.search(
