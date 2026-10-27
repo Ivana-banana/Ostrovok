@@ -277,3 +277,25 @@ def test_children_statement_in_the_first_message_stays_a_party(store):
 def test_question_about_children_is_not_a_party_at_a_plan():
     found, notes = extract("А дети бесплатно?", True, asking=True)
     assert "children_ages" not in found and notes
+
+
+# #81 and #179 together: a question at checkout keeps the cart; only a children question
+# gets the party answer.
+def test_other_question_at_checkout_keeps_the_cart(store):
+    before = _to_checkout(store)
+    after = say(store, "а отель с завтраком?", before.session_id)
+    assert after.stage == "checkout" and after.cart == before.cart
+    assert "Это вопрос" in after.reply
+
+
+def test_kids_question_with_an_age_at_checkout_is_an_edit(store):
+    before = _to_checkout(store)
+    after = say(store, "А с ребёнком 5 лет можно?", before.session_id)
+    assert after.plan.spec.children_ages == [5]  # a real change, as any edit of #81
+
+
+def test_kids_reply_dots(store):
+    before = _to_checkout(store)
+    assert "взр. Отдельной" in say(store, "А дети бесплатно?", before.session_id).reply
+    kids = say(store, "Сочи в ноябре на 5 ночей, вдвоём с ребёнком 4 года")
+    assert "взр. + дети 4 лет. Отдельной" in say(store, "А дети бесплатно?", kids.session_id).reply

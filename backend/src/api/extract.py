@@ -960,7 +960,7 @@ MAX_NIGHTS = 60  # a longer stay is named and not taken (#160)
 
 def too_long_note(said: str, nights: int) -> str:
     """A length over MAX_NIGHTS is not taken; `nights` is the length that stays in the plan."""
-    return f"длительность: срок «{said}» не принял — взято {nights} ночей"
+    return f"длительность: срок «{said}» не принял — взято {nights} {_night_word(nights)}"
 
 
 def is_too_long_note(assumption: str) -> bool:
@@ -1291,7 +1291,8 @@ def extract(
     range_notes = [i for i, n in enumerate(notes) if is_too_long_note(n)]
     _nights(t, found, notes, nights)
     for i in range_notes:  # «… на 10 ночей»: the note names the length the plan has (#173)
-        notes[i] = re.sub(r"\d+ ночей$", f"{found.get('nights', nights)} ночей", notes[i])
+        kept = found.get("nights", nights)
+        notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     _people(t, found, notes, asking)
     _budget(t, found, notes, nights, adults)
     if re.search(

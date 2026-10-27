@@ -363,7 +363,13 @@ def _no_errors(r):
         ("а на пару недель раньше?", -14),
     ],
 )
-def test_say_shifts_both_ends(store, antalya, text, days):
+def test_say_shifts_both_ends(store, antalya, text, days, monkeypatch):
+    class Early(date):  # the real date must not decide: a shift into the past is refused (#176)
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 1)
+
+    monkeypatch.setattr(dag, "date", Early)
     old = antalya.plan.spec
     r = say(store, text, antalya.session_id)
     spec = r.plan.spec
