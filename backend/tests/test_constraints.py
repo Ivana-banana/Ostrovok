@@ -222,6 +222,9 @@ def test_warm_refusal_does_not_pick_warm_places(store):
     assert "климату ноября" not in r.reply
 
 
-def test_warm_reply_says_the_estimate_is_by_november(store):
+def test_warm_reply_shows_the_air_of_the_month(store):
+    """«тепло» in January: only places with the January air of catalog.json ≥ 15 °C, number shown."""
     r = say(store, "Куда-нибудь где тепло в январе, до 6 часов лёту, из Екатеринбурга")
-    assert "климату ноября" in r.reply
+    assert [d.name for d in r.plan.destinations] == ["Хургада", "Дубай"]
+    assert "Хургада (Египет)" in r.reply and "воздух 20.9 °C" in r.reply
+    assert "Дубай (ОАЭ)" in r.reply and "воздух 24.4 °C" in r.reply

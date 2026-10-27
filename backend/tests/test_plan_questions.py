@@ -69,9 +69,9 @@ def test_question_changes_nothing(store, stage, question):
 def test_weather_is_the_catalogue_climate(store, question):
     r = at(store, "assemble")
     reply = say(store, question, r.session_id).reply
-    # December is not in the catalogue: no data for it, the November estimate is named as such
-    assert "в декабре в данных нет" in reply and "нет данных" in reply
-    assert "ноябрь: воздух 12 °C, вода 16 °C" in reply
+    # the December climate of Сочи in catalog.json, named as an estimate, not a forecast
+    assert "Сочи в декабре: воздух 11.6 °C, вода 13.5 °C — оценка по каталогу, не прогноз." in reply
+    assert "Прогноза погоды в данных нет." in reply
     assert "План поездки" not in reply  # a fact, not a repeat of the plan
 
 

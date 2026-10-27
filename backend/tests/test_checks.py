@@ -388,12 +388,17 @@ def test_unseen_findings_budget_over_without_a_note_is_a_violation():
     assert verdicts(run, {"budget_rub": 10**9}) == {"бюджет": checks.OK}
 
 
-def test_unseen_findings_never_count_what_the_data_cannot_check_as_ok():
+def test_unseen_findings_never_count_what_the_data_cannot_check_as_ok(monkeypatch):
     run = booked_run()
     got = verdicts(run, {"ski": True, "cheap_without_sum": True})
     assert set(got.values()) == {checks.UNKNOWN}
-    # warm sea in a month that has no climate in the data: the place has a sea, the water is unknown
+    # January water of Анталия in catalog.json is 19.5 °C: a violation, not a doubt
     sea = booked_run("Анталия на 5 ночей в январе")
+    assert verdicts(sea, {"warm_sea": True, "month": 1})["тёплое море"] == checks.VIOLATED
+    # warm sea in a month without the water in the data (a geocoder place): unknown, never OK
+    gap = dict(catalog.resolve("Анталия"), source="online")
+    gap["climate"] = dict(gap["climate"], sea=[None, *gap["climate"]["sea"][1:]])
+    monkeypatch.setattr(checks, "resolve_place", lambda _name: gap)
     assert verdicts(sea, {"warm_sea": True, "month": 1})["тёплое море"] == checks.UNKNOWN
     # a place without a sea is a violation, not a doubt
     assert verdicts(run, {"warm_sea": True})["тёплое море"] == checks.VIOLATED
@@ -524,5 +529,8 @@ def test_over_budget_note_needs_the_optimizer_phrase_not_two_loose_words():
 
 def test_sea_temperature_follows_the_booking_month_not_the_asked_one():
     run = booked_run("Анталия на 5 ночей в январе")
-    # expect.month says 11, the booking is in January: the November climate must not be used
-    assert verdicts(run, {"warm_sea": True, "month": 11})["тёплое море"] == checks.UNKNOWN
+    # expect.month says 11, the booking is in January: January water 19.5 °C, not November 23.6 °C
+    got = {
+        n: (s, why) for n, s, why in checks.unseen_findings(run, {"warm_sea": True, "month": 11})
+    }
+    assert got["тёплое море"] == (checks.VIOLATED, "вода 19.5 °C")

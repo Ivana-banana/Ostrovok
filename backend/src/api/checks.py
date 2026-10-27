@@ -855,7 +855,7 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
     """(constraint, OK | VIOLATED | UNKNOWN, why) for the final plan of a booked session.
 
     Every verdict comes from the voucher and from data the system has: catalog.json, the
-    November climate of the catalogue, the offers. No data - UNKNOWN, never OK.
+    climate of the booking month in it, the offers. No data - UNKNOWN, never OK.
     """
     unknown = set(expect) - EXPECT_KEYS
     if unknown:
