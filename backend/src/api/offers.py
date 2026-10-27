@@ -148,13 +148,54 @@ def _room_factor(spec: TripSpec) -> float:
     return adults + sum(0 if a < 2 else 0.25 if a < 12 else 0.45 for a in spec.children_ages)
 
 
+# Child fares by mode: (age below, share of a full fare, takes a seat). An age from the last
+# bound up pays the full fare. A car is paid per car elsewhere.
+CHILD_FARES: dict[Mode, list[tuple[int, float, bool]]] = {
+    "train": [(5, 0.0, False), (10, 0.5, True)],
+    "flight": [(2, 0.1, False), (12, 0.75, True)],
+}
+
+
+def _child_fare(mode: Mode, age: int) -> tuple[float, bool, bool]:
+    """Share of a full fare, a seat, a child fare (#323): one rule for the price and the label."""
+    for below, share, seat in CHILD_FARES.get(mode, []):
+        if age < below:
+            return share, seat, seat
+    return 1.0, True, False
+
+
 def _fares(spec: TripSpec, mode: Mode) -> float:
-    """Full fares for these guests: children pay less, a car is paid per car elsewhere."""
-    if mode == "train":
-        kids = sum(0 if a < 5 else 0.5 if a < 10 else 1 for a in spec.children_ages)
-    else:
-        kids = sum(0.1 if a < 2 else 0.75 if a < 12 else 1 for a in spec.children_ages)
-    return spec.adults + kids
+    """Full fares for these guests: children pay less (CHILD_FARES)."""
+    return spec.adults + sum(_child_fare(mode, a)[0] for a in spec.children_ages)
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} {one}"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} {few}"
+    return f"{n} {many}"
+
+
+def _seats_label(spec: TripSpec, mode: Mode) -> str:
+    """«6 мест (2 детских тарифа)» for a train or a plane: the seats and the child fares the
+    price counts (_fares, TRAP-4). Empty for a car: it is paid per car."""
+    if mode not in CHILD_FARES:
+        return ""
+    rules = [_child_fare(mode, a) for a in spec.children_ages]
+    seats = spec.adults + sum(seat for _, seat, _ in rules)
+    child = sum(kid for _, _, kid in rules)
+    free = sum(not seat for _, seat, _ in rules)
+    notes = []
+    if child:
+        notes.append(_plural(child, "детский тариф", "детских тарифа", "детских тарифов"))
+    if free and mode == "train":
+        below = CHILD_FARES[mode][0][0]
+        notes.append(_plural(free, "ребёнок", "ребёнка", "детей") + f" до {below} лет без места")
+    elif free:
+        notes.append(_plural(free, "младенец", "младенца", "младенцев") + " без места")
+    label = _plural(seats, "место", "места", "мест")
+    return f"{label} ({', '.join(notes)})" if notes else label
 
 
 def _dates(spec: TripSpec) -> tuple[date, date]:
@@ -389,6 +430,8 @@ def _leg(
     title = f"{what} {a['name']} → {b['name']}{tail}, {depart:%d.%m %H:%M}"
     if changes:
         title += f", пересадок: {changes}"
+    if seats := _seats_label(spec, mode):
+        title += f", {seats}"
     if mode == "car":
         title += " (бензин и платные дороги, оценка)"
     return TransportOffer(
