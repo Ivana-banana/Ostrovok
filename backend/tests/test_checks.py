@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from api import catalog, checks, dag, fixtures, main
+from api import catalog, checks, dag, fixtures, inspire, main, model
 from api.cart import book, make_cart
-from api.contracts import Cancellation, Change, ChatReply
+from api.contracts import Cancellation, Change, ChatReply, Destination
+from api.offers import find_offers
 
 CASES = json.loads((Path(__file__).resolve().parents[2] / "eval/cases.json").read_text("utf-8"))
 BY_ID = {c["id"]: c for c in CASES}
@@ -390,8 +391,7 @@ def test_unseen_findings_budget_over_without_a_note_is_a_violation():
 
 def test_unseen_findings_never_count_what_the_data_cannot_check_as_ok(monkeypatch):
     run = booked_run()
-    got = verdicts(run, {"ski": True, "cheap_without_sum": True})
-    assert set(got.values()) == {checks.UNKNOWN}
+    assert set(verdicts(run, {"cheap_without_sum": True}).values()) == {checks.UNKNOWN}
     # January water of Анталия in catalog.json is 19.5 °C: a violation, not a doubt
     sea = booked_run("Анталия на 5 ночей в январе")
     assert verdicts(sea, {"warm_sea": True, "month": 1})["тёплое море"] == checks.VIOLATED
@@ -402,6 +402,14 @@ def test_unseen_findings_never_count_what_the_data_cannot_check_as_ok(monkeypatc
     assert verdicts(sea, {"warm_sea": True, "month": 1})["тёплое море"] == checks.UNKNOWN
     # a place without a sea is a violation, not a doubt
     assert verdicts(run, {"warm_sea": True})["тёплое море"] == checks.VIOLATED
+
+
+def test_unseen_findings_check_ski_by_the_tag_of_the_booked_place(monkeypatch):
+    assert verdicts(booked_run(), {"ski": True}) == {"лыжи": checks.VIOLATED}  # Казань
+    resort = booked_run("Красная Поляна на 3 ночи в феврале, нас двое")
+    assert verdicts(resort, {"ski": True}) == {"лыжи": checks.OK}
+    monkeypatch.setattr(checks, "resolve_place", lambda _name: None)
+    assert verdicts(resort, {"ski": True}) == {"лыжи": checks.UNKNOWN}  # never OK without data
 
 
 def test_unseen_line_is_a_separate_metric_line_and_leaves_the_main_metric_alone():
@@ -534,3 +542,86 @@ def test_sea_temperature_follows_the_booking_month_not_the_asked_one():
         n: (s, why) for n, s, why in checks.unseen_findings(run, {"warm_sea": True, "month": 11})
     }
     assert got["тёплое море"] == (checks.VIOLATED, "вода 19.5 °C")
+
+
+# ---------------------------------------------------------------- S10
+
+
+def seven_cities(spec, limit=4, exclude=None):
+    """Inspiration before #20: the seven cities of fixtures.CATALOG, no theme, price order."""
+    hub, _ = catalog.origin_hub(spec.origin or "Москва")
+    out = []
+    for name in fixtures.CATALOG:
+        place = catalog.resolve(name)
+        out.append(
+            Destination(
+                name=name, country=place["country"], lat=place["lat"], lon=place["lon"],
+                why=fixtures.CATALOG[name]["why"], tradeoffs=fixtures.CATALOG[name]["tradeoffs"],
+                est_total_rub=fixtures.trip_cost(spec, find_offers(spec, name)),
+                travel_hours=fixtures.travel_hours(spec, hub, place),
+            )
+        )  # fmt: skip
+    return sorted(out, key=lambda d: d.est_total_rub)[:limit]
+
+
+def test_s10_is_green_on_the_catalogue_inspiration():
+    ok, note = checks.check_S10(BY_ID["S10"])
+    assert ok, note
+
+
+def test_s10_fails_on_the_inspiration_before_20_seven_cities(monkeypatch):
+    """Jury: «в горы летом с собакой» gave Казань, Петербург, Калининград (#20)."""
+    monkeypatch.setattr(model, "suggest_destinations", seven_cities)
+    ok, note = checks.check_S10(BY_ID["S10"])
+    assert not ok and "п.2" in note and "mountains" in note, note
+
+
+def test_s10_fails_when_a_card_that_breaks_the_request_stands_above_a_fitting_one(monkeypatch):
+    real = inspire.suggest_destinations
+
+    def broken_first(spec, limit=4, exclude=None):
+        cards = real(spec, limit, exclude)
+        bad = cards[0].model_copy(update={"violates": ["не горнолыжный курорт"]})
+        return [bad, *cards[1:]]
+
+    monkeypatch.setattr(model, "suggest_destinations", broken_first)
+    ok, note = checks.check_S10(BY_ID["S10"])
+    assert not ok and "п.3" in note, note
+
+
+def test_s10_fails_when_a_card_without_the_theme_has_no_mark(monkeypatch):
+    real = inspire.suggest_destinations
+
+    def unmarked(spec, limit=4, exclude=None):
+        return [d.model_copy(update={"violates": []}) for d in real(spec, len(catalog.places()))
+                if "city" in checks._tags(d.name)][:limit]  # fmt: skip
+
+    monkeypatch.setattr(model, "suggest_destinations", unmarked)
+    ok, note = checks.check_S10(BY_ID["S10"])
+    assert not ok and "п.2" in note, note
+
+
+def test_s10_fails_when_the_product_does_not_extract_the_dog(monkeypatch):
+    """The dog is fixed by the check, not read from the spec the product extracted."""
+    real = model.extract
+
+    def blind(*args, **kwargs):
+        found, notes = real(*args, **kwargs)
+        return {k: v for k, v in found.items() if k != "pets"}, notes
+
+    monkeypatch.setattr(model, "extract", blind)
+    ok, note = checks.check_S10(BY_ID["S10"])
+    assert not ok and "п.4" in note, note
+
+
+def test_s10_fails_when_non_pet_places_are_on_top(monkeypatch):
+    real = inspire.suggest_destinations
+
+    def mestia_first(spec, limit=4, exclude=None):
+        cards = real(spec, len(catalog.places()), exclude)
+        bad = [d.model_copy(update={"violates": []}) for d in cards if d.name == "Местиа"]
+        return [*bad, *[d for d in cards if d.name != "Местиа"]][:limit]
+
+    monkeypatch.setattr(model, "suggest_destinations", mestia_first)
+    ok, note = checks.check_S10(BY_ID["S10"])
+    assert not ok and "п.4" in note and "Местиа" in note, note
