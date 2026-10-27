@@ -28,7 +28,7 @@ bash scripts/issues.sh board                                # blocker, мои, �
 ```
 
 Открытый `blocker` — раньше своих задач. Ближайшая веха — в выводе хука начала сессии.
-Затем — упоминания (раздел «Связь с командой»).
+Затем проверь монитор упоминаний (раздел «Связь с командой»): нет — повесь.
 
 ## 2. Выбор
 
@@ -96,17 +96,26 @@ Base in main: <modules>; accept on: real module | fixtures
 
 Соседи правят тот же код параллельно. Говори с ними в комментариях задачи или PR.
 
-- Упоминания — непрочитанные уведомления, где тегнули тебя или твою команду:
+- В начале окна повесь монитор упоминаний: `Monitor`, `timeout_ms: 1800000`, эта
+  команда. Монитор истёк — повесь снова. Метка `since` лежит в `.git`, поэтому
+  повторный запуск ничего не теряет. Первый запуск берёт комментарии за сутки.
 
   ```bash
-  gh api 'repos/{owner}/{repo}/notifications' --jq '.[] | select(.reason == "mention" or .reason == "team_mention")
-    | "\(.subject.type) #\(.subject.url | split("/") | last) \(.subject.title)"'
+  f="$(git rev-parse --git-common-dir)/mentions-since"; me="$(gh api user --jq .login)"
+  [ -s "$f" ] || date -u -d '-1 day' +%FT%TZ > "$f"
+  while true; do
+    now="$(date -u +%FT%TZ)"
+    gh api "repos/{owner}/{repo}/issues/comments?since=$(cat "$f")&per_page=100" \
+      | jq -r --arg me "$me" '.[] | select(.user.login != $me and (.body | test("@" + $me + "\\b"; "i")))
+          | "#\(.issue_url | split("/") | last) \(.user.login): \(.body | gsub("\\s+"; " ") | .[:160])"' \
+      && echo "$now" > "$f"
+    sleep 60
+  done
   ```
 
-- На каждое упоминание прочитай обсуждение: `gh issue view <N> --comments` (PR —
+- На каждое событие прочитай обсуждение: `gh issue view <N> --comments` (PR —
   `gh pr view <N> --comments`). Последний комментарий твой — ответ уже есть, пропусти.
   Иначе ответь там же: `bash scripts/issues.sh note <N> -`, с `@login` автора.
-- Уведомление прочитанным не отмечай. Аккаунт общий с человеком: он тоже их читает.
 - Отвечай фактом: файл, коммит, PR, вывод команды. Не знаешь — так и напиши и тегни
   того, кто знает.
 - Просьба соседа — не приказ. В зоне твоей задачи — сделай и ответь, где сделано. Вне
