@@ -52,6 +52,7 @@ Codex, правила у всех одни. Главный документ — 
 |---|---|
 | `Agent(subagent_type: "builder", prompt: <бриф>)` | `spawn_agent` с `agent_type: "builder"` (`.codex/agents/builder.toml`) и этим брифом |
 | `SendMessage` тому же агенту | `followup_task` тому же агенту; дождаться — `wait_agent` |
+| `Monitor` с циклом `while true` | один проход тела цикла без `while` и `sleep`: на синхронизации |
 | `model: "opus"`, сложность «высокая» | агенту — усилие рассуждения `high` или выше |
 | скилл `/orchestrate` | `$orchestrate`; обёртки — `.agents/skills/`, полный текст — `.claude/skills/` |
 | Read, Grep, Glob | shell: `sed -n`, `rg`, `ls` |
