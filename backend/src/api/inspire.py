@@ -16,7 +16,7 @@ from api.fixtures import COLD_MONTHS, WARM_WATER_C, travel_hours, trip_cost
 from api.offers import find_offers
 from api.optimizer import pets_possible
 
-# Places priced per call: ~1 ms each (find_offers), so the card list costs ~16 ms.
+# Places priced per call: find_offers runs for each, so the cost grows with this number.
 CANDIDATES = 16
 SPREAD_KM = 150  # Анталия and Кемер are one choice for the user, not two
 SHOWN_PER_COUNTRY = 2
@@ -86,7 +86,8 @@ def _rule_breaks(spec: TripSpec, place: dict, hub: dict, month: int | None) -> l
             out.append(NO_SEA)
         elif water is not None and water < WARM_WATER_C:
             out.append(f"море холодное для купания: вода {water:g} °C")
-    if "тепло" in spec.wishes and month in COLD_MONTHS and air is not None and air < WARM_AIR_C:
+    warm_asked = "тепло" in spec.wishes or "юг" in spec.wishes  # #235: «на юг» in winter = warm
+    if warm_asked and month in COLD_MONTHS and air is not None and air < WARM_AIR_C:
         out.append(f"не тёплое направление: днём {air:g} °C")
     return out
 

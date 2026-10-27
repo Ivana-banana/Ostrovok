@@ -59,6 +59,16 @@ def test_south_is_south_of_the_departure_city(store):
     assert all(d.lat <= moscow["lat"] - inspire.SOUTH_DEG for d in dests)
 
 
+def test_south_in_a_cold_month_means_warm(store):
+    """#235: «на юг в ноябре» gave Белгород 4.9 °C and Волгоград 5.7 °C: south by latitude only."""
+    dests = inspired(store, "на юг в ноябре, недорого")
+    assert all(d.air_c >= inspire.WARM_AIR_C or d.violates for d in dests)
+    spec = TripSpec(origin="Москва", month=11, wishes=["юг"])
+    every = inspire.suggest_destinations(spec, 16)
+    assert all(d.air_c >= inspire.WARM_AIR_C or d.violates for d in every)
+    assert any(not d.violates for d in every)
+
+
 def test_cards_that_break_the_request_go_below():
     """Operator: a card marked «Нарушает требования» goes below the fitting ones."""
     spec = TripSpec(origin="Москва", month=11, wishes=["море"], max_travel_hours=4)
