@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from api import catalog, llm
 from api.answers import (
+    closed_line,
     destination_line,
     is_hotel_compare,
     plan_fact,
@@ -1525,6 +1526,7 @@ def _text_compare(plan: Plan) -> str:
             f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
         ),
         *([line] if (line := destination_line(plan)) else []),
+        *([line] if (line := closed_line(plan)) else []),
         *([line] if (line := missing_mode(plan)) else []),
         *([line] if (line := rooms_line(spec)) else []),
         "Отели:",

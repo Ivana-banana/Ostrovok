@@ -19,7 +19,7 @@ from api.offers import (
     closed_airport,
     places,
     resolve_place,
-    rooms,
+    rooms_label,
 )
 from api.optimizer import hotel_rows
 
@@ -494,23 +494,27 @@ def destination_line(plan: Plan) -> str:
         )
     if port := place.get("airport"):
         parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км {_how(port)}")
-        if closed_airport(place):  # C8 (#363): the reason a plan has no flight
-            parts[-1] += f" — {CLOSED_NOTE}"
     if not parts:
         return ""
     return "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
 
 
+def closed_line(plan: Plan) -> str:
+    """C8 (#363): the airport of the place is closed — the reason the plan flies elsewhere or
+    goes by land. Empty for an open airport or no place."""
+    place = _place(plan.spec.destinations[0]) if plan.spec.destinations else None
+    iata = closed_airport(place) if place else ""
+    return f"Аэропорт {iata} ({place['name']}) {CLOSED_NOTE}." if iata else ""
+
+
 def rooms_line(spec: TripSpec) -> str:
     """C7 (#363): a party over one standard room gets more rooms; the hotel price is for them."""
-    n = rooms(spec)
-    if n == 1:
+    if not (label := rooms_label(spec)):
         return ""
     guests = spec.adults + len(spec.children_ages)
-    word = "номера" if n < 5 else "номеров"
     return (
-        f"Размещение: {guests} гостей — {n} {word} (в стандартном номере до {ROOM_GUESTS} гостей, "
-        f"оценка); цена отеля — за {n} {word}. Точное размещение уточните у отеля."
+        f"Размещение: {guests} гостей — {label} (в стандартном номере до {ROOM_GUESTS} гостей, "
+        f"оценка); цена отеля — за все номера. Точное размещение уточните у отеля."
     )
 
 

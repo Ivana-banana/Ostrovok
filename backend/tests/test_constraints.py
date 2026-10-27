@@ -27,14 +27,13 @@ def say(store, text, sid=None):
 
 
 def test_train_to_station_less_city_is_named_not_replaced_silently(store):
-    # Ханты-Мансийск has no station; Геленджик was here before #363: its airport is closed (C8).
-    r = say(store, "Едем в Ханты-Мансийск на поезде в купе, в конце августа, дней 10")
+    r = say(store, "Едем в Геленджик на поезде в купе, в конце августа, дней 10")
     assert r.stage == "compare"
     assert r.plan.spec.modes == ["train"]
     legs = [o for o in r.plan.offers if o.kind == "transport"]
     assert legs and {o.mode for o in legs} == {"flight"}  # the data has no train there
     line = next(x for x in r.reply.splitlines() if "в данных нет" in x)
-    assert "Поезд" in line and "Ханты-Мансийск" in line and "перелёт" in line
+    assert "Поезд" in line and "Геленджик" in line and "перелёт" in line
     assert r.reply.index(line) < r.reply.index("Отели:")  # before the offers and the booking
 
 

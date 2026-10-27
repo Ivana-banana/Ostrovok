@@ -626,8 +626,7 @@ def test_s9_edit_priorities_changes_the_first_option(store, monkeypatch):
 
 @pytest.mark.parametrize(
     "city,nights,priorities",
-    # Сочи: Краснодар was here before #363, its airport KRR is closed (C8).
-    [("Екатеринбург", 2, []), ("Сочи", 3, []), ("Екатеринбург", 2, ["cancellation"])],
+    [("Екатеринбург", 2, []), ("Краснодар", 3, []), ("Екатеринбург", 2, ["cancellation"])],
 )
 def test_a_leg_longer_than_one_night_does_not_go_first_when_a_flight_exists(
     city, nights, priorities

@@ -125,7 +125,19 @@ def _complete(p: dict) -> dict:
     defaults = {"country": "", "sea": False, "level": DEFAULT_LEVEL, "airport_km": 25,
                 "station_km": 3 if russia else None, "aliases": []}  # fmt: skip
     slug = p.get("slug") or hashlib.sha1(p["name"].encode()).hexdigest()[:6]
-    return {**defaults, **p, "slug": slug}
+    return _open_airport({**defaults, **p, "slug": slug})
+
+
+def _open_airport(p: dict) -> dict:
+    """C8 (#363): a place behind a closed airport gets the nearest open airport of the data, km
+    by the straight line; the transfer prices the road by these km."""
+    if not closed_airport(p):
+        return p
+    ports = [a for a in catalog.snapshot()["airports"] if a[0] not in CLOSED_AIRPORTS]
+    pts = [{"iata": a[0], "lat": a[1], "lon": a[2], "tz": a[3]} for a in ports]
+    port = min(pts, key=lambda a: km_between(p, a))
+    km = round(km_between(p, port))
+    return {**p, "airport": {**port, "km": km}, "airport_km": km}
 
 
 def km_between(a: dict, b: dict) -> float:
@@ -149,6 +161,12 @@ def rooms(spec: TripSpec) -> int:
     """Standard rooms for the party (C7, #363); a child under 2 sleeps in a cot."""
     guests = spec.adults + sum(a >= 2 for a in spec.children_ages)
     return max(1, math.ceil(guests / ROOM_GUESTS))
+
+
+def rooms_label(spec: TripSpec) -> str:
+    """«2 номера» for a party in more than one room (C7: the cart line explains the price)."""
+    n = rooms(spec)
+    return "" if n == 1 else _plural(n, "номер", "номера", "номеров")
 
 
 def _room_factor(spec: TripSpec) -> float:
@@ -359,7 +377,7 @@ def _hotel(
             )
             hotel = HotelOffer(
                 offer_id=offer_id,
-                title=base["title"],
+                title=base["title"] + (f" ({label})" if (label := rooms_label(spec)) else ""),
                 city=place["name"],
                 tz=place["tz"],
                 date_in=date_in,
@@ -404,11 +422,12 @@ def _flight_hours(km: float) -> float:
 
 
 FAR_AIRPORT_KM = 60  # a place farther from its airport has none of its own (#123)
-# C8 (#363): airports of the south of Russia closed to flights since 24.02.2022, the list of
-# the critic card C8. Their status on the day of the defence is [СПРОСИТЬ]. A place behind
-# such an airport gets no flight: a train or a car.
-CLOSED_AIRPORTS = {"AAQ", "GDZ", "KRR", "ESL"}
-CLOSED_NOTE = "закрыт для рейсов с 24.02.2022"
+# C8 (#363): airports closed to flights, research/domain.md «Закрытые аэропорты» (sources,
+# 27.10.2026). GDZ and KRR take flights again since 25.10.2026. A place behind a closed airport
+# flies through the nearest open airport of the data with the road by distance (_complete), or
+# goes by train or car.
+CLOSED_AIRPORTS = {"AAQ", "EGO", "BZK", "VOZ", "URS", "LPK", "ROV", "SIP"}
+CLOSED_NOTE = "закрыт для рейсов (по данным на 27.10.2026)"
 
 
 def closed_airport(place: dict) -> str:
@@ -539,6 +558,7 @@ DAY_OUT, DAY_BACK, DAY_ARRIVE_BY = time(7, 40), time(16, 20), time(23, 0)
 # (SYNTH_KM); HUB_MARGIN as transfer_offers. Times of the transfer: _ride.
 CHECK_OUT = time(12, 0)
 FAR_HOTEL_KM = max(hi for _, hi in SYNTH_KM.values())
+NIGHT_END = time(5, 0)  # timeline.NIGHT_TO: a hotel reached later loses the check-in night
 HUB_MARGIN = {"flight": timedelta(minutes=120), "train": timedelta(minutes=40)}
 
 
@@ -587,6 +607,12 @@ def _day_train_hours(a: dict, b: dict, route: float) -> float | None:
     return round(best, 2) if best else None
 
 
+def _port(p: dict) -> dict:
+    """Where a flight of the place lands: its substitute airport (_open_airport), else the place."""
+    port = p.get("airport") or {}
+    return port if "lat" in port else p
+
+
 def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[TransportOffer]:
     """There on date_from and back on date_to: flights, trains, and a car if asked for."""
     km = km_between(origin, place)
@@ -601,13 +627,20 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
         return base * SEASON[day.month] * noise * _fares(spec, mode)
 
     legs: list[TransportOffer] = []
-    open_ports = not closed_airport(a) and not closed_airport(b)
-    if a["airport_km"] is not None and b["airport_km"] is not None and km >= 300 and open_ports:
+    # A substitute airport (C8) counts: Москва -> Воронеж through DME is no flight.
+    hops = km_between(_port(a), _port(b))
+    flies = not closed_airport(a) and not closed_airport(b) and min(km, hops) >= 300
+    if a["airport_km"] is not None and b["airport_km"] is not None and flies:
         pair = {a["country"], b["country"]}
         changes = int("Россия" in pair and bool(pair & NO_DIRECT))
         hours = _flight_hours(km) + 3 * changes
         base = 2200 + 3.6 * km + 3000 * changes
-        for slot, k in OUT_FLIGHTS:
+        road = _ride(_hub_road(b["airport_km"], FAR_HOTEL_KM)) + timedelta(minutes=40)
+        lost = datetime.combine(there + timedelta(days=1), NIGHT_END, tb)
+        for i, (slot, k) in enumerate(OUT_FLIGHTS):
+            # A far airport (C8): a later slot that loses the check-in night is no offer.
+            if i and _shift(datetime.combine(there, slot, tb), road) >= lost:
+                continue
             depart = _shift(datetime.combine(there, slot, tb), -_minutes(hours))
             price = fare("flight", base * k, there, slot)
             legs.append(_leg(spec, "flight", a, b, depart, hours, price, changes))
