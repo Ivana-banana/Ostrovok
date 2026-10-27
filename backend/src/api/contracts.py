@@ -5,25 +5,28 @@ T12 inspiration, T14 eval.
 
 Routes: POST /api/chat (ChatRequest -> ChatReply), GET /api/session/{session_id} -> ChatReply,
 POST /api/cart (CartAction -> Cart), POST /api/checkout (CheckoutRequest -> Voucher;
-409 when the total differs from the cart).
+409 when the total differs from the cart or the booking provider refuses).
 
 Money: whole roubles for everything (all guests, all nights, taxes included). Time: ISO 8601
 with a time zone, local to the place of the event. Only providers write prices and times
 (TRAP-4); LLM text refers to offer_id.
 
 A change is a separate PR labelled contract; web/src/contracts.ts changes in the same PR.
-Ports for data sources (Place, HotelProvider, TransportProvider, TransferProvider; ADR-0002)
-are in the section «Порты» at the end, with their consumers; they are backend only.
+Ports for data sources and the purchase (Place, HotelProvider, TransportProvider,
+TransferProvider, BookingProvider; ADR-0002) are in the section «Порты» at the end, with their
+consumers; they are backend only.
 """
 
 from datetime import date, datetime, time
 from typing import Annotated, Literal, Protocol, Required, TypedDict
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 Stage = Literal["clarify", "inspire", "select", "compare", "assemble", "checkout", "booked"]
 Meal = Literal["RO", "BB", "HB", "FB", "AI"]
 Mode = Literal["flight", "train", "car"]
+# Booking status from the BookingProvider; a refusal is an exception, not a status (ADR-0002).
+BookingStatus = Literal["created", "confirmed", "cancelled"]
 # What the user cares about when offers are compared; the optimizer turns the order into weights.
 Priority = Literal["price", "cancellation", "meal", "location", "travel_time", "rating"]
 # Hotel features that make it fit a guest: child (family, kids_club), hard to walk
@@ -50,6 +53,13 @@ class TripSpec(BaseModel):
     refundable: bool | None = None
     modes: list[Mode] = []
     max_travel_hours: float | None = None
+    # C5 (#408): the user has tickets. No transport is searched; transfers start from the
+    # user's own arrival and end before the own departure (local to the destination).
+    # Consumers: api/extract.py (rules), model.py (assume, compare text), offers.py (own_legs),
+    # optimizer.py, timeline.py, dag.py; web/src/Board.tsx (SpecSummary).
+    own_transport: bool = False
+    arrive_at: AwareDatetime | None = None
+    leave_at: AwareDatetime | None = None
     wishes: list[str] = []  # user's own words: sea, skiing, hard to walk
     priorities: list[Priority] = []  # most important first; empty: default weights
     assumptions: list[str] = []  # what the agent assumed; shown to the user
@@ -204,13 +214,25 @@ class Cart(BaseModel):
     total_rub: int = 0
 
 
+class Guest(BaseModel):
+    """Lead guest typed at checkout (#367). Simulated: stored with the session in the SQLite
+    session store (data/), not sent to the booking provider."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    contact: str = Field("", max_length=100)  # phone or e-mail; "" when not given
+
+
 class Voucher(BaseModel):
     booking_id: str
     items: list[Offer]
     spec: TripSpec  # dates and guests of the booking
     total_rub: int
     created_at: AwareDatetime
-    simulated: Literal[True] = True  # payment is simulated
+    status: BookingStatus = "confirmed"
+    simulated: bool = True  # True: booking and payment are simulated; the voucher says so
+    guest: Guest | None = None  # None: no name given (chat «подтверждаю», old clients)
 
 
 class ChatRequest(BaseModel):
@@ -238,17 +260,25 @@ class CartAction(BaseModel):
 class CheckoutRequest(BaseModel):
     session_id: str
     confirm_total_rub: int  # total the user saw when confirming
+    guest: Guest | None = None  # to be copied to Voucher.guest by checkout (#367)
 
 
 # --- Порты (ADR-0002, D-023) ---------------------------------------------------------------
-# Data sources behind the core. One Protocol per source; the active adapter is one module
-# variable in api/offers.py (HOTELS, TRANSPORT, TRANSFERS). Swap it with one assignment at
-# start-up (main.py) or in a test; no factories, no env switch. Backend only: no mirror in
-# web/src/contracts.ts, the offer types the web sees do not change.
+# Data sources and the purchase behind the core. One Protocol per source; the active adapter
+# is one module variable: api/offers.py (HOTELS, TRANSPORT, TRANSFERS), api/cart.py (BOOKING).
+# Swap it with one assignment at start-up (main.py) or in a test; no factories, no env switch.
+# Backend only: no mirror in web/src/contracts.ts, the types the web sees do not change.
 # Consumers: api/offers.py (adapters, offers_for_place), api/fixtures.py (travel_hours),
 # api/inspire.py (TRANSPORT: hours door to door and at the wheel, #321),
 # via find_offers: api/dag.py, api/inspire.py, api/model.py, api/checks.py;
 # tests/test_ports.py (conformance).
+# BookingProvider consumers: api/cart.py (SimulatedBooking, checkout_route, checkout_reply),
+# api/store.py (booking attempts), api/main.py (POST /api/checkout), api/model.py (chat
+# «подтверждаю»), api/checks.py (eval); tests/test_booking_port.py (conformance, a foreign
+# adapter). Voucher.status and Voucher.simulated: web/src/contracts.ts, web/src/api.ts,
+# web/src/Board.tsx, Board.test.tsx, App.tsx, App.test.tsx, web/e2e/demo.spec.ts.
+# Guest (CheckoutRequest.guest, Voucher.guest; #367): api/cart.py, api/main.py, api/store.py,
+# api/checks.py, web/src/api.ts, web/src/App.tsx, web/src/Board.tsx and their tests.
 
 
 class Place(TypedDict, total=False):
@@ -307,3 +337,43 @@ class TransferProvider(Protocol):
         hotels: list[HotelOffer],
         legs: list[TransportOffer],
     ) -> list[TransferOffer]: ...
+
+
+class BookingRefused(Exception):
+    """The provider refuses to quote, book or cancel. `reason` is for the user, in Russian.
+
+    The core answers 409 with the reason and keeps the cart: the user can confirm again or
+    change the plan. A network error (OSError, TimeoutError) gets the same answer without a
+    reason; an adapter wraps its HTTP client errors into one of them. Any other exception is
+    a bug: it goes up as a 500 with its traceback.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+class BookingProvider(Protocol):
+    """Purchase of a cart (ADR-0002).
+
+    Invariants the core reads: `quote` returns the same items (same offer_id) with the prices
+    of now; the core compares its total with the total the user confirmed. `book` returns a
+    Voucher of exactly the quoted items and total with status "created" or "confirmed"; the
+    core cancels and refuses any other voucher. `simulated` says if the booking is real.
+    A refusal raises BookingRefused.
+
+    The `session_id` argument of `book` is the idempotency key of one booking attempt, not
+    the bare session id: `<session_id>:<hash>` for the first attempt, `<session_id>:<hash>:<n>`
+    for the attempt n after a cancel; the hash covers the items, prices, dates and party
+    (cart.attempt_key). A real provider stores it as its order key
+    (for example `partner_order_id` of ETG) and returns the same booking for the same key.
+    While the booking is not "cancelled", the core keeps it and does not call `book` again;
+    after `cancel` the session gets a new key and a new booking_id. The core calls `quote`
+    and `book` outside the session write lock (POST /api/checkout).
+    """
+
+    def quote(self, spec: TripSpec, cart: Cart) -> Cart: ...
+
+    def book(self, spec: TripSpec, cart: Cart, session_id: str) -> Voucher: ...
+
+    def cancel(self, booking_id: str) -> None: ...

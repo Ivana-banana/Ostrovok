@@ -5,20 +5,29 @@
 - Only offers of the plan can enter the cart, and the price is taken from the plan, not from
   the client (TRAP-4). Every price is synthetic (TRAP-7).
 - Checkout needs the total the user saw. A different total means the cart changed: 409.
+- The purchase goes through the port `BookingProvider` (ADR-0002): `BOOKING.quote` re-checks the
+  prices, then `BOOKING.book` books. `BOOKING` is the simulation now; a real provider replaces
+  it with one assignment. A refusal of the provider is a 409 with its reason; the cart stays.
+- A repeated payment returns the same booking: the core rule, not the adapter's.
 - The voucher is stored in the session reply, so a reload shows it.
 - The session is changed in one store transaction, so parallel requests lose no update.
 """
 
+import hashlib
+import logging
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import HTTPException
 
 from api.contracts import (
+    BookingProvider,
+    BookingRefused,
     Cart,
     CartAction,
     ChatReply,
     CheckoutRequest,
+    Guest,
     Offer,
     Plan,
     TripSpec,
@@ -27,6 +36,8 @@ from api.contracts import (
 from api.offers import transfer_id
 from api.store import SessionStore
 from api.timeline import build_timeline
+
+log = logging.getLogger(__name__)
 
 
 def _rub(n: int) -> str:
@@ -210,7 +221,35 @@ def book(spec: TripSpec, cart: Cart) -> Voucher:
         spec=spec,
         total_rub=sum(o.price_rub for o in cart.items),
         created_at=now,
+        status="confirmed",
+        simulated=True,
     )
+
+
+class SimulatedBooking:
+    """BookingProvider adapter: the simulated purchase. Prices do not change between the plan
+    and the payment; every booking is confirmed at once and marked simulated. The same attempt
+    key returns the same booking, as the port requires (kept in memory of the process)."""
+
+    def __init__(self) -> None:
+        self._by_key: dict[str, Voucher] = {}
+
+    def quote(self, spec: TripSpec, cart: Cart) -> Cart:
+        return cart
+
+    def book(self, spec: TripSpec, cart: Cart, session_id: str) -> Voucher:
+        if session_id not in self._by_key:
+            self._by_key.setdefault(session_id, book(spec, cart))  # first of two parallel wins
+        return self._by_key[session_id]
+
+    def cancel(self, booking_id: str) -> None:
+        for key, v in self._by_key.items():
+            if v.booking_id == booking_id:
+                self._by_key[key] = v.model_copy(update={"status": "cancelled"})
+
+
+# The active booking adapter (ADR-0002). A real provider replaces it with one assignment.
+BOOKING: BookingProvider = SimulatedBooking()
 
 
 class CartRefusal(Exception):
@@ -222,8 +261,14 @@ class CartRefusal(Exception):
         self.text = text
 
 
+def _active(reply: ChatReply) -> Voucher | None:
+    """The booking of the session, unless it is cancelled: after a cancel the session books anew."""
+    v = reply.voucher
+    return v if v is not None and v.status != "cancelled" else None
+
+
 def _guard_cart_open(reply: ChatReply) -> None:
-    if reply.voucher:
+    if _active(reply):
         raise CartRefusal(409, f"Бронь {reply.voucher.booking_id} уже оформлена.")
     if reply.stage != "checkout":
         raise CartRefusal(
@@ -231,33 +276,119 @@ def _guard_cart_open(reply: ChatReply) -> None:
         )
 
 
-def checkout_reply(reply: ChatReply, confirm_total_rub: int) -> ChatReply:
-    """The one booking rule for POST /api/checkout and the chat «подтверждаю».
+_PROVIDER_DOWN = "Система бронирования не ответила"
+_KEEP = "Корзина сохранена: подтвердите ещё раз позже или измените план."
+# Errors of the provider the core answers with a 409. An adapter wraps its own network errors
+# into one of them; any other exception is a bug and goes up as a 500 with its traceback.
+_PROVIDER_ERRORS = (OSError, TimeoutError)
 
-    The cart must be open and not empty. Prices come from the plan, never from the stored or
-    the sent cart (TRAP-4). The confirmed total must equal the cart total. A repeated call
-    returns the same booking.
-    """
-    if reply.voucher:
-        if reply.voucher.total_rub != confirm_total_rub:
-            raise CartRefusal(409, f"Бронь уже оформлена на {_rub(reply.voucher.total_rub)}.")
-        return reply
+
+class _Rejected(CartRefusal):
+    """The provider returned a booking the core does not keep. `voucher` is that booking,
+    marked cancelled: the attempt records it, so the next confirmation gets a new key."""
+
+    def __init__(self, text: str, voucher: Voucher):
+        super().__init__(409, text)
+        self.voucher = voucher.model_copy(update={"status": "cancelled"})
+
+
+def _items(cart_items: list[Offer]) -> list[tuple[str, int]]:
+    return sorted((o.offer_id, o.price_rub) for o in cart_items)
+
+
+def _quote(spec: TripSpec, cart: Cart) -> Cart:
+    """Prices of now from the provider. Its total is the sum of its items; the items must be
+    the items of the cart, so the provider cannot add or drop one."""
+    try:
+        quoted = BOOKING.quote(spec, cart)
+    except BookingRefused as e:
+        raise CartRefusal(409, f"Цены не подтверждены: {e.reason}. {_KEEP}") from e
+    except _PROVIDER_ERRORS as e:
+        log.warning("booking: quote failed: %r", e)
+        raise CartRefusal(409, f"{_PROVIDER_DOWN}: цены не подтверждены. {_KEEP}") from e
+    if sorted(o.offer_id for o in quoted.items) != sorted(o.offer_id for o in cart.items):
+        raise CartRefusal(409, f"Система бронирования изменила состав корзины. {_KEEP}")
+    return make_cart(quoted.items)
+
+
+def _book(spec: TripSpec, cart: Cart, key: str) -> Voucher:
+    """The booking of the quoted cart under the attempt key. A voucher with other items or
+    another total than the quote is no booking of this cart: the core cancels it and refuses."""
+    try:
+        voucher = BOOKING.book(spec, cart, key)
+    except BookingRefused as e:
+        raise CartRefusal(409, f"Бронь не оформлена: {e.reason}. {_KEEP}") from e
+    except _PROVIDER_ERRORS as e:
+        log.warning("booking: book failed: %r", e)
+        raise CartRefusal(409, f"{_PROVIDER_DOWN}: бронь не оформлена. {_KEEP}") from e
+    if voucher.status == "cancelled":
+        text = f"Бронь не оформлена: система бронирования её отменила. {_KEEP}"
+        raise _Rejected(text, voucher)
+    if not _same_booking(voucher, cart):
+        log.warning("booking: voucher %s differs from the quote", voucher.booking_id)
+        try:
+            BOOKING.cancel(voucher.booking_id)
+        except (BookingRefused, *_PROVIDER_ERRORS) as e:
+            log.warning("booking: cancel of %s failed: %r", voucher.booking_id, e)
+        text = (
+            f"Бронь не оформлена: система бронирования вернула бронь на "
+            f"{_rub(voucher.total_rub)} вместо {_rub(cart.total_rub)}. {_KEEP}"
+        )
+        raise _Rejected(text, voucher)
+    return voucher
+
+
+def _repeat(reply: ChatReply, confirm_total_rub: int) -> Voucher | None:
+    """The booking of the session for a repeated payment: the core rule, not the adapter's."""
+    if (v := _active(reply)) and v.total_rub != confirm_total_rub:
+        raise CartRefusal(409, f"Бронь уже оформлена на {_rub(v.total_rub)}.")
+    return v
+
+
+def _priced(reply: ChatReply, confirm_total_rub: int) -> tuple[Cart, ChatReply | None]:
+    """The cart quoted by the provider, ready to book; or, when the provider changed the
+    prices, the reply to store instead: the cart with the new prices and the new total."""
     _guard_cart_open(reply)
     in_cart = {o.offer_id for o in reply.cart.items}
     cart = make_cart([o for o in reply.plan.offers if o.offer_id in in_cart])
     if not cart.items:
         raise CartRefusal(409, "Корзина пуста: оформлять нечего.")
-    if cart.total_rub != confirm_total_rub:
-        raise CartRefusal(
-            409,
-            f"Итог корзины {_rub(cart.total_rub)}, а вы подтверждаете "
-            f"{_rub(confirm_total_rub)}. Проверьте сумму и подтвердите ещё раз.",
-        )
-    voucher = book(reply.plan.spec, cart)
-    text = f"Бронь {voucher.booking_id} оформлена на {_rub(voucher.total_rub)}. Оплата имитирована."
-    return reply.model_copy(
-        update={"stage": "booked", "reply": text, "questions": [], "cart": cart, "voucher": voucher}
+    quoted = _quote(reply.plan.spec, cart)
+    if quoted.total_rub == confirm_total_rub:
+        return quoted, None
+    text = (
+        f"Итог корзины {_rub(quoted.total_rub)}, а вы подтверждаете "
+        f"{_rub(confirm_total_rub)}. Проверьте сумму и подтвердите ещё раз."
     )
+    if quoted.total_rub == cart.total_rub:
+        raise CartRefusal(409, text)
+    text = f"Система бронирования изменила цены. {text}"
+    return quoted, reply.model_copy(update={"reply": text, "questions": [], "cart": quoted})
+
+
+def _booked(reply: ChatReply, cart: Cart, voucher: Voucher) -> ChatReply:
+    paid = "Оплата имитирована." if voucher.simulated else "Оплата принята."
+    text = f"Бронь {voucher.booking_id} оформлена на {_rub(voucher.total_rub)}. {paid}"
+    update = {"stage": "booked", "reply": text, "questions": [], "cart": cart, "voucher": voucher}
+    return reply.model_copy(update=update)
+
+
+def attempt_key(session_id: str, attempt: int, spec: TripSpec, cart: Cart) -> str:
+    """Idempotency key of a booking attempt: `<session_id>:<hash>` for the first attempt, then
+    `<session_id>:<hash>:<n>`. The hash covers what is bought: items with prices, the total,
+    the dates and the party. So a new trip of the same session («начать заново») is a new key,
+    and the same cart repeated is the same key. A new attempt of one cart starts only after a
+    cancel or a rejected booking (BookingProvider)."""
+    what = repr(
+        (_items(cart.items), cart.total_rub, spec.date_from, spec.date_to)
+        + (spec.adults, tuple(spec.children_ages), spec.pets)
+    )
+    h = hashlib.sha256(what.encode()).hexdigest()[:8]
+    return f"{session_id}:{h}" if attempt <= 1 else f"{session_id}:{h}:{attempt}"
+
+
+def _same_booking(v: Voucher, cart: Cart) -> bool:
+    return v.total_rub == cart.total_rub and _items(v.items) == _items(cart.items)
 
 
 def _known(prev: ChatReply | None) -> ChatReply:
@@ -284,13 +415,93 @@ def cart_route(req: CartAction, store: SessionStore) -> Cart:
         raise _http(e) from e
 
 
-def checkout_route(req: CheckoutRequest, store: SessionStore) -> Voucher:
-    def change(prev: ChatReply | None) -> ChatReply:
-        return checkout_reply(_known(prev), req.confirm_total_rub)
+def _attempt(store: SessionStore, reply: ChatReply, cart: Cart) -> tuple[int, Voucher | None]:
+    """The attempt to book `cart` under, and its voucher if the provider already booked it.
 
+    The last attempt without a voucher is reused: the provider may have booked it before the
+    failure, and the same key returns that booking. Its voucher is reused only if it is a
+    booking of this very cart (a repeat after a failed session write). An attempt whose
+    voucher is cancelled, in the attempt or in the session, or is another trip of the session
+    («начать заново»), gives way to a new attempt."""
+    n, done = store.last_attempt(reply.session_id)
+    if done is not None and not _same_booking(done, cart):
+        n, done = n + 1, None
+        store.start_attempt(reply.session_id, n)
+        return n, done
+    cancelled = (
+        reply.voucher is not None
+        and reply.voucher.status == "cancelled"
+        and done is not None
+        and reply.voucher.booking_id == done.booking_id
+    )
+    if n == 0 or (done is not None and (done.status == "cancelled" or cancelled)):
+        n, done = n + 1, None
+        store.start_attempt(reply.session_id, n)
+    return n, done
+
+
+def checkout_reply(
+    store: SessionStore, session_id: str, confirm_total_rub: int, guest: Guest | None = None
+) -> ChatReply:
+    """The one booking path of a session: POST /api/checkout and the chat «подтверждаю» (#382).
+    Returns the stored reply with the voucher; a refusal is a CartRefusal.
+
+    The cart must be open and not empty. Prices come from the plan, never from the stored or
+    the sent cart (TRAP-4); then the provider re-checks them (`BOOKING.quote`). The confirmed
+    total must equal the quoted total. A repeated call returns the same booking; after a cancel
+    the session books anew. A quote with other prices books nothing: the session keeps the
+    stage and gets the cart with the new prices, so the next confirmation can book it.
+
+    The provider calls (`quote`, `book`) run outside the session write lock: a slow provider
+    does not block the other sessions. The attempt is saved before `book` and its voucher
+    right after it, so a repeat after a failed session write returns that voucher and books
+    nothing new.
+
+    `guest` (#367) goes into the voucher of a new booking; the provider does not get it. A
+    repeat returns the first booking with its first guest."""
+    sid = session_id
+    seen = _known(store.get(sid))
+    if _repeat(seen, confirm_total_rub):
+        return seen
+    quoted, changed = _priced(seen, confirm_total_rub)
+
+    if changed:
+
+        def new_prices(prev: ChatReply | None) -> ChatReply:
+            cur = _known(prev)
+            if (cur.cart, cur.voucher, cur.stage) != (seen.cart, seen.voucher, seen.stage):
+                raise CartRefusal(409, "Корзина изменилась. Проверьте её и подтвердите ещё раз.")
+            return changed
+
+        store.update(sid, new_prices)
+        raise CartRefusal(409, changed.reply)
+    n, done = _attempt(store, seen, quoted)
     try:
-        voucher = store.update(req.session_id, change).voucher
+        key = attempt_key(sid, n, seen.plan.spec, quoted)
+        voucher = done or _book(seen.plan.spec, quoted, key).model_copy(update={"guest": guest})
+    except _Rejected as e:
+        store.save_voucher(sid, n, e.voucher)  # closes attempt n: the next one has a new key
+        raise
+    voucher = store.save_voucher(sid, n, voucher)
+
+    def keep(prev: ChatReply | None) -> ChatReply:
+        cur = _known(prev)
+        if (v := _active(cur)) and v.booking_id == voucher.booking_id:
+            return cur  # a parallel request stored this booking already
+        out = _booked(cur, quoted, voucher)
+        if cur.cart != seen.cart:  # edited during the payment: the booking is the confirmed cart
+            note = " Корзину изменили во время оплаты: бронь оформлена на подтверждённую корзину."
+            out = out.model_copy(update={"reply": out.reply + note})
+        return out
+
+    return store.update(sid, keep)
+
+
+def checkout_route(req: CheckoutRequest, store: SessionStore) -> Voucher:
+    """POST /api/checkout: the voucher of checkout_reply; a refusal is its HTTP code."""
+    try:
+        out = checkout_reply(store, req.session_id, req.confirm_total_rub, req.guest)
     except CartRefusal as e:
         raise _http(e) from e
-    assert voucher is not None
-    return voucher
+    assert out.voucher is not None  # checkout_reply returns a booked session
+    return out.voucher

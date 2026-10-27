@@ -9,14 +9,23 @@ import re
 from datetime import timedelta
 
 from api import catalog
-from api.contracts import HotelOffer, Plan, TransportOffer
+from api.contracts import HotelOffer, Plan, TransportOffer, TripSpec
 from api.extract import MONTH, NOT_PLACES
 from api.fixtures import CATALOG, IN_MONTH
-from api.offers import FAR_AIRPORT_KM, places, resolve_place
+from api.offers import (
+    CLOSED_NOTE,
+    FAR_AIRPORT_KM,
+    ROOM_GUESTS,
+    closed_airport,
+    places,
+    resolve_place,
+    rooms_label,
+)
 from api.optimizer import hotel_rows
 
 WEATHER_RE = re.compile(
     r"погод|климат|температур|градус|дожд|осадк|снег|ливн|холодн|тепл|жарк|купа|вода\s+в\s+мор"
+    r"|какая\s+вода\b"
 )
 RAIN_RE = re.compile(r"дожд|осадк|снег|ливн")
 # «какой ближайший аэропорт?», «аэропорт далеко?»: the airport is asked about. «Сколько стоит
@@ -450,13 +459,20 @@ def weather_fact(plan: Plan, low: str = "", cities: list[str] | None = None, mon
             continue
         city = place["name"]
         air, water = catalog.month_climate(place, month) if month else (None, None)
-        if air is None:
+        if air is None and water is None:
             lines.append(f"Климата {city} {when or 'вашего месяца'} в данных нет — {NO_DATA}.")
             continue
-        fact = f"днём {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
+        parts = []
+        if air is not None:
+            parts.append(f"днём {air:g} °C")
+        if water is not None:
+            parts.append(f"вода {water:g} °C")
+        fact = ", ".join(parts)
         if RAIN_RE.search(low):
             fact += _rain(place, month)
-        lines.append(f"{city} {when}: {fact} — оценка по каталогу, не прогноз.")
+        line = f"{city} {when}: {fact} — оценка по каталогу, не прогноз."
+        notes = " ".join(place.get("climate_notes", []))
+        lines.append(line + (" " + notes if notes else ""))
     if not lines:
         return f"Направление не выбрано — климата {NO_DATA}."
     return "\n".join(lines) + "\nПрогноза погоды в данных нет."
@@ -486,9 +502,30 @@ def destination_line(plan: Plan) -> str:
         )
     if port := place.get("airport"):
         parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км {_how(port)}")
+    notes = " ".join(place.get("climate_notes", []))
     if not parts:
+        return notes
+    line = "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
+    return line + (" " + notes if notes else "")
+
+
+def closed_line(plan: Plan) -> str:
+    """C8 (#363): the airport of the place is closed — the reason the plan flies elsewhere or
+    goes by land. Empty for an open airport or no place."""
+    place = _place(plan.spec.destinations[0]) if plan.spec.destinations else None
+    iata = closed_airport(place) if place else ""
+    return f"Аэропорт {iata} ({place['name']}) {CLOSED_NOTE}." if iata else ""
+
+
+def rooms_line(spec: TripSpec) -> str:
+    """C7 (#363): a party over one standard room gets more rooms; the hotel price is for them."""
+    if not (label := rooms_label(spec)):
         return ""
-    return "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
+    guests = spec.adults + len(spec.children_ages)
+    return (
+        f"Размещение: {guests} гостей — {label} (в стандартном номере до {ROOM_GUESTS} гостей, "
+        f"оценка); цена отеля — за все номера. Точное размещение уточните у отеля."
+    )
 
 
 def airport_fact(plan: Plan, cities: list[str] | None = None) -> str:
@@ -502,6 +539,9 @@ def airport_fact(plan: Plan, cities: list[str] | None = None) -> str:
             lines.append(f"Аэропорта для {city} в данных нет — {NO_DATA}.")
             continue
         name, iata, km = place["name"], port["iata"], port["km"]
+        if closed_airport(place):
+            lines.append(f"{name}: ближайший аэропорт {iata}, {km} км — {CLOSED_NOTE}.")
+            continue
         if km <= FAR_AIRPORT_KM:
             lines.append(f"{name}: ближайший аэропорт {iata}, {km} км от города ({_how(port)}).")
             continue
