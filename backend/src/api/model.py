@@ -361,10 +361,19 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     if "?" in t or re.search(unclear, t):
         return "ask", month
     clause = re.split(r"[.;!?]", rest)[0]
-    # «в январе, не дорого» is no refusal: only «не» with a verb of refusing is one (#198)
-    no = r"не\s+(?:очень\s+)?(?:подход|получ|выйд|выход|смож|мож|годит|хоч|хот|над|нужн|вариант|устраива|катит)"
-    gone = rf"\s*,?\s*(?:\S+\s+){{0,2}}?(?:{no}|нельзя|отпадает|отпадают|исключен|невозможн)"
-    if negated or re.match(gone, clause):
+    # Without a comma a «не» after the month is a refusal («в январе не поедем»). After a comma,
+    # «но», «и» or «а» it may belong to a neighbour («в январе, не дорого»): only a verb of
+    # refusing makes it one (#198).
+    parts = re.split(r",|\s(?:но|и|а)\s", clause, maxsplit=1)
+    near, after = parts[0], parts[1] if len(parts) > 1 else ""
+    stop = r"нельзя|отпадает|отпадают|исключен|невозможн"
+    verbs = (
+        r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|над|нуж|вариант|устраива|катит"
+        r"|поед|полет|лет|ед[еи]м|рассматр|будет|удобн"
+    )
+    gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{stop})"
+    refusing = rf"\s*(?:не\s+(?:очень\s+)?(?:{verbs})|{stop})"
+    if negated or re.match(gone, near) or re.match(refusing, after):
         return "stay", month
     return "move", month
 
@@ -1672,9 +1681,12 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             # «на два дня позже» moves the current dates (S2)
             shifted = shift_dates(spec, message, prev is not None)
             refused = rules_found.get("month")
-            if month_verdict == "stay" and refused in (
-                shifted.date_from.month,
-                shifted.date_to.month,
+            moved = (shifted.date_from, shifted.date_to) != (spec.date_from, spec.date_to)
+            if (
+                month_verdict == "stay"
+                and moved
+                and refused not in (spec.date_from.month, spec.date_to.month)
+                and refused in (shifted.date_from.month, shifted.date_to.month)
             ):
                 # The user refused that month: the shift into it is not applied (#198)
                 lines.append(
