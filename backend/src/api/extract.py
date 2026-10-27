@@ -411,7 +411,7 @@ WISHES = [
     ("сафари", r"сафари"),
     ("шопинг", r"шопинг|аутлет"),
     ("музеи", r"\bмузе[йяеи]\w*|выставк|\bтеатр"),
-    ("йога", r"\bйог|ретрит"),
+    ("йога", r"\bйог(?:а|и|е|у|ой)\b|\bйог-|ретрит"),
     ("тяжело ходить", r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил"),
     ("вино и еда", r"\bвин[оа]\b|\bвинн|гастро|\bеда\b|\bкухн"),
     ("с удобствами", r"удобств|палатк"),
@@ -448,12 +448,20 @@ def _month(word: str) -> int:
     return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»
 
 
+NO_DATA_WISHES = (
+    "северное сияние", "киты", "термальные источники", "фестиваль", "дайвинг", "серфинг",
+    "рыбалка", "сафари", "шопинг", "музеи", "йога",
+)  # fmt: skip
+
+
 def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
     """The match is a wish: «не люблю жару» and «без лесов» are not."""
     if wish == "тепло":
         return not _warm_refused(t, x)
     if wish == "природа":
         return not negated.search(t[: x.start()])
+    if wish in NO_DATA_WISHES:  # #361: «без музеев», «шопинг не нужен»
+        return not _refused(t, x)
     return True
 
 
@@ -1413,7 +1421,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
         notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
     elif m := re.search(rf"(?<!\bin )\b{NUM_EN}[\s-]*weeks?\b", t):
         found["nights"] = 7 * _num_en(m.group(1))
-    elif re.search(r"\bвыходн|\bweekend\b|\bуик-?[эе]нд", t):
+    elif re.search(r"\bвыходн|\bweekend\b|\bуик[-\s]?[эе]нд", t):
         found["nights"] = 2
         if "date_from" not in found:
             month, tomorrow = found.get("month"), date.today() + timedelta(days=1)

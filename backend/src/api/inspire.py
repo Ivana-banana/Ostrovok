@@ -69,7 +69,7 @@ NOT_WARM = "не тепло"
 NO_AURORA = "северного сияния нет"
 # #361: «горы и море» — no place has both tags: a place with one, the other within this distance
 NEAR_KM = 100
-AURORA_LAT = 65.0  # the aurora oval; the dark season is September–March (team estimate)
+AURORA_LAT = 64.0  # the aurora oval; the dark season is September–March (team estimate)
 AURORA_MONTHS = (9, 10, 11, 12, 1, 2, 3)
 # Wishes the catalogue has no field for: the reply names them as not checked (TRAP-7).
 UNCHECKED = (
@@ -104,10 +104,16 @@ def unchecked_wishes(spec: TripSpec) -> list[str]:
     return [w for w in UNCHECKED if w in spec.wishes]
 
 
-def _near(place: dict, field: str) -> bool:
-    """The place has the feature (tag mountains, the sea) or one within NEAR_KM."""
+def _km_to(place: dict, field: str) -> float | None:
+    """Km to the nearest place with the feature (tag mountains, the sea), 0 for the place itself;
+    None when it is farther than NEAR_KM."""
     has = (lambda p: p["sea"]) if field == "sea" else (lambda p: field in p["tags"])
-    return any(has(q) and catalog.km_between(place, q) <= NEAR_KM for q in catalog.places())
+    km = min((catalog.km_between(place, q) for q in catalog.places() if has(q)), default=None)
+    return km if km is not None and km <= NEAR_KM else None
+
+
+def _near(place: dict, field: str) -> bool:
+    return _km_to(place, field) is not None
 
 
 def _both(spec: TripSpec, place: dict) -> bool:
@@ -127,10 +133,10 @@ def _rule_breaks(spec: TripSpec, place: dict, hub: dict, month: int | None) -> l
            if wish in spec.wishes and tag not in place["tags"]
            and not (both and wish == "горы")]  # fmt: skip
     if "северное сияние" in spec.wishes:
-        if place["lat"] < AURORA_LAT:
-            out.append(f"{NO_AURORA}: широта ниже {AURORA_LAT:g}°")
-        elif month and month not in AURORA_MONTHS:
+        if month and month not in AURORA_MONTHS:
             out.append(f"{NO_AURORA}: светлый сезон")
+        elif place["lat"] < AURORA_LAT:
+            out.append(f"{NO_AURORA}: широта ниже {AURORA_LAT:g}°")
     if "Европа" in spec.wishes and place["country"] not in EUROPE:
         out.append(NOT_EUROPE)
     if "юг" in spec.wishes and place["lat"] > hub["lat"] - SOUTH_DEG:
@@ -164,8 +170,10 @@ def _why(spec: TripSpec, place: dict, water: float | None) -> str:
         sea = "море для купания" if swim else "у моря"
         parts.insert(0 if "море" in spec.wishes else len(parts), sea)
     if _both(spec, place):
-        parts += ["горы рядом"] * ("mountains" not in place["tags"])
-        parts = ["море рядом"] * (not place["sea"]) + parts
+        if "mountains" not in place["tags"]:
+            parts.append(f"горы в {_km_to(place, 'mountains'):.0f} км")
+        if not place["sea"]:
+            parts.insert(0, f"море в {_km_to(place, 'sea'):.0f} км")
     return ", ".join(parts) or ("природа" if "nature" in place["tags"] else "город")
 
 

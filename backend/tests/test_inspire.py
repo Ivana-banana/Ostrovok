@@ -376,3 +376,46 @@ def test_c361_a_wish_is_mapped_or_named_as_not_checked(store, text, unchecked):
         assert f"Не проверяю по данным: {unchecked}" in r.reply, r.reply
     else:
         assert "Не проверяю" not in r.reply
+
+
+def test_c361_aurora_includes_reykjavik_and_names_the_season_first():
+    feb = TripSpec(origin="Москва", month=2, wishes=["северное сияние", "Европа"])
+    reykjavik = next(d for d in inspire.suggest_destinations(feb, 4) if d.name == "Рейкьявик")
+    assert not reykjavik.violates
+    july = TripSpec(origin="Москва", month=7, wishes=["северное сияние"])
+    flags = [v for d in inspire.suggest_destinations(july, 4) for v in d.violates]
+    assert flags and all("светлый сезон" in v for v in flags)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "без музеев, просто отдохнуть у моря в июле",
+        "шопинг не нужен, хочу море в июле",
+        "не люблю театры, хочу море в июле",
+        "море в июле, на завтрак йогурт",
+    ],
+)
+def test_c361_refused_or_lookalike_words_are_no_wish(text):
+    wishes = extract(text)[0].get("wishes", [])
+    assert not set(wishes) & set(inspire.UNCHECKED)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "дайвинг в Шарм-эль-Шейхе в ноябре на неделю вдвоём",
+        "рыбалка в Карелии в сентябре на неделю вдвоём",
+    ],
+)
+def test_c361_named_destination_reply_names_the_unchecked_wish(store, text):
+    r = first_reply(store, text)
+    assert r.stage in ("compare", "select"), r.stage
+    assert "Не проверяю по данным" in r.reply
+
+
+def test_c361_weekend_with_a_space_and_distance_in_the_reason(store):
+    assert extract("уик энд в Казани")[0]["nights"] == 2
+    spec = TripSpec(origin="Краснодар", month=9, wishes=["море", "горы"])
+    why = " ".join(d.why for d in inspire.suggest_destinations(spec, 4))
+    assert " км" in why and "рядом" not in why

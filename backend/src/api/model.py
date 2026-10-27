@@ -1323,6 +1323,12 @@ def _text_clarify(questions: list[Question]) -> str:
     return "Чтобы подобрать поездку, уточню: " + " ".join(q.text for q in questions)
 
 
+def _unchecked_lines(spec: TripSpec) -> list[str]:
+    """#361: a wish with no data is named in the reply, not dropped."""
+    unchecked = unchecked_wishes(spec)
+    return [f"Не проверяю по данным: {', '.join(unchecked)}."] if unchecked else []
+
+
 def _text_inspire(plan: Plan) -> str:
     spec = plan.spec
     guests = spec.adults + len(spec.children_ages)
@@ -1343,8 +1349,7 @@ def _text_inspire(plan: Plan) -> str:
         if d.violates:
             line += f" Нарушает требования: {'; '.join(d.violates)}."
         lines.append(line)
-    if unchecked := unchecked_wishes(spec):  # #361: a wish with no data is named, not dropped
-        lines.append(f"Не проверяю по данным: {', '.join(unchecked)}.")
+    lines += _unchecked_lines(spec)
     return "\n".join(lines + _tail(spec, "Напишите номер или название направления."))
 
 
@@ -1404,6 +1409,7 @@ def _text_compare(plan: Plan) -> str:
         lines += [f"Риск: {r}." for r in e.risks]
     for c in plan.changes:
         lines.append(f"Изменено {c.what}: {c.before} → {c.after}.")
+    lines += _unchecked_lines(spec)
     return "\n".join(
         lines
         + _tail(
@@ -1418,6 +1424,7 @@ def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
     lines += [f"{e.at:%d.%m %H:%M} — {e.title}" for e in plan.timeline]
     lines += [f"Внимание: {i.text}." for i in plan.issues]
+    lines += _unchecked_lines(plan.spec)
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
 
