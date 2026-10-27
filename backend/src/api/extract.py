@@ -190,11 +190,12 @@ PAIR_RE = re.compile(
 )
 # #275: grown-up relatives and friends named in a list («я, муж, бабушка с дедушкой»): each is
 # a traveller, «родители» are two. The speaker is one more.
-ADULT_ROLE_RE = re.compile(
-    r"\b(?:(?P<two>родител\w*)|муж(?:ем|а|ья)?|жен(?:а|ой|ы)|супруг\w*|мам(?:а|ой|ы)|пап(?:а|ой|ы)"
+ROLE_SRC = (
+    r"(?:родител\w*|муж(?:ем|а|ья)?|жен(?:а|ой|ы)|супруг\w*|мам(?:а|ой|ы)|пап(?:а|ой|ы)"
     r"|бабушк\w*|дедушк\w*|сестр(?:а|ой|ы)|брат(?:ом|а)?|друг(?:ом|а)?|подруг(?:а|ой|и)"
-    r"|коллег\w*|тещ\w*|тест(?:ь|ем)|свекр\w*)\b"
+    r"|коллег\w*|тещ\w*|тест(?:ь|ем)|свекр\w*)"
 )
+ADULT_ROLE_RE = re.compile(rf"\b{ROLE_SRC}\b")
 # «for two», «for 3 adults»; not «for 3 nights».
 EN_GROUP_RE = re.compile(
     rf"\bfor\s+{NUM_EN}\b(?!\s*-?(?:nights?|days?|weeks?|hours?|months?))|\bas a couple"
@@ -1342,23 +1343,42 @@ def is_child_question(text: str) -> bool:
     return bool(CHILD_QUESTION_RE.search(text.lower().replace("ё", "е")))
 
 
-# #275: the speaker is in the party when the first role follows «с»/«со» («я с мамой») or when
-# «я»/«мы» stand before a list of roles («я, муж, бабушка»). «Бабушка, дедушка и внук» are 2.
-WITH_BEFORE_RE = re.compile(r"\bсо?\s+(?:(?:мо\w+|наш\w+|свои\w*)\s+)?$")
-ME_BEFORE_RE = re.compile(r"\b(?:я|мы)\s*,?\s*(?:и\s+)?$")
+# #275: only the roles in a travel chain are companions: after «с/со» («я с мамой»), right after
+# «я/мы» («я, муж, бабушка с дедушкой»), or a bare list that holds a child («бабушка, дедушка и
+# внук 5 лет»). Roles after «без», «к», «навестить», «рядом с» or as a subject are not.
+# A child phrase becomes «§» so that the chain goes through it («двое детей 6 и 9 лет»).
+CHILD_PHRASE_RE = re.compile(
+    CHILD_RE.pattern + r"(?:\s+\d+(?:\s*(?:и|,)\s*\d+)*\s*(?:лет|года|год|мес\w*))?"
+)
+_ITEM = rf"(?:(?:мо\w+|наш\w+|свои\w*)\s+)?(?:\b{ROLE_SRC}\b|§)"
+CHAIN_RE = re.compile(
+    rf"(?P<s>\b(?:я|мы)\b[\s,]*(?:и\s+|со?\s+)?|\bсо?\s+)?"
+    rf"(?P<c>{_ITEM}(?:[\s,]*(?:и\s+|со?\s+)?{_ITEM})*)"
+)
+NEAR_BEFORE_RE = re.compile(
+    r"\b(?:рядом|около|возле|близко|недалеко|у|без|к|маму|папу|бабушку|дедушку|жену|мужа"
+    r"|родителей|сестру|брата|друга|подругу)\s+$"
+)
 
 
 def _family_adults(t: str) -> int:
-    """Adults named by family words; 0 when the words do not make a party."""
-    roles = list(ADULT_ROLE_RE.finditer(t))
-    if not roles:
-        return 0
-    before = t[: roles[0].start()]
-    me = bool(WITH_BEFORE_RE.search(before) or ME_BEFORE_RE.search(before))
-    n = sum(2 if r.group("two") else 1 for r in roles)
-    if len(roles) < 2 and not me:
-        return 0
-    return n + me
+    """Adults named by family words in a travel chain; 0 when the words do not make a party."""
+    t = CHILD_PHRASE_RE.sub("§", t)
+    adults, me = 0, False
+    for m in CHAIN_RE.finditer(t):
+        chain = m.group("c")
+        roles = [r.group(0) for r in ADULT_ROLE_RE.finditer(chain)]
+        start = m.group("s")
+        if start and NEAR_BEFORE_RE.search(t[: m.start()]) and not start.startswith(("я", "мы")):
+            continue
+        if not roles or not (start or ("§" in chain and len(roles) >= 2)):
+            continue
+        adults += sum(2 if r.startswith("родител") else 1 for r in roles)
+        me = me or bool(start)
+    return adults + me
+
+
+ADULT_KIN_RE = re.compile(r"\s+с\s+(?:жен\w*|мужем|невестк\w*|зят\w*)")
 
 
 def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None:
@@ -1369,6 +1389,8 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     ages: list[int] = []
     no_kids = False
     for m in CHILD_RE.finditer(t):
+        if ADULT_KIN_RE.match(t, m.end()):
+            continue  # «сын с женой»: a grown-up son is no child (#275)
         if (
             m.group(0).endswith(NO_CHILD_FORM)
             and NO_CHILD_BEFORE.search(t[: m.start()])
@@ -1413,13 +1435,13 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     elif not ages and (m := GROUP_RE.search(t)):  # «на двоих с ребёнком»: the child may count
         total = GROUP[m.group(1)] if m.group(1) else _num(m.group(2))
         found["adults"] = max(total - len(ages), 1)
-    elif (n := _family_adults(t)) and not SOLO_OTHER.search(t):
-        found["adults"] = n
-        notes.append(f"взрослых: {n} (по составу семьи в тексте)")
     elif SOLO_OTHER.search(t) or any(
         SOLO_NEXT.match(t, m.end()) or SOLO_PREV.search(t[: m.start()]) for m in SOLO_RE.finditer(t)
     ):
         found["adults"] = 1
+    elif not asking and (n := _family_adults(t)):
+        found["adults"] = n
+        notes.append(f"взрослых: {n} (по составу семьи в тексте)")
     elif m := EN_GROUP_RE.search(t):
         found["adults"] = 2 if m.group(0).endswith("couple") else _num_en(m.group(1))
     elif ages and (m := PAIR_RE.search(t)):

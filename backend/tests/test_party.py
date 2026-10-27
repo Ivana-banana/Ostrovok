@@ -357,8 +357,50 @@ def test_roster_words(text, adults, kids):
         "Друг посоветовал Сочи в ноябре",
         "Я хочу в Сочи, подруга говорит, там тепло",
         "С 1 июля в Сочи на неделю",
+        "Отправить маму с папой в Кисловодск",
     ],
 )
 def test_one_role_word_that_is_no_companion_adds_nobody(text):
     found, _ = extract(text)
     assert "adults" not in found
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Хочу в Сочи одна, мама и папа подарили путёвку", "Еду один, без жены и тёщи, в Сочи"],
+)
+def test_alone_wins_over_role_words(text):
+    found, _ = extract(text)
+    assert found["adults"] == 1
+
+
+# Roles after «без», «к», «навестить», as a subject: not companions (#275 B3).
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Едем с мамой, без мужа и детей, в Сочи",
+        "Едем к бабушке и дедушке в Сочи с мужем",
+        "Навестить родителей в Сочи, летим с мужем",
+        "Едем с мужем в Сочи, брат посоветовал отель",
+    ],
+)
+def test_roles_outside_the_travel_chain_are_not_counted(text):
+    found, _ = extract(text)
+    assert found["adults"] == 2
+
+
+def test_grown_son_with_a_wife_is_no_child():
+    found, _ = extract("Сын с женой и внуком едут в Сочи")
+    assert found.get("children_ages") == [7]
+
+
+def test_c1_question_about_grandparents_keeps_the_party(store):
+    r = say(store, C1)
+    r = say(store, "А бабушке с дедушкой скидка есть?", r.session_id)
+    assert r.plan.spec.adults == 4 and r.plan.spec.children_ages == [6, 9]
+
+
+def test_next_to_grandparents_is_a_hotel_wish_not_a_party(store):
+    r = say(store, "Едем 4 взрослых в Сочи на 5 ночей с 1 июля")
+    r = say(store, "Хочу отель рядом с бабушкой и дедушкой", r.session_id)
+    assert r.plan.spec.adults == 4
