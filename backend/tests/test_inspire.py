@@ -288,3 +288,20 @@ def test_warm_with_a_pet_pulls_further_candidates_when_all_first_are_dead_ends(s
 @pytest.mark.parametrize("text", ["хочу погреться в бане в ноябре", "погреться у камина"])
 def test_warm_up_in_a_sauna_or_by_a_fire_is_no_warm_wish(text):
     assert "тепло" not in extract(text)[0].get("wishes", [])
+
+
+def test_warm_up_by_the_fire_in_any_form_is_no_warm_wish():
+    """#356: `ем\\w*` gave the characters back: «погреемся у костра» was a warm wish."""
+    for text in ("погреемся у костра в октябре", "погреемся в бане"):
+        assert "тепло" not in extract(text)[0].get("wishes", [])
+    assert "тепло" in extract("погреемся в ноябре")[0]["wishes"]
+
+
+def test_sea_with_a_dog_refills_from_the_warmest_sea(store):
+    """#356: «С собакой на море в ноябре» gave Петергоф 3.5 °C and Витебск «моря нет», not Сочи."""
+    dests = inspired(store, "С собакой на море в ноябре из Москвы")
+    assert "Сочи" in {d.name for d in dests}
+    sea = [i for i, d in enumerate(dests) if "моря нет" not in d.violates]
+    assert all(
+        i < min(j for j, d in enumerate(dests) if "моря нет" in d.violates) for i in sea
+    ) or not any("моря нет" in d.violates for d in dests)
