@@ -825,10 +825,14 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         t = t[: m.start()] + " " * (end - m.start()) + t[end:]  # the origin is not a destination
     hits = [(m.start(), name, m.end()) for name, rx in PLACE_RES for m in rx.finditer(t)]
     hits += [(m.start(), name, m.end()) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
+    spans = []
     for m in re.finditer(r"(?:^|[\s,(])(?:[вВ]о?|[нН]а)\s+(?=[А-ЯЁ])", text):
         free = t[m.end()] != " " and not _place_at(text, t, m.end())  # " ": the origin span
         if free and (span := _capital_span(text, m.end())):
             hits.append((m.end(), *span))
+            spans.append((m.end(), span[1]))
+    # «Горный Алтай» is one name: the place «Алтай» inside its span is not a second destination.
+    hits = [h for h in hits if not any(a < h[0] < e for a, e in spans)]
     for m in re.finditer(r"(?:^|[\s,(])(?:во?|на)\s+([а-яе-]+)", t):  # «в иркутск», «в Иркутске»
         if (
             t[m.start(1)] != " "

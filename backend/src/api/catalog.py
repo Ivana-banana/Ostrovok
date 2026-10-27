@@ -17,6 +17,7 @@ import unicodedata
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable
+from contextvars import ContextVar
 from functools import cache
 from pathlib import Path
 
@@ -28,7 +29,9 @@ GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
 ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 MARINE = "https://marine-api.open-meteo.com/v1/marine"
 YEAR = "2025"  # one year of climate for a place outside the snapshot
-TIMEOUT_S = 4
+TIMEOUT_S = 4  # one request
+GEOCODE_BUDGET_S = 8  # all requests for one name together (#244): no new one starts after it
+WIDE_COUNT = 5  # records asked when the first one was another place
 FAILED_S = 60  # after a network error the geocoder is not asked again for this long
 SEA_KM = 30  # as in scripts/build_catalog.py
 # #224: tag "swim" = "sea for swimming", apart from "sea" = "the sea is near". As in
@@ -50,6 +53,7 @@ CASES = {"", "а", "я", "у", "ю", "е", "и", "ы", "ой", "ей", "ом", "
          "ему", "ых", "их"}  # fmt: skip
 PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
+_deadline: ContextVar[float | None] = ContextVar("geocode_deadline", default=None)
 _online: dict[str, dict | None] = {}
 _failed: dict[str, float] = {}  # name -> time.monotonic() of the last network error
 
@@ -217,7 +221,9 @@ def request_url(url: str, params: dict) -> str:
 
 def _get(url: str, params: dict) -> dict:
     req = urllib.request.Request(request_url(url, params))
-    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+    left = _deadline.get()
+    timeout = TIMEOUT_S if left is None else max(0.5, min(TIMEOUT_S, left - time.monotonic()))
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
@@ -267,28 +273,43 @@ def _airport(here: dict, fetch: Callable[[str, dict], dict]) -> tuple[dict, floa
 
 
 def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
-    """The geocoder's answer for a name in any case (TRAP-3).
+    """The geocoder's answer for a name in any case (TRAP-3), or None: never another place.
 
-    The name as written is asked first, as the user wrote it: «Кале» is Calais, «Малибу» is not
-    a case of «Малиба». Only when the geocoder knows nothing, the nominative guesses follow:
-    «Старую Ладогу» asks «Старая Ладога», «Бледе» asks «Блед», «Бледа», «Бледь». The answer to a
-    guess is taken only if it is the same words as the guess and as the name up to a case ending:
-    «Старая» is not «Стара-Загора».
+    Open-Meteo searches fuzzily and gives one record: «Тарту» -> Тартус, «Сиене» -> Сиенегитас,
+    «Кал» -> Кали (#244). So an answer counts only when its name is the name asked:
+    - the name as written is asked first, as the user wrote it: «Кале» is Calais, «Малибу» is
+      not a case of «Малиба». The answer must be the same words up to a case ending;
+    - then the nominative guesses: «Старую Ладогу» asks «Старая Ладога», «Бледе» asks «Блед»,
+      «Бледа», «Бледь». The answer to a guess must be the guess itself, letter for letter;
+    - last, when the first answer was another place, a longer list for the name as written:
+      «Тарту» is the second record after Тартус.
+    All of it fits GEOCODE_BUDGET_S: the first network error or the end of the time stops it.
     """
     ask = {"count": 1, "language": "ru", "format": "json"}
     written = name.strip()
-    for guess in dict.fromkeys([written, *name_candidates(name)]):
-        found = fetch(GEOCODE, {**ask, "name": guess}).get("results")
-        if guess != written:
-            found = [
-                g
-                for g in found or []
-                if _same_words(norm(guess).split(), norm(g["name"]).split())
-                and _same_words(norm(name).split(), norm(g["name"]).split())
-            ]
-        if found:
-            return found[0]
-    return None
+    words = norm(written).split()
+    deadline = time.monotonic() + GEOCODE_BUDGET_S
+    token = _deadline.set(deadline)
+
+    def search(guess: str, count: int = 1) -> list[dict]:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"geocoder budget {GEOCODE_BUDGET_S} s is over: {name}")
+        return fetch(GEOCODE, {**ask, "count": count, "name": guess}).get("results") or []
+
+    try:
+        for guess in dict.fromkeys([written, *name_candidates(name)]):
+            for g in search(guess):
+                if guess == written:
+                    same = _same_words(words, norm(g["name"]).split())
+                else:
+                    same = norm(g["name"]) == norm(guess)
+                if same:
+                    return g
+        # Written name: the first record was another place. A longer list may have the right one.
+        wide = search(written, WIDE_COUNT)
+        return next((g for g in wide if _same_words(words, norm(g["name"]).split())), None)
+    finally:
+        _deadline.reset(token)
 
 
 def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
