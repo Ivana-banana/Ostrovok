@@ -30,6 +30,30 @@ suite("доска поездки", () => {
     expect(bare).not.toMatch(/\d ₽<\/(td|p|li|span)>/);
   });
 
+  it("TRAP-7: каждая сумма в ₽ на доске стоит рядом с «синтетика»", () => {
+    const r = structuredClone(hotelBought);
+    r.plan.changes = [
+      { what: "итог", before: "22 500 ₽", after: "23 000 ₽" },
+      { what: "отель", before: "6 400 ₽ за ночь", after: "7 200 ₽ за ночь" },
+    ];
+    r.plan.explanations = [
+      { offer_id: "h1", why: "дешевле на 1 100 ₽", tradeoffs: ["дороже на 3 300 ₽"], risks: ["штраф 2 000 ₽"] },
+    ];
+    r.plan.bundles = r.plan.bundles.map((b) => ({ ...b, tradeoffs: ["дороже на 900 ₽"] }));
+    r.plan.destinations = r.plan.destinations.map((d) => ({ ...d, why: `от 5 000 ₽ в сезон` }));
+    r.plan.issues = r.plan.issues.map((i) => ({ ...i, text: `${i.text} (ранний заезд 1 200 ₽)` }));
+    const text = render(r).body.textContent ?? "";
+    const amounts = [...text.matchAll(/\d[\d \u00a0]*₽/g)];
+    expect(amounts.length).toBeGreaterThanOrEqual(15);
+    for (const m of amounts) {
+      const before = text.slice(Math.max(0, m.index! - 24), m.index!);
+      const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 24);
+      // a budget is the number the user typed, not a price of ours
+      if (/бюджет[а-я]*( отеля)? ?$/i.test(before)) continue;
+      expect(after, `${before}${m[0]}${after}`).toMatch(/^\s*\(?синтетика/);
+    }
+  });
+
   it("TRAP-7: цена реальных данных без пометки", () => {
     const real = structuredClone(base);
     real.plan.offers = real.plan.offers.map((o) => ({ ...o, synthetic: false }));

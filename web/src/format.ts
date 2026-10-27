@@ -1,4 +1,4 @@
-import type { ChatReply, Meal, Mode, Priority, Stage } from "./contracts";
+import type { Cart, ChatReply, Meal, Mode, Priority, Stage } from "./contracts";
 
 // One reply line for the user; the no-model mode is labelled honestly (TRAP-1).
 export function describe(r: ChatReply): string {
@@ -49,6 +49,13 @@ export function ordinal(i: number): string | null {
 
 export function rub(n: number): string {
   return `${String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} ₽`;
+}
+
+// Chat line after a cart edit: the real count and total (TRAP-7: the sums are mock).
+export function cartLine(cart: Cart): string {
+  if (!cart.items.length) return "Корзина пуста.";
+  const mock = cart.items.some((o) => o.synthetic);
+  return `В корзине ${cart.items.length} поз. на ${rub(cart.total_rub)}${mock ? " (синтетика)" : ""}.`;
 }
 
 // Times are shown as written in the ISO string: local to the place of the event, never
