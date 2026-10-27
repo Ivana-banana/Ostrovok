@@ -4,6 +4,9 @@ import { expect, test, type Locator } from "@playwright/test";
 // поездки до ваучера, затем перезагрузка. Работает на агенте с фикстурами (без ключа LLM).
 const REQUEST = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё.";
 
+// #334: семья с ребёнком и младенцем — самая длинная подпись мест в строке перелёта.
+const FAMILY = "Сочи из Москвы самолётом, 2 взрослых и двое детей 1 и 4 лет, 3 ночи с 20 ноября";
+
 const EMPTY = /^\s*(—|)\s*$/;
 
 // «41 000 ₽синтетика» → 41000.
@@ -147,4 +150,27 @@ test("ширина телефона: чат и доска без горизон�
   await expect(page.getByRole("region", { name: "Сравнение отелей" })).toBeVisible();
   const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(wide).toBe(false);
+});
+
+test("ширина телефона: длинная подпись мест семьи в корзине без горизонтальной прокрутки", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("Запрос").fill(FAMILY);
+  await page.getByRole("button", { name: "Отправить" }).click();
+  const hotels = page.getByRole("region", { name: "Сравнение отелей" });
+  await hotels.getByRole("button", { name: /^Выбрать/ }).first().click();
+  await expect(page.getByRole("region", { name: "Таймлайн" })).toBeVisible();
+  await page.getByRole("button", { name: "Положить в корзину" }).click();
+  const cart = page.getByRole("region", { name: "Корзина" });
+  const label = "3 места (1 детский тариф, 1 младенец без места, 10 % тарифа)";
+  const flights = cart.locator("ul.plain").first().locator("li").filter({ hasText: label });
+  await expect(flights).toHaveCount(2); // туда и обратно
+  const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  expect(wide).toBe(false);
+  // Строка не вылезает за край корзины: длинная подпись переносится.
+  const box = await cart.boundingBox();
+  for (const row of await flights.all()) {
+    const r = await row.boundingBox();
+    expect(r && box && r.x + r.width <= box.x + box.width + 1).toBe(true);
+  }
 });
