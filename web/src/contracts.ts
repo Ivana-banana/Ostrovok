@@ -128,7 +128,7 @@ export type Voucher = {
   guest: Guest | null; // null: no name given
 };
 
-// Lead guest typed at checkout (#367); simulated, kept in the session only.
+// Lead guest typed at checkout (#367); simulated, stored with the session, not sent to the provider.
 export type Guest = { name: string; contact: string };
 
 export type ChatRequest = { session_id: string | null; message: string };
