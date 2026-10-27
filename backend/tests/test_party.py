@@ -436,8 +436,25 @@ def test_ages_without_a_unit_after_a_counted_child():
         "Дети 2 и 3 класса, Сочи",
         "Двое детей 5, 8 ночей в Сочи",
         "Трое детей 5 и 8, Сочи",
+        "Сочи с детьми 3 и 4 ноября, на 5 ночей",
+        "Едем в Анапу с детьми 5 и 8 июля на неделю",
+        "Казань с двумя детьми 1 и 2 мая",
+        "Сочи с детьми 2 и 4 звезды",
+        "Двое детей 1 и 2 этаж",
+        "Сочи с детьми 10 и 12 часов в пути",
+        "Сочи с детьми 10 и 12 числа",
     ],
 )
 def test_numbers_that_are_not_ages_stay_default(text):
     found, _ = extract(text)
     assert set(found.get("children_ages", [])) <= {7}
+
+
+def test_grown_son_with_his_wife_is_an_adult_party():
+    found, _ = extract("Я с сыном и с его женой едем в Сочи")
+    assert found["adults"] == 3 and "children_ages" not in found
+
+
+def test_ages_in_brackets():
+    found, _ = extract("Двое детей (5 и 8), едем в Сочи")
+    assert found["children_ages"] == [5, 8]
