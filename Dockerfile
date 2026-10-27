@@ -22,8 +22,9 @@ COPY --from=build --chown=app:app /app/backend /app/backend
 COPY --from=web --chown=app:app /web/dist /app/web/dist
 # Сессии чата (SQLite) пишет пользователь app: каталог должен быть его.
 RUN mkdir -p /app/data && chown app:app /app/data
+# Одна база часовых поясов — пакет tzdata из uv.lock, а не системная (#340, TRAP-5).
 ENV PATH=/app/backend/.venv/bin:$PATH PYTHONUNBUFFERED=1 APP_PORT=8080 \
-    SESSIONS_DB=/app/data/sessions.db
+    SESSIONS_DB=/app/data/sessions.db PYTHONTZPATH=""
 USER app
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
