@@ -6,7 +6,7 @@ import pytest
 
 from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import chat
+from api.model import _genitive, chat
 from api.store import SessionStore
 
 ORIGIN_NOTE = "откуда: Москва (город вылета не назван)"
@@ -203,3 +203,32 @@ def test_egypt_and_turkey_are_alike(store, text):
 def test_without_a_budget_the_origin_is_assumed(store):
     r = say(store, "Бали на 12 ночей вдвоём")
     assert r.questions == [] and ORIGIN_NOTE in r.plan.spec.assumptions
+
+
+@pytest.mark.parametrize(
+    "name, form",
+    [
+        ("Санкт-Петербург", "Санкт-Петербурга"),
+        ("Новосибирск", "Новосибирска"),
+        ("Екатеринбург", "Екатеринбурга"),
+        ("Нижний Новгород", "Нижнего Новгорода"),
+        ("Казань", "Казани"),
+        ("Челябинск", "Челябинска"),
+        ("Омск", "Омска"),
+        ("Самара", "Самары"),
+        ("Ростов-на-Дону", "Ростова-на-Дону"),
+        ("Уфа", "Уфы"),
+        ("Ярославль", "Ярославля"),
+        ("Петропавловск-Камчатский", "Петропавловска-Камчатского"),
+        ("Набережные Челны", None),  # a plural: no chip, the text says «из города …»
+    ],
+)
+def test_hub_genitive_for_the_chip(name, form):
+    """The chip «Из …» of the cheapest hub: a form the rules read back as this city."""
+    assert _genitive(name) == form
+
+
+def test_road_question_claims_no_fit(store):
+    """The rule compares the road only: the text names the sums and the share, not the fit."""
+    q = say(store, "Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч").questions[0]
+    assert "уложит" not in q.text and "% бюджета" in q.text and "разница ≈" in q.text

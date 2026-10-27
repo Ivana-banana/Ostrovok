@@ -278,7 +278,7 @@ DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
 # takes over ROAD_SHARE of it alone. Sums from the offers (TRAP-4). Team estimates (README).
 ROAD_GAP = 0.15
 ROAD_SHARE = 0.5
-BIG_HUBS = 10  # the hubs by population, besides DEFAULT_ORIGIN; plus the hub nearest the place
+BIG_HUBS = 10  # the hubs by population compared with DEFAULT_ORIGIN
 ORIGIN_OPTIONS = ("Москвы", "Санкт-Петербурга", "Екатеринбурга", "Новосибирска")
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
 STAY_RE = re.compile(
@@ -482,29 +482,68 @@ def _round_trip(probe: TripSpec, origin: str) -> int | None:
     return there.price_rub + back.price_rub if there and back else None
 
 
+ADJ_GENITIVE = (("кий", "кого"), ("ний", "него"), ("ий", "ого"), ("ый", "ого"), ("ой", "ого"))
+
+
+def _adj_genitive(word: str) -> str | None:
+    return next((word[: -len(a)] + g for a, g in ADJ_GENITIVE if word.endswith(a)), None)
+
+
+def _noun_genitive(word: str) -> str | None:
+    if word.endswith("ль"):
+        return word[:-1] + "я"  # «Ярославль», «Ставрополь»
+    if word.endswith("ь"):
+        return word[:-1] + "и"  # «Казань», «Пермь»
+    if word.endswith("ы"):
+        return None  # «Чебоксары»: a plural, the rule does not decline it
+    if word.endswith("а"):
+        return word[:-1] + ("и" if word[-2] in "гкхжчшщ" else "ы")
+    if word[-1] in "бвгджзклмнпрстфхцчшщ":
+        return word + "а"
+    return word  # «Сочи», «Улан-Удэ»: not declined
+
+
 def _genitive(name: str) -> str | None:
-    """«Новосибирск» -> «Новосибирска» for the chip «Из …»; None when the rules would not read
-    the form back as this city (the chip is then left out)."""
-    head, sep, tail = name.partition("-на-")
-    if " " in head or "-" in head:
-        return None  # «Нижний Новгород», «Санкт-Петербург»: the rule does not decline them
-    if head.endswith("ь"):
-        form = head[:-1] + "и"
-    elif head.endswith("а"):
-        form = head[:-1] + ("и" if head[-2] in "гкхжчшщ" else "ы")
-    elif head[-1] in "бвгджзклмнпрстфхцчшщ":
-        form = head + "а"
+    """«Новосибирск» -> «Новосибирска», «Ростов-на-Дону» -> «Ростова-на-Дону», «Нижний Новгород»
+    -> «Нижнего Новгорода», «Санкт-Петербург» -> «Санкт-Петербурга» for the chip «Из …». None
+    when the rules would not read the form back as this city (the chip is then left out)."""
+    if "-на-" in name:
+        head, sep, tail = name.partition("-на-")
+        parts = [_noun_genitive(head), sep + tail]
+        form = None if None in parts else "".join(parts)
+    elif " " in name:
+        *adjs, noun = name.split()
+        parts = [*map(_adj_genitive, adjs), _noun_genitive(noun)]
+        form = None if None in parts else " ".join(parts)  # «Набережные Челны»: None
+    elif "-" in name:
+        first, last = name.rsplit("-", 1)
+        if (adj := _adj_genitive(last)) and (noun := _noun_genitive(first)):
+            form = f"{noun}-{adj}"  # «Петропавловска-Камчатского»
+        else:
+            form = (noun := _noun_genitive(last)) and f"{first}-{noun}"  # «Санкт-Петербурга»
     else:
-        form = head  # «Сочи»: not declined
-    form += sep + tail
-    return form if extract(f"из {form}", has_destination=True)[0].get("origin") == name else None
+        form = _noun_genitive(name)
+    if not form:
+        return None
+    origin = extract(f"из {form}", has_destination=True)[0].get("origin")
+    return form if origin and catalog.origin_hub(origin)[0]["name"] == name else None
+
+
+def _from(name: str) -> str:
+    """«из Новосибирска»; «из города X» when the rule has no form for X."""
+    return f"из {gen}" if (gen := _genitive(name)) else f"из города {name}"
+
+
+def _share(rub: int, budget: int) -> str:
+    return f"{round(100 * rub / budget)} %"
 
 
 def far_origin_question(spec: TripSpec) -> list[Question]:
-    """#302, #351: no origin and a budget for the whole trip. The origin is asked when the fit of
-    the budget depends on it: the DEFAULT_ORIGIN round trip for the party costs over ROAD_GAP of
-    the budget more than from the cheapest big hub, or over ROAD_SHARE of it alone. Both sums
-    come from the offers (TRAP-4) and are named in the question. Otherwise it is an assumption."""
+    """#302, #351: no origin and a budget for the whole trip. The origin is asked when the road
+    from DEFAULT_ORIGIN (a round trip for the party) costs over ROAD_GAP of the budget more than
+    from the cheapest big hub, or over ROAD_SHARE of the budget alone. The question names what
+    is measured: the road sums (offers, TRAP-4), their difference and its share of the budget.
+    It claims nothing about the whole trip. Otherwise the origin is an assumption."""
     if spec.origin or spec.budget_rub is None or not spec.destinations:
         return []
     probe = assume(spec)  # the dates and the party the plan would have
@@ -514,23 +553,28 @@ def far_origin_question(spec: TripSpec) -> list[Question]:
     hubs = sorted(catalog.hubs(), key=lambda h: -h["pop"])
     names = [h["name"] for h in hubs if h["name"] != DEFAULT_ORIGIN][:BIG_HUBS]
     if place := catalog.resolve(spec.destinations[0]):
-        names.append(catalog.nearest(place, hubs)["name"])
+        # The place itself is no origin to compare: «Казань» from Казань has no road. The hub
+        # nearest the place is not added either: its road is always small (Чебоксары — Казань
+        # 4 900 ₽), so the gap would measure the distance to the nearest city, not the origin.
+        names = [n for n in names if n != place["name"]]
     sums = [(r, n) for n in dict.fromkeys(names) if (r := _round_trip(probe, n)) is not None]
     best = min(sums, default=None)
-    gap = best is not None and home - best[0] > ROAD_GAP * spec.budget_rub
-    if not (gap or home > ROAD_SHARE * spec.budget_rub):
+    budget = spec.budget_rub
+    gap = best is not None and home - best[0] > ROAD_GAP * budget
+    if not (gap or home > ROAD_SHARE * budget):
         return []
-    line = f"из Москвы ≈ {_rub(home)}"
+    text = f"Откуда начинается поездка? Из Москвы дорога туда и обратно ≈ {_rub(home)}"
     if best and best[0] < home:
-        gen = _genitive(best[1])
-        line += (
-            f", из {gen} ≈ {_rub(best[0])}" if gen else f", из города {best[1]} ≈ {_rub(best[0])}"
+        diff = home - best[0]
+        text += (
+            f", {_from(best[1])} ≈ {_rub(best[0])} — разница ≈ {_rub(diff)}, "
+            f"это {_share(diff, budget)} бюджета."
         )
-    text = (
-        f"Откуда начинается поездка? Дорога туда и обратно: {line}. "
-        f"От этого зависит, уложится ли она в {_rub(spec.budget_rub)}. "
-        "Если города нет в кнопках, напишите «из …»."
-    )
+    else:
+        text += "."
+    if home > ROAD_SHARE * budget:
+        text += f" Дорога из Москвы — {_share(home, budget)} бюджета {_rub(budget)}."
+    text += " Если города нет в кнопках, напишите «из …»."
     options = [f"Из {w}" for w in ORIGIN_OPTIONS]
     if best and (gen := _genitive(best[1])) and f"Из {gen}" not in options:
         options.insert(1, f"Из {gen}")

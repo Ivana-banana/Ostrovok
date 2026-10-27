@@ -4,6 +4,7 @@ No model (TRAP-1): the rules read the message. Each class has its F-case in the 
 test and its negatives: the fix is for a class of phrases, not for one phrase.
 """
 
+import re
 from datetime import date, timedelta
 
 import pytest
@@ -151,7 +152,10 @@ def test_f15_asks_the_origin_with_both_sums(store):
     assert r.stage == "clarify" and len(r.questions) == 1
     q = r.questions[0]
     assert "откуда" in q.text.lower() and q.options[0] == "Из Москвы"
-    assert "из Москвы ≈" in q.text and q.text.count("≈") == 2
+    # #351: the text says what the rule measures: the road sums, their difference and its share
+    assert "Из Москвы дорога туда и обратно ≈" in q.text and "разница ≈" in q.text
+    assert re.search(r"это \d+ % бюджета", q.text) and "уложит" not in q.text
+    assert "Иркутск" not in q.text  # «Байкал» is Иркутск: the place itself is no origin
     after = say(store, "из Новосибирска", r.session_id)
     assert after.stage == "compare" and after.plan.spec.origin == "Новосибирск"
     assert after.plan.spec.budget_rub == 200_000 and after.questions == []
