@@ -289,6 +289,14 @@ def _spread(cards: list[Destination], limit: int) -> list[Destination]:
     return sorted(shown[:limit], key=_rank)
 
 
+def _sea_first(spec: TripSpec, place: dict, month: int | None) -> float:
+    """The «море» refill goes from the warmest sea; a place without a sea goes last (#356)."""
+    if "море" not in spec.wishes:
+        return 0.0
+    water = catalog.month_climate(place, month)[1] if month and place["sea"] else None
+    return 1000.0 if water is None else -water
+
+
 def suggest_destinations(
     spec: TripSpec, limit: int = 4, exclude: list[str] | None = None
 ) -> list[Destination]:
@@ -303,7 +311,9 @@ def suggest_destinations(
     def order(p: dict) -> tuple:
         breaks = _rule_breaks(spec, p, hub, month)
         air = catalog.month_climate(p, month)[0] if month else None
-        return _level(breaks), _coldness(breaks, air), catalog.km_between(hub, p)
+        level = _level(breaks)
+        sea = _sea_first(spec, p, month) if level else 0.0  # a breaking card: the warmest sea
+        return level, _coldness(breaks, air), sea, catalog.km_between(hub, p)
 
     ordered, per_country = [], Counter()
     for p in sorted(_pool(spec, hub, exclude), key=order):
