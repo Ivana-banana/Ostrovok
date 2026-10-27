@@ -26,8 +26,8 @@ MONTH_NAMES = [
 SEASONS = {"зимой": (12, 1, 2), "весной": (3, 4, 5), "летом": (6, 7, 8), "осенью": (9, 10, 11)}
 NUMS = {
     "один": 1, "одна": 1, "одну": 1, "два": 2, "две": 2, "двое": 2, "двух": 2, "двумя": 2,
-    "три": 3, "трое": 3, "трех": 3, "тремя": 3, "четыре": 4, "четверо": 4, "пять": 5,
-    "пятеро": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10,
+    "три": 3, "трое": 3, "трех": 3, "тремя": 3, "четыре": 4, "четверо": 4, "четырьмя": 4,
+    "пять": 5, "пятью": 5, "пятеро": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10,
     "одиннадцать": 11, "двенадцать": 12, "тринадцать": 13, "четырнадцать": 14,
     "пятнадцать": 15, "двадцать": 20,
 }  # fmt: skip
@@ -178,6 +178,47 @@ PAIR_RE = re.compile(
 EN_GROUP_RE = re.compile(
     rf"\bfor\s+{NUM_EN}\b(?!\s*-?(?:nights?|days?|weeks?|hours?|months?))|\bas a couple"
 )
+# #185: «трое друзей», «с двумя друзьями»: after «с» (or alone) the user and the friends travel,
+# the friends are extra. «мы две подруги», «едем трое друзей», «трое друзей едем»: they are all.
+FRIENDS_RE = re.compile(
+    rf"\b{NUM}\s+(?:(?:мо(?:их|и|им|ими)|наш\w+)\s+)?"
+    r"(?P<noun>друз(?:ей|ья|ьям|ьями|ьях)|подруг\w*|приятел\w+|коллег\w*)\b"
+)
+WITH_BEFORE = re.compile(r"\bсо?\s+$")
+WHOLE_BEFORE = re.compile(
+    r"\b(?:мы|едем|летим|поедем|полетим|отправимся|собираемся)\s+(?:\w+\s+)?$"
+)
+WHOLE_AFTER = re.compile(
+    r"\s*,?\s*(?:едем|летим|поедем|полетим|хотим|собираемся|планируем|отдыхаем)\b"
+)
+FRIEND_NUMS = {1: "один", 2: "двое", 3: "трое", 4: "четверо", 5: "пятеро"}
+FRIEND_NUMS_FEM = {1: "одна", 2: "две", 3: "три", 4: "четыре", 5: "пять"}
+FRIEND_WORDS = {  # stem: (one, many)
+    "друз": ("друг", "друзей"),
+    "приятел": ("приятель", "приятелей"),
+    "коллег": ("коллега", "коллег"),
+}
+
+
+def _friends(t: str, m: re.Match) -> tuple[int, str]:
+    """(adults, note) for «трое друзей»: the user's word stays in the note."""
+    n, noun = _num(m.group(1)), m.group("noun")
+    before, after = t[: m.start()], t[m.end() : m.end() + 20]
+    if noun.startswith("подруг"):
+        said = f"{FRIEND_NUMS_FEM[n]} " if n in FRIEND_NUMS_FEM else f"{n} "
+        said += "подруга" if n == 1 else "подруги" if n < 5 else "подруг"
+    else:
+        one, many = next(v for k, v in FRIEND_WORDS.items() if noun.startswith(k))
+        said = f"один {one}" if n == 1 else f"{FRIEND_NUMS.get(n, n)} {many}"
+    if (
+        n >= 2
+        and not WITH_BEFORE.search(before)
+        and (WHOLE_BEFORE.search(before) or WHOLE_AFTER.match(after))
+    ):
+        return n, f"взрослых: {n} ({said} едут вместе)"
+    return n + 1, f"взрослых: {n + 1} (вы и {said})"
+
+
 AGES_RE = re.compile(r"\D{0,12}?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)")
 BUDGET_RES = [  # (pattern, multiplier); «к» counts only right after the number: «150к»
     (r"\b(\d+(?:[.,]\d+)?)\s*(?:млн|миллион)", 1_000_000),
@@ -1015,6 +1056,86 @@ def _month_stay(t: str) -> re.Match | None:
     return next(stays, None)
 
 
+# #185: holidays instead of dates. The Russian New Year break is a known period; other school
+# holidays have no calendar here, so they name a season or the nearest month, in a note.
+NEW_YEAR_RE = re.compile(
+    r"(?:\b(?:на|к|под)\s+)?(?:\bнов(?:ый|ого|ому|ым)\s+год\w*"
+    r"|\bновогодн\w*(?:\s+(?:праздник|каникул|выходн)\w*)?)"
+)
+WINTER_HOLIDAY_RE = re.compile(r"(?:\bна\s+)?\bзимн\w*\s+каникул\w*")
+SEASON_HOLIDAY_RE = re.compile(r"\b(летн|осенн|весенн)\w*\s+каникул\w*")
+HOLIDAY_SEASON = {"летн": "летом", "осенн": "осенью", "весенн": "весной"}
+ANY_HOLIDAY_RE = re.compile(r"\bканикул\w*")
+NEW_YEAR_START, NEW_YEAR_END = (12, 30), (1, 8)
+# After «после», «до», «кроме», «без», «перед», «не» the break is not the trip; «к новому году
+# вернуться домой» is a deadline, not a trip.
+NOT_NEW_YEAR_BEFORE = re.compile(r"\b(?:после|до|кроме|без|перед|не)\s+$")
+AT_HOME_AFTER = re.compile(r"\bверн[уё]\w*|\bдом(?:а|ой|е)?\b|\bуспе\w*")
+
+
+def _new_year(t: str) -> re.Match | None:
+    for m in NEW_YEAR_RE.finditer(t):
+        if NOT_NEW_YEAR_BEFORE.search(t[: m.start()]):
+            continue
+        if m.group(0).startswith("к ") and AT_HOME_AFTER.search(t[m.end() : m.end() + 40]):
+            continue
+        return m
+    return None
+
+
+def _new_year_window(today: date) -> tuple[date, date]:
+    """30.12–08.01 after today. The break goes on until 7.01 (a night is left): from tomorrow."""
+    if today.month == 1 and today.day < NEW_YEAR_END[1] - 1:
+        return today + timedelta(days=1), date(today.year, *NEW_YEAR_END)
+    if (today.month, today.day) == (12, 31):
+        return today + timedelta(days=1), date(today.year + 1, *NEW_YEAR_END)
+    start = future_date(*NEW_YEAR_START, today)
+    return start, date(start.year + 1, *NEW_YEAR_END)
+
+
+def _holiday(t: str, found: dict, notes: list[str]) -> str | None:
+    """«на новый год», «новогодние праздники», «каникулы» without a date.
+
+    The New Year break sets the start date; returns the said words, the end is set by
+    _holiday_end after the length is read. A season holiday sets the month, like «летом»."""
+    if "date_from" in found:
+        return None
+    month, today = found.get("month"), date.today()
+    new_year = _new_year(t) if month in (None, 12) else None
+    if new_year or (month is None and (winter := WINTER_HOLIDAY_RE.search(t))):
+        said = (new_year or winter).group(0)
+        found["date_from"] = _new_year_window(today)[0]
+        found["month"] = found["date_from"].month
+        notes[:] = [n for n in notes if not n.startswith("когда:")]  # «зимой на новый год»
+        return said
+    if month is not None:
+        return None
+    if m := SEASON_HOLIDAY_RE.search(t):
+        months = SEASONS[HOLIDAY_SEASON[m.group(1)]]
+        found["month"] = today.month if today.month in months else months[0]
+        why = "текущий месяц сезона" if today.month in months else "первый месяц сезона"
+    elif m := ANY_HOLIDAY_RE.search(t):
+        found["month"] = today.month % 12 + 1
+        why = "сезон не назван, взят ближайший месяц"
+    else:
+        return None
+    notes.append(f"когда: {MONTH_NAMES[found['month'] - 1]} («{m.group(0)}»: {why})")
+    return None
+
+
+def _holiday_end(said: str, found: dict, notes: list[str]) -> None:
+    """The New Year break lasts to 08.01 unless the user named the length."""
+    start = found["date_from"]
+    end = _new_year_window(date.today())[1] if "nights" not in found else None
+    if end is not None:
+        found["nights"] = (end - start).days
+    found["date_to"] = start + timedelta(days=found["nights"])
+    notes.append(
+        f"даты: {start:%d.%m}–{found['date_to']:%d.%m} («{said}»: праздники 1–8 января, "
+        f"заезд {start:%d.%m} — допущение)"
+    )
+
+
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на месяц» (30), «на выходные» (пятница–воскресенье).
 
@@ -1130,6 +1251,9 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     elif m := re.search(rf"\bнас\s+(?:будет\s+)?{NUM}\b|\b({'|'.join(TOGETHER)})\b", t):
         total = _num(m.group(1)) if m.group(1) else TOGETHER[m.group(2)]
         found["adults"] = max(total - len(ages), 1)
+    elif (m := FRIENDS_RE.search(t)) and _num(m.group(1)) >= 1:
+        found["adults"], note = _friends(t, m)
+        notes.append(note)
     elif not ages and (m := GROUP_RE.search(t)):  # «на двоих с ребёнком»: the child may count
         total = GROUP[m.group(1)] if m.group(1) else _num(m.group(2))
         found["adults"] = max(total - len(ages), 1)
@@ -1320,11 +1444,14 @@ def extract(
     _places(text, t, found, notes, has_destination)
     _english_places(t, found)
     _dates(t, found, notes, nights)
+    holiday = _holiday(t, found, notes)
     range_notes = [i for i, n in enumerate(notes) if is_too_long_note(n)]
     _nights(t, found, notes, nights)
     for i in range_notes:  # «… на 10 ночей»: the note names the length the plan has (#173)
         kept = found.get("nights", nights)
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
+    if holiday:
+        _holiday_end(holiday, found, notes)
     _people(t, found, notes, asking)
     _budget(t, found, notes, nights, adults)
     if re.search(
