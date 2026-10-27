@@ -1787,6 +1787,41 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
         notes.append(f"бюджет: в {label} — не пересчитываю, уточните в рублях")
 
 
+PET_RE = re.compile(
+    r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"
+    r"|\bпс(?:а|у|ом|е|ы|ов|ам|ами|ах)\b"
+    r"|\bщен(?:ок|ка|ку|ком|ке|ки|ков|кам|ками|ках)\b|\bщенят(?:а|ам|ами|ах)?\b"
+    r"|\bкот[её]н(?:ок|ка|ку|ком|ке)\b|\bкотят(?:а|ам|ами|ах)?\b"
+    r"|\bс(?:о)?\s+(?:домашн\w+\s+)?животн|\bживотн"  # a bare «животные» is a zoo, not a pet
+)
+# #294: «без питомцев», «без детей и собаки», «питомцев нет», «собаку не берём». Words between
+# «без» and the pet: «без нашей собаки»; «с» stops it: «без детей с собакой» has the dog.
+_PET_BEFORE = re.compile(
+    r"\b(?:без|не\s+(?:берем|возьмем|везем|берут|возьмут))\s+(?:(?!с\s|со\s)\w+\s+(?:и\s+)?){0,2}$"
+)
+_PET_AFTER = re.compile(
+    r"\w*\s+(?:у\s+нас\s+)?(?:нет\b|не\s+(?:берем|возьмем|везем|берут|возьмут|будет|будут))"
+)
+_DOUBLE_NO = re.compile(
+    r"\w*\W*(?:мы\s+)?не\s+(?:поед|можем|смож|хотим|будем)"
+)  # «без собаки не поедем»
+
+
+def _pets(t: str) -> bool | None:
+    """True: a pet goes. False: the message refuses one. None: pets are not mentioned.
+    A pet that is not refused wins: «с собакой, без кошек»."""
+    refused = False
+    for m in PET_RE.finditer(t):
+        if m.group().startswith(("с ", "со ")):
+            return True  # «с домашним животным»
+        no = _PET_BEFORE.search(t[: m.start()]) or _PET_AFTER.match(t, m.end())
+        if no and not _DOUBLE_NO.match(t, m.end()):
+            refused = True
+        elif m.group() != "животн":  # a bare «животные»: a zoo, not a pet
+            return True
+    return False if refused else None
+
+
 def extract(
     text: str,
     has_destination: bool = False,
@@ -1816,14 +1851,8 @@ def extract(
         _holiday_end(holiday, found, notes)
     _people(t, found, notes, asking)
     _budget(t, found, notes, nights, adults)
-    if re.search(
-        r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"
-        r"|\bпс(?:а|у|ом|е|ы|ов|ам|ами|ах)\b"
-        r"|\bщен(?:ок|ка|ку|ком|ке|ки|ков|кам|ками|ках)\b|\bщенят(?:а|ам|ами|ах)?\b"
-        r"|\bкот[её]н(?:ок|ка|ку|ком|ке)\b|\bкотят(?:а|ам|ами|ах)?\b",
-        t,
-    ):
-        found["pets"] = True
+    if (pets := _pets(t)) is not None:
+        found["pets"] = pets
     if meal := _meal(t):
         found["meal"] = meal
     negated = re.compile(r"\b(?:не|без)\s+(?:\w+\s+)?$")  # «не хочу лететь», «не на машине»

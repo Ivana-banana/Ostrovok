@@ -863,3 +863,37 @@ def test_trap_3_c15_full_turn_has_no_missing_catalogue_reply(tmp_path):
 def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
     found, _ = extract(text)
     assert found["destinations"] == dests
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Казань на выходные, без питомцев", "едем без собаки", "питомцев у нас нет",
+     "собаку не берём", "без животных", "без детей и без кошки", "поедем без нашей собаки",
+     "без детей и собаки"],
+)  # fmt: skip
+def test_pets_negation_gives_false(text):  # #294
+    found, _ = extract(text)
+    assert found["pets"] is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["едем с собакой", "с нами кот", "без детей, с собакой", "без питомцев не поедем",
+     "с собакой, без кошек", "едем с домашним животным", "без детей с собакой"],
+)  # fmt: skip
+def test_pets_positive_mention_stays_true(text):  # #294
+    found, _ = extract(text)
+    assert found["pets"] is True
+
+
+def test_pets_negation_clears_a_flag_set_earlier(tmp_path):  # #294
+    store = SessionStore(tmp_path / "s.db")
+    first = chat(ChatRequest(session_id=None, message="Казань на выходные, с собакой"), store)
+    assert first.plan.spec.pets is True
+    second = chat(ChatRequest(session_id=first.session_id, message="без питомцев"), store)
+    assert second.plan.spec.pets is False
+
+
+def test_pets_unrelated_text_does_not_touch_the_flag():  # #294
+    found, _ = extract("Казань на выходные, без детей")
+    assert "pets" not in found
