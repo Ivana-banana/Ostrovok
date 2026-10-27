@@ -200,5 +200,6 @@ def test_inspire_keeps_four_options_without_the_origin(store):
 def test_select_exit_does_not_offer_the_origin(store):
     r = say(store, "Хиврии, 3 ночи с 20 ноября")
     r = say(store, "летим из Казани", r.session_id)
+    r = say(store, "Россия", r.session_id)  # #346: the country first, then its cities
     options = r.questions[0].options
     assert 2 <= len(options) <= 3 and "Казань" not in options
