@@ -1,14 +1,16 @@
 """Destination catalogue (T4, #8): one case per rule, no network (conftest.py)."""
 
+import re
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from api import catalog
-from api.contracts import ChatRequest
+from api.contracts import ChatRequest, TripSpec
 from api.guards import resolve_destination
 from api.model import chat
-from api.offers import resolve_place
+from api.offers import offers_for_place, resolve_place
 from api.store import SessionStore
 
 
@@ -30,9 +32,10 @@ def test_trap_5_every_place_has_a_road():
         p["name"] for p in catalog.places() if p["airport_km"] is None and p["station_km"] is None
     ]
     assert bad == []
-    # RGK has no scheduled_service in OurAirports: the nearest airport with flights stands in
+    # RGK has no scheduled_service in OurAirports: the nearest airport with flights by road
+    # stands in, BAX 271 km, not NOZ 216 km by straight line and 372 km by road (#223)
     assert catalog.resolve("Горно-Алтайск")["airport"] == {
-        "iata": "NOZ", "km": 216, "tz": "Asia/Krasnoyarsk"
+        "iata": "BAX", "km": 271, "tz": "Asia/Krasnoyarsk", "road": True
     }  # fmt: skip
 
 
@@ -49,7 +52,7 @@ def test_trap_5_altai_plan_has_a_flight_and_a_transfer(tmp_path):
     assert {(i.origin, i.destination, i.mode) for i in flights} == {
         ("Москва", "Горно-Алтайск", "flight"), ("Горно-Алтайск", "Москва", "flight")
     }  # fmt: skip
-    assert any("≈217.5 км" in i.title for i in r.cart.items if i.kind == "transfer")
+    assert any("≈272.5 км" in i.title for i in r.cart.items if i.kind == "transfer")
 
 
 @pytest.mark.parametrize(
@@ -87,6 +90,41 @@ def test_trap_5_home_airport_and_zone_of_a_new_airport():
         "km": 23,
         "tz": "Europe/Saratov",
     }
+
+
+def test_trap_4_mountain_airport_is_nearest_by_road():
+    """TRAP-4: Домбай flies to MRV, not to AER behind the Main Caucasus ridge (#223).
+
+    The transfer from the airport is the OSRM road of the snapshot, not the straight line.
+    """
+    place = catalog.resolve("Домбай")
+    road = catalog.snapshot()["roads"]["Домбай"]
+    assert place["airport"]["iata"] == "MRV" and place["airport"]["road"] is True
+    assert place["airport_km"] == place["airport"]["km"] == road["MRV"] < road["AER"]
+    soon = date.today() + timedelta(days=60)
+    spec = TripSpec(origin="Москва", date_from=soon, date_to=soon + timedelta(days=3), nights=3)
+    rides = [
+        float(re.search(r"≈([\d.]+) км", o.title)[1])
+        for o in offers_for_place(spec, place, resolve_place("Москва"))
+        if o.kind == "transfer" and "аэропорт" in o.title
+    ]
+    assert rides and all(road["MRV"] <= x <= road["MRV"] + 10 for x in rides)
+
+
+def test_trap_6_airport_road_from_the_snapshot_else_straight_line():
+    """TRAP-6: road km come from the roads snapshot in catalog.json (no network).
+
+    A place without a road for every candidate keeps the straight line and no "road" mark.
+    """
+    roads = catalog.snapshot()["roads"]
+    ports = {a[0]: {"lat": a[1], "lon": a[2]} for a in catalog.snapshot()["airports"]}
+    for p in catalog.places():
+        ap = p["airport"]
+        if ap.get("road"):
+            known = {k: v for k, v in roads[p["name"]].items() if v is not None}
+            assert ap["km"] == known[ap["iata"]] == min(known.values()), p["name"]
+        else:
+            assert ap["km"] == round(catalog.km_between(p, ports[ap["iata"]])), p["name"]
 
 
 def test_country_in_text_gives_its_places():
