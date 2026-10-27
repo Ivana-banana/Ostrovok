@@ -4,14 +4,14 @@ from urllib.error import HTTPError
 
 import pytest
 
-from api import catalog, checks
-from api.contracts import ChatRequest, TripSpec
+from api import answers, catalog, checks
+from api.contracts import ChatRequest, Plan, TripSpec
 from api.inspire import NO_SEA, _rule_breaks
 from api.model import chat
 from api.store import SessionStore
 
 
-def test_trap_6_archive_rate_limit_keeps_city_and_marine(geo):
+def test_trap_6_archive_rate_limit_keeps_city_and_marine(geo, monkeypatch, tmp_path):
     base = geo("Блед")
 
     def fetch(url, params):
@@ -41,6 +41,19 @@ def test_trap_6_archive_rate_limit_keeps_city_and_marine(geo):
     assert place["sea"] is True
     assert catalog.month_climate(place, 7) == (None, 24.0)
     assert not catalog.ONLINE_CACHE.exists()
+    reply = answers.weather_fact(
+        Plan(spec=TripSpec(destinations=["Блед"], month=7)), "какая вода в июле?"
+    )
+    assert "вода 24 °C" in reply
+    assert "днём" not in reply
+    assert "температура воздуха и осадки неизвестны" in reply
+    monkeypatch.setattr(catalog, "_get", fetch)
+    store = SessionStore(tmp_path / "sessions.db")
+    start = chat(ChatRequest(session_id=None, message="Хочу в Блед в июле"), store)
+    answer = chat(ChatRequest(session_id=start.session_id, message="какая вода в июле?"), store)
+    assert "вода 24 °C" in answer.reply
+    assert "днём" not in answer.reply
+    assert answer.plan == start.plan and answer.stage == start.stage
 
 
 @pytest.mark.parametrize("failed", [(catalog.MARINE,), (catalog.ARCHIVE, catalog.MARINE)])
