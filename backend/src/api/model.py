@@ -51,7 +51,8 @@ from api.extract import (
     is_excluded,
     with_llm,
 )
-from api.fixtures import CATALOG, build_timeline, future_date, suggest_destinations
+from api.fixtures import CATALOG, build_timeline, future_date
+from api.fixtures import suggest_destinations as catalog_destinations
 from api.offers import find_offers, resolve_place
 from api.optimizer import (
     _hotel_why,
@@ -189,6 +190,26 @@ OR_RE = re.compile(r"\bили\b")  # cities joined by «или» are candidates,
 PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
 # #113: the refused places live in this assumption (TripSpec has no field for them).
 EXCLUDED = "исключено"
+
+
+# #114: «тепло» in the wishes. Estimate without a source, like the climate of the catalogue:
+# in the cold half of the year a destination counts as warm if its November air is this warm.
+WARM_AIR_C = 15.0
+COLD_MONTHS = (10, 11, 12, 1, 2, 3, 4)
+
+
+def suggest_destinations(spec: TripSpec, limit: int = 4, exclude: list[str] | None = None):
+    """catalog_destinations, and with the «тепло» wish in the cold months: warm places only.
+
+    If no warm place is left (all refused), the others are shown and marked, never hidden."""
+    if "тепло" not in spec.wishes or spec.month not in COLD_MONTHS:
+        return catalog_destinations(spec, limit, exclude)
+    ranked = catalog_destinations(spec, len(CATALOG), exclude)
+    warm = [d for d in ranked if (CATALOG[d.name]["nov"][0] or 0) >= WARM_AIR_C]
+    if warm:
+        return warm[:limit]
+    note = "не тёплое направление: «тепло» в пожеланиях, а тёплых мест не осталось"
+    return [d.model_copy(update={"violates": [*d.violates, note]}) for d in ranked[:limit]]
 
 
 def _label(assumption: str) -> str:
@@ -530,11 +551,34 @@ def _text_inspire(plan: Plan) -> str:
         if d.violates:
             line += f" Нарушает требования: {'; '.join(d.violates)}."
         lines.append(line)
+    if "тепло" in spec.wishes and spec.month in COLD_MONTHS and spec.month != 11:
+        lines.append(
+            "Тепло оцениваю по климату ноября из каталога: других месяцев в данных нет, "
+            "в вашем месяце может быть холоднее."
+        )
     return "\n".join(lines + _tail(spec, "Напишите номер или название направления."))
 
 
 def _selected_total(plan: Plan) -> int:
     return sum(o.price_rub for o in plan.offers if o.offer_id in plan.selected)
+
+
+# #114: the mode the user asked for, when the data has none: «Поезда … в данных нет».
+NO_MODE = {"train": "поезда", "flight": "перелёта", "car": "поездки на машине"}
+OFFER_MODE = {"train": "поезд", "flight": "перелёт", "car": "машину"}
+
+
+def missing_mode(plan: Plan) -> str:
+    """The line that names an asked mode the offers do not have (offers.py then takes all
+    modes); empty if the spec asks for no mode or at least one leg of it exists."""
+    legs = [o for o in plan.offers if isinstance(o, TransportOffer)]
+    modes = plan.spec.modes
+    if not legs or not modes or any(o.mode in modes for o in legs):
+        return ""
+    way = f"{plan.spec.origin} → {plan.spec.destinations[0]}"
+    asked = " и ".join(NO_MODE[m] for m in modes)
+    have = " и ".join(OFFER_MODE[m] for m in dict.fromkeys(o.mode for o in legs))
+    return f"{_cap(asked)} {way} в данных нет: предлагаю {have}."
 
 
 def _text_compare(plan: Plan) -> str:
@@ -545,6 +589,7 @@ def _text_compare(plan: Plan) -> str:
             f"{spec.destinations[0]}, {spec.date_from:%d.%m}–{spec.date_to:%d.%m}, "
             f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
         ),
+        *([line] if (line := missing_mode(plan)) else []),
         "Отели:",
     ]
     hotels = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff

@@ -28,7 +28,24 @@ NUMS = {
     "один": 1, "одна": 1, "одну": 1, "два": 2, "две": 2, "двое": 2, "двух": 2, "двумя": 2,
     "три": 3, "трое": 3, "трех": 3, "тремя": 3, "четыре": 4, "четверо": 4, "пять": 5,
     "пятеро": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10,
+    "одиннадцать": 11, "двенадцать": 12, "тринадцать": 13, "четырнадцать": 14,
+    "пятнадцать": 15, "двадцать": 20,
 }  # fmt: skip
+# #114: the English request (TRAP-3): month names, number words, the aliases of places.json.
+MONTHS_EN = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6, "july": 7,
+    "august": 8, "september": 9, "sept": 9, "october": 10, "november": 11, "december": 12,
+}  # fmt: skip
+NUMS_EN = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10,
+}  # fmt: skip
+NUM_EN = rf"(\d{{1,2}}|{'|'.join(NUMS_EN)})"
+# «may» is also a verb: it names a month only after a preposition.
+MONTH_EN = (
+    r"\b(?:(?:in|during|around|of|early|late|mid)\s+may"
+    rf"|(?:{'|'.join(m for m in MONTHS_EN if m != 'may')}))\b"
+)
 NUM = rf"(\d{{1,2}}|{'|'.join(NUMS)})"
 EDIT_VERB = (
     r"(?:перенес|перенос|сдвин|сдвиг|передвин|отлож|отодвин|подвин|продл|удлин|сократ|укороти)"
@@ -157,6 +174,10 @@ PAIR_RE = re.compile(
     r"|\bсемь(?:я|е|и|ей|ю)\b|\bсемейн\w*|\b(?:едем|летим|поедем|полетим|хотим|планируем"
     r"|собираемся|отдыхаем)\b"
 )
+# «for two», «for 3 adults»; not «for 3 nights».
+EN_GROUP_RE = re.compile(
+    rf"\bfor\s+{NUM_EN}\b(?!\s*-?(?:nights?|days?|weeks?|hours?|months?))|\bas a couple"
+)
 AGES_RE = re.compile(r"\D{0,12}?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)")
 BUDGET_RES = [  # (pattern, multiplier); «к» counts only right after the number: «150к»
     (r"\b(\d+(?:[.,]\d+)?)\s*(?:млн|миллион)", 1_000_000),
@@ -178,11 +199,25 @@ MODES = [
     ("car", r"\bна\s+(?:сво\w+\s+)?(?:машин|авто)"),
     ("flight", r"\b(?:самол[её]т|летим|лететь|полетим|рейс)"),
 ]
+# #114: «где тепло», «тёплые края», «жарко». «Тёплое море» is the sea wish (its water is checked),
+# «не тепло», «не люблю жару» and «тёплая куртка» are no wish for the warm.
+WARM = (
+    r"\b(?:тепл(?!оход|\w*\s+(?:мор|одежд|куртк|вещ|одет|носк|шапк|плед))\w*"
+    r"|жарк\w*|жар[аеуы]\b|\bwarm\b|\bhot\b)"
+)
+# The warm is refused or only asked about: «не люблю жару», «жару не люблю», «жарко не надо»,
+# «будет ли тепло?».
+WARM_REFUSED_BEFORE = re.compile(r"\b(?:не|без|ли)\s+(?:\w+\s+)?$")
+WARM_REFUSED_AFTER = re.compile(
+    r"\s*(?:[,—–-]\s*)?(?:\w+\s+)?не\s+(?:люблю|любим|надо|нужн\w*|хочу|хотим|хочется|выношу"
+    r"|переношу|перевариваю|подходит|нравится|нравятся|годится)"
+)
 WISHES = [
-    ("море", r"\bмор[еяю]\b|\bморск|пляж|купат"),
-    ("недорого", r"недорог|деш[её]в|бюджетн|эконом"),
-    ("горы", r"\bгор(?:ы|ах|ам|ами|у)\b|\bгорн"),
-    ("лыжи", r"лыж|сноуборд"),
+    ("море", r"\bмор[еяю]\b|\bморск|пляж|купат|\bsea\b|\bbeach"),
+    ("недорого", r"недорог|деш[её]в|бюджетн|эконом|\bcheap"),
+    ("горы", r"\bгор(?:ы|ах|ам|ами|у)\b|\bгорн|\bmountains?\b"),
+    ("лыжи", r"лыж|сноуборд|\bski"),
+    ("тепло", WARM),
     ("санаторий", r"санатор"),
     ("тяжело ходить", r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил"),
     ("вино и еда", r"\bвин[оа]\b|\bвинн|гастро|\bеда\b|\bкухн"),
@@ -217,8 +252,16 @@ def _month(word: str) -> int:
     return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»
 
 
+def _warm_refused(t: str, m: re.Match) -> bool:
+    return bool(WARM_REFUSED_BEFORE.search(t[: m.start()]) or WARM_REFUSED_AFTER.match(t, m.end()))
+
+
 def _num(word: str) -> int:
     return int(word) if word.isdigit() else NUMS[word]
+
+
+def _num_en(word: str) -> int:
+    return int(word) if word.isdigit() else NUMS_EN[word]
 
 
 def _place_at(text: str, t: str, pos: int) -> str | None:
@@ -686,6 +729,32 @@ def _nominative(word: str) -> str:
     return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
 
 
+# The English names of places.json (its ASCII aliases) and the common spellings of the capital.
+EN_EXTRA = {"st. petersburg": "Санкт-Петербург", "st petersburg": "Санкт-Петербург",
+            "petersburg": "Санкт-Петербург", "saint-petersburg": "Санкт-Петербург"}  # fmt: skip
+
+
+def _english_places(t: str, found: dict) -> None:
+    """«from Moscow» is the origin, any other known name is a destination (#114, TRAP-3).
+
+    Only what the Russian rules did not find; only the names of places.json."""
+    names = {a: p["name"] for p in places() for a in p["aliases"] if a.isascii()} | EN_EXTRA
+    rx = re.compile(
+        r"\b(from\s+)?(" + "|".join(sorted(map(re.escape, names), key=len, reverse=True)) + r")\b"
+    )
+    dests = []
+    for m in rx.finditer(t):
+        name = names[m.group(2)]
+        if m.group(1):
+            found.setdefault("origin", name)
+        elif name not in dests:
+            dests.append(name)
+    if dests and "destinations" not in found:
+        found["destinations"] = [d for d in dests if d != found.get("origin")]
+        if not found["destinations"]:
+            del found["destinations"]
+
+
 WEEKDAYS = ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
 
 
@@ -696,6 +765,8 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
         found["month"] = _month(m.group(1))
     elif m := re.search(r"\bмайск", t):
         found["month"] = 5
+    elif m := re.search(MONTH_EN, t):
+        found["month"] = MONTHS_EN[m.group(0).split()[-1]]
     elif m := re.search(rf"\b({'|'.join(SEASONS)})\b", t):
         months = SEASONS[m.group(1)]
         found["month"] = date.today().month if date.today().month in months else months[0]
@@ -753,6 +824,10 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
     found["date_to"], found["nights"] = end, (end - start).days
 
 
+# «дней 10 августа», «дней 5 тысяч»: the number after «дней» is a date or a sum, not a length.
+NOT_LENGTH_AFTER = rf"(?!\s*(?:{MONTH}|[-–—:.]\d|тыс|к\b|₽|руб|час|ч\b|чел|%))"
+
+
 def _nights(t: str, found: dict, notes: list[str]) -> None:
     """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на выходные» (пятница–воскресенье)."""
     if "nights" in found:
@@ -783,7 +858,18 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
         notes.append(f"длительность: 2 ноч. («{m.group(0)}»)")
     elif m := re.search(rf"\b(?:{NUM}\s+)?недел", t):
         found["nights"] = 7 * (_num(m.group(1)) if m.group(1) else 1)
-    elif re.search(r"\bвыходн", t):
+    elif m := re.search(rf"\bдн(?:я|ей)\s+(\d{{1,2}})\b{NOT_LENGTH_AFTER}", t):
+        # «дней 10» (#114): after every named length; «день 3» is a day of a programme
+        found["nights"] = max(int(m.group(1)) - 1, 1)
+        notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
+    elif m := re.search(rf"(?<!\bin )\b{NUM_EN}[\s-]*nights?\b", t):
+        found["nights"] = _num_en(m.group(1))
+    elif m := re.search(rf"(?<!\bin )\b{NUM_EN}[\s-]*days?\b", t):
+        found["nights"] = max(_num_en(m.group(1)) - 1, 1)
+        notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
+    elif m := re.search(rf"(?<!\bin )\b{NUM_EN}[\s-]*weeks?\b", t):
+        found["nights"] = 7 * _num_en(m.group(1))
+    elif re.search(r"\bвыходн|\bweekend\b", t):
         found["nights"] = 2
         if "date_from" not in found:
             month, tomorrow = found.get("month"), date.today() + timedelta(days=1)
@@ -825,6 +911,8 @@ def _people(t: str, found: dict, notes: list[str]) -> None:
         SOLO_NEXT.match(t, m.end()) or SOLO_PREV.search(t[: m.start()]) for m in SOLO_RE.finditer(t)
     ):
         found["adults"] = 1
+    elif m := EN_GROUP_RE.search(t):
+        found["adults"] = 2 if m.group(0).endswith("couple") else _num_en(m.group(1))
     elif ages and (m := PAIR_RE.search(t)):
         found["adults"] = 2
         notes.append(f"взрослых: 2 (по слову «{m.group(0)}»)")
@@ -850,6 +938,7 @@ def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:
     found: dict = {}
     notes: list[str] = []
     _places(text, t, found, notes, has_destination)
+    _english_places(t, found)
     _dates(t, found, notes)
     _nights(t, found, notes)
     _people(t, found, notes)
@@ -870,7 +959,11 @@ def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:
     ]
     if modes:
         found["modes"] = modes
-    wishes = [w for w, p in WISHES if re.search(p, t)]
+    wishes = [
+        w
+        for w, p in WISHES
+        if any(w != "тепло" or not _warm_refused(t, x) for x in re.finditer(p, t))
+    ]
     hours = r"\s*(?:ч\b|час\w*)\s+(?:в\s+пути|лет\w*|перел\w*|езд\w*|дорог\w*)"
     if m := re.search(rf"\b(?:до|не\s+(?:больше|дольше|более))\s+(\d{{1,2}}){hours}", t):
         found["max_travel_hours"] = float(m.group(1))
