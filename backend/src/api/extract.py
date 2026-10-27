@@ -244,9 +244,9 @@ def _friends(t: str, m: re.Match) -> tuple[int, str]:
 # #322: «трое детей 3, 5 и 8» (no «лет»): a list of two or more numbers right after the child
 # noun. A unit after it («5 ночей», «2 и 3 класса», «100 тысяч») says the numbers are not ages.
 AGES_BARE_RE = re.compile(
-    r"\s*\(?((?:\d{1,2}\s*(?:,|и)\s*)+\d{1,2})\)?(?![\d.,]*\d)"
-    r"(?!\s*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
-    r"|мин|км\b|январ|феврал|март|апрел|ма[йяе]\b|июн|июл|август|сентябр|октябр|ноябр|декабр))"
+    r"\s*\(?((?>(?:\d{1,2}\s*(?:,|и)\s*(?=\d))+)\d{1,2})\)?(?![\d.,]*\d)"
+    r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
 )
 AGES_RE = re.compile(r"\D{0,12}?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)")
 # #193: «дети с нами — двое, 5 и 8 лет»: a dash or a colon, an optional count word, the ages.
@@ -1355,7 +1355,8 @@ def is_child_question(text: str) -> bool:
 # внук 5 лет»). Roles after «без», «к», «навестить», «рядом с» or as a subject are not.
 # A child phrase becomes «§» so that the chain goes through it («двое детей 6 и 9 лет»).
 CHILD_PHRASE_RE = re.compile(
-    CHILD_RE.pattern + r"(?:\s+\d+(?:\s*(?:и|,)\s*\d+)*\s*(?:лет|года|год|мес\w*))?"
+    CHILD_RE.pattern
+    + r"(?:\s+\d+(?:\s*(?:и|,)\s*\d+)*\s*(?:лет|года|год|мес\w*)|\s*\(\d+(?:\s*(?:и|,)\s*\d+)*\))?"
 )
 _ITEM = rf"(?:(?:мо\w+|наш\w+|свои\w*|ег?о|её|ее|их)\s+)?(?:\b{ROLE_SRC}\b|§)"
 CHAIN_RE = re.compile(

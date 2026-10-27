@@ -443,6 +443,11 @@ def test_ages_without_a_unit_after_a_counted_child():
         "Двое детей 1 и 2 этаж",
         "Сочи с детьми 10 и 12 часов в пути",
         "Сочи с детьми 10 и 12 числа",
+        "Сочи с детьми 1, 2 и 3 мая",
+        "Сочи с детьми 5, 6 и 7 июля",
+        "Сочи с детьми 3, 5 и 8 ночей",
+        "Сочи с детьми 3 и 4 ноя",
+        "Сочи с детьми 5 и 8 (июль)",
     ],
 )
 def test_numbers_that_are_not_ages_stay_default(text):
@@ -458,3 +463,8 @@ def test_grown_son_with_his_wife_is_an_adult_party():
 def test_ages_in_brackets():
     found, _ = extract("Двое детей (5 и 8), едем в Сочи")
     assert found["children_ages"] == [5, 8]
+
+
+def test_bracketed_ages_do_not_break_the_kin_chain():
+    found, _ = extract("Едем я, муж, двое детей (3 и 11) и бабушка на море в Анапу в июле")
+    assert found["adults"] == 3 and found["children_ages"] == [3, 11]
