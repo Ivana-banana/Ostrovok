@@ -77,6 +77,9 @@ def test_sea_in_july_does_not_give_a_sea_without_swimming():
     spb = [d for d in every if d.name == "Санкт-Петербург"]
     assert all(inspire.NO_SWIM in d.violates for d in spb)
     assert not any(d.why.startswith("море для купания") for d in spb)
+    spb = catalog.resolve("Санкт-Петербург")
+    hub, _ = catalog.origin_hub("Москва")
+    assert inspire.NO_SWIM in inspire._rule_breaks(spec, spb, hub, 7)
 
 
 def test_cards_that_break_the_request_go_below():

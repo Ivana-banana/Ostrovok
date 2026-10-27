@@ -1078,7 +1078,7 @@ def climate(lat: float, lon: float, cache_dir: Path) -> dict:
 def swim_tags(tags: list[str], sea: list | None) -> list[str]:
     """tags without "swim", plus "swim" when the sea is warm SWIM_MONTHS of the year."""
     tags = [t for t in tags if t != "swim"]
-    warm = sum(t >= SWIM_WATER_C for t in sea or [])
+    warm = sum(t is not None and t >= SWIM_WATER_C for t in sea or [])
     return tags + ["swim"] * (warm >= SWIM_MONTHS)
 
 
