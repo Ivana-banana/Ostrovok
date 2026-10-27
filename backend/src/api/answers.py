@@ -353,7 +353,7 @@ def weather_fact(plan: Plan, low: str = "") -> str:
         if air is None:
             lines.append(f"Климата {city} {when or 'вашего месяца'} в данных нет — {NO_DATA}.")
             continue
-        fact = f"воздух {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
+        fact = f"днём {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
         rain = place["climate"]["rain"][month - 1]
         if RAIN_RE.search(low):
             fact += (

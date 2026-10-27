@@ -10,6 +10,7 @@
 кладёт ответы Open-Meteo в `data/catalog/openmeteo/` и пишет `backend/src/api/catalog.json`.
 Повторный запуск берёт ответы из кэша. Сбор климата на нескольких машинах — флаги `--points`,
 `--export`, `--import` (docstring скрипта). Источники и лицензии — `research/data-sources.md`.
+Тег `swim` (море для купания, #224) считается из `climate.sea` без сети: `python3 -I scripts/build_catalog.py --swim-only`.
 
 | Файл | Байт | sha256 | Загружен |
 |---|---|---|---|

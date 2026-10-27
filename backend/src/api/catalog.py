@@ -31,6 +31,10 @@ YEAR = "2025"  # one year of climate for a place outside the snapshot
 TIMEOUT_S = 4
 FAILED_S = 60  # after a network error the geocoder is not asked again for this long
 SEA_KM = 30  # as in scripts/build_catalog.py
+# #224: tag "swim" = "sea for swimming", apart from "sea" = "the sea is near". As in
+# scripts/build_catalog.py. SWIM_WATER_C equals api.fixtures.WARM_WATER_C (test_catalog.py checks).
+SWIM_WATER_C = 21.5
+SWIM_MONTHS = 3  # months of the year with the sea this warm: a season, not two weeks
 AIRPORT_KM = 200
 FUZZY = 0.85  # «Антлия» -> «Анталия», but «Малага» is not «Мале»
 ENDINGS = ("ий", "ый", "ой", "ая", "ое", "ие", "ые", "ь", "й", "а", "я", "о", "е", "и", "у",
@@ -43,6 +47,11 @@ PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _online: dict[str, dict | None] = {}
 _failed: dict[str, float] = {}  # name -> time.monotonic() of the last network error
+
+
+def swims(sea: list | None) -> bool:
+    """Sea for swimming: SWIM_MONTHS or more months with the water at SWIM_WATER_C or warmer."""
+    return sum(t is not None and t >= SWIM_WATER_C for t in sea or []) >= SWIM_MONTHS
 
 
 @cache
@@ -264,7 +273,7 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
         "slug": f"geo-{g['id']}", "name": g["name"], "country": country, "cc": g.get("country_code", ""), "lat": lat,
         "lon": lon, "tz": g["timezone"], "elev": g.get("elevation"), "pop": g.get("population") or 0,
         "geonameid": g.get("id"), "hub": False, "main": False, "sea": sea is not None,
-        "tags": ["sea"] if sea else [], "aliases": [norm(name)] if norm(name) != norm(g["name"]) else [],
+        "tags": ["sea"] * (sea is not None) + ["swim"] * swims(sea), "aliases": [norm(name)] if norm(name) != norm(g["name"]) else [],
         "airport": {"iata": port["iata"], "km": ap_km, "tz": port["tz"]},
         "airport_km": ap_km if ap_km <= AIRPORT_KM else None,
         "climate": {"air": air, "rain": rain, "sea": sea}, "source": "online",

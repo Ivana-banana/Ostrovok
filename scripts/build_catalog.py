@@ -9,11 +9,17 @@ Steps (raw files go to --data, outside git; the run can stop and resume, respons
    GeoNames cities500 does not have goes to the Open-Meteo Geocoding API (GeoNames ids).
    No coordinate is typed by hand: a name that resolves nowhere is skipped and printed.
 2. OurAirports airports.csv (public domain) + OpenFlights airports.dat (ODbL, zone by IATA):
-   the nearest airport with scheduled service and an IATA code.
+   airports with scheduled service and an IATA code. The place's airport is the nearest by road
+   among the candidates (candidates()); road km are the "roads" snapshot of the previous
+   catalog.json (OSRM, TRAP-6: no network). A place without a road to every candidate keeps the
+   nearest by straight line. --fetch-roads asks the OSRM demo server (one table request a
+   place, 1 a second) for the mountain places with a choice of airports (#223: Домбай is MRV,
+   not AER behind the ridge). --airports-only re-picks the airports of the existing --out.
 3. Open-Meteo Historical Weather (ERA5, CC BY 4.0): daily max air temperature and
    precipitation 2016–2025 (two 5-year requests) -> monthly means. Open-Meteo Marine (CC BY 4.0): sea surface
    temperature 2023–2025 (the Marine archive has no SST before 2023) for places with a sea cell
-   within SEA_KM.
+   within SEA_KM. Tag swim ("sea for swimming", #224) = SWIM_MONTHS or more months of the
+   sea at SWIM_WATER_C or warmer, from the same data; --swim-only re-tags the existing --out.
    Free tier: < 600 calls/min, < 5000/hour, < 10000/day; a long request counts as many
    calls (weight = max(1, variables/10 * days/14), open-meteo.com/en/pricing). Ten years for
    450 places is ~25000 calls, so the work is shared between machines (on a 429 the script
@@ -50,6 +56,7 @@ URLS = {
     "airports.dat": "https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat",
 }
 GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
+OSRM = "https://router.project-osrm.org/table/v1/driving/"
 ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 MARINE = "https://marine-api.open-meteo.com/v1/marine"
 START, END = "2016-01-01", "2025-12-31"
@@ -57,7 +64,28 @@ AIR_SPANS = (("air16", START, "2020-12-31"), ("air", "2021-01-01", END))  # cach
 SEA_START = "2023-01-01"  # Marine SST is null before 2023 (checked 2026-10-26)
 YEARS = 10
 SEA_KM = 30  # a sea cell of the Marine model this close to the centre: the place is on the sea
+SWIM_WATER_C = 21.5  # as WARM_WATER_C of backend/src/api/fixtures.py (a team estimate)
+SWIM_MONTHS = 3  # months with the sea this warm: a swimming season, not two weeks (#224)
+SWIM_SOURCE = (
+    f"Тег swim (море для купания, не то же, что sea) — есть, если вода {SWIM_WATER_C:g} °C и теплее "
+    f"не меньше {SWIM_MONTHS} месяцев в году по тем же данным; порог — оценка команды без источника. "
+)
 AIRPORT_KM = 200  # a farther airport is not the place's own, unless the place has no rail
+# A road candidate is up to ROAD_SPAN x the straight km of the nearest + ROAD_PLUS_KM: farther
+# airports do not win by road unless a ridge stands in the way (Домбай: AER 136, MRV 156 km)
+ROAD_SPAN, ROAD_PLUS_KM = 1.5, 30
+AIRPORT_SOURCE = (
+    "Аэропорт — с регулярными рейсами и кодом IATA "
+    f"из OurAirports (public domain), своей страны, если такой есть ближе {AIRPORT_KM} км. "
+    f"Кандидаты — аэропорты не дальше {ROAD_SPAN:g} × расстояние до ближайшего по прямой "
+    f"+ {ROAD_PLUS_KM} км. Выбран ближайший по дороге (roads — км по дороге, OSRM demo "
+    "router.project-osrm.org, данные OpenStreetMap, ODbL; null — дороги нет), тогда у "
+    "аэропорта road = true и km — по дороге. Если в roads нет дороги до каждого кандидата, "
+    "выбран ближайший по прямой и km — по прямой. Пояс аэропорта — OpenFlights "
+    "airports.dat (ODbL), для новых аэропортов — пояс ближайшего города GeoNames; "
+    f"airport_km = null, если аэропорт дальше {AIRPORT_KM} км по прямой и есть вокзал "
+    "(station_km); без вокзала — расстояние до аэропорта с рейсами. "
+)
 MOUNTAIN_M = 1000  # GeoNames elevation (DEM) from which a place counts as mountains
 DEFAULT_LEVEL = 5500  # api/offers.py DEFAULT_LEVEL
 UA = "nedovost-org catalog build (hackathon, github.com/ostrovok-hackathon-2026/nedovost-org)"
@@ -960,6 +988,52 @@ def read_airports(csv_path: Path, dat_path: Path, towns: list[tuple]) -> list[li
     return out
 
 
+def candidates(r: dict, airports: list[list]) -> list[tuple[float, list]]:
+    """(straight km, airport) to compare by road, nearest first: the home ones if one is within
+    AIRPORT_KM (Выборг is LED, not LPP), else all; within ROAD_SPAN of the nearest."""
+    by_km = sorted(
+        ((km((r["lat"], r["lon"]), (a[1], a[2])), a) for a in airports), key=lambda x: x[0]
+    )
+    home = [x for x in by_km if x[1][4] == r["cc"]]
+    pool = home if home and home[0][0] <= AIRPORT_KM else by_km
+    return [x for x in pool if x[0] <= ROAD_SPAN * pool[0][0] + ROAD_PLUS_KM]
+
+
+def fetch_roads(r: dict, near: list[tuple[float, list]], roads: dict) -> None:
+    """Road km from the place to every candidate (one OSRM table request; null: no road)."""
+    if all(a[0] in roads.get(r["ru"], {}) for _, a in near):
+        return
+    at = [(r["lat"], r["lon"])] + [(a[1], a[2]) for _, a in near]
+    points = ";".join(f"{lon},{lat}" for lat, lon in at)
+    print(f"osrm {r['ru']}: {' '.join(a[0] for _, a in near)}", file=sys.stderr)
+    time.sleep(1)  # the demo server asks for at most one request a second
+    body = get_json(OSRM + points, {"sources": 0, "annotations": "distance"}, None, 0)
+    if body.get("code") != "Ok":
+        sys.exit(f"osrm {r['ru']}: {body}")
+    metres = body["distances"][0][1:]
+    roads[r["ru"]] = {a[0]: None if m is None else round(m / 1000)
+                      for (_, a), m in zip(near, metres, strict=True)}  # fmt: skip
+
+
+def airport_fields(r: dict, airports: list[list], roads: dict, station: int | None) -> dict:
+    """airport and airport_km of a place: the nearest by road when the roads snapshot has every
+    candidate ("road": true, km by road), else the nearest by straight line."""
+    near = candidates(r, airports)
+    road = roads.get(r["ru"], {})
+    ok = [(road[a[0]], a, k) for k, a in near if road.get(a[0]) is not None]
+    if ok and all(a[0] in road for _, a in near):
+        ap_km, ap_, line = min(ok, key=lambda x: x[0])
+        mark = {"road": True}
+    else:
+        (line, ap_), mark = near[0], {}
+        ap_km = round(line)
+    # no rail either: the nearest airport with flights however far, else no road at all.
+    # Горно-Алтайск: RGK has no scheduled_service in OurAirports, so its road is from elsewhere
+    own = line <= AIRPORT_KM or station is None
+    return {"airport": {"iata": ap_[0], "km": ap_km, "tz": ap_[3], **mark},
+            "airport_km": ap_km if own else None}  # fmt: skip
+
+
 def monthly(days: list[str], values: list, how: str) -> list[float | None]:
     by_month: dict[int, list[float]] = {}
     for d, v in zip(days, values, strict=True):
@@ -1001,6 +1075,13 @@ def climate(lat: float, lon: float, cache_dir: Path) -> dict:
     return out
 
 
+def swim_tags(tags: list[str], sea: list | None) -> list[str]:
+    """tags without "swim", plus "swim" when the sea is warm SWIM_MONTHS of the year."""
+    tags = [t for t in tags if t != "swim"]
+    warm = sum(t is not None and t >= SWIM_WATER_C for t in sea or [])
+    return tags + ["swim"] * (warm >= SWIM_MONTHS)
+
+
 def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
@@ -1016,6 +1097,12 @@ def main() -> None:
     ap.add_argument("--import", dest="imports", type=Path, nargs="*", default=[],
                     help="climate files written by --export on other machines")  # fmt: skip
     ap.add_argument("--points-out", type=Path, help="write [{name, lat, lon}] of all places, stop")
+    ap.add_argument("--fetch-roads", action="store_true",
+                    help="ask OSRM for the roads of mountain places with a choice of airports")
+    ap.add_argument("--airports-only", action="store_true",
+                    help="re-pick the airports of the existing --out; needs only airports.csv")
+    ap.add_argument("--swim-only", action="store_true",
+                    help="re-tag swim in the existing --out from its sea climate; no network")
     ap.add_argument("--points", help="file ('-': stdin) with a JSON list of {name, lat, lon}: "
                     "fetch their climate to --export, no GeoNames")  # fmt: skip
     args = ap.parse_args()
@@ -1036,6 +1123,33 @@ def main() -> None:
             json.dumps(share, ensure_ascii=False, separators=(",", ":")), "utf-8"
         )
         print(f"export: {len(share)} places, {args.export.stat().st_size} B", file=sys.stderr)
+        return
+    old = json.loads(args.out.read_text("utf-8")) if args.out.exists() else {}
+    roads = old.get("roads", {})
+    if args.airports_only:
+        cc = {}
+        with open(download(data, "airports.csv"), encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row["scheduled_service"] == "yes" and row["iata_code"]:
+                    cc[row["iata_code"]] = row["iso_country"]
+        airports = [[*a, cc[a[0]]] for a in old["airports"]]
+        for p in old["places"]:
+            r = {"ru": p["name"], "lat": p["lat"], "lon": p["lon"], "cc": p["cc"]}
+            near = candidates(r, airports)
+            if args.fetch_roads and "mountains" in p["tags"] and len(near) > 1:
+                fetch_roads(r, near, roads)
+            p.update(airport_fields(r, airports, roads, p["station_km"]))
+        old["roads"] = {k: roads[k] for k in sorted(roads)}
+        old["_source"] = re.sub(r"Аэропорт — .*?аэропорта с рейсами\. ", lambda _: AIRPORT_SOURCE,
+                                old["_source"], count=1)  # fmt: skip
+        write(args.out, old)
+        return
+    if args.swim_only:
+        for p in old["places"]:
+            p["tags"] = swim_tags(p["tags"], p["climate"]["sea"])
+        if SWIM_SOURCE not in old["_source"]:
+            old["_source"] = old["_source"].replace("тогда sea = true. ", "тогда sea = true. " + SWIM_SOURCE, 1)
+        write(args.out, old)
         return
     files = {n: download(data, n) for n in URLS}
 
@@ -1105,11 +1219,6 @@ def main() -> None:
                    and a not in country_keys and len(a) >= 3}  # fmt: skip
         aliases |= {norm(a) for a in EXTRA_ALIASES.get(r["ru"], [])}
         aliases.discard(norm(r["ru"]))
-        by_km = sorted(airports, key=lambda a: km((r["lat"], r["lon"]), (a[1], a[2])))
-        home = next((a for a in by_km if a[4] == r["cc"]), by_km[0])
-        # a home airport within reach, not the nearer one abroad: Выборг is LED, not LPP
-        ap_ = home if km((r["lat"], r["lon"]), (home[1], home[2])) <= AIRPORT_KM else by_km[0]
-        ap_km = round(km((r["lat"], r["lon"]), (ap_[1], ap_[2])))
         if r["ru"] in LEGACY:
             slug, level, station = LEGACY[r["ru"]]
         else:
@@ -1124,9 +1233,6 @@ def main() -> None:
             )
             station = None if r["ru"] in NO_RAIL else RAIL_COUNTRIES.get(r["country"])
         slugs.add(slug)
-        # no rail either: the nearest airport with flights however far, else no road at all.
-        # Горно-Алтайск: RGK has no scheduled_service in OurAirports, so its road is from NOZ
-        own = ap_km <= AIRPORT_KM or station is None
         print(f"[{i + 1}/{len(resolved)}] {r['ru']} (вызовов {LIMIT.total:.0f})", file=sys.stderr)
         CACHED_ONLY = args.cached_only or not lo <= i + 1 <= hi
         try:
@@ -1137,16 +1243,18 @@ def main() -> None:
         tags = [t for t in r["tags"] if t not in ("hub", "main")]
         if sea:
             tags.append("sea")
+        tags = swim_tags(tags, clim["sea"])
         if (r["elev"] or 0) >= MOUNTAIN_M and "mountains" not in tags:
             tags.append("mountains")
+        if args.fetch_roads and "mountains" in tags and len(near := candidates(r, airports)) > 1:
+            fetch_roads(r, near, roads)
         places.append({
             "name": r["ru"], "slug": slug, "country": r["country"], "cc": r["cc"],
             "lat": round(r["lat"], 4), "lon": round(r["lon"], 4), "tz": r["tz"],
             "elev": r["elev"], "pop": r["pop"], "geonameid": int(r["gid"]),
             "hub": "hub" in r["tags"], "main": "main" in r["tags"], "sea": sea, "tags": tags,
-            "aliases": sorted(aliases),
-            "airport": {"iata": ap_[0], "km": ap_km, "tz": ap_[3]},
-            "airport_km": ap_km if own else None, "station_km": station, "level": level,
+            "aliases": sorted(aliases), **airport_fields(r, airports, roads, station),
+            "station_km": station, "level": level,
             "climate": clim,
         })  # fmt: skip
 
@@ -1164,16 +1272,13 @@ def main() -> None:
             f"Сборка {date.today():%Y-%m-%d}, scripts/build_catalog.py (#8). "
             "Координаты, IANA-пояс, высота (DEM), население и варианты названий ru/en — GeoNames "
             "cities500 и alternateNamesV2 (CC BY 4.0, geonames.org); несколько посёлков — "
-            "Open-Meteo Geocoding (тоже GeoNames). Аэропорт — ближайший с регулярными рейсами "
-            f"и кодом IATA из OurAirports (public domain), своей страны, если он ближе {AIRPORT_KM} км; "
-            "его пояс — OpenFlights airports.dat (ODbL), для новых аэропортов — пояс ближайшего "
-            f"города GeoNames; airport_km = null, если аэропорт дальше {AIRPORT_KM} км и есть "
-            "вокзал (station_km); без вокзала — расстояние до ближайшего аэропорта с рейсами. "
-            "Климат — Open-Meteo Historical Weather (ERA5, CC BY 4.0): air — среднее дневного "
+            "Open-Meteo Geocoding (тоже GeoNames). "
+            + AIRPORT_SOURCE
+            + "Климат — Open-Meteo Historical Weather (ERA5, CC BY 4.0): air — среднее дневного "
             f"максимума, °C; rain — осадки за месяц, мм; среднее за {START[:4]}–{END[:4]} "
             f"({YEARS} лет). sea — температура поверхности моря, Open-Meteo "
             f"Marine (CC BY 4.0), {SEA_START[:4]}–{END[:4]} (раньше 2023 в архиве нет); есть, если ячейка моря модели ближе {SEA_KM} км; "
-            "тогда sea = true. Тег mountains — высота от "
+            "тогда sea = true. " + SWIM_SOURCE + "Тег mountains — высота от "
             f"{MOUNTAIN_M} м или список отбора; ski, spa, city, nature, hub (город вылета), "
             "main (куда ведёт название страны) — список отбора команды. level (цена ночи 3★ "
             "на двоих, ₽), station_km и NO_RAIL — оценки команды без источника: для городов "
@@ -1185,7 +1290,23 @@ def main() -> None:
         },
         "places": places,
         "airports": [a[:4] for a in airports],
+        "roads": {k: roads[k] for k in sorted(roads) if k in {p["name"] for p in places}},
     }
+    write(args.out, snapshot)
+    print(f"places {len(places)}, hubs {len(hubs)}, sea {sum(p['sea'] for p in places)}, "
+          f"airports {len(airports)}, size {args.out.stat().st_size} B, "
+          f"Open-Meteo calls {LIMIT.total:.0f}", file=sys.stderr)  # fmt: skip
+    for w in warnings:
+        print("warn:", w, file=sys.stderr)
+    if missing:
+        print("missing:", ", ".join(missing), file=sys.stderr)
+    for n, p in files.items():
+        print(f"{n}\t{p.stat().st_size}\t{sha256(p)}", file=sys.stderr)
+
+
+def write(out: Path, snapshot: dict) -> None:
+    """One place a line: a rebuild diff shows the places that changed."""
+    places = snapshot["places"]
     text = (
         "{\n"
         + f' "_source": {json.dumps(snapshot["_source"], ensure_ascii=False)},\n "places": [\n'
@@ -1196,17 +1317,10 @@ def main() -> None:
     text += '\n ],\n "countries": ' + json.dumps(
         snapshot["countries"], ensure_ascii=False, separators=(",", ":")
     )
-    text += ',\n "airports": ' + json.dumps(snapshot["airports"], separators=(",", ":")) + "\n}\n"
-    args.out.write_text(text, encoding="utf-8")
-    print(f"places {len(places)}, hubs {len(hubs)}, sea {sum(p['sea'] for p in places)}, "
-          f"airports {len(airports)}, size {args.out.stat().st_size} B, "
-          f"Open-Meteo calls {LIMIT.total:.0f}", file=sys.stderr)  # fmt: skip
-    for w in warnings:
-        print("warn:", w, file=sys.stderr)
-    if missing:
-        print("missing:", ", ".join(missing), file=sys.stderr)
-    for n, p in files.items():
-        print(f"{n}\t{p.stat().st_size}\t{sha256(p)}", file=sys.stderr)
+    text += ',\n "airports": ' + json.dumps(snapshot["airports"], separators=(",", ":"))
+    roads = json.dumps(snapshot["roads"], ensure_ascii=False, separators=(",", ":"))
+    text += ',\n "roads": ' + roads
+    out.write_text(text + "\n}\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
