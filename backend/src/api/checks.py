@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
-from api import catalog, dag, fixtures
+from api import catalog, dag
 from api.contracts import (
     Bundle,
     Cancellation,
@@ -41,6 +41,7 @@ from api.contracts import (
 )
 from api.fixtures import WARM_WATER_C
 from api.main import app, get_store
+from api.model import NOT_IN_CATALOG
 from api.offers import _norm, osm_hotels, resolve_place, transfer_id
 from api.optimizer import optimize
 from api.store import SessionStore
@@ -182,13 +183,30 @@ def _walk(
         sid = r.session_id
         if run.first_rec_ms is None and r.stage in ("inspire", "compare"):
             run.first_rec_ms = (time.perf_counter() - started) * 1000
-        if r.stage in stop:
+        dead_end = _is_pets_dead_end(r)
+        if r.stage in stop and not dead_end:
             break
-        if r.stage == "clarify":
+        if dead_end:  # nothing takes the pet there (#131): the user takes the offered city
+            text = r.questions[0].options[0]
+        elif r.stage == "clarify":
             text = " ".join(q.options[0] for q in r.questions if q.options) or "пока не знаю"
         else:
             text = ANSWERS[r.stage]
     return run
+
+
+def _is_pets_dead_end(r: ChatReply) -> bool:
+    """A pets dead end (#131): no hotel is chosen for the user, other cities are offered.
+
+    «Not in the catalogue» (#136) offers cities too, but it is no pet dead end."""
+    return bool(
+        r.plan.spec.pets
+        and r.stage in ("select", "compare")
+        and r.questions
+        and r.questions[0].options
+        and NOT_IN_CATALOG not in r.reply
+        and not any(x.kind == "hotel" for x in _chosen(r.plan))
+    )
 
 
 def _say(client: TestClient, run: Run, text: str) -> ChatReply | None:
@@ -363,8 +381,20 @@ def check_S3(case: dict) -> tuple[bool, str]:
                         fails.append(f"{tag}: точный запрос не разобран ({run.replies[0].stage})")
                     if variant == "A1":
                         total = last.voucher.total_rub if last.voucher else 0
-                        budget = last.plan.spec.budget_rub
-                        over = f" > бюджета {budget}" if budget and total > budget else ""
+                        spec = last.plan.spec
+                        over = (
+                            f" > бюджета {spec.budget_rub}"
+                            if spec.budget_rub and total > spec.budget_rub
+                            else ""
+                        )
+                        hotel = next(
+                            (o for o in _chosen(last.plan) if isinstance(o, HotelOffer)), None
+                        )
+                        if spec.hotel_budget_rub and hotel:  # S3-A: the hotel within its own budget
+                            fits = hotel.price_rub <= spec.hotel_budget_rub
+                            over += f"; отель {hotel.price_rub} {'≤' if fits else '>'} {spec.hotel_budget_rub}"
+                            if not fits:
+                                fails.append(f"{variant}/{name}: отель дороже бюджета отеля")
                         notes.append(
                             f"{name}: вопросов {run.asked}, ходов {len(run.replies)}, "
                             f"итог {total}{over}"
@@ -717,7 +747,7 @@ def check_S4(case: dict) -> tuple[bool, str]:
 def known_place(name: str) -> bool:
     """The team seeded the place: it is in catalog.json (names, aliases) or in osm_hotels.json.
 
-    Snapshot only: a place the geocoder finds online is not seeded (human decision on #8, D-014).
+    Snapshot only: a place the geocoder finds online is not seeded (human decision on #8, D-017).
     """
     return catalog.resolve(name) is not None or name in osm_hotels()
 
@@ -876,14 +906,14 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
         )
     if expect.get("warm_sea"):
         place = resolve_place(first.city)
-        dest = next((c for n, c in fixtures.CATALOG.items() if _same_name(first.city, [n])), None)
         month = first.date_in.month  # the month of the booking, not the one asked for
+        water = catalog.month_climate(place, month)[1] if place else None
         if place is None:
             out.append(("тёплое море", UNKNOWN, "города нет в catalog.json и у геокодера"))
         elif not place["sea"]:
             put("тёплое море", False, f"{first.city}: моря нет (catalog.json)")
-        elif month == 11 and dest and dest["nov"][1] is not None:
-            put("тёплое море", dest["nov"][1] >= WARM_WATER_C, f"вода {dest['nov'][1]} °C")
+        elif water is not None:
+            put("тёплое море", water >= WARM_WATER_C, f"вода {water:g} °C")
         else:
             out.append(("тёплое море", UNKNOWN, "море есть, температуры в этом месяце нет"))
     if expect.get("ski"):

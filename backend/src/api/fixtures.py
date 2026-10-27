@@ -37,6 +37,10 @@ CATALOG: dict[str, dict] = {row[0]: dict(zip(_KEYS, row[1:], strict=True)) for r
 # Estimate, not from a source: below this the sea counts as cold for swimming.
 # It sits between catalogue values on purpose (November sea: Antalya 23.6, Sochi 17.1).
 WARM_WATER_C = 21.5
+# #114: the cold half of the year, where «тепло» in the wishes filters the places by the air.
+COLD_MONTHS = (10, 11, 12, 1, 2, 3, 4)
+IN_MONTH = ("в январе", "в феврале", "в марте", "в апреле", "в мае", "в июне", "в июле",
+            "в августе", "в сентябре", "в октябре", "в ноябре", "в декабре")  # fmt: skip
 
 
 def future_date(month: int, day: int, today: date | None = None) -> date:
@@ -73,17 +77,22 @@ def travel_hours(spec: TripSpec, origin: dict, place: dict) -> float:
     )
 
 
-def suggest_destinations(spec: TripSpec, limit: int = 4) -> list[Destination]:
+def suggest_destinations(
+    spec: TripSpec, limit: int = 4, exclude: list[str] | None = None
+) -> list[Destination]:
     """2–4 destinations (up to `limit`) for the spec, violations marked.
+
+    exclude: refused cities and countries (#113); «Турция» drops every city of Turkey.
 
     TODO(T12, #20): replace with the inspiration ranking over the catalogue.
     """
     sea = "море" in spec.wishes
+    exclude = exclude or []
     hub, note = catalog.origin_hub(spec.origin or "Москва")
     out = []
     for name, c in CATALOG.items():
         place = catalog.resolve(name)
-        if sea and not place["sea"]:
+        if (sea and not place["sea"]) or name in exclude or place["country"] in exclude:
             continue
         air, water = catalog.month_climate(place, spec.month) if spec.month else (None, None)
         hours = travel_hours(spec, hub, place)

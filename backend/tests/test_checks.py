@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from api import catalog, checks, dag, main
+from api import catalog, checks, dag, fixtures, main
 from api.cart import book, make_cart
 from api.contracts import Cancellation, Change, ChatReply
 
@@ -357,12 +357,12 @@ def test_unseen_pool_is_not_the_s5_pool():
 def test_seeded_is_the_places_and_hotels_snapshots_not_the_seven_fixture_cities():
     assert checks.known_place("Санкт-Петербург") and checks.known_place("Питер")
     assert checks.known_place("Ереван")  # in catalog.json, not in fixtures.CATALOG
-    assert "Ереван" not in checks.fixtures.CATALOG
+    assert "Ереван" not in fixtures.CATALOG
     assert not checks.known_place("Тихвин") and not checks.known_place("Зурбаган")
 
 
 def test_a_place_the_geocoder_found_is_not_seeded():
-    """D-014: only the snapshot is seeded; an online place is the agent's work, not our data."""
+    """D-017: only the snapshot is seeded; an online place is the agent's work, not our data."""
     checks.catalog._online[checks.catalog.norm("Зурбаган")] = {
         "name": "Зурбаган",
         "source": "online",

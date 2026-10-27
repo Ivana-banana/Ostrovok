@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getSession } from "./api";
 import { Board } from "./Board";
 import type { ChatReply, Offer } from "./contracts";
-import { SOURCES, describe } from "./format";
+import { SOURCES, cartLine, describe } from "./format";
 
 type Msg = { role: "user" | "agent"; text: string };
 type Ui = { messages: Msg[]; removed: Offer[] };
@@ -182,7 +182,8 @@ export function App() {
       }
       // The cart edit can change the plan (selection, timeline, issues): take it from the server.
       const fresh = await getSession(id).catch(() => null);
-      update({ ...ui, removed });
+      // The old chat line with the cart sum is stale now: say the real count and total.
+      update({ ...ui, removed, messages: [...ui.messages, { role: "agent", text: cartLine(cart) }] });
       setReply({ ...(fresh ?? reply), cart });
     } catch (e) {
       setError(userError(e));
