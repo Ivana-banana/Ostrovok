@@ -134,6 +134,22 @@ def test_far_past_note_goes_when_the_user_names_dates(today, model, store):
     assert not any("не применены" in a for a in r.plan.spec.assumptions)
 
 
+@pytest.mark.parametrize(
+    "text,month", [("давай в декабре", 12), ("лучше в январе", 1), ("давай летом", 6)]
+)
+def test_month_change_after_far_past_model_dates_moves_the_plan(today, model, store, text, month):
+    model.patch = {"destinations": ["Сочи"], "date_from": "2026-08-20", "date_to": "2026-08-25"}
+    r = say(store, TEXT)
+    assert len(past_notes(r.plan.spec)) == 1
+    guess = r.plan.spec.date_from
+    assert any("точных дат не было" in a for a in r.plan.spec.assumptions)  # the dates are a guess
+    model.patch = {}
+    r = say(store, text, r.session_id)
+    spec = r.plan.spec
+    assert spec.month == month and spec.date_from.month == month != guess.month
+    assert not past_notes(spec)  # the old note about the model dates goes with the old dates
+
+
 def test_far_past_dates_alone_still_mark_the_reply_as_model_made(today, model, store):
     model.patch = {"destinations": ["Сочи"]}
     r = say(store, TEXT)

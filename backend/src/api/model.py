@@ -348,7 +348,8 @@ def assume(spec: TripSpec) -> TripSpec:
     notes = data["assumptions"]
 
     def note(label: str, text: str) -> None:
-        if all(_label(a) != label for a in notes):
+        # A note of a past date (#159, #164) is not a guess: the guess note comes beside it.
+        if all(_label(a) != label or is_past_note(a) for a in notes):
             notes.append(f"{label}: {text}")
 
     today = date.today()
