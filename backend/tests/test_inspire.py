@@ -267,3 +267,24 @@ def test_warm_sea_wish_has_no_air_threshold():
     """«тёплое море» is the sea wish; its water is checked, not the air (as on main)."""
     assert "тепло" not in extract("тёплое море в ноябре")[0]["wishes"]
     assert "тепло" in extract("хочу погреться в ноябре")[0]["wishes"]
+
+
+def test_cold_warm_cards_go_from_the_warmest(store):
+    """#342 review: «поездом, где тепло, в ноябре» gave Дмитров 1.9 °C instead of Сочи 15.7 °C."""
+    spec = TripSpec(modes=["train"], origin="Москва", month=11, wishes=["тепло"])
+    dests = inspire.suggest_destinations(spec, 4)
+    assert dests[0].air_c == max(d.air_c for d in dests)
+    assert [d.air_c for d in dests if d.violates] == sorted(
+        (d.air_c for d in dests if d.violates), reverse=True
+    )
+
+
+def test_warm_with_a_pet_pulls_further_candidates_when_all_first_are_dead_ends(store):
+    """#342 review: «тепло в ноябре с собакой» gave four cards «с питомцем не собрать»."""
+    dests = inspired(store, "тепло в ноябре с собакой из Москвы")
+    assert any(inspire.NO_PETS not in d.violates for d in dests)
+
+
+@pytest.mark.parametrize("text", ["хочу погреться в бане в ноябре", "погреться у камина"])
+def test_warm_up_in_a_sauna_or_by_a_fire_is_no_warm_wish(text):
+    assert "тепло" not in extract(text)[0].get("wishes", [])

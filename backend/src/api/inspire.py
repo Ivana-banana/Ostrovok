@@ -21,15 +21,15 @@ from api.optimizer import pets_possible
 
 # Places priced per call: find_offers runs for each, so the cost grows with this number.
 CANDIDATES = 16
+MAX_CANDIDATES = 48  # when every card of the first 16 is a dead end, up to this many are priced
 SPREAD_KM = 150  # Анталия and Кемер are one choice for the user, not two
 SHOWN_PER_COUNTRY = 2
 CITY_POP = 1_000_000  # with no theme: the big cities (GeoNames population), nearest first
 PER_COUNTRY = 3  # candidates of one country: the 21 places of Турция leave room for Египет
 # #114: estimate without a source: in the cold half of the year a place is warm from this air.
 WARM_AIR_C = 15.0  # «на юг» in the cold half of the year
-WARM_ASKED_C = (
-    22.0  # #342: «тепло», «погреться»: team estimate (D-027), no source for the beach air
-)
+# #342: «тепло», «погреться»: team estimate (D-027), no source for the beach air.
+WARM_ASKED_C = 22.0
 # Estimates without a source, for the prefilter and the minus lines only.
 ROAD_KM = 1745  # a drive up to 24 h: api/offers.py drives road / 80 h × 1.1, road = 1.3 × the line
 RAIL_KM = 3000  # api/offers.py builds a train up to 3000 km of route, route = 1.2 × the line
@@ -264,8 +264,13 @@ def _level(violates: list[str]) -> int:
     return int(bool(violates))
 
 
+def _coldness(violates: list[str], air: float | None) -> float:
+    """Cards that are «не тепло» go from the warmest to the coldest (Сочи before Дмитров)."""
+    return -(air or 0.0) if any(v.startswith(NOT_WARM) for v in violates) else 0.0
+
+
 def _rank(d: Destination) -> tuple:
-    return _level(d.violates), d.est_total_rub
+    return _level(d.violates), _coldness(d.violates, d.air_c), d.est_total_rub
 
 
 def _spread(cards: list[Destination], limit: int) -> list[Destination]:
@@ -296,14 +301,28 @@ def suggest_destinations(
     month = _month(spec)
 
     def order(p: dict) -> tuple:
-        return _level(_rule_breaks(spec, p, hub, month)), catalog.km_between(hub, p)
+        breaks = _rule_breaks(spec, p, hub, month)
+        air = catalog.month_climate(p, month)[0] if month else None
+        return _level(breaks), _coldness(breaks, air), catalog.km_between(hub, p)
 
-    picked, per_country = [], Counter()
+    ordered, per_country = [], Counter()
     for p in sorted(_pool(spec, hub, exclude), key=order):
         if per_country[p["country"]] < PER_COUNTRY:
-            picked.append(p)
+            ordered.append(p)
             per_country[p["country"]] += 1
-        if len(picked) == max(CANDIDATES, limit):
-            break
-    cards = sorted((card(spec, hub, p, note) for p in picked), key=_rank)
-    return _spread(cards, limit)
+    step = max(CANDIDATES, limit)
+    cards = [card(spec, hub, p, note) for p in ordered[:step]]
+    cards.sort(key=_rank)
+    shown = _spread(cards, limit)
+    if all(_level(d.violates) == 3 for d in shown):
+        # #342: every shown card is a dead end (a pet needs a flight): price the places a train
+        # or a car reaches, the warmest first, before more of the far places that fit the wish
+        ground = spec.model_copy(update={"modes": ["train", "car"]})
+        rest = sorted(
+            (p for p in ordered[step:] if _reachable(ground, hub, p)),
+            key=lambda p: order(p)[1:],
+        )
+        cards += [card(spec, hub, p, note) for p in rest[: MAX_CANDIDATES - step]]
+        cards.sort(key=_rank)
+        shown = _spread(cards, limit)
+    return shown
