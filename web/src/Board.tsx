@@ -30,6 +30,8 @@ import {
   priorityMessage,
   rub,
 } from "./format";
+import { ParamsBar } from "./ParamsBar";
+import { otherAssumptions } from "./params";
 
 export type BoardProps = {
   reply: ChatReply;
@@ -105,22 +107,23 @@ function guests(spec: TripSpec): string {
   return `${spec.adults} взр.${kids}`;
 }
 
-function SpecSummary({ spec }: { spec: TripSpec }) {
+// Origin, dates, guests and budget are the chips of ParamsBar; the rows keep the rest.
+function SpecSummary({ spec, locked, onSend }: {
+  spec: TripSpec;
+  locked: boolean;
+  onSend: (text: string) => void;
+}) {
   const rows: [string, string][] = [];
-  if (spec.origin) rows.push(["Откуда", spec.origin]);
   if (spec.destinations.length) rows.push(["Куда", spec.destinations.join(", ")]);
-  if (spec.date_from)
-    rows.push(["Даты", `${localDate(spec.date_from)} – ${localDate(spec.date_to)}`]);
   if (spec.nights) rows.push(["Ночей", String(spec.nights)]);
-  rows.push(["Гости", guests(spec)]);
   if (spec.pets) rows.push(["Питомец", "да"]);
-  if (spec.budget_rub !== null) rows.push(["Бюджет", rub(spec.budget_rub)]);
   if (spec.hotel_budget_rub !== null) rows.push(["Бюджет отеля", rub(spec.hotel_budget_rub)]);
   if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
   if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);
   return (
     <section className="card" aria-label="Параметры поездки">
       <h2>Поездка</h2>
+      <ParamsBar spec={spec} disabled={locked} onSend={onSend} />
       <dl className="spec">
         {rows.map(([k, v]) => (
           <div key={k}>
@@ -129,11 +132,11 @@ function SpecSummary({ spec }: { spec: TripSpec }) {
           </div>
         ))}
       </dl>
-      {spec.assumptions.length > 0 && (
+      {otherAssumptions(spec).length > 0 && (
         <div className="assumptions">
           <h3>Допущения агента</h3>
           <ul>
-            {spec.assumptions.map((a) => (
+            {otherAssumptions(spec).map((a) => (
               <li key={a}>{a}</li>
             ))}
           </ul>
@@ -735,7 +738,11 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
         </p>
       )}
       {voucher && <VoucherView voucher={voucher} />}
-      <SpecSummary spec={plan.spec} />
+      <SpecSummary
+        spec={plan.spec}
+        locked={busy || stage === "clarify" || stage === "booked"}
+        onSend={onSend}
+      />
       <PriorityChips order={plan.spec.priorities} stage={stage} busy={busy} onSend={onSend} />
       <Changes plan={plan} />
       {plan.destinations.length > 0 && (
