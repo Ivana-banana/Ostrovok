@@ -385,7 +385,8 @@ def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
         parts.append(f"дорога {_rub(t.road)}")
     if t.transfers:
         parts.append(f"трансферы {_rub(t.transfer_rub)}")
-    why = f"{', '.join(facts)}; поездка целиком {_rub(t.total)} ({' + '.join(parts)})"
+    whole = "поездка целиком" if t.legs else "проживание без дороги"
+    why = f"{', '.join(facts)}; {whole} {_rub(t.total)} ({' + '.join(parts)})"
     if spec.hotel_budget_rub is not None and not t.hotel_over:
         why += f"; отель в бюджете отеля {_rub(spec.hotel_budget_rub)}"
     order = list(dict.fromkeys(spec.priorities))
@@ -509,6 +510,8 @@ def _risks(spec: TripSpec, t: Trip, fits: bool, trips: list[Trip]) -> list[str]:
     if not fits:
         out.append("ни один вариант не подходит под все условия — выбран ближайший")
     out += t.rules
+    if not t.legs:
+        out.append("как добраться — нет данных")
     if t.hotel_over and spec.hotel_budget_rub is not None:
         out.append(
             f"отель не укладывается в бюджет отеля {_rub(spec.hotel_budget_rub)}: "
@@ -517,8 +520,8 @@ def _risks(spec: TripSpec, t: Trip, fits: bool, trips: list[Trip]) -> list[str]:
     trip_over = t.over - t.hotel_over
     if trip_over and spec.budget_rub is not None:
         line = (
-            f"не укладывается в бюджет {_rub(spec.budget_rub)}: поездка целиком "
-            f"{_rub(t.total)}, на {_rub(trip_over)} больше"
+            f"не укладывается в бюджет {_rub(spec.budget_rub)}: "
+            f"{'поездка целиком' if t.legs else 'проживание без дороги'} {_rub(t.total)}, на {_rub(trip_over)} больше"
         )
         if t.hotel.price_rub <= spec.budget_rub < t.total:
             line += f"; отель {_rub(t.hotel.price_rub)} укладывается, сверху дорога и трансферы"

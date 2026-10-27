@@ -30,6 +30,15 @@ suite("доска поездки", () => {
     expect(bare).not.toMatch(/\d ₽<\/(td|p|li|span)>/);
   });
 
+  it("#225: пакеты без транспорта не называются «поездка целиком»", () => {
+    expect(render(base).body.textContent).toContain("Варианты поездки целиком");
+    const r = structuredClone(base);
+    r.plan.offers = r.plan.offers.filter((o) => o.kind !== "transport");
+    const text = render(r).body.textContent ?? "";
+    expect(text).not.toContain("Варианты поездки целиком");
+    expect(text).toContain("дороги в плане нет");
+  });
+
   it("TRAP-7: каждая сумма в ₽ на доске стоит рядом с «синтетика»", () => {
     const r = structuredClone(hotelBought);
     r.plan.changes = [

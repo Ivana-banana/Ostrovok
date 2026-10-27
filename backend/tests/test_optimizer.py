@@ -873,3 +873,15 @@ def test_allowed_amounts_reject_a_made_up_round_difference():
     assert real and real <= allowed
     for k in (100, 500, 1500):  # a mutant prints d + k instead of d
         assert not {n + k for n in real} <= allowed, k
+
+
+def test_no_transport_in_the_plan_is_no_whole_trip_and_says_so():
+    """#225: a plan with no leg is no «поездка целиком»; the risks say the road has no data."""
+    s = spec(budget_rub=1000)
+    _, ex = rank(s, [hotel("a", 20000)])
+    text = " ".join([ex[0].why, *ex[0].risks])
+    assert "поездка целиком" not in text
+    assert "как добраться — нет данных" in ex[0].risks
+    _, ex = rank(s, [*FLIGHTS, hotel("a", 20000)])
+    assert "поездка целиком" in ex[0].why
+    assert not any("как добраться" in r for r in ex[0].risks)
