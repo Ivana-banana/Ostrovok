@@ -82,10 +82,11 @@ AIRPORT_SOURCE = (
     "Аэропорт — с регулярными рейсами и кодом IATA "
     f"из OurAirports (public domain), своей страны, если такой есть ближе {AIRPORT_KM} км. "
     f"Кандидаты — аэропорты не дальше {ROAD_SPAN:g} × расстояние до ближайшего по прямой "
-    f"+ {ROAD_PLUS_KM} км. Ближайший по прямой меняем на ближайший по дороге, только если выигрыш не меньше "
-    f"{ROAD_GAIN:.0%} или {ROAD_GAIN_KM} км (roads — км по дороге, OSRM demo "
-    "router.project-osrm.org, данные OpenStreetMap, ODbL; null — дороги нет), тогда у "
-    "аэропорта road = true и km — по дороге. Если в roads нет дороги до каждого кандидата, "
+    f"+ {ROAD_PLUS_KM} км. Если в roads (км по дороге, OSRM demo router.project-osrm.org, "
+    "данные OpenStreetMap, ODbL; null — дороги нет) есть дорога до каждого кандидата, у "
+    "аэропорта road = true и km — по дороге. Тогда ближайший по прямой меняем на ближайший "
+    f"по дороге, только если выигрыш не меньше {ROAD_GAIN:.0%} или {ROAD_GAIN_KM} км. "
+    "Если дороги до каждого кандидата нет, "
     "выбран ближайший по прямой и km — по прямой. Пояс аэропорта — OpenFlights "
     "airports.dat (ODbL), для новых аэропортов — пояс ближайшего города GeoNames; "
     f"airport_km = null, если аэропорт дальше {AIRPORT_KM} км по прямой и есть вокзал "
@@ -1023,7 +1024,7 @@ def fetch_roads(r: dict, near: list[tuple[float, list]], roads: dict) -> None:
 def airport_fields(r: dict, airports: list[list], roads: dict, station: int | None) -> dict:
     """airport and airport_km of a place: the nearest by road when the roads snapshot has every
     candidate ("road": true, km by road), else the nearest by straight line. The straight-line
-    nearest airport is left only for a road gain of ROAD_GAIN or ROAD_GAIN_KM (#246)."""
+    nearest airport is replaced only for a road gain of at least ROAD_GAIN or ROAD_GAIN_KM (#246)."""
     near = candidates(r, airports)
     road = roads.get(r["ru"], {})
     ok = [(road[a[0]], a, k) for k, a in near if road.get(a[0]) is not None]
