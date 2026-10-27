@@ -81,7 +81,7 @@ def no_network(monkeypatch):
         raise AssertionError("network in tests")
 
     monkeypatch.setattr(llm.urllib.request, "urlopen", deny)
-    for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_TIMEOUT_S"):
+    for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_TIMEOUT_S", "GIGACHAT_AUTH_KEY"):
         monkeypatch.delenv(k, raising=False)
     llm.reset()
     yield
@@ -152,6 +152,8 @@ def test_trap_1_invalid_key_reaches_booking_and_pauses_the_llm(store, fake):
 
 
 def test_schema_rejected_falls_back_to_json_object(store, fake):
+    """OpenAI json_schema, then the flat GigaChat json_schema, then json_object (#117)."""
+
     def spec(p):
         if p["response_format"]["type"] == "json_schema":
             return http_error(400)
@@ -159,13 +161,15 @@ def test_schema_rejected_falls_back_to_json_object(store, fake):
 
     fake.spec = spec
     r = say(store, SOCHI)
-    kinds = [c["response_format"]["type"] for c in fake.calls]
-    assert kinds[:2] == ["json_schema", "json_object"] and r.llm is True
-    assert "тепло" in r.plan.spec.wishes
-    schema = fake.calls[0]["response_format"]["json_schema"]
+    formats = [c["response_format"] for c in fake.calls]
+    assert [f["type"] for f in formats[:3]] == ["json_schema", "json_schema", "json_object"]
+    assert r.llm is True and "тепло" in r.plan.spec.wishes
+    schema = formats[0]["json_schema"]
     assert schema["strict"] is True and set(schema["schema"]["required"]) == set(llm.SPEC_FIELDS)
+    assert formats[1] == {"type": "json_schema", "schema": llm.SPEC_SCHEMA}
     say(store, "а можно поближе к морю?", r.session_id)
-    assert fake.calls[-1]["response_format"]["type"] == "json_object"  # remembered
+    spec_calls = [c for c in fake.calls if c["messages"][0]["content"] == llm.SPEC_PROMPT]
+    assert spec_calls[-1]["response_format"]["type"] == "json_object"  # remembered
 
 
 def test_llm_flag_only_when_the_model_changed_the_reply(store, fake):
