@@ -5,8 +5,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from api import catalog
+from api.contracts import ChatRequest
 from api.guards import resolve_destination
+from api.model import chat
 from api.offers import resolve_place
+from api.store import SessionStore
 
 
 def test_snapshot_has_climate_zones_and_hubs():
@@ -19,6 +22,34 @@ def test_snapshot_has_climate_zones_and_hubs():
         assert len(c["air"]) == len(c["rain"]) == 12 and None not in c["air"] + c["rain"], p["name"]
         assert (c["sea"] is not None) == p["sea"], p["name"]
         assert c["sea"] is None or (len(c["sea"]) == 12 and None not in c["sea"]), p["name"]
+
+
+def test_trap_5_every_place_has_a_road():
+    """An airport with flights or a station: else the plan has no way there (Горно-Алтайск, B1)."""
+    bad = [
+        p["name"] for p in catalog.places() if p["airport_km"] is None and p["station_km"] is None
+    ]
+    assert bad == []
+    # RGK has no scheduled_service in OurAirports: the nearest airport with flights stands in
+    assert catalog.resolve("Горно-Алтайск")["airport"] == {
+        "iata": "NOZ", "km": 216, "tz": "Asia/Krasnoyarsk"
+    }  # fmt: skip
+
+
+def test_trap_5_altai_plan_has_a_flight_and_a_transfer(tmp_path):
+    """TRAP-5: «Алтай из Москвы» in rules mode reaches the cart with the road, not a hotel alone."""
+    store = SessionStore(tmp_path / "sessions.db")
+    r = chat(ChatRequest(message="Хочу на Алтай в июле на неделю из Москвы, двое взрослых"), store)
+    for text in ("беру", "да"):
+        r = chat(ChatRequest(session_id=r.session_id, message=text), store)
+    assert r.stage == "checkout" and r.llm is False
+    kinds = [i.kind for i in r.cart.items]
+    assert kinds.count("transport") == 2 and kinds.count("transfer") == 2
+    flights = [i for i in r.cart.items if i.kind == "transport"]
+    assert {(i.origin, i.destination, i.mode) for i in flights} == {
+        ("Москва", "Горно-Алтайск", "flight"), ("Горно-Алтайск", "Москва", "flight")
+    }  # fmt: skip
+    assert any("≈217.5 км" in i.title for i in r.cart.items if i.kind == "transfer")
 
 
 @pytest.mark.parametrize(
