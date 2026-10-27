@@ -748,6 +748,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
                 note = f"откуда: {start} — город вылета по умолчанию, напишите «из …»"
                 if note not in notes:
                     notes.append(note)
+                f["origin"] = start  # merge() drops the old «откуда» line: one line per label
         return f
 
     found = without_origin(found)

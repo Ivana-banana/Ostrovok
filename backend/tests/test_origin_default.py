@@ -56,3 +56,10 @@ def test_model_cannot_bring_the_origin_back_as_a_stay(monkeypatch, store):
     assert r.llm is True
     assert "Москва" not in r.plan.spec.destinations
     assert r.plan.spec.destinations == ["Казань"]
+
+
+def test_second_turn_keeps_one_origin_line(store):
+    r = say(store, "хочу на море")
+    r = say(store, "Москва или Сочи", r.session_id)
+    lines = [a for a in r.plan.spec.assumptions if a.startswith("откуда:")]
+    assert len(lines) == 1 and TOLD in lines[0]
