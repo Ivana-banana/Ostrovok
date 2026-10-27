@@ -273,9 +273,12 @@ ROUTE_RE = re.compile(
     r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
 )
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
-# #351: an unnamed origin is asked when the cheapest round trip from DEFAULT_ORIGIN (offers,
-# TRAP-4) takes more than this share of a whole-trip budget. Team estimate (README).
+# #351: an unnamed origin is asked when the fit of a whole-trip budget depends on it: the round
+# trip from DEFAULT_ORIGIN costs ROAD_GAP of the budget more than from the cheapest big hub, or
+# takes over ROAD_SHARE of it alone. Sums from the offers (TRAP-4). Team estimates (README).
+ROAD_GAP = 0.15
 ROAD_SHARE = 0.5
+BIG_HUBS = 10  # the hubs by population, besides DEFAULT_ORIGIN; plus the hub nearest the place
 ORIGIN_OPTIONS = ("Москвы", "Санкт-Петербурга", "Екатеринбурга", "Новосибирска")
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
 STAY_RE = re.compile(
@@ -470,25 +473,67 @@ def party_question(spec: TripSpec) -> list[Question]:
     return [Question(text="Кто едет с ребёнком — сколько взрослых?", options=options)]
 
 
+def _round_trip(probe: TripSpec, origin: str) -> int | None:
+    """The cheapest round trip origin -> destination -> origin for the party, from the offers."""
+    spec = probe.model_copy(update={"origin": origin})
+    legs = [o for o in find_offers(spec, spec.destinations[0]) if isinstance(o, TransportOffer)]
+    there = _cheapest([o for o in legs if o.origin == origin])
+    back = _cheapest([o for o in legs if o.destination == origin])
+    return there.price_rub + back.price_rub if there and back else None
+
+
+def _genitive(name: str) -> str | None:
+    """«Новосибирск» -> «Новосибирска» for the chip «Из …»; None when the rules would not read
+    the form back as this city (the chip is then left out)."""
+    head, sep, tail = name.partition("-на-")
+    if " " in head or "-" in head:
+        return None  # «Нижний Новгород», «Санкт-Петербург»: the rule does not decline them
+    if head.endswith("ь"):
+        form = head[:-1] + "и"
+    elif head.endswith("а"):
+        form = head[:-1] + ("и" if head[-2] in "гкхжчшщ" else "ы")
+    elif head[-1] in "бвгджзклмнпрстфхцчшщ":
+        form = head + "а"
+    else:
+        form = head  # «Сочи»: not declined
+    form += sep + tail
+    return form if extract(f"из {form}", has_destination=True)[0].get("origin") == name else None
+
+
 def far_origin_question(spec: TripSpec) -> list[Question]:
-    """#302, #351: no origin and a budget for the whole trip. When the cheapest round trip from
-    DEFAULT_ORIGIN for the party (offers, TRAP-4) takes over ROAD_SHARE of that budget, the
-    origin decides whether the trip fits, so it is asked. Otherwise it stays an assumption."""
+    """#302, #351: no origin and a budget for the whole trip. The origin is asked when the fit of
+    the budget depends on it: the DEFAULT_ORIGIN round trip for the party costs over ROAD_GAP of
+    the budget more than from the cheapest big hub, or over ROAD_SHARE of it alone. Both sums
+    come from the offers (TRAP-4) and are named in the question. Otherwise it is an assumption."""
     if spec.origin or spec.budget_rub is None or not spec.destinations:
         return []
-    probe = assume(spec)  # the dates and the party the plan would have, origin DEFAULT_ORIGIN
-    legs = [o for o in find_offers(probe, spec.destinations[0]) if isinstance(o, TransportOffer)]
-    there = _cheapest([o for o in legs if o.origin == probe.origin])
-    back = _cheapest([o for o in legs if o.destination == probe.origin])
-    if not (there and back) or there.price_rub + back.price_rub <= ROAD_SHARE * spec.budget_rub:
+    probe = assume(spec)  # the dates and the party the plan would have
+    home = _round_trip(probe, DEFAULT_ORIGIN)
+    if home is None:
         return []
-    road = there.price_rub + back.price_rub
-    options = [f"Из {w}" for w in ORIGIN_OPTIONS]
+    hubs = sorted(catalog.hubs(), key=lambda h: -h["pop"])
+    names = [h["name"] for h in hubs if h["name"] != DEFAULT_ORIGIN][:BIG_HUBS]
+    if place := catalog.resolve(spec.destinations[0]):
+        names.append(catalog.nearest(place, hubs)["name"])
+    sums = [(r, n) for n in dict.fromkeys(names) if (r := _round_trip(probe, n)) is not None]
+    best = min(sums, default=None)
+    gap = best is not None and home - best[0] > ROAD_GAP * spec.budget_rub
+    if not (gap or home > ROAD_SHARE * spec.budget_rub):
+        return []
+    line = f"из Москвы ≈ {_rub(home)}"
+    if best and best[0] < home:
+        gen = _genitive(best[1])
+        line += (
+            f", из {gen} ≈ {_rub(best[0])}" if gen else f", из города {best[1]} ≈ {_rub(best[0])}"
+        )
     text = (
-        f"Откуда вы едете? Дорога из Москвы туда и обратно — от {_rub(road)}, "
-        f"это больше половины бюджета {_rub(spec.budget_rub)}. "
+        f"Откуда начинается поездка? Дорога туда и обратно: {line}. "
+        f"От этого зависит, уложится ли она в {_rub(spec.budget_rub)}. "
         "Если города нет в кнопках, напишите «из …»."
     )
+    options = [f"Из {w}" for w in ORIGIN_OPTIONS]
+    if best and (gen := _genitive(best[1])) and f"Из {gen}" not in options:
+        options.insert(1, f"Из {gen}")
     return [Question(text=text, options=options)]
 
 
@@ -505,15 +550,16 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
 
     A place or a wish is enough to move on: the rest becomes assumptions named in the reply.
     Exceptions ask one question, the most important first (#302): the city of a hotel request
-    (F14) or of a booking (#351), the origin when the road eats the whole budget (F15), the children without a number
-    (F25), then the adults next to a child (#112). The guest count sets the price and the
+    (F14) or the place of a booking (#351); the origin when the fit of a whole budget depends on
+    it (F15, far_origin_question); the children without a number (F25); the adults next to a
+    child (#112). The guest count sets the price and the
     booking, so it is asked, not assumed. Without a place the adults question only goes next to
     the options (party_question), it never replaces them.
     """
     if not (spec.destinations or spec.wishes) and asks_stay(message):
         return [Question(text="В каком городе нужна гостиница?", options=[])]
     if not (spec.destinations or spec.wishes) and asks_booking(message):
-        return [Question(text="Куда едете? Напишите город.", options=[])]  # #351: tickets
+        return [Question(text="Куда хотите поехать? Напишите город.", options=[])]  # #351: tickets
     party = party_question(spec) if spec.destinations else []
     if spec.destinations:
         first = far_origin_question(spec) or children_question(message, spec) or party

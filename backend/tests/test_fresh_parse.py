@@ -126,8 +126,8 @@ def test_other_modes_stay(text, modes):
 # ---------------------------------------------------------------- the origin is not named
 
 
-# #351: the question comes from the road share, not from the distance. Бали for 100 000 ₽ on
-# all: the cheapest Москва round trip of the offers is over half of it.
+# #351: the question comes from the road sums of the offers, not from the distance. Бали for
+# 100 000 ₽ on all: the cheapest Москва round trip of the offers is over half of it.
 BALI = "Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч"
 
 
@@ -144,12 +144,17 @@ def test_far_trip_with_a_whole_budget_asks_the_origin(store):
     assert after.plan.spec.budget_rub == 100_000 and after.questions == []
 
 
-def test_f15_road_under_half_is_an_assumption(store):
-    """F15 (#351): the Москва round trip is about 28% of 200 000 ₽: the origin is assumed aloud.
-    It was a question by the 3000 km rule of #302."""
+def test_f15_asks_the_origin_with_both_sums(store):
+    """F15: «Байкал… 200 тысяч на всё» and no origin (#302). The Москва round trip costs over 15 %
+    of the budget more than from the cheapest big hub (#351): one question with both sums."""
     r = say(store, F15)
-    assert r.stage == "compare" and r.questions == []
-    assert ORIGIN_NOTE in r.plan.spec.assumptions
+    assert r.stage == "clarify" and len(r.questions) == 1
+    q = r.questions[0]
+    assert "откуда" in q.text.lower() and q.options[0] == "Из Москвы"
+    assert "из Москвы ≈" in q.text and q.text.count("≈") == 2
+    after = say(store, "из Новосибирска", r.session_id)
+    assert after.stage == "compare" and after.plan.spec.origin == "Новосибирск"
+    assert after.plan.spec.budget_rub == 200_000 and after.questions == []
 
 
 def test_far_trip_origin_option_keeps_the_trip(store):

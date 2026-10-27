@@ -333,6 +333,10 @@ FLIGHT_FEAR_RE = re.compile(
 )
 FEAR_DENIED_BEFORE_RE = re.compile(r"\b(?:не|нет)\s+(?:\w+\s+)?$")
 FEAR_DENIED_AFTER_RE = re.compile(r"\s+(?:нет|не\s+\w+)\b")
+# «боюсь летать, но ради Бали готов»: a concession after the fear lifts the ban (#351).
+FEAR_CONCEDED_RE = re.compile(
+    r"[^.!?]*?\bно\b[^.!?]*?\b(?:готов\w*|можно|ладно|потерплю|соглас\w*|полечу|полетим|переживу)"
+)
 CLAUSE_END_RE = re.compile(r"\s*(?:[.,;!?)—–-]|$)|\s+(?:и|а|но|поэтому|так\s+что)\b")
 # #114: «где тепло», «тёплые края», «жарко». «Тёплое море» is the sea wish (its water is checked),
 # «не тепло», «не люблю жару» and «тёплая куртка» are no wish for the warm.
@@ -418,6 +422,7 @@ def _fears_flight(t: str) -> bool:
         not FEAR_DENIED_BEFORE_RE.search(t[: m.start()])
         and not FEAR_DENIED_AFTER_RE.match(t, m.end())
         and CLAUSE_END_RE.match(t, m.end())
+        and not FEAR_CONCEDED_RE.match(t, m.end())
         for m in FLIGHT_FEAR_RE.finditer(t)
     )
 
@@ -428,7 +433,8 @@ def _meal(t: str) -> str | None:
     for p, v in MEALS:
         xs = list(re.finditer(p, t))
         if v == "RO" and xs:
-            return v  # «без завтрака» names the refusal itself
+            # «без завтрака» names the refusal itself; «без завтрака не хочу» wants it (#351)
+            return "BB" if all(REFUSED_AFTER_RE.match(t, x.end()) for x in xs) else v
         if any(not _refused(t, x) for x in xs):
             return v
         refused += [v] if xs else []
@@ -1760,10 +1766,14 @@ def extract(
     # A refusal after the word bans the flight; a refusal before it is NO_FLIGHT's: «не хочу
     # лететь долго» bans a long flight only (#277).
     refused_after = any(REFUSED_AFTER_RE.match(t, x.end()) for x in hits["flight"])
+    # «без перелёта не поеду»: two refusals want the flight (#351)
+    no_flight = [bool(REFUSED_AFTER_RE.match(t, x.end())) for x in NO_FLIGHT.finditer(t)]
+    if any(no_flight) and "flight" not in modes:
+        modes.append("flight")
     fear = _fears_flight(t)
     if fear:  # «боимся самолётов»: the word «самолёт» is no wish for the flight (#351)
         modes = [m for m in modes if m != "flight"]
-    if not modes and (refused_after or NO_FLIGHT.search(t) or fear):
+    if not modes and (refused_after or not all(no_flight) or fear):
         # #277, #302: «без самолётов», «самолёт ни за что» ban the flight, the rest stay.
         # «не хочу поезд» bans nothing: it is no pick at a built plan (test_transport_choice).
         modes = ["train", "car"]

@@ -50,16 +50,25 @@ def test_fear_of_flying_bans_the_flight(text):
     "text",
     [
         "Не боюсь летать, хочу на Бали",
-        "Мы не боимся летать, Бали",
-        "Аэрофобии нет, Бали",
-        "Боюсь летать ночью, Бали",  # a condition: not every flight
-        "Боюсь летать с пересадками, Бали",
-        "Боюсь летать на маленьких самолётах, Бали",
+        "Мы не боимся летать, хотим на Бали",
+        "Аэрофобии нет, хотим на Бали",
+        "Боюсь летать ночью, хотим на Бали",  # a condition: not every flight
+        "Боюсь летать с пересадками, хотим на Бали",
+        "Боюсь летать на маленьких самолётах, хотим на Бали",
+        "Боюсь летать, но на Бали можно",  # a concession lifts the ban
     ],
 )
 def test_no_fear_or_a_condition_is_no_ban(text):
     """«не боюсь летать» banned the flight: «Бали» had no plan."""
-    assert extract(text)[0].get("modes") in (None, ["flight"])
+    found = extract(text)[0]
+    assert found.get("modes") in (None, ["flight"])
+    assert found.get("destinations") == ["Бали"]
+
+
+def test_concession_lifts_the_ban():
+    """«но ради Бали готов»: no ban. «ради Бали» is no destination for the rules yet: a gap of
+    the place reader, not of this parse (#351 report)."""
+    assert "modes" not in extract("Боюсь летать, но ради Бали готов")[0]
 
 
 def test_no_fear_bali_builds_a_plan(store):
@@ -81,6 +90,27 @@ def test_no_fear_bali_builds_a_plan(store):
 )
 def test_double_negation_wants_the_meal(text):
     assert extract(text)[0].get("meal") == "AI"
+
+
+@pytest.mark.parametrize(
+    "text, meal",
+    [("Казань, без завтрака не хочу", "BB"), ("Казань, без питания не поедем", "BB")],
+)
+def test_double_negation_wants_the_breakfast(text, meal):
+    assert extract(text)[0].get("meal") == meal
+
+
+@pytest.mark.parametrize(
+    "text, modes",
+    [
+        ("Из Москвы в Сочи, без перелёта не поеду", ["flight"]),
+        ("Из Москвы в Сочи, без самолёта не хочу", ["flight"]),
+        ("Из Москвы в Сочи без перелёта", ["train", "car"]),
+    ],
+)
+def test_double_negation_wants_the_flight(text, modes):
+    """«без перелёта не поеду» needs the flight; one «без» bans it."""
+    assert extract(text)[0].get("modes") == modes
 
 
 @pytest.mark.parametrize(
@@ -116,7 +146,7 @@ def test_ticket_request_asks_where_not_the_hotel(store, text):
 def test_tickets_in_a_budget_ask_nothing_new(store):
     """F09: «90к на двоих вместе с билетами» is a budget, not a booking request."""
     r = say(store, "Дагестан на майские, 90к на двоих вместе с билетами, вылет из Казани")
-    assert not any("куда едете" in q.text.lower() for q in r.questions)
+    assert not any("куда хотите поехать" in q.text.lower() for q in r.questions)
 
 
 @pytest.mark.parametrize("text", ["Забронируй гостиницу на пятницу", "Забронируй отель на 2 ночи"])
@@ -163,8 +193,9 @@ def test_road_over_half_of_the_budget_asks_the_origin(store):
     ],
 )
 def test_egypt_and_turkey_are_alike(store, text):
-    """3000 km asked for Хургада (3183 km) and not for Анталия (2159 km); the road share is
-    about a third of the budget for both: the origin is an assumption the user sees."""
+    """3000 km asked for Хургада (3183 km) and not for Анталия (2159 km). By the offers both are
+    alike: Москва is about a third of the budget and under 15 % dearer than the cheapest big hub,
+    so the origin is an assumption the user sees."""
     r = say(store, text)
     assert r.questions == [] and ORIGIN_NOTE in r.plan.spec.assumptions
 
