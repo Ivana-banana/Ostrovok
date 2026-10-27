@@ -13,7 +13,7 @@ from collections import Counter
 from api import catalog
 from api.contracts import Destination, TripSpec
 from api.fixtures import COLD_MONTHS, WARM_WATER_C, travel_hours, trip_cost
-from api.offers import find_offers
+from api.offers import FAR_AIRPORT_KM, find_offers
 from api.optimizer import pets_possible
 
 # Places priced per call: find_offers runs for each, so the cost grows with this number.
@@ -30,7 +30,6 @@ CAR_KM = 1900  # api/offers.py drives up to 2500 km of road, road = 1.3 × the s
 SOUTH_DEG = 5.0  # «на юг»: this many degrees of latitude south of the departure hub
 RAINY_MM = 150
 HOT_C = 33.0
-FAR_AIRPORT_KM = 60
 LONG_ROAD_H = 4.0
 HIGH_M = 1000  # the height is named in the reason from here (as the mountains tag of catalog.json)
 # «в Европу» from Russia: the European countries of catalog.json; Russia, Belarus and Turkey

@@ -331,6 +331,21 @@ def _flight_hours(km: float) -> float:
     return 0.6 + min(km, 3000) / 720 + max(km - 3000, 0) / 870
 
 
+FAR_AIRPORT_KM = 60  # a place farther from its airport has none of its own (#123)
+
+
+def _via_airport(mode: Mode, a: dict, b: dict) -> str:
+    """The IATA code of the airport a flight to or from a place without an airport of its own
+    goes through: the nearest one of the data. Empty when the data has no airport for the place."""
+    if mode != "flight":
+        return ""
+    for p in (b, a):
+        port = p.get("airport")
+        if port and port["km"] > FAR_AIRPORT_KM:
+            return port["iata"]
+    return ""
+
+
 def _leg(
     spec: TripSpec,
     mode: Mode,
@@ -345,8 +360,14 @@ def _leg(
     depart = depart.astimezone(ZoneInfo(a["tz"]))
     arrive = _shift(depart, _minutes(hours)).astimezone(ZoneInfo(b["tz"]))
     what = {"flight": "Перелёт", "train": "Поезд", "car": "На своей машине"}[mode]
-    port = f" ({b['airport']['iata']})" if mode == "flight" and b.get("airport") else ""
-    title = f"{what} {a['name']} → {b['name']}{port}, {depart:%d.%m %H:%M}"
+    port = b["airport"]["iata"] if mode == "flight" and b.get("airport") else ""
+    via = _via_airport(mode, a, b)  # a flight only: a train or a car has no airport
+    # The airport of arrival (#247); a place far from its airport is reached through it (#123).
+    if via and via == port:
+        tail = f" через {via}"
+    else:
+        tail = (f" ({port})" if port else "") + (f" через {via}" if via else "")
+    title = f"{what} {a['name']} → {b['name']}{tail}, {depart:%d.%m %H:%M}"
     if changes:
         title += f", пересадок: {changes}"
     if mode == "car":

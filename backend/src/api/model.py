@@ -22,7 +22,13 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import catalog, llm
-from api.answers import is_hotel_compare, plan_fact, span, without_plan_fields
+from api.answers import (
+    destination_line,
+    is_hotel_compare,
+    plan_fact,
+    span,
+    without_plan_fields,
+)
 from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
 from api.contracts import (
     Cart,
@@ -1095,14 +1101,17 @@ def _question_fact(old: ChatReply, low: str) -> str:
     return ""
 
 
-def _question_answer(old: ChatReply, low: str = "", message: str = "") -> str:
+def _question_answer(
+    old: ChatReply, low: str = "", message: str = "", found: dict | None = None
+) -> str:
     """The reply to a question at assemble or checkout: the facts of the plan or the cart only
     (TRAP-4), the stage and the cart stay. Weather, visas and «почему не <отель>» get the fact
-    and the hint of the stage, not a repeat of the plan (#186)."""
+    and the hint of the stage, not a repeat of the plan (#186). `found`: what extract read from
+    the message, for a question about a city the plan does not have (#123)."""
     head = "Это вопрос: план и корзину не меняю."
     if old.stage == "compare":
         head = "Это вопрос: план не меняю."
-    if fact := plan_fact(old.plan, low, message):
+    if fact := plan_fact(old.plan, low, message, found):
         return f"{head}\n{fact}\n{HINTS[old.stage]}"
     if fact := _question_fact(old, low):
         head += "\n" + fact
@@ -1183,6 +1192,7 @@ def _text_compare(plan: Plan) -> str:
             f"{spec.destinations[0]}, {period(spec)}, "
             f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
         ),
+        *([line] if (line := destination_line(plan)) else []),
         *([line] if (line := missing_mode(plan)) else []),
         "Отели:",
     ]
@@ -1392,8 +1402,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # #186, #216: «какая погода в декабре?» at a December plan names no new field: still a
     # question. A question with a fact to give («погода?», «почему не Бульвар?», «почему не
     # поезд?») goes to no model, changes nothing, and is no transport pick.
-    fact = plan_fact(old.plan, low, message) if prev and old.stage in PLAN3 else ""
-    asked = without_plan_fields(rules_found, old.plan) if fact else rules_found
+    # #123: «какая погода в Анталии?» at a plan in Сочи is a question too: the place is its subject.
+    fact = plan_fact(old.plan, low, message, rules_found) if prev and old.stage in PLAN3 else ""
+    asked = without_plan_fields(rules_found, old.plan, low, message) if fact else rules_found
     if (
         fact
         and ASKING_NOTE not in rules_notes
@@ -1403,7 +1414,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         )
     ):
         return old.model_copy(
-            update={"reply": _question_answer(old, low, message), "questions": [], "llm": False}
+            update={
+                "reply": _question_answer(old, low, message, rules_found),
+                "questions": [],
+                "llm": False,
+            }
         )
     pure = (
         set(rules_found) <= {"modes"}

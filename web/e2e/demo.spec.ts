@@ -82,7 +82,7 @@ test("S6: запрос → сравнение → план → корзина �
 
   // Выбор транспорта: рейс туда (прилёт 10:30), затем поезд туда. S6 п.3: при поезде таймлайн
   // помечает прибытие 07:10 при заезде с 14:00 и предлагает действие с ценой.
-  await transport.getByRole("button", { name: /^Выбрать рейс \d+: Перелёт Москва → Казань, 11\.12 08:55/ }).click();
+  await transport.getByRole("button", { name: /^Выбрать рейс \d+: Перелёт Москва → Казань \(KZN\), 11\.12 08:55/ }).click();
   await expect(timeline).toContainText("Прилёт");
   await expect(timeline).toContainText("10:30");
   await transport.getByRole("button", { name: /^Выбрать рейс \d+: Поезд Москва → Казань/ }).click();
