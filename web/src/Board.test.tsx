@@ -19,6 +19,21 @@ function render(r: ChatReply): Document {
 }
 
 suite("доска поездки", () => {
+  it("#321: машина с ночёвками — часы за рулём вместо «в пути», без повтора в минусах", () => {
+    const r = structuredClone(base);
+    const [d] = r.plan.destinations;
+    r.plan.destinations = [
+      { ...d, travel_hours: 33, tradeoffs: ["за рулём 18 ч, 1 ночёвка в пути", "от аэропорта 197 км"] },
+      { ...d, name: "Без ночёвок", travel_hours: 7.5, tradeoffs: ["дорога 7.5 ч"] },
+    ];
+    const cards = [...render(r).querySelectorAll(".dest")].map((c) => c.textContent ?? "");
+    expect(cards[0]).toContain("за рулём 18 ч, 1 ночёвка в пути");
+    expect(cards[0]).not.toContain("в пути 33");
+    expect(cards[0]).toContain("Минусы: от аэропорта 197 км");
+    expect(cards[0].match(/за рулём/g)).toHaveLength(1);
+    expect(cards[1]).toContain("в пути 7");
+    expect(cards[1]).toContain("Минусы: дорога 7.5 ч");
+  });
   it("TRAP-7: у каждой синтетической цены есть пометка «синтетика»", () => {
     const doc = render(hotelBought);
     const prices = [...doc.querySelectorAll(".price")];
@@ -28,6 +43,46 @@ suite("доска поездки", () => {
     // a ₽ sign outside a labelled price is a price without the label
     const bare = doc.body.innerHTML.replace(/<span class="price">.*?<\/span><\/span>/g, "");
     expect(bare).not.toMatch(/\d ₽<\/(td|p|li|span)>/);
+  });
+
+  it("#225: пакеты без транспорта не называются «поездка целиком»", () => {
+    expect(render(base).body.textContent).toContain("Варианты поездки целиком");
+    const r = structuredClone(base);
+    r.plan.offers = r.plan.offers.filter((o) => o.kind !== "transport");
+    const text = render(r).body.textContent ?? "";
+    expect(text).not.toContain("Варианты поездки целиком");
+    expect(text).toContain("дороги в плане нет");
+  });
+
+  it("TRAP-7: каждая сумма в ₽ на доске стоит рядом с «синтетика»", () => {
+    const r = structuredClone(hotelBought);
+    r.plan.changes = [
+      { what: "итог", before: "22 500 ₽", after: "23 000 ₽" },
+      { what: "отель", before: "6 400 ₽ за ночь", after: "7 200 ₽ за ночь" },
+      { what: "budget_rub", before: "100 000 ₽", after: "80 000 ₽" },
+      { what: "бюджет отеля", before: "12 000 ₽", after: "10 000 ₽" },
+    ];
+    r.plan.explanations = [
+      { offer_id: "h1", why: "дешевле на 1 100 ₽", tradeoffs: ["дороже на 3 300 ₽"], risks: ["штраф 2 000 ₽"] },
+    ];
+    r.plan.bundles = r.plan.bundles.map((b) => ({ ...b, tradeoffs: ["дороже на 900 ₽", "не укладывается в бюджет 80 000 ₽: поездка целиком 91 000 ₽", "отель не укладывается в бюджет отеля 10 000 ₽: 12 500 ₽ (синтетика)"] }));
+    r.plan.destinations = r.plan.destinations.map((d) => ({ ...d, why: `от 5 000 ₽ в сезон` }));
+    r.plan.issues = r.plan.issues.map((i) => ({ ...i, text: `${i.text} (ранний заезд 1 200 ₽)` }));
+    const text = render(r).body.textContent ?? "";
+    const amounts = [...text.matchAll(/\d[\d \u00a0]*₽/g)];
+    expect(amounts.length).toBeGreaterThanOrEqual(15);
+    expect(text).not.toMatch(/синтетика\s*\(?синтетика/); // a sum that has the label is not marked twice
+    for (const m of amounts) {
+      const before = text.slice(Math.max(0, m.index! - 48), m.index!);
+      const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 24);
+      // a budget is the number the user typed, not a price of ours
+      const userBudget = /бюджет[а-я]*( отеля)?:? ?(было )?$|бюджет[^→]*→ стало $/i;
+      if (userBudget.test(before)) {
+        expect(after, `${before}${m[0]}${after}`).not.toMatch(/^\s*\(?синтетика/);
+        continue;
+      }
+      expect(after, `${before}${m[0]}${after}`).toMatch(/^\s*\(?синтетика/);
+    }
   });
 
   it("TRAP-7: цена реальных данных без пометки", () => {
@@ -118,6 +173,30 @@ suite("доска поездки", () => {
     const cart = render(r).querySelector("[aria-label='Корзина']")?.textContent ?? "";
     expect(cart).toContain("больше бюджета");
     expect(cart).toContain("Подтвердить бронь на 600 ₽ (синтетика) · оплата имитируется");
+  });
+
+  it("#41: бюджет отеля — своя строка в параметрах, не «Бюджет» на поездку", () => {
+    const r = structuredClone(base);
+    r.plan.spec.budget_rub = null;
+    r.plan.spec.hotel_budget_rub = 40000;
+    const rows = [...render(r).querySelectorAll("[aria-label='Параметры поездки'] dl > div")].map(
+      (d) => d.textContent ?? "",
+    );
+    expect(rows.some((t) => t.startsWith("Бюджет отеля") && t.includes("40 000 ₽"))).toBe(true);
+    expect(rows.some((t) => t.startsWith("Бюджет") && !t.startsWith("Бюджет отеля"))).toBe(false);
+  });
+
+  it("#41: корзина с отелем дороже бюджета отеля — предупреждение до подтверждения", () => {
+    const r = structuredClone(hotelBought);
+    r.stage = "checkout";
+    r.voucher = null;
+    r.plan.spec.hotel_budget_rub = 15000; // the hotel costs 19 600 ₽
+    const cart = render(r).querySelector("[aria-label='Корзина']");
+    const note = cart?.querySelector("[role='note']");
+    expect(note?.textContent).toContain("Отель дороже бюджета отеля 15 000 ₽");
+    expect(note?.querySelector(".price")?.textContent).toBe("4 600 ₽синтетика");
+    r.plan.spec.hotel_budget_rub = 40000;
+    expect(render(r).querySelector("[aria-label='Корзина'] [role='note']")).toBeNull();
   });
 
   it("TRAP-7: превышение бюджета и кнопка подтверждения помечены по данным корзины", () => {
@@ -217,5 +296,15 @@ suite("доска поездки", () => {
     const sec = render(r).querySelector("[aria-label='Приоритеты']");
     expect(sec?.textContent).toContain("Порядок не задан");
     expect(sec?.querySelectorAll("button[aria-label^='Добавить']").length).toBe(6);
+  });
+
+  it("S9: на сборке подсказка честно говорит, что сдвиг вернёт к сравнению", () => {
+    const hint = (stage: "compare" | "assemble") => {
+      const r = { ...structuredClone(base), stage, voucher: null };
+      r.plan.spec.priorities = ["price", "cancellation"];
+      return render(r).querySelector("[aria-label='Приоритеты']")?.textContent ?? "";
+    };
+    expect(hint("assemble")).toContain("вернёт вас к сравнению");
+    expect(hint("compare")).not.toContain("вернёт");
   });
 });

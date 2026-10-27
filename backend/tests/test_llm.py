@@ -1,14 +1,16 @@
 """LLM client (T11, #15): the HTTP layer is a fake urlopen, no network in tests."""
 
+import io
 import json
 import sqlite3
 import urllib.error
+from datetime import date, timedelta
 
 import pytest
 
 from api import llm
 from api.contracts import ChatRequest, TripSpec
-from api.extract import extract, with_llm
+from api.extract import DATE_KEYS, extract, with_llm
 from api.guards import llm_available, unknown_prices
 from api.model import REFUSAL, REFUSE_RE, chat
 from api.store import SessionStore
@@ -41,8 +43,9 @@ def answer(obj) -> Resp:
     return Resp({"choices": [{"message": {"content": content}}]})
 
 
-def http_error(code: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError("http://llm.test/v1/chat/completions", code, "x", {}, None)
+def http_error(code: int, message: str = "") -> urllib.error.HTTPError:
+    body = io.BytesIO(json.dumps({"error": {"message": message}}).encode()) if message else None
+    return urllib.error.HTTPError("http://llm.test/v1/chat/completions", code, "x", {}, body)
 
 
 class FakeLLM:
@@ -80,7 +83,7 @@ def no_network(monkeypatch):
         raise AssertionError("network in tests")
 
     monkeypatch.setattr(llm.urllib.request, "urlopen", deny)
-    for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_TIMEOUT_S"):
+    for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_TIMEOUT_S", "GIGACHAT_AUTH_KEY"):
         monkeypatch.delenv(k, raising=False)
     llm.reset()
     yield
@@ -151,20 +154,24 @@ def test_trap_1_invalid_key_reaches_booking_and_pauses_the_llm(store, fake):
 
 
 def test_schema_rejected_falls_back_to_json_object(store, fake):
+    """OpenAI json_schema, then the flat GigaChat json_schema, then json_object (#117)."""
+
     def spec(p):
         if p["response_format"]["type"] == "json_schema":
-            return http_error(400)
+            return http_error(400, "response_format json_schema is not supported")
         return answer({**NULLS, "wishes": ["тепло"]})
 
     fake.spec = spec
     r = say(store, SOCHI)
-    kinds = [c["response_format"]["type"] for c in fake.calls]
-    assert kinds[:2] == ["json_schema", "json_object"] and r.llm is True
-    assert "тепло" in r.plan.spec.wishes
-    schema = fake.calls[0]["response_format"]["json_schema"]
+    formats = [c["response_format"] for c in fake.calls]
+    assert [f["type"] for f in formats[:3]] == ["json_schema", "json_schema", "json_object"]
+    assert r.llm is True and "тепло" in r.plan.spec.wishes
+    schema = formats[0]["json_schema"]
     assert schema["strict"] is True and set(schema["schema"]["required"]) == set(llm.SPEC_FIELDS)
+    assert formats[1] == {"type": "json_schema", "schema": llm.SPEC_SCHEMA}
     say(store, "а можно поближе к морю?", r.session_id)
-    assert fake.calls[-1]["response_format"]["type"] == "json_object"  # remembered
+    spec_calls = [c for c in fake.calls if c["messages"][0]["content"] == llm.SPEC_PROMPT]
+    assert spec_calls[-1]["response_format"]["type"] == "json_object"  # remembered
 
 
 def test_llm_flag_only_when_the_model_changed_the_reply(store, fake):
@@ -239,20 +246,84 @@ def test_llm_fills_what_rules_missed(store, fake):
     assert r.plan.spec.destinations == ["Сочи"] and "тепло" in r.plan.spec.wishes
 
 
-def test_rules_win_over_the_llm_and_dates_stay_one_group():
+def test_llm_hotel_budget_gets_an_assumption_the_user_sees(store, fake):
+    """#41: the model reads «на проживание не больше сорока пяти тысяч»; the budget is shown."""
+    text = "Махнём в Сочи на три ночки, на проживание не больше сорока пяти тысяч"
+    assert "hotel_budget_rub" not in extract(text)[0]
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["Сочи"], "hotel_budget_rub": 45_000})
+    r = say(store, text)
+    assert r.llm is True and r.plan.spec.hotel_budget_rub == 45_000
+    assert r.plan.spec.budget_rub is None
+    assert "бюджет отеля: 45 000 ₽ за все ночи" in r.plan.spec.assumptions
+
+
+def test_llm_does_not_turn_the_hotel_sum_into_a_trip_budget():
+    """#41: the rules read «отель до 40 тысяч»; the same sum from the model is not a trip budget."""
     found, _ = extract(SOCHI)
+    assert found["hotel_budget_rub"] == 40_000
+    assert "budget_rub" not in with_llm(found, {"budget_rub": 40_000})
+    assert with_llm(found, {"budget_rub": 150_000})["budget_rub"] == 150_000
+
+
+def test_llm_wins_over_the_rules_and_dates_stay_one_group():
+    """#258: the model's fields replace the rules'; its date group replaces the rules' group."""
+    found, _ = extract(SOCHI)
+    start = found["date_from"].replace(day=25)
     patch = {
         "destinations": ["Анапа"],
-        "date_from": found["date_from"].replace(day=25),
-        "budget_rub": 90_000,
+        "date_from": start,
+        "date_to": start + timedelta(days=3),
+        "hotel_budget_rub": 90_000,
         "pets": True,
         "wishes": ["море"],
     }
     out = with_llm(found, patch)
-    assert out["destinations"] == ["Сочи"] and out["budget_rub"] == 40_000
-    assert out["date_from"] == found["date_from"] and out["pets"] is True
-    assert out["wishes"] == ["море"]
+    assert out["destinations"] == ["Анапа"] and out["hotel_budget_rub"] == 90_000
+    assert (out["date_from"], out["date_to"]) == (patch["date_from"], patch["date_to"])
+    assert "nights" not in out  # the rules' length goes with the rules' group
+    assert out["pets"] is True and out["wishes"] == ["море"]
+    for part in ({"nights": 2}, {"month": 12}, {"date_from": start}):  # a part of a group
+        merged = with_llm(found, part)
+        assert {k: merged[k] for k in DATE_KEYS & found.keys()} == {
+            k: found[k] for k in DATE_KEYS & found.keys()
+        }
     assert with_llm(found, None) == found
+
+
+def test_s9_chip_phrase_goes_to_no_model(store, fake):
+    """A chip click is an order, not a filter: no LLM call, no field from it."""
+    r = say(store, SOCHI)
+    before = r.plan.spec
+
+    def reads():  # calls that read the text into a spec; explanations are another call
+        return [c for c in fake.calls if c["messages"][0]["content"] == llm.SPEC_PROMPT]
+
+    calls = len(reads())
+    fake.spec = lambda p: answer({**NULLS, "refundable": True, "meal": "AI", "pets": True})
+    r = say(store, "Мои приоритеты по важности: отмена, питание, цена.", r.session_id)
+    spec = r.plan.spec
+    assert spec.priorities == ["cancellation", "meal", "price"]
+    assert (spec.refundable, spec.meal, spec.pets) == (before.refundable, before.meal, before.pets)
+    assert len(reads()) == calls and r.llm is False
+
+
+@pytest.mark.parametrize(
+    "text, field, value",
+    [
+        ("Для меня главное рейтинг, и чтобы можно было с животными", "pets", True),
+        ("Главное — бесплатная отмена и чтобы был бассейн", "wishes", ["бассейн"]),
+        ("Главное — бесплатная отмена и чтобы был бассейн", "refundable", True),
+        ("Важнее цена, и с питанием", "meal", "AI"),
+    ],
+)
+def test_s9_free_text_with_priorities_keeps_the_llm_fields(store, fake, text, field, value):
+    """Rules read only `priorities` here, but the message has more: the model fields stay."""
+    r = say(store, SOCHI)
+    fake.spec = lambda p: answer({**NULLS, field: value})
+    r = say(store, text, r.session_id)
+    got = getattr(r.plan.spec, field)
+    assert (value[0] in got) if field == "wishes" else got == value
+    assert r.llm is True
 
 
 def test_llm_patch_is_validated(fake):
@@ -263,8 +334,10 @@ def test_llm_patch_is_validated(fake):
         ({"wishes": [llm.SPEC_PROMPT.splitlines()[2]]}, None),  # the prompt is not echoed
         ({"destinations": ["Сочи"], "origin": "Москва", "nights": 3}, {}),  # echo of the spec
         ({"budget_rub": 0}, {}),  # «поставь цену 0»
+        ({"hotel_budget_rub": 0}, {}),
+        ({"hotel_budget_rub": 45_000}, {"hotel_budget_rub": 45_000}),
         ({"children_ages": [5, 40]}, {}),
-        ({"date_from": "2020-01-01", "date_to": "2020-01-05"}, {}),  # past dates
+        ({"date_from": "2020-01-01", "date_to": "2020-01-05"}, {"nights": 4}),  # model.py checks
         ({"date_from": "2099-03-01", "date_to": "2099-03-05", "nights": 9}, {"nights": 4}),
         ({"adults": 3, "meal": "BB"}, {"adults": 3, "meal": "BB"}),
     ]
@@ -276,6 +349,37 @@ def test_llm_patch_is_validated(fake):
         else:
             assert {k: v for k, v in (got or {}).items() if k in want} == want, patch
             assert want or got == {}, patch
+    # past dates reach model.py (#164): a silent drop here would hide them
+    fake.spec = lambda p: answer({**NULLS, "date_from": "2020-01-01", "date_to": "2020-01-05"})
+    got = llm.extract_spec("текст", spec)
+    assert got["date_from"] == date(2020, 1, 1) and got["date_to"] == date(2020, 1, 5)
+
+
+S1_TEXT = (
+    "Хочу куда-нибудь к тёплому морю в ноябре, недорого, с ребёнком 5 лет, "
+    "без долгих перелётов. Летим из Москвы."
+)
+
+
+def test_kind_of_place_is_no_destination(store, fake):
+    """#117: GigaChat put «тёплое море» into destinations; the turn stopped on «нет в каталоге».
+
+    A place name is a proper name. «тёплое море», «рядом с Москвой» are wishes: rules read them.
+    """
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["тёплое море"], "origin": "Москва"})
+    r = say(store, S1_TEXT)
+    assert r.stage == "inspire" and not r.plan.spec.destinations
+    assert "синтетика" in r.reply
+
+
+def test_only_proper_names_stay_in_destinations(fake):
+    fake.spec = lambda p: answer(
+        {**NULLS, "destinations": ["Сочи", "рядом с Москвой", "море"], "origin": "дом"}
+    )
+    got = llm.extract_spec("текст", TripSpec())
+    assert got["destinations"] == ["Сочи"] and "origin" not in got
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["горы"], "nights": 3})
+    assert llm.extract_spec("текст", TripSpec()) == {"nights": 3}
 
 
 def test_user_text_is_data_and_source_texts_are_not_sent(store, fake):
@@ -377,13 +481,20 @@ def test_trap_4_explanation_keeps_only_numbers_from_the_facts(tmp_path, fake):
     assert new[1:] == plan.explanations[1:]
     fake.why = why("Около 9 800 ₽ за ночь")  # derived: price ÷ nights
     assert llm.explain(plan) is not None
-    assert plan.spec.budget_rub == 40_000
+    assert plan.spec.hotel_budget_rub == 40_000 and plan.spec.budget_rub is None
     fake.why = why(f"Ваш бюджет 40 000 ₽, отель {price} ₽")  # the budget named as the budget
     assert llm.explain(plan) is not None
+    fake.why = why(f"Бюджет отеля 40 000 ₽, отель {price} ₽ в него укладывается")  # #41
+    assert llm.explain(plan) is not None
+    plan.spec.budget_rub = 150_000  # both budgets in one text
+    fake.why = why(f"Бюджет поездки 150 000 ₽, бюджет отеля 40 000 ₽, отель {price} ₽")
+    assert llm.explain(plan) is not None
+    plan.spec.budget_rub = None
     for bad in (
         why("Отель за 12 345 ₽ — дешевле всех"),  # price not in the tools
         why("Отель стоит 40 000 ₽"),  # the budget is not a price (review of PR #47)
         why("Отель стоит 40 000"),
+        why("Отель стоит 40 000 ₽, бюджет отеля 40 000 ₽"),  # the hotel budget as a price
         why("До моря 97 м"),  # any number not in the facts
         why("Хороший отель", offer_id="h-made-up"),  # offer_id the optimizer did not explain
         why(llm.WHY_PROMPT.splitlines()[3]),  # the prompt is not echoed
@@ -457,7 +568,8 @@ def test_s4_phrase_of_the_eval_case_is_still_refused():
 def test_free_text_on_assemble_goes_to_the_model_and_a_service_word_does_not(
     monkeypatch, store, fake
 ):
-    """#49: «хотим с бассейном» is a wish and re-plans; «беру» is consent and calls no model."""
+    """#49: «хотим с бассейном» on assemble is a wish and re-plans to compare; «беру» there
+    (on compare, after the re-plan) is consent and calls no model."""
     r = say(store, SOCHI)
     r = say(store, "беру", r.session_id)
     assert r.stage == "assemble"
@@ -482,6 +594,18 @@ def test_free_text_on_checkout_goes_to_the_model(monkeypatch, store, fake):
     assert r.stage == "checkout"
     calls = []
     monkeypatch.setattr(llm, "extract_spec", lambda m, s, until=None, today=None: calls.append(m))
+    # a wish («хотим…») is no question: the model reads it (#81)
+    say(store, "хотим что-нибудь с бассейном", r.session_id)
+    assert calls == ["хотим что-нибудь с бассейном"]
+
+
+def test_wish_question_on_checkout_goes_to_the_model(monkeypatch, store, fake):
+    """«а есть что-нибудь с бассейном?» asks for other offers: an edit, the model reads it (#81)."""
+    r = say(store, SOCHI)
+    for text in ("беру", "да"):
+        r = say(store, text, r.session_id)
+    calls = []
+    monkeypatch.setattr(llm, "extract_spec", lambda m, s, until=None, today=None: calls.append(m))
     say(store, "а есть что-нибудь с бассейном?", r.session_id)
     assert calls == ["а есть что-нибудь с бассейном?"]
 
@@ -492,3 +616,15 @@ def test_second_half_of_a_month_is_no_hotel_pick(store):
     assert r.stage == "compare"
     r2 = say(store, "во второй половине ноября", r.session_id)
     assert r2.plan.selected == r.plan.selected and r2.stage == "compare"
+
+
+def test_model_answer_cannot_lift_an_earlier_refusal(store, fake):
+    """#113: the refusal of turn 1 holds against a model answer of turn 2 («Анталия» is in Turkey)."""
+    r = say(
+        store, "Едем с ребёнком в ноябре, хотим к морю. В Турции и Египте уже были, не хочется."
+    )
+    assert "исключено: Турция, Египет" in r.plan.spec.assumptions
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["Анталия"]})
+    r = say(store, "подешевле, до 100 тысяч", r.session_id)
+    assert r.plan.spec.destinations == [] and "Анталия" not in [d.name for d in r.plan.destinations]
+    assert "исключено: Турция, Египет" in r.plan.spec.assumptions

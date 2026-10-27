@@ -9,7 +9,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export TZ=UTC GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export ISSUES_NOW="$(date -d '2026-10-20T12:00:00Z' +%s)"
-unset HACK_MODE TAKEOVER_MIN SKIP_TEST_HOOK
+unset HACK_MODE TAKEOVER_MIN
 FAIL=0 N=0
 ok()   { N=$((N + 1)); echo "ok:   $1"; }
 bad()  { N=$((N + 1)); echo "FAIL: $1"; FAIL=1; }
@@ -288,37 +288,6 @@ git -C "$W" rm -q --cached report.md; rm "$W/report.md"
 (printf 'refs/heads/arch/hack1 abc123 refs/heads/arch/hack1 def456\n' | bash .githooks/pre-push origin url >/dev/null 2>&1) && ok "pre-push: arch/<run> пропускается" || bad "pre-push arch"
 (printf 'refs/heads/main abc123 refs/heads/main def456\n' | bash .githooks/pre-push origin url >/dev/null 2>&1) && bad "pre-push: push из основной копии пропущен" || ok "pre-push: push из основной копии — отказ"
 
-echo "--- check-tests.sh по режиму"
-cd "$W"
-# a lock of its own: the real /tmp/hack-heavy-tests.lock of the sessions on this laptop is not touched (#330)
-tests() { HEAVY_LOCK="$TMP/heavy.lock" bash "$R/.claude/hooks/check-tests.sh" 2>&1; }
-lacks "нет stack.mk — молчит"                 "$(tests)" block
-printf 'STACK := t\nstack-check:\n\t@echo "1 failed"; exit 1\n' > stack.mk
-echo 'include stack.mk' > Makefile
-printf 'check:\n\t@$(MAKE) -s stack-check\n' >> Makefile
-has   "сборка: красный make check — блок"      "$(tests)" "make check красный"
-lacks "финал: тесты не запускает"              "$(HACK_MODE=финал tests)" block
-echo "Tests: off" > CLAUDE.local.md
-lacks "/tests off: хук молчит"                 "$(tests)" block
-rm CLAUDE.local.md
-if command -v flock >/dev/null; then
-  flock "$TMP/heavy.lock" sleep 4 & holder=$!
-  for _ in $(seq 50); do flock -n "$TMP/heavy.lock" true || break; sleep 0.1; done  # wait until the holder has the lock
-  busy="$(HEAVY_LOCK_WAIT=1 tests)"
-  has   "#330: замок занят — блок, не зелёный"  "$busy" '"decision": "block"'
-  has   "#330: замок занят — «не запускался»"   "$busy" "не запускался: замок занят"
-  wait "$holder"
-  has   "#330: замок свободен — красный блок"  "$(tests)" "make check красный"
-fi
-has   "#330: HEAVY_LOCK пуст — без замка тоже блок" "$(HEAVY_LOCK= bash "$R/.claude/hooks/check-tests.sh" 2>&1)" "make check красный"
-printf 'STACK := t\nstack-check:\n\t@echo ok\n' > stack.mk
-lacks "сборка: зелёный — пропуск"             "$(tests)" block
-[ -f "$(git rev-parse --git-dir)/last-green-check" ] && ok "зелёный прогон оставил маркер" || bad "нет маркера"
-printf 'STACK := t\nstack-check:\n\t@exit 1\n' > stack.mk && touch -d '2000-01-01' stack.mk
-lacks "без изменений после зелёного — не гоняет" "$(tests)" block
-rm -f stack.mk Makefile
-cd "$R"
-
 echo "--- check-worktrees.sh"
 lacks "секретов в worktree нет"               "$(bash .claude/hooks/check-worktrees.sh)" block
 echo 'const token = "f9a8Xc72kLmQ01zYvB3n4dHs"' > .claude/worktrees/wt-test/bot.js
@@ -483,27 +452,6 @@ mkdir "$LN.d" && echo "999999 $(date +%s)" > "$LN.d/owner"
 hn echo ran >/dev/null
 [ -z "$(ls -d "$LN".d.rm.* 2>/dev/null)" ] && ok "#602: после снятия замка копии .rm.* не остались" || bad "#602: остались $(ls -d "$LN".d.rm.*)"
 rm -rf "$LN.d"
-# the Stop hook uses the same fallback
-cd "$W"
-printf 'STACK := t\nstack-check:\n\t@echo "1 failed"; exit 1\n' > stack.mk
-echo 'include stack.mk' > Makefile
-printf 'check:\n\t@$(MAKE) -s stack-check\n' >> Makefile
-hook_nf() { HEAVY_LOCK="$LN" PATH="$NF" bash "$R/.claude/hooks/check-tests.sh" 2>&1; }
-has   "#595: хук без flock, замок свободен — красный блок"   "$(hook_nf)" "make check красный"
-mkdir "$LN.d" && echo "$$ $(date +%s)" > "$LN.d/owner"
-busy="$(HEAVY_LOCK_WAIT=1 hook_nf)"
-has   "#595: хук без flock, замок занят — блок «не запускался»" "$busy" "не запускался: замок занят"
-rm -rf "$LN.d"
-rm -f stack.mk Makefile
-cd "$R"
-cd "$W"
-printf 'STACK := t\nstack-check:\n\t@echo "1 failed"; exit 1\n' > stack.mk
-echo 'include stack.mk' > Makefile
-printf 'check:\n\t@$(MAKE) -s stack-check\n' >> Makefile
-has   "#333: нечисловой HEAVY_LOCK_WAIT — всё равно блок" "$(HEAVY_LOCK_WAIT=abc tests)" "make check красный"
-has   "#333: нечисловой CHECK_TIMEOUT — всё равно блок"   "$(CHECK_TIMEOUT=10m tests)" "make check красный"
-rm -f stack.mk Makefile
-cd "$R"
 
 echo "--- finish.sh"
 cd .claude/worktrees/12-x

@@ -4,10 +4,11 @@
 можно было подменить снапшотом или фейком в тестах.
 """
 
+import itertools
 import os
 import re
 import unicodedata
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, time
 
 # TRAP-3: варианты написания топонимов. Ключ — нормализованная форма.
@@ -31,13 +32,87 @@ def normalize_toponym(name: str) -> str:
     return TOPONYM_ALIASES.get(_norm(name), name.strip())
 
 
+# TRAP-3: падежное окончание → замены именительного падежа, самая вероятная первой.
+# None — слово как написано («Бали», «Сочи» не меняются). Существительное: «в Сиену» → Сиена,
+# «в Бледе» → Блед, Бледа, Бледь; «в Италии» → Италия.
+NOUN_ENDINGS = (
+    ("ии", ("ия",)), ("ию", ("ия",)), ("ом", ("",)), ("ем", ("", "ь")), ("у", ("а", "")),
+    ("ю", ("я", "ь")), ("е", ("", "а", "ь")), ("и", (None, "ь", "я", "а")),
+)  # fmt: skip
+# Прилагательное в многословном названии: «Старую» → Старая, «Чешском» → Чешский.
+ADJ_ENDINGS = (
+    ("ую", ("ая",)), ("юю", ("яя",)), ("ой", ("ая", "ой")), ("ей", ("яя",)),
+    ("ого", ("ый", "ий", "ой")), ("ом", ("ый", "ий", "ой")), ("ем", ("ий", "ый")),
+    ("ым", ("ый",)), ("им", ("ий",)),
+)  # fmt: skip
+HUSHING = "кгхжчшщ"  # after them «ий», never «ый»: Чешский, Великий
+MAX_CANDIDATES = 6  # each one is a geocoder call with a timeout
+
+
+def _forms(word: str, rules: tuple) -> list[str]:
+    """Nominative guesses for a word by its case ending; the word itself if no rule fits."""
+    low = word.lower()
+    for ending, repls in rules:
+        if low.endswith(ending) and len(low) - len(ending) >= 2:
+            stem = word[: len(word) - len(ending)]
+            out = [word if r is None else stem + r for r in repls]
+            if ending in ("ого", "ом") and stem[-1].lower() in HUSHING:
+                out = [w for w in out if not w.endswith("ый")]  # Чешском → Чешский, not «Чешскый»
+            return out
+    return [word]
+
+
+def _gender(word: str) -> str:
+    """m, f, n by the nominative ending; «?» when «ь» can be either."""
+    low = word.lower()
+    if low.endswith(("ая", "яя", "а", "я")):
+        return "f"
+    if low.endswith(("ое", "ее", "о", "е")):
+        return "n"
+    return "?" if low.endswith("ь") else "m"
+
+
+def _agrees(adj: str, noun: str) -> bool:
+    """An adjective of a place name has the gender of its noun (an adjective that is none passes)."""
+    low = adj.lower()
+    if low.endswith(("ая", "яя")):
+        gender = "f"
+    elif low.endswith(("ое", "ее")):
+        gender = "n"
+    elif low.endswith(("ый", "ий", "ой")):
+        gender = "m"
+    else:
+        return True
+    return _gender(noun) in (gender, "?")
+
+
+def name_candidates(name: str) -> list[str]:
+    """Nominative forms of a place name for the geocoder, likeliest first, the name as written last.
+
+    «Старую Ладогу» → Старая Ладога; «Бледе» → Блед, Бледа, Бледь. A many-word name stays
+    whole: the words before the last one are adjectives that must agree with the noun (TRAP-3).
+    """
+    words = name.split()
+    if not words or len(words) > 3:
+        return [name.strip()]
+    nouns = _forms(words[-1], NOUN_ENDINGS)
+    leads = [_forms(w, ADJ_ENDINGS) for w in words[:-1]]
+    forms = [
+        " ".join([*lead, noun])
+        for lead in itertools.product(*leads)
+        for noun in nouns
+        if all(_agrees(a, noun) for a in lead)
+    ]
+    return list(dict.fromkeys([*forms, name.strip()]))[:MAX_CANDIDATES]
+
+
 def resolve_destination(
     name: str,
     catalog: dict[str, dict],
     geocode: Callable[[str], dict | None],
     snapshot: dict[str, dict] | None = None,
 ) -> dict | None:
-    """Направление из каталога, иначе — геокодер (TRAP-2), при сбое сети — снапшот (TRAP-6).
+    """Направление из каталога, иначе — геокодер (TRAP-2), при сбое или пустом ответе — снапшот (TRAP-6).
 
     Результат помечен источником: catalog | geocoder | snapshot.
     """
@@ -46,22 +121,27 @@ def resolve_destination(
         return {**catalog[canon], "name": canon, "source": "catalog"}
     try:
         found = geocode(canon)
-    except OSError:
+    except Exception:  # noqa: BLE001  любой сбой геокодера: таймаут, HTTP, разбор ответа
         found = None
-        if snapshot and canon in snapshot:
-            return {**snapshot[canon], "name": canon, "source": "snapshot"}
     if found:
         return {**found, "name": canon, "source": "geocoder"}
+    if snapshot and canon in snapshot:
+        return {**snapshot[canon], "name": canon, "source": "snapshot"}
     return None
 
 
-LLM_VARS = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
+# Ключ: статичный LLM_API_KEY или ключ авторизации GigaChat (llm.py меняет его на токен).
+LLM_KEYS = ("LLM_API_KEY", "GIGACHAT_AUTH_KEY")
 
 
-def llm_available(env: dict[str, str] | None = None) -> bool:
+def llm_available(env: Mapping[str, str] | None = None) -> bool:
     """TRAP-1: LLM включена, только если заданы ключ, адрес и модель; иначе — режим правил."""
     env = os.environ if env is None else env
-    return all(env.get(k, "").strip() for k in LLM_VARS)
+
+    def has(k: str) -> bool:
+        return bool(env.get(k, "").strip())
+
+    return has("LLM_BASE_URL") and has("LLM_MODEL") and any(has(k) for k in LLM_KEYS)
 
 
 def rule_extract(text: str) -> dict:
@@ -73,6 +153,7 @@ def rule_extract(text: str) -> dict:
     return {
         "month": found.get("month"),
         "budget_rub": found.get("budget_rub"),
+        "hotel_budget_rub": found.get("hotel_budget_rub"),
         "cheap": "недорого" in wishes,
         "kids": bool(found.get("children_ages")),
         "pets": found.get("pets", False),

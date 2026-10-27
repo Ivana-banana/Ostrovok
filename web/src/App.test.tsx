@@ -161,6 +161,23 @@ suite("приложение", () => {
     );
   });
 
+  it("#187: после «В корзину» из апселла чат называет актуальные число позиций и сумму", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const offer = (id: string) => checkoutStage.plan.offers.find((o) => o.offer_id === id)!;
+    const before = [...checkoutStage.cart.items, offer("h1")];
+    const after = [...before, offer("x1")];
+    // total_rub of the stored cart is stale (1): the chat line must use the total the server returns
+    const session = { ...structuredClone(checkoutStage), cart: { items: before, total_rub: 1 } };
+    const total = after.reduce((n, o) => n + o.price_rub, 0);
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: session });
+    routes["POST /api/cart"] = () => ({ status: 200, body: { items: after, total_rub: total } });
+    await mount();
+    await click("В корзину");
+    const sum = String(total).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    const last = [...box.querySelectorAll(".msg.agent")].at(-1)?.textContent;
+    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
+  });
+
   it("подтверждение: отправляет итог, который видел пользователь, и показывает ваучер", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     let session: ChatReply = checkoutStage;
@@ -284,6 +301,13 @@ suite("приложение", () => {
     const link = foot?.querySelector("a") as HTMLAnchorElement;
     expect(link.textContent).toBe("ODbL");
     expect(link.href).toBe("https://www.openstreetmap.org/copyright");
-    expect(foot?.textContent).toContain("синтетические");
+    expect(foot?.textContent).toContain("синтетика");
+  });
+
+  it("TRAP-7: подвал называет всю синтетику и оценки команды", async () => {
+    await mount();
+    const foot = (box.querySelector("footer[aria-label='Источники данных']")?.textContent ?? "").replace(/\s+/g, " ");
+    for (const w of ["Цены, рейсы, тарифы, трансферы и рейтинги — синтетика", "отели вне снимка OSM", "Климат и время в пути — оценки команды", "Оплата имитируется"])
+      expect(foot).toContain(w);
   });
 });
