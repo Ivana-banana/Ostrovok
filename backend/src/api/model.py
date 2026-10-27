@@ -22,6 +22,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import llm
+from api.answers import plan_fact, without_plan_fields
 from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, sync_plan
 from api.contracts import (
     Cart,
@@ -1074,10 +1075,17 @@ def _question_fact(old: ChatReply, low: str) -> str:
 
 def _question_answer(old: ChatReply, low: str = "") -> str:
     """The reply to a question at assemble or checkout: the facts of the plan or the cart only
-    (TRAP-4), the stage and the cart stay."""
+    (TRAP-4), the stage and the cart stay. Weather, visas and «почему не <отель>» get the fact
+    and the hint of the stage, not a repeat of the plan (#186)."""
     head = "Это вопрос: план и корзину не меняю."
+    if old.stage == "compare":
+        head = "Это вопрос: план не меняю."
+    if fact := plan_fact(old.plan, low):
+        return f"{head}\n{fact}\n{HINTS[old.stage]}"
     if fact := _question_fact(old, low):
         head += "\n" + fact
+    if old.stage == "compare":
+        return f"{head}\n{HINTS['compare']}"
     if old.stage == "assemble":
         return f"{head}\n{_text_assemble(old.plan)}"
     rows = [f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in old.cart.items]
@@ -1392,7 +1400,22 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return old.model_copy(
                 update={"plan": plan or old.plan, "reply": text, "questions": [], "llm": False}
             )
-    if prev and old.stage in ("assemble", "checkout") and is_question(low, rules_found):
+    # #186: «какая погода в декабре?» at a December plan names no new field: still a question.
+    fact = plan_fact(old.plan, low) if prev and old.stage in PLAN3 else ""
+    asked = without_plan_fields(rules_found, old.plan) if fact else rules_found
+    if (
+        prev
+        and old.stage == "compare"
+        and ASKING_NOTE not in rules_notes  # «а дети бесплатно?» has its own answer (#179)
+        and is_question(low, asked)
+        and (fact or _question_fact(old, low))
+    ):
+        # #186: a question at compare with a fact to give («погода?», «почему не Бульвар?»)
+        # goes to no model and changes nothing; other questions go on as before.
+        return old.model_copy(
+            update={"reply": _question_answer(old, low), "questions": [], "llm": False}
+        )
+    if prev and old.stage in ("assemble", "checkout") and is_question(low, asked):
         # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
         kids_only = asking and ASKING_NOTE in rules_notes and not rules_found
         text = _text_kids_question(old) if kids_only else _question_answer(old, low)
