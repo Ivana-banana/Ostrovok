@@ -249,9 +249,11 @@ LABELS = {
 # #139: cities as candidates («Сочи или Анапа») get the same notice and chips.
 ROUTE = "маршрут"
 CANDIDATES = "варианты"
+# A link word makes a route only right before a city: «потом в Казань», not «потом решим».
+LINK = r"\b(?:потом|затем|далее|оттуда|следом|а\s+после(?:\s+(?:этого|того|чего))?|после\s+(?:этого|того|чего))"
+LINK_RE = re.compile(LINK + r"(?:\s+(?:еще|тоже))?\s+(?:(?:в|во|на|к|ко)\s+)?([\w-]+)")
 ROUTE_RE = re.compile(
-    r"\b(?:потом|затем|далее|оттуда|следом|а\s+после|после\s+(?:этого|того|чего))\b"
-    r"|\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
+    r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
 )
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
@@ -260,7 +262,7 @@ STAY_RE = re.compile(
     r"\s*(?:ноч|дн|сут)"
 )
 AHEAD_RE = re.compile(r"\bчерез\s+\S+\s*(?:ноч|дн|сут)")  # «вылет через 3 дня»: no stay length
-OR_RE = re.compile(r"\bили\b")  # cities joined by «или» are candidates, never a route
+OR_RE = re.compile(r"\b(?:или|либо)\b")  # cities joined by «или», «либо» are candidates
 # The adults are not named: 2 by default. With a child this becomes a question (#112).
 PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
 # #113: the refused places live in this assumption (TripSpec has no field for them).
@@ -521,7 +523,8 @@ def is_route(message: str, destinations: list[str]) -> bool:
     if len(destinations) < 2 or OR_RE.search(low):
         return False
     stays = STAY_RE.findall(AHEAD_RE.sub(" ", low))
-    return bool(ROUTE_RE.search(low)) or len(stays) > 1
+    linked = any(resolve_place(m.group(1)) for m in LINK_RE.finditer(low))
+    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1
 
 
 def severals(message: str, destinations: list[str]) -> str | None:
