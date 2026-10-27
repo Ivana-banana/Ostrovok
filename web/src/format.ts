@@ -41,7 +41,7 @@ const FIELDS: Record<string, string> = {
 };
 
 // The backend picks hotels and destinations by ordinal word ("беру второй").
-const ORDINALS = ["первый", "второй", "третий", "четвёртый"];
+const ORDINALS = ["первый", "второй", "третий", "четвёртый", "пятый"];
 
 export function ordinal(i: number): string | null {
   return ORDINALS[i] ?? null;

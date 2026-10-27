@@ -19,7 +19,7 @@ import re
 from datetime import timedelta
 
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
-from api.extract import MONTH_NAMES, NUM, NUMS
+from api.extract import EDIT_VERB, MONTH_NAMES, NUM, NUMS
 from api.fixtures import find_offers, rank
 from api.optimizer import bundles, order_tariffs, pick_hotel
 from api.timeline import build_timeline
@@ -86,26 +86,113 @@ PRIORITIES = {
 }
 
 
-# «на два дня позже», «на неделю раньше»: a shift of the current dates, not a duration.
-# model.step drops the nights the extractor reads from «неделю» when this matches.
-SHIFT_RE = re.compile(rf"\bна\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)\s+(позже|раньше)")
+# «на два дня позже», «на пару недель раньше», «на сутки позже»: a shift of the current dates,
+# not a duration. model.step drops the nights the extractor reads from «неделю» when it matches.
+SHIFT_RE = re.compile(
+    rf"\bна\s+(?:(?P<n>{NUM}|пар[уы])\s+)?(?P<unit>дн\w*|день|сут\w*|недел\w*|ноч\w*)"
+    r"\s+(?P<way>позже|раньше)"
+)
+# A word that says which end of the trip moves; no word -> both ends move. Departure verbs
+# («улетим», «уедем», «выезд из Москвы», «отъезд») mean leaving home, so they are no cue.
+END_CUE = r"\b(?:обратн|верну|верне[мт]|верни|домой|выезд\s+из\s+отел|выселя|выселен|выписа|возврат|возвращ)"
+START_CUE = r"\b(?:засел|заезд|заех|заезж|приезд|приед|приеха|прилет|вылет|начал|старт)"
+# A request to move the dates that SHIFT_RE does not read: no amount, no direction or an odd word.
+# «поездк…» names the date only with a move verb: «измени бюджет поездки» is no date edit.
+_MOVE = rf"(?:{EDIT_VERB}\w*)"  # the verbs of extract.py: its amount is no length either
+_WEAK_MOVE = r"(?:поменя\w*|измени\w*)"
+_DATE_WORD = (
+    r"(?:дат\w*|поездк\w*|вылет\w*|отпуск\w*|заезд\w*|выезд\w*|заселени\w*|возвращени\w*|обратн\w*)"
+)
+_WEAK_DATE_WORD = r"(?:дат\w*|заезд\w*|заселени\w*|возвращени\w*|возврат\w*)"
+_UNIT = r"(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
+_EDIT_START = START_CUE.replace("|вылет", "")  # a bare «вылет позже» may be a time
+DATE_EDIT_RE = re.compile(
+    rf"\b{_MOVE}\b[^.!?]*?\b(?:{_DATE_WORD}|на\s+\w+\s+{_UNIT})"
+    rf"|\b{_WEAK_MOVE}\b[^.!?]*?\b(?:{_WEAK_DATE_WORD}|на\s+\w+\s+{_UNIT})"
+    rf"|\bна\s+\w+\s+{_UNIT}\s+(?:позже|раньше)"
+    # «вылет позже 10 утра», «хочу вылет позже, утром тяжело» is a time of day, not a date
+    rf"|(?:{_EDIT_START}|{END_CUE})\w*[^.!?,;]*\b(?:позже|раньше)\b(?!\s+(?:\d|чем|в\s+\d))"
+)
 MANUAL_WHY = "вы выбрали этот отель сами"
+# What the user sees about a shift; the kinds are the ends that moved.
+SHIFT_NOTE = {"both": "сдвинуты", "start": "заезд", "end": "возврат"}
+SHIFT_NOTE_RE = re.compile(
+    r"^даты: (сдвинуты|заезд|возврат) на (\d+) дн\. (позже|раньше) по вашей просьбе$"
+)
+
+
+def is_shift_note(assumption: str) -> bool:
+    return bool(SHIFT_NOTE_RE.match(assumption))
+
+
+def _which_end(text: str, m: re.Match, lo: int, hi: int, places: list[str]) -> str:
+    """ "start", "end" or "both" for the shift phrase m; lo..hi bounds the clause around it.
+
+    places: the destinations of the trip; «вылет из Сочи» from there is the flight back.
+    """
+    before = re.split(r"[.,;!?]|\sа\s|\sи\s", text[lo : m.start()])[-1]
+    after = re.split(r"[.,;!?]|\sа\s|\sи\s", text[m.end() : hi])[0]
+    for part in (before, after):
+        if re.search(END_CUE, part):  # «вылет обратно» is the return
+            return "end"
+        if f := re.search(r"вылет\w*\s+из\s+(\w+)", part):
+            stems = [p.lower().replace("ё", "е")[:4] for p in places]
+            if f.group(1)[:4] in stems:
+                return "end"
+        if re.search(START_CUE, part):
+            return "start"
+    return "both"
+
+
+def _amount(word: str | None) -> int:
+    """«два», «3», «пару» -> 2; no number -> 1 («на день», «на сутки»)."""
+    if not word:
+        return 1
+    return int(word) if word.isdigit() else 2 if word.startswith("пар") else NUMS.get(word, 1)
 
 
 def shift_dates(spec: TripSpec, text: str) -> TripSpec:
     """The spec with its dates moved by «на N дней позже/раньше»; unchanged without the phrase.
 
-    The extractor sees one message, not the spec, so the shift is applied here (S2).
+    The extractor sees one message, not the spec, so the shift is applied here (S2). A cue word
+    («обратно», «заселиться») moves one end only and changes the nights. The old «даты:»
+    assumptions go; a note «сдвинуты на N дн. … по вашей просьбе» (totals per end) replaces them.
+    Raises ValueError when less than one night would be left.
     """
-    m = SHIFT_RE.search(text.lower().replace("ё", "е"))
-    if not m or not (spec.date_from and spec.date_to):
+    t = text.lower().replace("ё", "е")
+    found = list(SHIFT_RE.finditer(t))
+    if not found or not (spec.date_from and spec.date_to):
         return spec
-    n = int(m.group(1)) if m.group(1) and m.group(1).isdigit() else NUMS.get(m.group(1), 1)
-    days = n * (7 if m.group(2).startswith("нед") else 1) * (1 if m.group(3) == "позже" else -1)
-    start, end = spec.date_from + timedelta(days=days), spec.date_to + timedelta(days=days)
+    start, end = spec.date_from, spec.date_to
+    total = {"both": 0, "start": 0, "end": 0}
+    for a in spec.assumptions:  # the shifts of earlier turns count too
+        if old := SHIFT_NOTE_RE.match(a):
+            kind = next(k for k, w in SHIFT_NOTE.items() if w == old.group(1))
+            total[kind] += int(old.group(2)) * (1 if old.group(3) == "позже" else -1)
+    for i, m in enumerate(found):
+        days = _amount(m.group("n")) * (7 if m.group("unit").startswith("нед") else 1)
+        days *= 1 if m.group("way") == "позже" else -1
+        lo = found[i - 1].end() if i else 0
+        hi = found[i + 1].start() if i + 1 < len(found) else len(t)
+        kind = _which_end(t, m, lo, hi, spec.destinations)
+        total[kind] += days
+        start += timedelta(days=days) if kind != "end" else timedelta(0)
+        end += timedelta(days=days) if kind != "start" else timedelta(0)
+    if (end - start).days < 1:
+        raise ValueError("В поездке останется меньше одной ночи.")
     kept = [a for a in spec.assumptions if not a.startswith("даты:")]  # dates are stated now
+    for kind, days in total.items():
+        if days:
+            way = "позже" if days > 0 else "раньше"
+            kept.append(f"даты: {SHIFT_NOTE[kind]} на {abs(days)} дн. {way} по вашей просьбе")
     return spec.model_copy(
-        update={"date_from": start, "date_to": end, "month": start.month, "assumptions": kept}
+        update={
+            "date_from": start,
+            "date_to": end,
+            "nights": (end - start).days,
+            "month": start.month,
+            "assumptions": kept,
+        }
     )
 
 
@@ -141,17 +228,35 @@ def _same_hotel(h: HotelOffer, offers: list[Offer]) -> HotelOffer | None:
     return next((o for o in group if (o.meal, o.cancellation.refundable) == same), group[0])
 
 
+# Labels of the best bundle in optimizer.optimize; a test keeps them in step.
+BEST_LABELS = ("лучший по вашим приоритетам", "ближе всего к условиям")
+
+
+def _ranked_hotel(plan: Plan) -> HotelOffer | None:
+    """The hotel of the best set the ranking showed, read from the stored bundles.
+
+    The best bundle is found by its label, not by its place: a bundle of the user's own trip
+    may stand before it. Without such a label the first bundle stands for the ranking.
+    """
+    best = next((b for b in plan.bundles if b.label.startswith(BEST_LABELS)), None)
+    best = best or (plan.bundles[0] if plan.bundles else None)
+    ids = set(best.offer_ids) if best else set()
+    return next((o for o in plan.offers if isinstance(o, HotelOffer) and o.offer_id in ids), None)
+
+
 def _keep_pick(old: Plan, plan: Plan) -> Change | None:
     """Keeps the hotel the user picked over the ranking («беру первый»).
 
-    The pick is manual when the old ranking chose another hotel. It is dropped only when the
-    hotel is gone, the edit changed a hotel requirement it fails, or a lowered budget fits the
-    ranked set but not the pick; the Change says why.
+    The pick is manual when the old plan selects another hotel than its best bundle, the
+    ranking the user saw. The bundles are stored, so no second rank() of the old spec runs
+    here. It is dropped only when the hotel is gone, the edit changed a hotel requirement it
+    fails, or a lowered budget fits the ranked set but not the pick; the Change says why.
     """
     picked, ranked = _hotel_of(old), _hotel_of(plan)
-    if not picked or not ranked or ranked.title == picked.title:
+    if not picked or not ranked or (ranked.title, ranked.city) == (picked.title, picked.city):
         return None
-    if picked.offer_id in rank(old.spec, old.offers)[0]:
+    shown = _ranked_hotel(old)
+    if not shown or (shown.title, shown.city) == (picked.title, picked.city):
         return None  # the ranking chose it, not the user
     same, spec = _same_hotel(picked, plan.offers), plan.spec
     budget = spec.budget_rub if spec.budget_rub != old.spec.budget_rub else None

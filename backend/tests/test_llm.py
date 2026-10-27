@@ -266,6 +266,42 @@ def test_rules_win_over_the_llm_and_dates_stay_one_group():
     assert with_llm(found, None) == found
 
 
+def test_s9_chip_phrase_goes_to_no_model(store, fake):
+    """A chip click is an order, not a filter: no LLM call, no field from it."""
+    r = say(store, SOCHI)
+    before = r.plan.spec
+
+    def reads():  # calls that read the text into a spec; explanations are another call
+        return [c for c in fake.calls if c["messages"][0]["content"] == llm.SPEC_PROMPT]
+
+    calls = len(reads())
+    fake.spec = lambda p: answer({**NULLS, "refundable": True, "meal": "AI", "pets": True})
+    r = say(store, "Мои приоритеты по важности: отмена, питание, цена.", r.session_id)
+    spec = r.plan.spec
+    assert spec.priorities == ["cancellation", "meal", "price"]
+    assert (spec.refundable, spec.meal, spec.pets) == (before.refundable, before.meal, before.pets)
+    assert len(reads()) == calls and r.llm is False
+
+
+@pytest.mark.parametrize(
+    "text, field, value",
+    [
+        ("Для меня главное рейтинг, и чтобы можно было с животными", "pets", True),
+        ("Главное — бесплатная отмена и чтобы был бассейн", "wishes", ["бассейн"]),
+        ("Главное — бесплатная отмена и чтобы был бассейн", "refundable", True),
+        ("Важнее цена, и с питанием", "meal", "AI"),
+    ],
+)
+def test_s9_free_text_with_priorities_keeps_the_llm_fields(store, fake, text, field, value):
+    """Rules read only `priorities` here, but the message has more: the model fields stay."""
+    r = say(store, SOCHI)
+    fake.spec = lambda p: answer({**NULLS, field: value})
+    r = say(store, text, r.session_id)
+    got = getattr(r.plan.spec, field)
+    assert (value[0] in got) if field == "wishes" else got == value
+    assert r.llm is True
+
+
 def test_llm_patch_is_validated(fake):
     spec = TripSpec(destinations=["Сочи"], origin="Москва", nights=3)
     cases = [
@@ -512,3 +548,15 @@ def test_second_half_of_a_month_is_no_hotel_pick(store):
     assert r.stage == "compare"
     r2 = say(store, "во второй половине ноября", r.session_id)
     assert r2.plan.selected == r.plan.selected and r2.stage == "compare"
+
+
+def test_model_answer_cannot_lift_an_earlier_refusal(store, fake):
+    """#113: the refusal of turn 1 holds against a model answer of turn 2 («Анталия» is in Turkey)."""
+    r = say(
+        store, "Едем с ребёнком в ноябре, хотим к морю. В Турции и Египте уже были, не хочется."
+    )
+    assert "исключено: Турция, Египет" in r.plan.spec.assumptions
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["Анталия"]})
+    r = say(store, "подешевле, до 100 тысяч", r.session_id)
+    assert r.plan.spec.destinations == [] and "Анталия" not in [d.name for d in r.plan.destinations]
+    assert "исключено: Турция, Египет" in r.plan.spec.assumptions

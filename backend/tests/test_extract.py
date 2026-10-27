@@ -1,11 +1,14 @@
 """Rule extractor and clarification policy (T3, #7): one case per rule, phrases from eval/cases.json."""
 
+import itertools
+import re
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
 from api.contracts import ChatRequest
-from api.extract import extract
+from api.extract import extract, is_chip_message
 from api.model import chat, step
 from api.store import SessionStore
 
@@ -527,3 +530,138 @@ def test_trap3_city_note_goes_away_when_a_city_is_stated_later():
     r = step(second, "s", "Лучше Казань")
     assert r.plan.spec.destinations == ["Казань"]
     assert not any("каталоге" in a for a in r.plan.spec.assumptions)
+
+
+def _format_ts() -> str:
+    return (Path(__file__).parents[2] / "web/src/format.ts").read_text(encoding="utf-8")
+
+
+def _chip_names() -> dict[str, str]:
+    """Priority names as the web chips say them: read from web/src/format.ts, no copy here."""
+    body = _format_ts().split("export const PRIORITIES", 1)[1].split("};", 1)[0]
+    return dict(re.findall(r'(\w+):\s*"([^"]+)"', body))
+
+
+def _chip_prefix() -> str:
+    """The start of the phrase priorityMessage builds, read from web/src/format.ts."""
+    body = _format_ts().split("export function priorityMessage", 1)[1]
+    return re.search(r"return `([^$`]+)\$\{", body).group(1)
+
+
+def test_s9_chip_phrase_of_every_order_gives_only_priorities():
+    names, prefix = _chip_names(), _chip_prefix()
+    assert len(names) == 6 and prefix.startswith("Мои приоритеты")
+    for size in range(1, len(names) + 1):
+        for order in itertools.permutations(names, size):
+            phrase = f"{prefix}{', '.join(names[p] for p in order)}."
+            for has_destination in (False, True):
+                found, _ = extract(phrase, has_destination)
+                assert found == {"priorities": list(order)}, phrase
+            assert is_chip_message(phrase), phrase
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Для меня главное рейтинг, и чтобы можно было с животными",
+        "Главное — бесплатная отмена и чтобы был бассейн",
+        "Важнее цена, и с питанием",
+        "Мои приоритеты по важности: отмена, цена, и ещё хочу бассейн.",
+    ],
+)
+def test_s9_free_text_is_not_the_chip_phrase(text):
+    assert not is_chip_message(text)
+
+
+# --- #82: a two-word city first in the phrase (TRAP-3) ---
+
+
+@pytest.mark.parametrize(
+    "text, city",
+    [
+        ("Великий Новгород в мае", "Великий Новгород"),
+        ("Минеральные Воды на 3 дня", "Минеральные Воды"),
+        ("Нижний Новгород на выходные", "Нижний Новгород"),
+        ("Санкт-Петербург в июле", "Санкт-Петербург"),
+        ("санкт-петербург в июле", "Санкт-Петербург"),
+        ("Петербург в июле", "Санкт-Петербург"),
+        ("хочу в великий новгород в мае", "Великий Новгород"),
+        ("из минеральных вод в казань", "Казань"),
+        ("Великий Новгород, 3 ночи", "Великий Новгород"),
+        ("Хочу в Великом Новгороде на 3 дня", "Великий Новгород"),
+        ("Поездка в Минеральные Воды", "Минеральные Воды"),
+        ("Отдых в Сочи", "Сочи"),
+    ],
+)
+def test_trap3_two_word_city_in_any_place_of_the_phrase(text, city):
+    assert extract(text)[0]["destinations"] == [city]
+
+
+def test_trap3_two_word_city_as_origin_and_as_destination():
+    found, _ = extract("Из Москвы в Великий Новгород")
+    assert found["origin"] == "Москва" and found["destinations"] == ["Великий Новгород"]
+    found, _ = extract("Из Великого Новгорода в Сочи")
+    assert found["origin"] == "Великий Новгород" and found["destinations"] == ["Сочи"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Хочу на море в мае",
+        "Великий отпуск в мае",
+        "Минеральная вода на 3 дня",
+        "Хочу санаторий с минеральными водами в мае",
+        "великий новгород, 3 ночи",  # lower case, no preposition: dropped on purpose
+    ],
+)
+def test_trap3_ordinary_capitalised_first_words_are_no_city(text):
+    assert "destinations" not in extract(text)[0]
+
+
+def test_trap3_mineral_waters_in_a_sanatorium_wish_stay_a_wish():
+    found, _ = extract("Санаторий в Кисловодске, лечение минеральными водами")
+    assert found["destinations"] == ["Кисловодск"]
+    assert extract("из минеральных вод в казань")[0]["origin"] == "Минеральные Воды"
+
+
+@pytest.fixture
+def tuesday(monkeypatch):
+    """Fix «today» for the extractor: Tuesday 2026-10-27."""
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 27)
+
+    monkeypatch.setattr("api.extract.date", FixedDate)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("в Минск на поезде в пятницу", date(2026, 10, 30)),
+        ("в Минск на поезде во вторник", date(2026, 11, 3)),
+        ("в Казань в понедельник, двое", date(2026, 11, 2)),
+        ("в Казань через неделю, двое", date(2026, 11, 3)),
+        ("в Казань в эти выходные, двое", date(2026, 10, 30)),
+    ],
+)
+def test_relative_date_is_the_nearest_from_today(tuesday, text, expected):
+    found, _ = extract(text)
+    assert found["date_from"] == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["отдых в средней полосе в ноябре, двое", "Казань по субботам, двое", "Казань в среде, двое"],
+)
+def test_weekday_lookalikes_are_not_dates(tuesday, text):
+    found, _ = extract(text)
+    assert "date_from" not in found
+    if "ноябре" in text:
+        assert found["month"] == 11
+
+
+def test_weekday_respects_the_named_month(tuesday):
+    found, _ = extract("в Сочи в ноябре в пятницу, двое")
+    assert found["date_from"] == date(2026, 11, 6) and found["month"] == 11

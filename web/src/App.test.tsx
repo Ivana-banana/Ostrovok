@@ -284,6 +284,13 @@ suite("приложение", () => {
     const link = foot?.querySelector("a") as HTMLAnchorElement;
     expect(link.textContent).toBe("ODbL");
     expect(link.href).toBe("https://www.openstreetmap.org/copyright");
-    expect(foot?.textContent).toContain("синтетические");
+    expect(foot?.textContent).toContain("синтетика");
+  });
+
+  it("TRAP-7: подвал называет всю синтетику и оценки команды", async () => {
+    await mount();
+    const foot = (box.querySelector("footer[aria-label='Источники данных']")?.textContent ?? "").replace(/\s+/g, " ");
+    for (const w of ["Цены, рейсы, тарифы, трансферы и рейтинги — синтетика", "отели вне снимка OSM", "Климат и время в пути — оценки команды", "Оплата имитируется"])
+      expect(foot).toContain(w);
   });
 });
