@@ -202,3 +202,16 @@ def test_c17_warm_sea_with_quiet_rest_keeps_the_sea_pool(store):
 def test_c17_no_flight_phrases_still_ban_the_plane():
     assert extract("не на самолёте, дорого")[0]["modes"] == ["train", "car"]
     assert extract("без самолётов")[0]["modes"] == ["train", "car"]
+
+
+def test_c17_train_only_from_spb_to_the_sea_keeps_domestic_trains():
+    """Review of #277: «поездом из Санкт-Петербурга на море» lost every fitting card to a 24 h cap."""
+    spec = TripSpec(modes=["train"], origin="Санкт-Петербург", wishes=["море"], month=7)
+    assert any(not d.violates for d in inspire.suggest_destinations(spec, 4))
+
+
+def test_c17_chosen_car_keeps_the_soft_car_pool():
+    """A chosen car is not a flight ban: the pool is that of main (Кобулети, Варна by car)."""
+    spec = TripSpec(modes=["car"], origin="Москва", wishes=["море"], month=7)
+    names = {d.name for d in inspire.suggest_destinations(spec, 4)}
+    assert {"Кобулети", "Варна"} & names
