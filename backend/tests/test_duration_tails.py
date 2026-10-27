@@ -27,7 +27,7 @@ def test_range_over_the_limit_is_named_and_not_taken(store):
     r = say(store, "Сочи с 1 ноября по 15 февраля, двое взрослых")
     assert r.plan.spec.nights == 7
     assert length_notes(r) == [
-        "длительность: срок «1 ноября по 15 февраля» не принял — взято 7 ночей"
+        "длительность: срок «с 1 ноября по 15 февраля» не принял — взято 7 ночей"
     ]
     assert r.plan.spec.date_from is not None
     assert (r.plan.spec.date_to - r.plan.spec.date_from).days == 7
@@ -44,7 +44,7 @@ def test_range_over_the_limit_on_an_edit_keeps_the_plan_length(store):
     reply = say(store, "лучше с 1 ноября по 15 февраля", first.session_id)
     assert reply.plan.spec.nights == 5
     assert length_notes(reply) == [
-        "длительность: срок «1 ноября по 15 февраля» не принял — взято 5 ночей"
+        "длительность: срок «с 1 ноября по 15 февраля» не принял — взято 5 ночей"
     ]
 
 
@@ -114,3 +114,108 @@ def test_a_month_before_a_budget_is_still_30_nights(store):
     r = say(store, "Сочи на месяц, бюджет 100 тысяч, двое взрослых")
     assert r.plan.spec.nights == 30
     assert length_notes(r) == ["длительность: «на месяц» — 30 ночей"]
+
+
+# --- #173: the note agrees with the plan; a date shift is no length and no consent -----------
+
+
+def test_range_note_names_the_length_the_plan_has(store):
+    r = say(store, "Сочи с 1 ноября по 15 февраля на 10 ночей, двое взрослых")
+    assert r.plan.spec.nights == 10
+    assert length_notes(r) == [
+        "длительность: срок «с 1 ноября по 15 февраля» не принял — взято 10 ночей"
+    ]
+
+
+def test_range_note_without_a_length_names_the_default(store):
+    r = say(store, "Сочи с 1 ноября по 15 февраля, двое взрослых")
+    assert length_notes(r) == [
+        "длительность: срок «с 1 ноября по 15 февраля» не принял — взято 7 ночей"
+    ]
+
+
+def test_range_quote_without_from_has_no_from(store):
+    r = say(store, "Сочи 1 ноября - 15 февраля, двое взрослых")
+    assert length_notes(r) == [
+        "длительность: срок «1 ноября - 15 февраля» не принял — взято 7 ночей"
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сочи на полгода вперёд, на неделю",
+        "Сочи на полгода позже, на неделю",
+        "Сочи на пол года назад, на неделю",
+    ],
+)
+def test_half_a_year_shift_is_no_length(store, text):
+    r = say(store, text + ", двое взрослых")
+    assert r.plan.spec.nights == 7
+    assert [n for n in length_notes(r) if "не принял" in n] == []
+
+
+def test_half_a_year_shift_on_compare_is_no_consent(store):
+    first = say(store, "Сочи на 5 ночей в ноябре, двое взрослых")
+    reply = say(store, "давай на полгода позже", first.session_id)
+    assert reply.stage == "compare" and not reply.cart.items
+    assert reply.plan.spec.nights == 5
+    assert [n for n in length_notes(reply) if "не принял" in n] == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сочи, бюджет 100 тыс. на месяц",
+        "Сочи, 100 тыс. руб. на месяц",
+        "Сочи, 100 000 руб. на месяц",
+        "Сочи, 100 000 р. на месяц",
+    ],
+)
+def test_a_month_after_an_abbreviated_budget_sum_is_no_length(store, text):
+    r = say(store, text + ", двое взрослых")
+    assert r.plan.spec.nights == 7
+    assert length_notes(r) == ["длительность: 7 ночей (не названа)"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сочи, 100к на месяц, едем на месяц",
+        "Сочи, бюджет 100 тыс. на месяц, поедем на месяц",
+        "Сочи на месяц, 100к на месяц",
+    ],
+)
+def test_every_month_is_checked_the_first_length_wins(store, text):
+    r = say(store, text + ", двое взрослых")
+    assert r.plan.spec.nights == 30
+    assert length_notes(r) == ["длительность: «на месяц» — 30 ночей"]
+
+
+@pytest.mark.parametrize(
+    "text", ["давай на месяц позже", "давай на 2 месяца позже", "ок, на год вперёд"]
+)
+def test_a_month_shift_on_compare_is_no_consent(store, text):
+    first = say(store, "Сочи на 5 ночей в ноябре, двое взрослых")
+    reply = say(store, text, first.session_id)
+    assert reply.stage == "compare" and not reply.cart.items
+    assert reply.plan.spec.nights == 5
+    assert reply.plan.spec.date_from == first.plan.spec.date_from
+    assert length_notes(reply) == length_notes(first)
+    assert "на два дня позже" in reply.reply  # says what the plan can shift
+
+
+def test_a_month_shift_on_assemble_is_no_consent(store):
+    first = say(store, "Сочи на 5 ночей в ноябре, двое взрослых")
+    second = say(store, "давай", first.session_id)
+    reply = say(store, "давай на месяц позже", second.session_id)
+    assert reply.stage == "assemble" and not reply.cart.items
+    assert reply.plan.spec.date_from == second.plan.spec.date_from
+
+
+def test_a_week_shift_still_moves_the_dates(store):
+    first = say(store, "Сочи на 5 ночей в ноябре, двое взрослых")
+    reply = say(store, "давай на неделю позже", first.session_id)
+    assert reply.stage == "compare"
+    assert (reply.plan.spec.date_from - first.plan.spec.date_from).days == 7
+    assert reply.plan.spec.nights == 5
