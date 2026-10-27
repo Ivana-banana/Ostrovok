@@ -134,6 +134,8 @@ hotel_budget_rub is the budget of the hotel only, for all nights, in roubles: «
 A sum said about the hotel goes to hotel_budget_rub, not to budget_rub. A price per night is
 not a hotel budget: leave hotel_budget_rub null for it.
 destinations and origin are place names in Russian, nominative case.
+A place name is a proper name of a city, region or country. A kind of place («море», «горы»)
+or «недалеко от Москвы» is a wish, not a destination.
 wishes are short Russian words of the traveller, for example: море, недорого, горы, лыжи.
 priorities only when the user compares criteria (важнее, главное, приоритет).
 "недорого" alone is a wish, not a priority.
@@ -402,6 +404,16 @@ def extract_spec(
             return None
         if any(_leaks(v, SPEC_PROMPT) for v in values):
             return None
+    # A place is a proper name. «тёплое море», «рядом с Москвой» from GigaChat stopped the turn
+    # on «нет в каталоге» (#117); the rules read such words as wishes.
+    if isinstance(patch.get("destinations"), str):
+        patch["destinations"] = [patch["destinations"]]
+    names = [v for v in patch.get("destinations", []) if v.strip()[:1].isupper()]
+    patch.pop("destinations", None)
+    if names:
+        patch["destinations"] = names
+    if "origin" in patch and not patch["origin"].strip()[:1].isupper():
+        patch.pop("origin")
     try:
         typed = TripSpec.model_validate({**spec.model_dump(), **patch})
     except ValidationError:

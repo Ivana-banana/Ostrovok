@@ -344,6 +344,33 @@ def test_llm_patch_is_validated(fake):
     assert got["date_from"] == date(2020, 1, 1) and got["date_to"] == date(2020, 1, 5)
 
 
+S1_TEXT = (
+    "Хочу куда-нибудь к тёплому морю в ноябре, недорого, с ребёнком 5 лет, "
+    "без долгих перелётов. Летим из Москвы."
+)
+
+
+def test_kind_of_place_is_no_destination(store, fake):
+    """#117: GigaChat put «тёплое море» into destinations; the turn stopped on «нет в каталоге».
+
+    A place name is a proper name. «тёплое море», «рядом с Москвой» are wishes: rules read them.
+    """
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["тёплое море"], "origin": "Москва"})
+    r = say(store, S1_TEXT)
+    assert r.stage == "inspire" and not r.plan.spec.destinations
+    assert "синтетика" in r.reply
+
+
+def test_only_proper_names_stay_in_destinations(fake):
+    fake.spec = lambda p: answer(
+        {**NULLS, "destinations": ["Сочи", "рядом с Москвой", "море"], "origin": "дом"}
+    )
+    got = llm.extract_spec("текст", TripSpec())
+    assert got["destinations"] == ["Сочи"] and "origin" not in got
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["горы"], "nights": 3})
+    assert llm.extract_spec("текст", TripSpec()) == {"nights": 3}
+
+
 def test_user_text_is_data_and_source_texts_are_not_sent(store, fake):
     """S4: the message is a JSON value in the user turn; hotel descriptions never go out."""
     r = say(store, KGD)
