@@ -350,7 +350,8 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     before, rest = t[: m.start()], t[m.end() :]
     if re.search(r"\b(?:до|после|с|со|перед)\s+$", before):
         return "skip", month
-    negated = bool(re.search(r"\b(?:не|кроме)\s+(?:\S+\s+){0,2}$|\bбез\s+$", before))
+    # «не дорого, в январе»: a comma ends the reach of the «не» (#198)
+    negated = bool(re.search(r"\b(?:не|кроме)\s+(?:[^\s,;]+\s+){0,2}$|\bбез\s+$", before))
     if negated and re.match(r"\s*,?\s*(?:а|но|лучше|давай)\b", rest):
         other = re.search(rf"\b{MONTH}", rest)  # «не в январе, а в феврале»: the month to ask about
         return "ask", _month_number(other.group(1)) if other else None
@@ -360,8 +361,25 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     if "?" in t or re.search(unclear, t):
         return "ask", month
     clause = re.split(r"[.;!?]", rest)[0]
-    gone = r"\s*(?:\S+\s+){0,2}?(?:не\b|нельзя|отпадает|отпадают|исключен|невозможн)"
-    if negated or re.match(gone, clause):
+    # Without a comma a «не» after the month is a refusal («в январе не поедем»). After a comma,
+    # «но», «и» or «а» it may belong to a neighbour («в январе, не дорого»): only a verb of
+    # refusing makes it one (#198).
+    parts = re.split(r",|\s(?:но|и|а)\s", clause, maxsplit=1)
+    near, after = parts[0], parts[1] if len(parts) > 1 else ""
+    stop = r"нельзя|отпадает|отпадают|исключен|невозможн"
+    verbs = (
+        r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|над|нуж|вариант|устраива|катит"
+        r"|рассматр|будет|удобн"
+    )
+    # «не поедем» ends the part: «не поедем на самолёте» only drops a way to travel
+    moves = r"поед|полет|лет|ед[еи]м"
+    end = r"(?=\s*(?:,|;|$))"
+    gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{stop})"
+    refusing = (
+        rf"\s*(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
+        rf"|не\s+(?:{moves})\w*{end}|не{end}|{stop})"
+    )
+    if negated or re.match(gone, near) or re.match(refusing, after):
         return "stay", month
     return "move", month
 
@@ -1600,11 +1618,19 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # A route of an earlier message: the notice comes with the first plan (after a question)
         route = next((k for k in (ROUTE, CANDIDATES) if _noted(spec, k)), None)
 
+    before = old.plan.spec
+
     def with_month(spec: TripSpec, text: str, questions: list[Question]):
         """The dates stay: the line is built from the final spec, not from the old dates. The
         general question is only for a message that changed nothing; here the dates stay."""
         if not (month_note and spec.date_to):
             return text, questions
+        if (
+            month_verdict == "ask"
+            and month_target == spec.date_from.month != before.date_from.month
+        ):
+            # «может в январе? на месяц позже»: the shift put the dates there already (#198)
+            return f"{text}\nДаты сдвинуты по вашей просьбе: {period(spec)}.", questions
         line, chips = month_reply(spec, month_target or spec.date_from.month, "")
         return f"{text}\n{line}", [*chips, *questions]
 
@@ -1664,7 +1690,22 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if "date_from" not in found:
         try:
             # «на два дня позже» moves the current dates (S2)
-            spec = shift_dates(spec, message, prev is not None)
+            shifted = shift_dates(spec, message, prev is not None)
+            refused = rules_found.get("month")
+            moved = (shifted.date_from, shifted.date_to) != (spec.date_from, spec.date_to)
+            if (
+                month_verdict == "stay"
+                and moved
+                and refused not in (spec.date_from.month, spec.date_to.month)
+                and refused in (shifted.date_from.month, shifted.date_to.month)
+            ):
+                # The user refused that month: the shift into it is not applied (#198)
+                lines.append(
+                    f"Сдвиг не применён: он переносит даты на {period(shifted)}, "
+                    f"а {MONTH_NAMES[refused - 1]} вы отвергли."
+                )
+            else:
+                spec = shifted
         except ValueError as e:
             text = (
                 f"{e} Из этого сообщения ничего не применено. "
