@@ -371,10 +371,21 @@ REFUSED_BEFORE_RE = re.compile(r"\b(?:не|без|никак\w*)\s+(?:\w+\s+)?$"
 REFUSED_AFTER_RE = re.compile(
     r"\w*\s*(?:[—–:-]\s*)?(?:(?:мне|нам|точно|совсем|вообще)\s+)?"
     r"(?:ни\s+за\s+что|исключ\w*|отпада\w*|не\s+вариант|не\s+рассматрива\w*"
-    r"|не\s+(?:надо|нужн\w*|нужен|хочу|хотим|хочется|подходит|интересн\w*)"
+    r"|не\s+(?:надо|нужн\w*|нужен|хочу|хотим|хочется|подходит|интересн\w*|поеду|поедем|едем)"
     r"(?=\s*(?:[.,;!?)]|$)|\s+(?:и|а|но)\b))"
 )
-FLIGHT_FEAR_RE = re.compile(r"аэрофоб|бо(?:юсь|имся|ится)\s+(?:летать|летет|самол)")
+# #351: the fear of flying bans the flight only as a whole: «не боюсь летать», «аэрофобии нет»
+# and «боюсь летать ночью» (a condition, not every flight) ban nothing.
+FLIGHT_FEAR_RE = re.compile(
+    r"аэрофоб\w*|бо(?:юсь|имся|ится|ятся)\s+(?:летать|лететь|самол[её]т\w*|перел[её]т\w*)"
+)
+FEAR_DENIED_BEFORE_RE = re.compile(r"\b(?:не|нет)\s+(?:\w+\s+)?$")
+FEAR_DENIED_AFTER_RE = re.compile(r"\s+(?:нет|не\s+\w+)\b")
+# «боюсь летать, но ради Бали готов»: a concession after the fear lifts the ban (#351).
+FEAR_CONCEDED_RE = re.compile(
+    r"[^.!?]*?\bно\b[^.!?]*?\b(?:готов\w*|можно|ладно|потерплю|соглас\w*|полечу|полетим|переживу)"
+)
+CLAUSE_END_RE = re.compile(r"\s*(?:[.,;!?)—–-]|$)|\s+(?:и|а|но|поэтому|так\s+что)\b")
 # #114: «где тепло», «тёплые края», «жарко». «Тёплое море» is the sea wish (its water is checked),
 # «не тепло», «не люблю жару» and «тёплая куртка» are no wish for the warm.
 WARM = (
@@ -466,8 +477,22 @@ def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
 
 
 def _refused(t: str, m: re.Match) -> bool:
-    """«без all inclusive», «самолёт ни за что»: the named thing is refused, not wanted (#302)."""
-    return bool(REFUSED_BEFORE_RE.search(t[: m.start()]) or REFUSED_AFTER_RE.match(t, m.end()))
+    """«без all inclusive», «самолёт ни за что»: the named thing is refused, not wanted (#302).
+
+    Two refusals want it (#351): «без all inclusive не хочу», «без всё включено не поеду»."""
+    before = bool(REFUSED_BEFORE_RE.search(t[: m.start()]))
+    return before != bool(REFUSED_AFTER_RE.match(t, m.end()))
+
+
+def _fears_flight(t: str) -> bool:
+    """«боюсь летать», «аэрофобия»: no flight at all (#302); not denied, with no condition."""
+    return any(
+        not FEAR_DENIED_BEFORE_RE.search(t[: m.start()])
+        and not FEAR_DENIED_AFTER_RE.match(t, m.end())
+        and CLAUSE_END_RE.match(t, m.end())
+        and not FEAR_CONCEDED_RE.match(t, m.end())
+        for m in FLIGHT_FEAR_RE.finditer(t)
+    )
 
 
 def _meal(t: str) -> str | None:
@@ -476,7 +501,8 @@ def _meal(t: str) -> str | None:
     for p, v in MEALS:
         xs = list(re.finditer(p, t))
         if v == "RO" and xs:
-            return v  # «без завтрака» names the refusal itself
+            # «без завтрака» names the refusal itself; «без завтрака не хочу» wants it (#351)
+            return "BB" if all(REFUSED_AFTER_RE.match(t, x.end()) for x in xs) else v
         if any(not _refused(t, x) for x in xs):
             return v
         refused += [v] if xs else []
@@ -1208,14 +1234,20 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
                 days=n * (7 if m.group(2).startswith("нед") else 1)
             )
         elif m := re.search(
-            rf"\b(?:в|во|на)\s+(?:(?:эт[уо]т?|ближайш\w+)\s+)?({'|'.join(WEEKDAYS)})\b", t
+            rf"\b(?:в|во|на)\s+(?:(эт[уо]т?|ближайш\w+|следующ\w+)\s+)?({'|'.join(WEEKDAYS)})\b",
+            t,
         ):
-            wd, month = WEEKDAYS.index(m.group(1)), found.get("month")
+            which, wd, month = m.group(1) or "", WEEKDAYS.index(m.group(2)), found.get("month")
+            ahead = (wd - today.weekday()) % 7
             if month and month != (today + timedelta(days=1)).month:
                 base = future_date(month, 1)  # first such weekday of the named month
                 found["date_from"] = base + timedelta(days=(wd - base.weekday()) % 7)
+            elif which.startswith("эт"):  # #351: «на эту пятницу» on a Friday is today
+                found["date_from"] = today + timedelta(days=ahead)
+            elif which.startswith("следующ"):  # the same weekday of the next week
+                found["date_from"] = today + timedelta(days=ahead + 7)
             else:
-                found["date_from"] = today + timedelta(days=(wd - today.weekday()) % 7 or 7)
+                found["date_from"] = today + timedelta(days=ahead or 7)
             notes.append(f"даты: {found['date_from']:%d.%m} («{m.group(0)}», ближайший)")
         elif re.search(r"\bследующ\w*\s+недел", t):
             found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
@@ -1451,12 +1483,20 @@ def is_child_question(text: str) -> bool:
 # #302: a stay is asked for («гостиницу на пятницу», «нужен отель»): it needs a city.
 STAY_ASK_RE = re.compile(
     r"\b(?:отел(?:ь|я|ю|е|и|ей|ям|ях|ями)\b|гостиниц\w*|хостел\w*|апартамент\w*|жиль[еяю]\w*"
-    r"|переночев\w*|заброниру\w*)"
+    r"|переночев\w*)"
 )
+# #351: a booking or tickets without a stay word («забронируй билеты на поезд»): the trip's
+# destination is asked, not the city of a hotel.
+# A verb asks to book: «вместе с билетами» in a budget is no request (F09).
+BOOK_ASK_RE = re.compile(r"\b(?:заброниру\w*|забронир\w*|купи(?:те)?|оформи(?:те)?)\b")
 
 
 def asks_stay(text: str) -> bool:
     return bool(STAY_ASK_RE.search(text.lower().replace("ё", "е")))
+
+
+def asks_booking(text: str) -> bool:
+    return bool(BOOK_ASK_RE.search(text.lower().replace("ё", "е")))
 
 
 def children_uncounted(text: str) -> bool:
@@ -1852,7 +1892,14 @@ def extract(
     # A refusal after the word bans the flight; a refusal before it is NO_FLIGHT's: «не хочу
     # лететь долго» bans a long flight only (#277).
     refused_after = any(REFUSED_AFTER_RE.match(t, x.end()) for x in hits["flight"])
-    if not modes and (refused_after or NO_FLIGHT.search(t) or FLIGHT_FEAR_RE.search(t)):
+    # «без перелёта не поеду»: two refusals want the flight (#351)
+    no_flight = [bool(REFUSED_AFTER_RE.match(t, x.end())) for x in NO_FLIGHT.finditer(t)]
+    if any(no_flight) and "flight" not in modes:
+        modes.append("flight")
+    fear = _fears_flight(t)
+    if fear:  # «боимся самолётов»: the word «самолёт» is no wish for the flight (#351)
+        modes = [m for m in modes if m != "flight"]
+    if not modes and (refused_after or not all(no_flight) or fear):
         # #277, #302: «без самолётов», «самолёт ни за что» ban the flight, the rest stay.
         # «не хочу поезд» bans nothing: it is no pick at a built plan (test_transport_choice).
         modes = ["train", "car"]
