@@ -404,7 +404,7 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
     # mean the same timeline. If the checker starts reading spec fields, rebuild it here.
     # The timeline is built whenever the selection changed, also for the first plan (#66): the
     # compare stage shows it before the user says «беру».
-    if _chosen(plan) != _chosen(old) or not plan.timeline:
+    if _chosen(plan) != _chosen(old) or not old.offers:
         plan.timeline, plan.issues = build_timeline(plan)
         done.append("timeline")
     new_cart = cart
