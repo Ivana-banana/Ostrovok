@@ -978,8 +978,8 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
                 found["budget_rub"] = None
                 notes.append(f"бюджет: в {label} — не пересчитываю, уточните в рублях")
                 return
-    hits = [(m, v, True) for p, v in MILLION_RES if (m := re.search(p, t))]
-    hits += [(m, k, False) for p, k in BUDGET_RES if (m := re.search(p, t))]
+    hits = [(m, v, True) for p, v in MILLION_RES for m in re.finditer(p, t)]
+    hits += [(m, k, False) for p, k in BUDGET_RES for m in re.finditer(p, t)]
     for m, k, is_word in hits:
         if NOT_MONEY_RE.match(t[m.end() :]):
             continue

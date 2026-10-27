@@ -182,3 +182,7 @@ def test_plain_budgets_stay():
     ]:
         found, notes = extract(text)
         assert found["budget_rub"] == budget and not budget_notes(notes), text
+
+
+def test_a_sum_that_counts_steps_is_skipped_for_the_next_sum():
+    assert extract("прошли 50 тысяч шагов, бюджет 80 тысяч")[0]["budget_rub"] == 80_000
