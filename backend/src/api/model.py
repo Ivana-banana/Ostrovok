@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from api import llm
 from api.answers import plan_fact, without_plan_fields
-from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, sync_plan
+from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
 from api.contracts import (
     Cart,
     ChatReply,
@@ -692,7 +692,9 @@ def switch_transport(plan: Plan, text: str) -> tuple[Plan | None, str]:
     kept = [i for i in plan.selected if not isinstance(by_id.get(i), TransportOffer)]
     out = plan.model_copy(
         update={
-            "selected": pick_hotel([*kept, *chosen], plan.offers, hotel.offer_id),
+            "selected": keep_refusal(
+                plan, pick_hotel([*kept, *chosen], plan.offers, hotel.offer_id)
+            ),
             "changes": [],
         }
     )
@@ -926,7 +928,9 @@ def _without_changes(plan: Plan) -> tuple[Plan | None, str]:
     chosen = [new.get(x.offer_id, x.offer_id) for x in legs]
     out = plan.model_copy(
         update={
-            "selected": pick_hotel([*kept, *chosen], plan.offers, hotel.offer_id),
+            "selected": keep_refusal(
+                plan, pick_hotel([*kept, *chosen], plan.offers, hotel.offer_id)
+            ),
             "changes": [],
         }
     )
@@ -970,7 +974,10 @@ def _better_hotel(plan: Plan) -> tuple[Plan | None, str]:
     if cur.stars != nxt.stars:
         what.append(f"звёзды: {cur.stars or '—'}★ → {nxt.stars or '—'}★")
     out = plan.model_copy(
-        update={"selected": pick_hotel(plan.selected, plan.offers, nxt.offer_id), "changes": []}
+        update={
+            "selected": keep_refusal(plan, pick_hotel(plan.selected, plan.offers, nxt.offer_id)),
+            "changes": [],
+        }
     )
     out.timeline, out.issues = build_timeline(out)
     out.explanations = _explain(out)
@@ -1302,8 +1309,6 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
     else:
         plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
         plan.timeline, plan.issues = build_timeline(plan)
-    # The checker derives a transfer from the hotel and the leg; the user does not take it.
-    plan.timeline = [e for e in plan.timeline if e.offer_id not in ids]
     rows = "; ".join(f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in gone)
     head = f"Убираю трансфер из плана: {rows}."
     if old.stage == "assemble":
