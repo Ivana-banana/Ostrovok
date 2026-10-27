@@ -78,6 +78,25 @@ def test_trap_3_close_spelling_is_not_another_city():
     assert catalog.resolve("Малага") is None
 
 
+@pytest.mark.parametrize("written", ["Гагра", "Гагры", "в Гагре", "Анья"])
+def test_trap_3_gagra_is_not_agra(written):
+    """TRAP-3 (#267): a name with another first letter is another place, not a typo.
+
+    «Гагра» (not in the snapshot) is not «Агра», «Анья» is not «Ханья»: None, so the caller
+    goes to the online geocoder, never to a different city.
+    """
+    assert catalog.resolve(written) is None
+
+
+def test_trap_3_gagra_neighbours_still_resolve():
+    """TRAP-3 (#267): the exact names next to the failure keep their place."""
+    assert catalog.resolve("Агра")["name"] == "Агра"
+    assert catalog.resolve("в Агре")["name"] == "Агра"
+    assert catalog.resolve("Томск")["name"] == "Томск"
+    assert catalog.resolve("Омск")["name"] == "Омск"
+    assert catalog.resolve("Санья")["name"] == "Санья"
+
+
 def test_trap_3_letters_after_a_short_name_are_not_a_case_ending():
     """TRAP-3: «Гори» (Georgia) is not «Гоа» + «ри»; «в Нижнем Новгороде» still is the city."""
     assert catalog.resolve("Гори") is None

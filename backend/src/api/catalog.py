@@ -2,7 +2,8 @@
 
 catalog.json is built by scripts/build_catalog.py; sources, licences and the date are in its
 _source. Free text resolves to a place: case, ё/е, a leading preposition, Russian case endings,
-ru/en aliases (TRAP-3), a country name (its main place), then a close spelling.
+ru/en aliases (TRAP-3), a country name (its main place), then a close spelling with the same
+first letter.
 A name outside the snapshot goes to lookup_online: the Open-Meteo geocoder and one year of
 climate with a short timeout. Any error there gives None, never an exception (TRAP-2, TRAP-6).
 """
@@ -140,7 +141,8 @@ def resolve(text: str) -> dict | None:
         return found[0]  # «в Турцию» -> Анталия; Россия has no main place
     if len(q) < 4:
         return None
-    stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
+    # A typo keeps the first letter: «Гагра» is not «Агра», «Анья» is not «Ханья» (TRAP-3).
+    stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split()) and k[0] == q[0]}
     close = difflib.get_close_matches(_stems(q), stems, n=1, cutoff=FUZZY)
     return stems[close[0]] if close else None
 
