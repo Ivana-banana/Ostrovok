@@ -529,7 +529,7 @@ def test_only_checks_py_reads_the_unseen_pool():
     places = [root / "backend/src", root / "scripts", root / "web/src"]
     suffixes = {".py", ".sh", ".ts", ".tsx", ".js", ".json", ".mk"}
     readers = {
-        str(p.relative_to(root))
+        p.relative_to(root).as_posix()
         for base in places
         for p in base.rglob("*")
         if p.is_file() and p.suffix in suffixes and "cases_unseen" in p.read_text("utf-8")
