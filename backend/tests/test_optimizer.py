@@ -187,6 +187,46 @@ def test_budget_fallback_names_the_overrun_and_picks_the_cheapest():
     assert r.bundles[0].label == "ближе всего к условиям"
 
 
+def test_hotel_budget_limits_the_hotel_not_the_whole_trip():
+    """#41: «отель до 20 000» — the hotel price, the flights above it do not count."""
+    good, cheap = hotel("good", 40_000, rating=9.5, stars=5), hotel("cheap", 15_000, rating=7.0)
+    items = offers([good, cheap], FLIGHTS)
+    s = spec(priorities=["rating"], hotel_budget_rub=20_000)
+    assert hotel_of(s, items) == cheap
+    r = optimize(s, items)
+    assert r.explanations[0].risks == []
+    assert "отель в бюджете отеля 20 000 ₽" in r.explanations[0].why
+    # 31 000 ₽ for the whole trip fits the same hotel under a trip budget of 35 000
+    both = spec(priorities=["rating"], hotel_budget_rub=20_000, budget_rub=35_000)
+    assert hotel_of(both, items) == cheap
+    wide = spec(priorities=["rating"], hotel_budget_rub=45_000)
+    assert hotel_of(wide, items) == good  # the budget does not push a fitting better hotel out
+
+
+def test_hotel_budget_fallback_names_the_overrun_of_the_hotel():
+    """D-006: nothing fits the hotel budget — the smallest overrun, named in the risks."""
+    items = offers([hotel("a", 25_000), hotel("b", 30_000, rating=9.5)], FLIGHTS)
+    s = spec(priorities=["rating"], hotel_budget_rub=20_000)
+    r = optimize(s, items)
+    assert r.selected[0] == "h-a"
+    risks = " ".join(r.explanations[0].risks)
+    assert "отель не укладывается в бюджет отеля 20 000 ₽: 25 000 ₽, на 5 000 ₽ больше" in risks
+    assert "самая дешёвая поездка из найденных" in risks
+    assert "в бюджете отеля" not in r.explanations[0].why
+
+
+def test_hotel_budget_gives_way_to_a_broken_requirement_last():
+    """The meal is kept over the hotel budget, as it is over the trip budget (D-006)."""
+    bb, ro = hotel("bb", 30_000, meal="BB"), hotel("ro", 10_000, meal="RO")
+    items = offers([bb, ro], FLIGHTS)
+    r = optimize(spec(meal="BB", hotel_budget_rub=20_000), items)
+    assert r.selected[0] == "h-bb"
+    assert "бюджет отеля 20 000 ₽" in " ".join(r.explanations[0].risks)
+    assert "в бюджете отеля" not in " ".join(b.label for b in r.bundles)
+    alt = next(b for b in r.bundles if b.label == "в бюджете")
+    assert "h-ro" in alt.offer_ids
+
+
 def test_budget_risk_looks_at_every_hotel_not_only_the_meal_ones():
     """PR #35: the breakfast hotel is over the budget, a hotel without meals fits."""
     bb, ro = hotel("bb", 30_000, meal="BB"), hotel("ro", 10_000, meal="RO")
@@ -400,6 +440,9 @@ def _allowed_amounts(s, items, out):
     base |= {t.total for t in pool}
     if s.budget_rub is not None:
         base |= {s.budget_rub} | {t - s.budget_rub for t in base if t > s.budget_rub}
+    if s.hotel_budget_rub is not None:
+        hb = s.hotel_budget_rub
+        base |= {hb} | {o.price_rub - hb for o in items if o.price_rub > hb}
     return base | {abs(a - b) for a in bund for b in base}
 
 
