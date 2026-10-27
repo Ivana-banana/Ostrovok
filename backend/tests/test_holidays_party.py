@@ -53,7 +53,7 @@ def test_new_year_gives_dates_and_a_note(today, text):
     assert found["date_from"] == date(2026, 12, 30) and found["date_to"] == date(2027, 1, 8)
     assert found["nights"] == 9 and found["month"] == 12
     assert len(notes) == 1 and notes[0].startswith("даты: 30.12–08.01")
-    assert "новогодние праздники" in notes[0]
+    assert "праздники 1–8 января" in notes[0] and "допущение" in notes[0]
 
 
 def test_new_year_reply_does_not_say_no_term(today, store):
@@ -85,6 +85,40 @@ def test_new_year_in_the_first_week_of_january_is_this_break(today):
     assert found["date_from"] == date(2027, 1, 4) and found["date_to"] == date(2027, 1, 8)
     today(2027, 1, 20)
     assert extract("Тбилиси на новый год")[0]["date_from"] == date(2027, 12, 30)
+
+
+def test_new_year_edge_days_never_stretch_the_window(today):
+    for day, start in [((2026, 12, 31), date(2027, 1, 1)), ((2027, 1, 6), date(2027, 1, 7))]:
+        today(*day)
+        found, _ = extract("Тбилиси на новый год")
+        assert found["date_from"] == start and found["date_to"] == date(2027, 1, 8)
+    for day in [(2027, 1, 7), (2027, 1, 8)]:  # the break is over: the next one
+        today(*day)
+        found, _ = extract("Тбилиси на новый год")
+        assert found["date_from"] == date(2027, 12, 30) and found["date_to"] == date(2028, 1, 8)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сочи после нового года, из Москвы, вдвоём",
+        "Сочи до нового года",
+        "Сочи, кроме новогодних праздников",
+        "Сочи перед новым годом",
+        "Сочи не на новый год",
+        "Сочи, к новому году вернуться домой",
+        "Сочи, к новому году надо быть дома",
+        "Сочи после новогодних праздников",
+    ],
+)
+def test_around_the_new_year_is_no_holiday_trip(today, text):
+    found, notes = extract(text)
+    assert "date_from" not in found and "nights" not in found
+    assert not [n for n in notes if n.startswith("даты")]
+
+
+def test_to_the_new_year_without_a_return_is_a_holiday_trip(today):
+    assert extract("Хочу в Сочи к новому году")[0]["date_from"] == date(2026, 12, 30)
 
 
 def test_a_stated_date_wins_over_the_holiday(today):
@@ -157,6 +191,34 @@ def test_friends_are_extra_adults_with_a_note(text, adults):
     found, notes = extract(text)
     assert found["adults"] == adults
     assert f"взрослых: {adults} (вы и " in notes[0]
+
+
+@pytest.mark.parametrize(
+    "text,adults",
+    [
+        ("Мы две подруги, хотим на море в ноябре из Москвы", 2),
+        ("Мы три подруги, Сочи в ноябре", 3),
+        ("Мы трое друзей, Сочи в ноябре", 3),
+        ("Трое друзей едем в Казань", 3),
+        ("Едем трое друзей в Казань", 3),
+        ("Сочи в ноябре, мы с тремя друзьями", 4),
+    ],
+)
+def test_friends_who_are_the_whole_party(text, adults):
+    found, _ = extract(text)
+    assert found["adults"] == adults
+
+
+def test_the_note_keeps_the_users_word():
+    assert extract("Сочи, с тремя подругами")[1] == ["взрослых: 4 (вы и три подруги)"]
+    assert extract("Сочи, с двумя коллегами")[1] == ["взрослых: 3 (вы и двое коллег)"]
+    assert extract("Сочи, мы две подруги")[1] == ["взрослых: 2 (две подруги едут вместе)"]
+
+
+@pytest.mark.parametrize("text,kids", [("с пятью детьми", 5), ("с четырьмя детьми", 4)])
+def test_many_children_in_the_instrumental(text, kids):
+    found, _ = extract(f"Сочи в ноябре, {text}")
+    assert len(found["children_ages"]) == kids
 
 
 def test_three_friends_note_text():
