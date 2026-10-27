@@ -32,11 +32,15 @@ from api.contracts import (
     Cancellation,
     ExtraOffer,
     HotelOffer,
+    HotelProvider,
     Meal,
     Mode,
     Offer,
+    Place,
     TransferOffer,
+    TransferProvider,
     TransportOffer,
+    TransportProvider,
     TripSpec,
 )
 
@@ -491,6 +495,46 @@ def transfer_offers(
     return out
 
 
+# Adapters behind the ports (api/contracts.py, «Порты»; ADR-0002). Each search reads the
+# module variables below; a business swaps a source with one assignment (README).
+
+
+class OsmOrSynthetic:
+    """Hotels from the OSM snapshot when it has at least 3 for the place, else synthetic."""
+
+    def hotels(
+        self, spec: TripSpec, place: Place, now: datetime
+    ) -> list[tuple[HotelOffer, list[ExtraOffer]]]:
+        osm = _osm_bases(place)
+        bases = osm if len(osm) >= 3 else _synthetic_bases(place)
+        return [pair for b in bases for pair in _hotel(spec, place, b, now)]
+
+
+class SyntheticTransport:
+    """Flight, train or car from the great-circle distance (transport_offers)."""
+
+    def legs(self, spec: TripSpec, origin: Place, place: Place) -> list[TransportOffer]:
+        return transport_offers(spec, origin, place)
+
+
+class SyntheticTransfers:
+    """Hub <-> hotel rides after each arrival and before each return (transfer_offers)."""
+
+    def transfers(
+        self,
+        spec: TripSpec,
+        place: Place,
+        hotels: list[HotelOffer],
+        legs: list[TransportOffer],
+    ) -> list[TransferOffer]:
+        return transfer_offers(spec, place, hotels, legs)
+
+
+HOTELS: HotelProvider = OsmOrSynthetic()
+TRANSPORT: TransportProvider = SyntheticTransport()
+TRANSFERS: TransferProvider = SyntheticTransfers()
+
+
 def offers_for_place(
     spec: TripSpec, place: dict, origin: dict | None = None, now: datetime | None = None
 ) -> list[Offer]:
@@ -502,12 +546,10 @@ def offers_for_place(
         return []
     place = _complete(place)
     now = now or datetime.now(UTC)  # only the cancellation state depends on it
-    osm = _osm_bases(place)
-    bases = osm if len(osm) >= 3 else _synthetic_bases(place)
-    pairs = [pair for b in bases for pair in _hotel(spec, place, b, now)]
+    pairs = HOTELS.hotels(spec, place, now)
     hotels = [h for h, _ in pairs]
-    legs = transport_offers(spec, _complete(origin), place) if origin else []
-    transfers = transfer_offers(spec, place, hotels, legs)
+    legs = TRANSPORT.legs(spec, _complete(origin), place) if origin else []
+    transfers = TRANSFERS.transfers(spec, place, hotels, legs)
     return [*hotels, *legs, *transfers, *(x for _, extras in pairs for x in extras)]
 
 

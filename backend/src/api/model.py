@@ -793,9 +793,53 @@ def pick_kinds(low: str) -> list[str]:
     return [kind for kind, rx in REBUILD_PICKS if rx.search(low)]
 
 
+# #278: a cheaper plan without a sum. «Дешевле, чем в …?» and «дешевле ли …?» compare; they
+# lower no budget.
+CHEAPER_RE = re.compile(
+    r"\b(?:по)?дешевле\b|\bбюджет\w*\s+(?:по)?меньше|\b(?:по)?меньше\s+бюджет"
+    r"|\bэкономнее\b|\bслишком\s+дорого\b|\bдорогов\w+"
+)
+CHEAPER_ASK_RE = re.compile(
+    r"\b(?:дешевле|экономнее)\s*,?\s*(?:чем|ли)\b|\bли\b|\bпочему\b|\bсколько\b"
+)
+BUDGET_STEP = 15  # percent off the current total per «подешевле»
+
+
+def asks_cheaper(low: str) -> bool:
+    return bool(CHEAPER_RE.search(low) and not CHEAPER_ASK_RE.search(low))
+
+
 def is_rebuild(low: str) -> bool:
     """A phrase that asks to rebuild the plan: it is never a consent (#184)."""
     return bool(pick_kinds(low) or NO_FLIGHT_RE.search(low) or stay_delta(low))
+
+
+def lower_budget(plan: Plan, found: dict, notes: list[str]) -> None:
+    """«Бюджет поменьше» at a built plan: the trip budget is one step (15 %) under the current
+    total, rounded down to 100 ₽. The DAG then re-plans the ranking only (#278)."""
+    total = _selected_total(plan)
+    if total <= 0 or "budget_rub" in found:
+        return
+    target = total * (100 - BUDGET_STEP) // 100 // 100 * 100
+    found["budget_rub"] = target
+    notes.append(f"бюджет: {_rub(target)} (на {BUDGET_STEP}% ниже итога {_rub(total)})")
+
+
+def cheaper_line(old: Plan, new: Plan) -> str:
+    """The honest line after «подешевле»: the minimum comes from the offers, never invented."""
+    a, b = _selected_total(old), _selected_total(new)
+    goal = new.spec.budget_rub
+    if b >= a:
+        return (
+            f"Дешевле набора в предложениях нет: сейчас {_rub(b)} — это минимум (синтетика). "
+            "Если назовёте сумму, подберу ближайшее к ней."
+        )
+    if goal is not None and b > goal:
+        return (
+            f"В {_rub(goal)} не уложиться: самый дешёвый набор в предложениях — {_rub(b)} "
+            "(синтетика). Если назовёте другую сумму, пересоберу под неё."
+        )
+    return ""
 
 
 EXISTS_RE = re.compile(r"\bесть\b")
@@ -1545,12 +1589,15 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     planned = (
         prev is not None and old.stage in PLAN3 and bool(old.plan.offers) and not asks_about(low)
     )
-    rebuild = planned and is_rebuild(low)
+    cheaper = planned and asks_cheaper(low) and old.stage != "checkout"
+    rebuild = planned and (is_rebuild(low) or cheaper)
     picks = pick_kinds(low) if planned else []
     lines: list[str] = []  # reasons there is nothing to change («уже поездом»)
     pinned = (
         rebuild_spec_edit(old.plan.spec, old.plan, low, found, notes, lines) if planned else None
     )
+    if cheaper:
+        lower_budget(old.plan, found, notes)  # #278
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
     # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
@@ -1595,11 +1642,13 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             notes[:] = [n for n in notes if _label(n) != "длительность" or is_too_long_note(n)]
         if llm_found:
             # The rules read the shift (which end, how far); the model must not add other dates.
-            for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
+            for k in ("nights", *DATE_KEYS):
                 llm_found.pop(k, None)
     # Dates only the model read pass the check of the rules' dates (#164).
-    past = llm_past_dates(llm_found) if llm_found and not DATE_KEYS & found.keys() else None
-    if past:
+    past = llm_past_dates(llm_found) if llm_found else None
+    if past and DATE_KEYS & found.keys() and not DATE_KEYS & llm_found.keys():
+        past = None  # the model's dates are dropped; the rules' dates stay, nothing to tell
+    if past and past not in notes:
         notes.append(past)
     if llm_found:
         # The model may not set a length the rules would not take; note and plan then agree (#160).
@@ -1615,6 +1664,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         notes.append(PARTY_UNKNOWN)
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
+        (llm_found or {}).pop("destinations", None)  # the model does not see the numbered list
     # The departure city is no destination (#139): «Москва — Питер — Казань» starts in Москва.
     # It runs after the model too (#141): the model may return the departure city as a stay.
     start_default = not found.get("origin") and (
@@ -1802,6 +1852,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             lines = [*lines, *more]
             plan.changes = plan_changes(old.plan, plan, old.cart, cart)
         lines = [_replanned(x) for x in lines]
+        if cheaper and (line := cheaper_line(old.plan, plan)):
+            lines.append(line)
         same_trip = (old.plan.spec.destinations, old.plan.spec.origin, old.plan.spec.modes) == (
             spec.destinations,
             spec.origin,
@@ -1826,6 +1878,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return reply("compare", plan, f"{notice}\n{text}", cart, questions=[*chips, *questions])
         return reply("compare", plan, text, cart, questions=questions)
 
+    if cheaper and not plan_dirty:
+        # The budget of the last step already holds: the plan is the cheapest one (#278).
+        text = f"{cheaper_line(old.plan, old.plan.model_copy(update={'selected': plan.selected}))} {HINTS[old.stage]}"
+        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     if (picks or (lines and not yes)) and not plan_dirty:
         # Nothing to re-plan: a pick on the plan, or the reason there is no change (#184).
         if picks:

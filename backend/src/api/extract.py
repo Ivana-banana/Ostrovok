@@ -3,7 +3,7 @@
 extract(text) -> (found, notes): found holds only the TripSpec fields the message states;
 notes are assumptions "<label>: text" made while reading it. model.merge drops a label
 when a later message states its field. The LLM extractor (llm.extract_spec, T11 #15) returns
-the same `found`; with_llm merges it: rules first, the LLM fills what rules missed.
+the same `found`; with_llm merges it: the model first, the rules keep what it did not say.
 Invalid values (31 ноября, 0 ночей) are skipped with a note, never an exception.
 """
 
@@ -11,6 +11,7 @@ import functools
 import re
 from datetime import date, timedelta
 
+from api import catalog
 from api.fixtures import CATALOG, future_date
 from api.guards import name_candidates
 from api.offers import places, resolve_place
@@ -111,6 +112,8 @@ def _two_word_places() -> None:
 
 
 _two_word_places()
+# «Минводы», «Мин Воды» is the place «Минеральные Воды», not a second one (TRAP-3, #274).
+PLACE_RES.append(("Минеральные Воды", re.compile(rf"\bминвод\w*|{AFTER_PREPOSITION}мин\s+вод\w*")))
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой",
               "европа", "европе", "европу", "европы"}  # fmt: skip
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
@@ -300,6 +303,12 @@ MODES = [
     ("car", r"\bна\s+(?:сво\w+\s+)?(?:машин|авто)"),
     ("flight", r"\b(?:самол[её]т|летим|лететь|полетим|рейс)"),
 ]
+# «без самолётов», «не хочу лететь»: the flight is banned (the spec keeps the other modes)
+NO_FLIGHT = re.compile(
+    r"\b(?:без|не)\s+(?:на\s+)?(?!долг|длинн)(?:перелет\w*|самолет\w*|авиа(?!билет|компани|линии|перевоз)\w*)"
+    r"|\bне\s+(?:хочу\s+|будем\s+|надо\s+)?(?:лететь|летим|полетим|летать)\b"
+    r"(?!\s+(?:долг|дольше|больше|более|\d|с\s+пересад))"  # a long flight, not every flight
+)
 # #114: «где тепло», «тёплые края», «жарко». «Тёплое море» is the sea wish (its water is checked),
 # «не тепло», «не люблю жару» and «тёплая куртка» are no wish for the warm.
 WARM = (
@@ -318,6 +327,11 @@ WISHES = [
     ("недорого", r"недорог|деш[её]в|бюджетн|эконом|\bcheap"),
     ("горы", r"\bгор(?:ы|ах|ам|ами|у)\b|\bгорн|\bmountains?\b"),
     ("лыжи", r"лыж|сноуборд|\bski"),
+    # #277: quiet and green words are the nature tag of the catalogue (api/inspire.py)
+    (
+        "природа",
+        r"\bлес(?:а|у|ом|е|ах|ов)?\b|\bлесн|природ|\bозер(?:о|а|у|ом|е|ах)?\b",
+    ),
     ("тепло", WARM),
     ("санаторий", r"санатор"),
     ("тяжело ходить", r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил"),
@@ -354,6 +368,15 @@ def is_chip_message(text: str) -> bool:
 
 def _month(word: str) -> int:
     return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»
+
+
+def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
+    """The match is a wish: «не люблю жару» and «без лесов» are not."""
+    if wish == "тепло":
+        return not _warm_refused(t, x)
+    if wish == "природа":
+        return not negated.search(t[: x.start()])
+    return True
 
 
 def _warm_refused(t: str, m: re.Match) -> bool:
@@ -813,6 +836,38 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
     return sides
 
 
+TRANSFER = re.compile(r"с\s+пересадкой\s+(?:в|во|на)\s+$")
+VIA = re.compile(r"через\s+$")
+
+
+def _transit_dropped(t: str, hits: list) -> list:
+    """Hits without transit points (#274): the place after «с пересадкой в», or after «через» when
+    it has its own airport that serves another named place («через Минводы» to Кисловодск, MRV).
+    «через Нижний в Сочи» is a route stop and stays. The last place is never dropped."""
+
+    def iata(name: str) -> str | None:
+        p = resolve_place(name)
+        return (p or {}).get("airport", {}).get("iata")
+
+    out = []
+    for h in hits:
+        before = t[: h[0]]
+        own = ((resolve_place(h[1]) or {}).get("airport") or {}).get("km", 99) <= 25  # own airport
+        hub = (
+            VIA.search(before)
+            and own
+            and iata(h[1])
+            and any(
+                o[1] != h[1] and not VIA.search(t[: o[0]]) and iata(o[1]) == iata(h[1])
+                for o in hits
+            )
+        )
+        if TRANSFER.search(before) or hub:
+            continue
+        out.append(h)
+    return out or hits
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -826,6 +881,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     else:
         m = None
     if m:
+        if home := catalog.respelled(name):
+            name = home["name"]  # «Ебург» -> Екатеринбург (#274)
         found["origin"] = name
         end = t.find(" ", m.end())
         end = len(t) if end < 0 else end
@@ -855,6 +912,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         hits.append((*first, _word_end(t, first[0])))
     elif not hits and not has_destination:
         _vetoed_first_word(text, t, notes)
+    # A transit point is no destination (#274): «через Минводы», «с пересадкой в Москве».
+    hits = _transit_dropped(t, hits)
     # Mentions for the negation: the places above and the bare countries («Турцию и Египет…»).
     # The refused name is the country when the word is one: «египет» is a hit of Хургада.
     mentions = {s: (e, name, name) for s, name, e in hits}
@@ -875,6 +934,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         place = resolve_place(name)
         if place and place.get("source") == "online":
             name = place["name"]  # the geocoder's name: «Бледе» is the place «Блед» (TRAP-3)
+        elif fixed := catalog.respelled(name):
+            name = fixed["name"]  # «Ебург», «Кисловоцк» are the places of the catalogue (#274)
         if s in pair_sides and place and place["country"] in refused:
             continue  # «Турция или Египет, в Египте уже были»: no Хургада (#151)
         if place and mentions[s][2] in COUNTRIES and place["name"] in refused:
@@ -1547,13 +1608,11 @@ def extract(
     modes = [
         m for m, p in MODES if any(not negated.search(t[: x.start()]) for x in re.finditer(p, t))
     ]
+    if not modes and NO_FLIGHT.search(t):  # #277: «без самолётов» bans one mode, the rest stay
+        modes = ["train", "car"]
     if modes:
         found["modes"] = modes
-    wishes = [
-        w
-        for w, p in WISHES
-        if any(w != "тепло" or not _warm_refused(t, x) for x in re.finditer(p, t))
-    ]
+    wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
     hours = r"\s*(?:ч\b|час\w*)\s+(?:в\s+пути|лет\w*|перел\w*|езд\w*|дорог\w*)"
     if m := re.search(rf"\b(?:до|не\s+(?:больше|дольше|более))\s+(\d{{1,2}}){hours}", t):
         found["max_travel_hours"] = float(m.group(1))
@@ -1581,9 +1640,10 @@ DATE_KEYS = {"date_from", "date_to", "month", "nights"}
 
 
 def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = None) -> dict:
-    """Rule fields win; the LLM adds the fields rules missed and its wishes (T11, #15).
+    """The model's fields win over the rules' fields; the rules keep what it did not say (#258).
 
-    Dates are one group: if rules read any date field, the LLM dates are not mixed in.
+    Dates are one group: a full model group (date_from and date_to or nights) replaces the rules'
+    group; a part of a group never replaces it, and fills only when the rules read no dates.
     excluded: a refused place (#113) never comes back as a model destination.
     """
     if not llm_found:
@@ -1594,11 +1654,17 @@ def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = N
         llm_found = {**llm_found, "destinations": kept}
         if not kept:
             del llm_found["destinations"]
+    full_dates = "date_from" in llm_found and bool({"date_to", "nights"} & llm_found.keys())
+    if full_dates:
+        for d in DATE_KEYS:
+            out.pop(d, None)
     for k, v in llm_found.items():
+        if k in DATE_KEYS and not full_dates and DATE_KEYS & found.keys():
+            continue
         if k == "wishes":
             out["wishes"] = found.get("wishes", []) + [w for w in v if w not in found.get(k, [])]
         elif k == "budget_rub" and v == found.get("hotel_budget_rub"):
             continue  # the model took the hotel sum for the trip budget (#41)
-        elif k not in found and not (k in DATE_KEYS and DATE_KEYS & found.keys()):
+        else:
             out[k] = v
     return out

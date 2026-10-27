@@ -7,6 +7,7 @@ import pytest
 
 from api import catalog, inspire
 from api.contracts import ChatRequest, TripSpec
+from api.extract import extract
 from api.fixtures import WARM_WATER_C, future_date
 from api.model import chat
 from api.store import SessionStore
@@ -131,3 +132,99 @@ def test_no_trip_goes_below_a_cold_sea_and_a_cold_sea_below_no_sea():
     first = inspire.suggest_destinations(spec)[0]
     assert inspire.NO_PETS not in first.violates and inspire.NO_SEA not in first.violates
     assert not any(v.endswith(inspire.NO_WAY) for v in first.violates), first.violates
+
+
+C17 = "Устал, хочу тишины и леса, без самолётов, на неделю в ноябре вдвоём"
+
+
+def test_c17_quiet_forest_no_planes_gives_nature_without_flights(store):
+    """C17: «тишины и леса, без самолётов» gave Воронеж, Нижний, Минск and Бухарест (plane)."""
+    first = chat(ChatRequest(session_id=None, message=C17), store)
+    assert "flight" not in first.plan.spec.modes
+    assert first.plan.spec.modes, "«без самолётов» must be written to the spec"
+    r = chat(ChatRequest(session_id=first.session_id, message="тысяч 60"), store)
+    assert r.stage == "inspire", r.reply
+    assert "flight" not in r.plan.spec.modes and r.plan.spec.modes
+    dests = r.plan.destinations
+    assert 2 <= len(dests) <= 4
+    assert sum("nature" in tags(d.name) for d in dests) >= 2
+    for d in dests:
+        place = catalog.resolve(d.name)
+        assert "nature" in place["tags"] or place["pop"] < inspire.CITY_POP, d.name
+        assert d.name != "Бухарест"
+        assert not any(v.endswith(inspire.NO_WAY) for v in d.violates), d.violates
+        assert d.travel_hours <= 24, (d.name, d.travel_hours)
+
+
+def test_nature_wish_with_banned_flight_gives_nature_places_without_big_cities():
+    """The pool of «природа» with a banned flight: nature places, no city from a million
+    (on main the wish was unknown and the pool was the big cities)."""
+    spec = TripSpec(modes=["train", "car"], wishes=["природа"], month=11, origin="Москва")
+    dests = inspire.suggest_destinations(spec, 4)
+    assert sum("nature" in tags(d.name) for d in dests) >= 2
+    for d in dests:
+        place = catalog.resolve(d.name)
+        assert "nature" in place["tags"] or place["pop"] < inspire.CITY_POP, d.name
+        assert not any(v.endswith(inspire.NO_WAY) for v in d.violates), d.violates
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "К тёплому морю в ноябре вдвоём, не хочу лететь долго, из Москвы, тысяч 150",
+        "не хочу лететь больше 4 часов",
+        "не хочу лететь с пересадками",
+        "без авиабилетов, у нас уже есть",
+        "не авиакомпанией Победа",
+        "не Аэрофлотом, а Победой",
+        "не лоукостером",
+    ],
+)
+def test_c17_long_flight_or_owned_tickets_is_no_flight_ban(text):
+    """Review of #277: «не хочу лететь долго» kept the flights; only «без самолётов» bans them."""
+    assert not extract(text)[0].get("modes")
+
+
+@pytest.mark.parametrize(
+    "text", ["тихий отдых на море", "тишина и море", "не нужна тишина", "без лесов", "Озерки"]
+)
+def test_c17_quiet_or_negated_words_are_no_nature_theme(text):
+    assert "природа" not in extract(text)[0].get("wishes", [])
+
+
+def test_c17_warm_sea_with_quiet_rest_keeps_the_sea_pool(store):
+    dests = inspired(
+        store, "Хочу тихий отдых на тёплом море в ноябре с ребёнком 5 лет, из Москвы, тысяч 150"
+    )
+    assert all(d.water_c is not None and d.water_c >= WARM_WATER_C for d in dests)
+
+
+def test_c17_no_flight_phrases_still_ban_the_plane():
+    assert extract("не на самолёте, дорого")[0]["modes"] == ["train", "car"]
+    assert extract("без самолётов")[0]["modes"] == ["train", "car"]
+
+
+def test_c17_train_only_from_spb_to_the_sea_keeps_domestic_trains():
+    """Review of #277: «поездом из Санкт-Петербурга на море» lost every fitting card to a 24 h cap."""
+    spec = TripSpec(modes=["train"], origin="Санкт-Петербург", wishes=["море"], month=7)
+    assert any(not d.violates for d in inspire.suggest_destinations(spec, 4))
+
+
+def test_c17_chosen_car_keeps_the_soft_car_pool():
+    """A chosen car is not a flight ban: the pool is that of main (Кобулети, Варна by car)."""
+    spec = TripSpec(modes=["car"], origin="Москва", wishes=["море"], month=7)
+    names = {d.name for d in inspire.suggest_destinations(spec, 4)}
+    assert {"Кобулети", "Варна"} & names
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Поездом из Хабаровска куда-нибудь в июле вдвоём, тысяч 80",
+        "Поездом из Калининграда в горы на лыжах в феврале вдвоём, тысяч 100",
+    ],
+)
+def test_c17_nothing_reachable_by_train_still_gives_flagged_cards(store, text):
+    """Arbiter of #277: an empty filtered pool gave no cards under «Подходящие направления»."""
+    dests = inspired(store, text)
+    assert any(v.endswith(inspire.NO_WAY) for d in dests for v in d.violates)

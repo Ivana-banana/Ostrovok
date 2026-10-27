@@ -799,3 +799,62 @@ def test_adults_are_counted_from_family_words(text, adults, kids):
     found, _ = extract(text)
     assert found["adults"] == adults
     assert found.get("children_ages") == kids
+
+# --- #274: colloquial names and typos in a message (TRAP-3) ---
+
+
+def test_trap_3_colloquial_origin_and_typo_destination():
+    found, _ = extract("из Ебурга в Кисловоцк на неделю в мае")
+    assert found["origin"] == "Екатеринбург"
+    assert found["destinations"] == ["Кисловодск"]
+
+
+@pytest.mark.parametrize(
+    "text", ["в Минводы в июне", "хочу в Мин Воды в июне", "в Минеральные Воды в июне",
+             "из Москвы в Минводы на неделю"],
+)  # fmt: skip
+def test_trap_3_min_vody_is_one_place(text):
+    found, _ = extract(text)
+    assert found["destinations"] == ["Минеральные Воды"]
+
+
+def test_trap_3_no_place_in_ordinary_sentences():
+    for text in ("Хорошо бы недорого, с ребенком на 5 дней", "Привет! Хотим отдохнуть в мае"):
+        found, _ = extract(text)
+        assert not found.get("destinations"), text
+
+
+@pytest.mark.parametrize("name", ["Коломбо", "Чиангмай", "Чианграй"])
+def test_trap_3_exact_catalogue_name_is_not_respelled(name):
+    found, _ = extract(f"хочу в {name} в мае")
+    assert found["destinations"] == [name]
+
+
+C15 = "Из Ебурга в Кисловоцк через Минводы, с мамой 70 лет в санаторий на 10 ночей в мае"
+
+
+def test_trap_3_transit_point_is_no_destination():
+    found, _ = extract(C15)
+    assert found["origin"] == "Екатеринбург"
+    assert found["destinations"] == ["Кисловодск"]
+    found, _ = extract("Хочу в Сочи с пересадкой в Москве на неделю")
+    assert found["destinations"] == ["Сочи"]
+
+
+def test_trap_3_c15_full_turn_has_no_missing_catalogue_reply(tmp_path):
+    r = chat(ChatRequest(session_id=None, message=C15), SessionStore(tmp_path / "s.db"))
+    assert "нет в каталоге" not in r.reply.lower(), r.reply
+
+
+@pytest.mark.parametrize(
+    ("text", "dests"),
+    [("из Москвы в Казань, потом через Нижний в Сочи", ["Казань", "Нижний Новгород", "Сочи"]),
+     ("хочу проехать через Карелию и Мурманск", ["Карелия", "Мурманск"]),
+     ("из Москвы через Казань в Екатеринбург, по 3 ночи в каждом", ["Казань", "Екатеринбург"]),
+     ("маршрут через Ярославль, Кострому и Плёс в июле", ["Ярославль"]),
+     ("из Москвы в Санкт-Петербург через Великий Новгород на 5 дней",
+      ["Санкт-Петербург", "Великий Новгород"])],
+)  # fmt: skip
+def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
+    found, _ = extract(text)
+    assert found["destinations"] == dests

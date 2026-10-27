@@ -8,7 +8,7 @@ import itertools
 import os
 import re
 import unicodedata
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, time
 
 # TRAP-3: варианты написания топонимов. Ключ — нормализованная форма.
@@ -130,13 +130,18 @@ def resolve_destination(
     return None
 
 
-LLM_VARS = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
+# Ключ: статичный LLM_API_KEY или ключ авторизации GigaChat (llm.py меняет его на токен).
+LLM_KEYS = ("LLM_API_KEY", "GIGACHAT_AUTH_KEY")
 
 
-def llm_available(env: dict[str, str] | None = None) -> bool:
+def llm_available(env: Mapping[str, str] | None = None) -> bool:
     """TRAP-1: LLM включена, только если заданы ключ, адрес и модель; иначе — режим правил."""
     env = os.environ if env is None else env
-    return all(env.get(k, "").strip() for k in LLM_VARS)
+
+    def has(k: str) -> bool:
+        return bool(env.get(k, "").strip())
+
+    return has("LLM_BASE_URL") and has("LLM_MODEL") and any(has(k) for k in LLM_KEYS)
 
 
 def rule_extract(text: str) -> dict:
