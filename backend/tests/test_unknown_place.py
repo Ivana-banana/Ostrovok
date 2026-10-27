@@ -8,7 +8,6 @@ import pytest
 
 from api import catalog
 from api.contracts import ChatRequest, HotelOffer
-from api.fixtures import CATALOG
 from api.model import chat
 from api.store import SessionStore
 
@@ -56,5 +55,7 @@ def test_trap_2_geocoder_city_reaches_voucher(store, monkeypatch, geo):
 def test_trap_2_unknown_place_says_variants_are_not_nearby(store):
     """Offline, the place has no coordinates: the reply says so and never calls the variants near."""
     r = walk(store, "Хочу в Тихвин в марте")
-    assert r.stage == "select" and set(r.questions[0].options) <= set(CATALOG)
+    assert r.stage == "select" and r.questions[0].options
+    # #20: the variants are places of catalog.json, not the seven names of fixtures.py
+    assert all(catalog.resolve(n)["name"] == n for n in r.questions[0].options)
     assert "Где это место, не знаю" in r.reply and "не по близости" in r.reply
