@@ -118,10 +118,33 @@ def test_one_end_moves_by_a_month():
     assert moved.nights == 35
 
 
-def test_the_shift_note_counts_days():
-    moved = shift_dates(spec_of(date(2026, 11, 3), date(2026, 11, 8)), "на месяц позже")
-    notes = [a for a in moved.assumptions if is_shift_note(a)]
-    assert notes == ["даты: сдвинуты на 30 дн. позже по вашей просьбе"]
+@pytest.mark.parametrize(
+    ("text", "note"),
+    [
+        ("на месяц позже", "даты: сдвинуты на 1 мес. позже по вашей просьбе"),
+        ("на 3 месяца раньше", "даты: сдвинуты на 3 мес. раньше по вашей просьбе"),
+        ("на полгода позже", "даты: сдвинуты на 6 мес. позже по вашей просьбе"),
+        ("на год позже", "даты: сдвинуты на 1 год позже по вашей просьбе"),
+        ("на два года позже", "даты: сдвинуты на 2 года позже по вашей просьбе"),
+        ("на 5 лет позже", None),
+        ("на 5 дней позже", "даты: сдвинуты на 5 дн. позже по вашей просьбе"),
+    ],
+)
+def test_the_shift_note_repeats_the_unit(text, note):
+    spec = spec_of(date(2027, 11, 3), date(2027, 11, 8))
+    notes = [a for a in shift_dates(spec, text).assumptions if is_shift_note(a)]
+    assert notes == ([note] if note else [])
+
+
+def test_the_notes_keep_the_running_sum_per_unit():
+    spec = spec_of(date(2027, 11, 3), date(2027, 11, 8))
+    once = shift_dates(spec, "на полгода позже")
+    twice = shift_dates(once, "ещё на полгода позже и на два дня раньше")
+    notes = sorted(a for a in twice.assumptions if is_shift_note(a))
+    assert notes == [
+        "даты: сдвинуты на 1 год позже по вашей просьбе",
+        "даты: сдвинуты на 2 дн. раньше по вашей просьбе",
+    ]
 
 
 @pytest.mark.parametrize("text", ["беру, на месяц вперёд спасибо", "да, оплачу на месяц позже"])
@@ -131,6 +154,22 @@ def test_a_trailing_remark_stays_a_consent(store, text):
     assert r.stage == "assemble"
     assert r.plan.spec.date_from == first.plan.spec.date_from
     assert not [c for c in r.plan.changes if c.what == "даты"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "берём, но на месяц позже",
+        "оплачу, только сдвинь на месяц позже",
+        "возьму, если на месяц позже",
+        "давай на месяц позже, беру",
+    ],
+)
+def test_a_booking_word_elsewhere_does_not_hide_the_shift(store, text):
+    first = plan_for(store)
+    r = say(store, text, first.session_id)
+    assert r.stage == "compare" and not r.cart.items
+    assert r.plan.spec.date_from == date(2026, 12, 3) and r.plan.spec.nights == 5
 
 
 def test_a_month_shift_on_assemble_moves_the_dates(store):
@@ -162,13 +201,16 @@ def test_an_odd_amount_still_gets_the_hint(store):
     assert r.plan.spec.date_from == first.plan.spec.date_from
 
 
-def test_a_shift_into_the_recent_past_goes_to_next_year_with_a_note(store):
-    # TRAP-5 neighbour of #159: 03.10 passed 24 days ago, the same rule as for a named day
+@pytest.mark.parametrize("text", ["на месяц раньше", "на 10 дней раньше", "на три недели раньше"])
+def test_a_shift_into_the_recent_past_is_refused(store, text):
+    # The year of a shift is known: 03.11 minus 10 days is 24.10.2026, not 2027
     first = plan_for(store)
-    r = say(store, "на месяц раньше", first.session_id)
-    assert r.plan.spec.date_from == date(2027, 10, 3) and r.plan.spec.date_to == date(2027, 10, 8)
-    assert any("уже прошло" in a and "2027" in a for a in r.plan.spec.assumptions)
-    assert "уже прошло" in r.reply
+    r = say(store, text, first.session_id)
+    assert r.plan.spec.date_from == first.plan.spec.date_from
+    assert r.plan.spec.date_to == first.plan.spec.date_to
+    assert "Заезд пришёлся бы на" in r.reply and "2026: эта дата уже прошла" in r.reply
+    assert "ничего не применено" in r.reply
+    assert not r.plan.changes and not any("уже прошло" in a for a in r.plan.spec.assumptions)
 
 
 def test_a_shift_far_into_the_past_is_refused(store):

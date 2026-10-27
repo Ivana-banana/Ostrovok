@@ -364,7 +364,7 @@ def _no_errors(r):
     ],
 )
 def test_say_shifts_both_ends(store, antalya, text, days, monkeypatch):
-    class Early(date):  # two weeks before 8 November is no day of the past
+    class Early(date):  # the real date must not decide: a shift into the past is refused (#176)
         @classmethod
         def today(cls):
             return cls(2026, 10, 1)
