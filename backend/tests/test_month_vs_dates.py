@@ -271,3 +271,167 @@ def test_a_limit_word_before_the_month_is_no_consent(store, text):
     s = r.plan.spec
     assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
     assert r.stage == "compare" and not r.cart.items
+
+
+# #198: a negation in a neighbouring list item is no refusal of the month.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "не дорого, в январе",
+        "недорого, в январе",
+        "не дорого и в январе",
+        "не очень дорого, в январе",
+    ],
+)
+def test_a_negation_of_a_neighbour_does_not_refuse_the_month(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2027, 1, 3), date(2027, 1, 8), 1)
+    assert "Они остаются" not in r.reply and r.stage == "compare"
+
+
+def test_a_month_before_a_neighbouring_negation_is_no_refusal(store):
+    first = named(store)
+    r = say(store, "лучше в январе, не дорого", first.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 3)
+
+
+@pytest.mark.parametrize("text", ["не в январе, недорого", "в январе не получится, недорого"])
+def test_the_refusal_before_a_neighbour_stays_a_refusal(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+    assert "Они остаются" in r.reply and r.stage == "compare"
+
+
+def test_a_shift_into_the_refused_month_is_not_applied(store):
+    first = named(store)
+    r = say(store, "не в январе, на месяц позже", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+    assert "Сдвиг не применён" in r.reply and "январь" in r.reply
+    assert "Перенести на декабрь" not in r.reply and not r.cart.items
+    assert r.stage == "compare"
+
+
+def test_a_shift_out_of_the_refused_month_is_applied(store):
+    first = named(store)
+    r = say(store, "не в январе, на два дня позже", first.session_id)
+    assert r.plan.spec.date_from == date(2026, 12, 5)
+
+
+def test_the_other_fields_stay_applied_when_the_shift_is_refused(store):
+    first = named(store)
+    r = say(store, "не в январе, на месяц позже, бюджет 100 тысяч", first.session_id)
+    assert r.plan.spec.budget_rub == 100_000 and r.plan.spec.date_from == date(2026, 12, 3)
+    assert "Сдвиг не применён" in r.reply
+
+
+def test_a_shift_into_the_asked_month_is_told_as_a_shift(store):
+    first = named(store)
+    r = say(store, "может в январе? на месяц позже", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2027, 1, 3), date(2027, 1, 8), 1)
+    assert "Даты сдвинуты по вашей просьбе: 03.01.2027–08.01.2027." in r.reply
+    assert "вы назвали сами" not in r.reply and "Перенести" not in r.reply
+    assert not r.questions and r.stage == "compare" and not r.cart.items
+
+
+# #198 review: without a comma a «не» after the month is a refusal, as it was. The verbs of
+# refusing only decide the part after a comma, «но», «и» or «а».
+
+REFUSALS = [
+    "в январе не поедем",
+    "январь не",
+    "в январе не летим",
+    "в январе не едем",
+    "январь не рассматриваем",
+    "январь не нужен",
+    "в январе не будет отпуска",
+    "в январе — не",
+    "в январе не очень удобно",
+    "в январе не, лучше в феврале",
+    "в январе не дорого",  # no comma: the «не» stays with the month, as on main
+    "в январе и феврале не поедем",
+    "январь и февраль не подходят",
+    "в январе, увы, не получится",
+    "в январе, но не получится",
+    "январь, не",
+    "в январе, не",
+]
+
+
+@pytest.mark.parametrize("text", REFUSALS)
+def test_a_refusal_after_the_month_keeps_the_dates(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+    assert r.stage == "compare" and "Они остаются" in r.reply
+
+
+@pytest.mark.parametrize(
+    "text", ["в январе, не дорого", "в январе, не в феврале", "в январе, не на самолёте"]
+)
+def test_a_negated_neighbour_after_a_comma_is_no_refusal(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 3) and "Они остаются" not in r.reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "в январе не поедем, подтверждаю",
+        "январь не, оформляй",
+        "в январе и феврале не поедем, подтверждаю",
+        "в январе, увы, не получится, подтверждаю",
+        "январь, не, подтверждаю",
+        "январь и февраль не подходят, беру",
+    ],
+)
+@pytest.mark.parametrize("stages", [1, 2])
+def test_a_refusal_is_no_consent_at_assemble_and_checkout(store, text, stages):
+    r = named(store)
+    for _ in range(stages):
+        r = say(store, "беру", r.session_id)
+    stage, cart = r.stage, r.cart
+    assert stage == ("assemble", "checkout")[stages - 1]
+    r = say(store, text, r.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to) == (date(2026, 12, 3), date(2026, 12, 8))
+    assert r.stage == stage and r.cart == cart and not r.voucher
+
+
+def test_no_shift_means_no_refused_shift_line(store):
+    first = named(store, "с 27 декабря по 3 января")
+    for text in ("не в январе, бюджет 100 тысяч", "январь не подходит, бюджет 100 тысяч"):
+        r = say(store, text, first.session_id)
+        s = r.plan.spec
+        assert (s.date_from, s.date_to) == (date(2026, 12, 27), date(2027, 1, 3))
+        assert s.budget_rub == 100_000 and "Сдвиг не применён" not in r.reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "в январе, не в феврале",
+        "в январе а не в феврале",
+        "январь, а не декабрь",
+        "лучше в январе, но не дорого",
+        "в январе, но не поедем на самолёте",
+        "в январе, не дороже 100 тысяч",
+        "в январе и не дороже 100 тысяч",
+        "в январе и подешевле",
+    ],
+)
+def test_a_negated_neighbour_after_the_month_is_still_a_move(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2027, 1, 3), date(2027, 1, 8), 1)
+    assert "Они остаются" not in r.reply and r.stage == "compare"
