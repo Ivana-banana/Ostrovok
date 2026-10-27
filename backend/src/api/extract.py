@@ -265,7 +265,7 @@ AGES_RE = re.compile(
 )
 # «с детьми 5 лет и 8»: the first number has a unit, the last has none.
 AGES_TAIL_RE = re.compile(
-    r"\D{0,12}?(\d{1,2}\s*(лет|год|мес)\w*\s*(?:,|и)\s*\d{1,2})(?![\d.,]*\d)(?!\s*(?:лет|год|мес))"
+    r"\D{0,12}?(\d{1,2}\s*(лет|год|мес)\w*\s*(?:,|и)\s*\d{1,2})(?![\d.,]*\d)(?!\s*(?:лет|год|мес))(?=\s*(?:[.,;!?)]|$))"
     r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
     r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
 )
@@ -1511,7 +1511,7 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
             no_kids = True  # «без детей»: nobody is added (#195)
             continue
         a = (
-            AGES_TAIL_RE.match(t, m.end())
+            (m.group(0).split()[-1].startswith("дет") and AGES_TAIL_RE.match(t, m.end()))
             or AGES_RE.match(t, m.end())
             or AGES_LIST_RE.match(t, m.end())
         )
@@ -1540,6 +1540,7 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
             and not m.group(1)
             and re.match(r"\s*:", t[m.end() :])
             and CHILD_RE.search(t, m.end())
+            and (not a or CHILD_RE.search(t, m.end(), a.start(1)))
         ):
             continue  # «наши дети: у меня близнецы…»: the list that follows has them
         if asking and len(said) < count:  # no age for every counted child: nobody is added

@@ -541,3 +541,30 @@ def test_337_double_bed_in_a_dialog_keeps_the_party(store):
 def test_337_list_after_children(text, ages):
     found, _ = extract(text)
     assert found["children_ages"] == ages
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Едем с ребенком 5 лет и 2 собаки в Сочи",
+        "Едем с ребенком 5 лет и 2 бабушки в Сочи",
+        "Едем с детьми 5 лет и 2 номера в Сочи",
+        "Едем с ребенком 5 лет и 3 чемодана в Сочи",
+    ],
+)
+def test_337_tail_after_a_unit_is_not_a_second_age(text):
+    found, _ = extract(text)
+    assert found["children_ages"] == [5]
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("Дети: 5 и 8 лет, сын любит море, едем в Сочи", [5, 8, 7]),
+        ("Дети: 5 и 8 лет. Ребёнок 5 лет плохо переносит перелёт", [5, 8, 5]),
+        ("Наши дети: сын 5 лет и дочь 8 лет, едем в Сочи", [5, 8]),
+    ],
+)
+def test_337_children_header_keeps_its_own_ages(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
