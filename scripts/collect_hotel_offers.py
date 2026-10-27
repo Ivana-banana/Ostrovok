@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = ["curl_cffi", "playwright"]
 # ///
 """Dated hotel offers from WAF-protected sites: «browser enters, curl_cffi collects» (#119).
@@ -17,8 +17,10 @@ The browser is needed once per session, not once per request.
 
 Rules as in collect_prices.py: robots.txt (Google semantics) before every path, one request at a
 time, PAUSE_S between requests, stop after FAILS_MAX failures in a row or at --budget requests.
-Only facts are kept: price, dates, stars, meal, cancellation. No names, descriptions, photos.
-Raw answers and offers go to data/real/ (outside git); stdout is an aggregate.
+Parsed offers keep only facts: price, dates, stars, guest score, meal, cancellation. The raw pages
+and JSON saved beside them DO hold hotel names, descriptions and photo links: they stay in
+data/real/ (outside git) and never go to git or tests/fixtures/. stdout is an aggregate.
+The browser visits obey the same rules: robots.txt first, pause, budget.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ import sys
 import time
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from collect_prices import Refused, allowed
@@ -70,18 +72,34 @@ def session():
     return _session
 
 
-def get(host: str, path: str, *, method="GET", headers=None, data=None):
-    """curl_cffi request. robots.txt is read once per host; every call counts against the budget."""
+def pace() -> None:
+    """Budget and pause for one request, whether curl_cffi or the browser makes it."""
     if _state["requests"] >= _state["budget"]:
         raise Refused(f"бюджет {_state['budget']} запросов исчерпан")
-    if host not in _robots:
-        _robots[host] = ""  # robots.txt itself is not checked against robots.txt
-        _robots[host] = get(host, "/robots.txt").text
-    if path != "/robots.txt" and not allowed(_robots[host], path):
-        raise Disallowed(f"robots.txt запрещает {host}{path}")
     wait = PAUSE_S - (time.monotonic() - _state["last"])
     if wait > 0:
         time.sleep(wait)
+
+
+def check_robots(host: str, path: str) -> None:
+    """robots.txt is read once per host. A non-200 answer (a WAF challenge, a block) stops the run:
+    an HTML page would otherwise read as «everything allowed»."""
+    if host not in _robots:
+        _robots[host] = ""  # robots.txt itself is not checked against robots.txt
+        r = get(host, "/robots.txt")
+        if r.status_code != 200:
+            del _robots[host]
+            raise Refused(f"{host}/robots.txt: HTTP {r.status_code}")
+        _robots[host] = r.text
+    if not allowed(_robots[host], path):
+        raise Disallowed(f"robots.txt запрещает {host}{path}")
+
+
+def get(host: str, path: str, *, method="GET", headers=None, data=None):
+    """curl_cffi request. Every call is checked against robots.txt and counts against the budget."""
+    if path != "/robots.txt":
+        check_robots(host, path)
+    pace()
     r = session().request(
         method,
         f"https://{host}{path}",
@@ -94,19 +112,18 @@ def get(host: str, path: str, *, method="GET", headers=None, data=None):
     _state["requests"] += 1
     _state["fails"] = 0 if r.status_code == 200 else _state["fails"] + 1
     if _state["fails"] >= FAILS_MAX:
-        raise Refused(
-            f"{FAILS_MAX} отказа подряд (последний: {host}{path} → {r.status_code})"
-        )
+        raise Refused(f"{FAILS_MAX} отказа подряд (последний: {host}{path} → {r.status_code})")
     return r
 
 
-def browser_visit(
-    url: str, *, ready: str, links: str | None = None, capture: str | None = None
-):
+def browser_visit(url: str, *, ready: str, links: str | None = None, capture: str | None = None):
     """Open `url` in Brave. Returns cookies, the first request whose URL contains `capture`
     (headers, body) and the hrefs of `links`. `ready` is a selector or a request-URL part to wait for."""
     from playwright.sync_api import sync_playwright
 
+    parts = urlsplit(url)
+    check_robots(parts.netloc, f"{parts.path}?{parts.query}" if parts.query else parts.path)
+    pace()
     seen: dict = {}
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
@@ -114,9 +131,7 @@ def browser_visit(
             headless=True,
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
         )
-        ctx = browser.new_context(
-            locale="ru-RU", viewport={"width": 1366, "height": 900}
-        )
+        ctx = browser.new_context(locale="ru-RU", viewport={"width": 1366, "height": 900})
         page = ctx.new_page()
         if capture:
 
@@ -132,21 +147,17 @@ def browser_visit(
         for _ in range(6):  # lazy blocks (room grid) load on scroll
             page.mouse.wheel(0, 900)
             page.wait_for_timeout(900)
-        hrefs = (
-            page.eval_on_selector_all(links, "els => els.map(e => e.href)")
-            if links
-            else []
-        )
+        hrefs = page.eval_on_selector_all(links, "els => els.map(e => e.href)") if links else []
         cookies = ctx.cookies()
         browser.close()
+    _state["last"] = time.monotonic()
+    _state["requests"] += 1
     return status, cookies, seen.get("req"), hrefs
 
 
 def load_cookies(cookies: list[dict]) -> None:
     for c in cookies:
-        session().cookies.set(
-            c["name"], c["value"], domain=c["domain"].lstrip("."), path=c["path"]
-        )
+        session().cookies.set(c["name"], c["value"], domain=c["domain"].lstrip("."), path=c["path"])
 
 
 def text_of(fragment: str) -> str:
@@ -163,9 +174,7 @@ def stat(rows: list[dict], nights: int) -> dict:
         "offers": len(rows),
         "min_night": round(min(prices)) if prices else None,
         "median_night": round(statistics.median(prices)) if prices else None,
-        "free_cancel_share": round(
-            sum(bool(r["free_cancel"]) for r in rows) / len(rows), 2
-        )
+        "free_cancel_share": round(sum(bool(r["free_cancel"]) for r in rows) / len(rows), 2)
         if rows
         else None,
         "breakfast_share": round(sum(bool(r["breakfast"]) for r in rows) / len(rows), 2)
@@ -180,9 +189,7 @@ def stat(rows: list[dict], nights: int) -> dict:
 ORDERS = ["popularity", "price", "review_score_and_price", "class", "class_asc"]
 
 
-def booking_url(
-    city: str, d_in: date, d_out: date, adults: int, children: int, order: str
-) -> str:
+def booking_url(city: str, d_in: date, d_out: date, adults: int, children: int, order: str) -> str:
     """The static page holds 20 cards and ignores `offset`: other sort orders give other cards."""
     return (
         f"/searchresults.ru.html?ss={quote(city)}&checkin={d_in}&checkout={d_out}"
@@ -208,13 +215,13 @@ def parse_booking(page: str, nights: int) -> list[dict]:
         txt = text_of(card)
         stars = re.search(r"Оценка объекта:\s*(\d)", html.unescape(card))
         link = re.search(r'href="(https://www\.booking\.com/hotel/[^"?]+)', card)
+        if not link:
+            continue
         score = re.search(r"Оценка[: ]+(\d+[,.]\d)", txt)
         rows.append(
             {
                 "source": "booking",
-                "id": hashlib.sha1(link.group(1).encode()).hexdigest()[:10]
-                if link
-                else None,
+                "id": hashlib.sha1(link.group(1).encode()).hexdigest()[:10],
                 "total_price": int(digits),
                 "currency": "RUB",
                 "night_price": round(int(digits) / nights),
@@ -326,9 +333,15 @@ def run_agoda(args, d_in: date, d_out: date, nights: int) -> list[dict]:
         ready='a[href*="/hotel/"]',
         links='a[href*="/hotel/"]',
     )
-    slugs = list(dict.fromkeys(h.split(host, 1)[1] for h in hrefs if "/hotel/" in h))[
-        : args.hotels
-    ]
+    slugs = []
+    for h in dict.fromkeys(h.split(host, 1)[1] for h in hrefs if "/hotel/" in h):
+        try:
+            check_robots(host, f"{h.split('?')[0]}?{query}")
+        except Disallowed as e:
+            print(f"  пропуск: {e}")
+            continue
+        slugs.append(h)
+    slugs = slugs[: args.hotels]
     if not slugs:
         raise Refused(f"Agoda: на странице города нет отелей (HTTP {status})")
     print(f"  отелей на странице города: {len(slugs)}")
@@ -367,12 +380,9 @@ def run_agoda(args, d_in: date, d_out: date, nights: int) -> list[dict]:
         if page.status_code != 200 or not pid:
             print(f"  {slug[:40]}: нет id (HTTP {page.status_code})")
             continue
-        stars = re.search(r'"starRating":\s*\{?"?(?:value"?:\s*)?(\d)', page.text)
         body = copy.deepcopy(template)
         body["propertyId"] = int(pid.group(1))
-        body["searchCriteria"].update(
-            checkIn=str(d_in), checkOut=str(d_out), adults=args.adults
-        )
+        body["searchCriteria"].update(checkIn=str(d_in), checkOut=str(d_out), adults=args.adults)
         r = get(
             host,
             "/api/v1/property/room-grid",
@@ -383,11 +393,9 @@ def run_agoda(args, d_in: date, d_out: date, nights: int) -> list[dict]:
         if r.status_code != 200:
             print(f"  {pid.group(1)}: room-grid HTTP {r.status_code}")
             continue
-        (OUT / "agoda" / f"raw_{pid.group(1)}_{d_in}_{d_out}.json").write_text(
-            r.text, "utf-8"
-        )
+        (OUT / "agoda" / f"raw_{pid.group(1)}_{d_in}_{d_out}.json").write_text(r.text, "utf-8")
         grid = r.json()
-        got = parse_agoda(grid, nights, int(stars.group(1)) if stars else None)
+        got = parse_agoda(grid, nights, None)  # stars are not in the room-grid answer
         rows += got
         print(
             f"  {pid.group(1)}: {len(got)} тарифов{' (распродан)' if grid.get('isSoldOut') else ''}"
@@ -418,9 +426,7 @@ def main() -> int:
     _state["budget"] = args.budget
     d_in, d_out = date.fromisoformat(args.check_in), date.fromisoformat(args.check_out)
     nights = (d_out - d_in).days
-    rows = (run_booking if args.source == "booking" else run_agoda)(
-        args, d_in, d_out, nights
-    )
+    rows = (run_booking if args.source == "booking" else run_agoda)(args, d_in, d_out, nights)
     summary = {
         "source": args.source,
         "place": args.place,
@@ -434,7 +440,8 @@ def main() -> int:
         **stat(rows, nights),
     }
     OUT.mkdir(parents=True, exist_ok=True)
-    name = f"offers_{args.source}_{re.sub(r'\W+', '_', args.place)}_{args.check_in}_{args.check_out}.json"
+    place = re.sub(r"\W+", "_", args.place)
+    name = f"offers_{args.source}_{place}_{args.check_in}_{args.check_out}.json"
     (OUT / name).write_text(
         json.dumps({"summary": summary, "offers": rows}, ensure_ascii=False, indent=1),
         "utf-8",

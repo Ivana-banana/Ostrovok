@@ -84,3 +84,51 @@ def test_agoda_price_is_per_night_total_multiplies_by_nights():
     assert first["breakfast"] is True
     assert second["free_cancel"] is False
     assert second["free_cancel_until"] is None
+
+
+def test_booking_card_without_link_is_skipped():
+    assert ch.parse_booking(CARD.replace("https://www.booking.com/hotel/", "/x/"), 4) == []
+
+
+class FakeResponse:
+    def __init__(self, status_code, text=""):
+        self.status_code = status_code
+        self.text = text
+
+
+class FakeSession:
+    def __init__(self, robots):
+        self.robots = robots
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        self.calls.append(url)
+        return self.robots
+
+
+@pytest.fixture
+def fake_session(monkeypatch):
+    def make(robots):
+        fake = FakeSession(robots)
+        monkeypatch.setattr(ch, "session", lambda: fake)
+        monkeypatch.setattr(ch, "PAUSE_S", 0)
+        monkeypatch.setattr(ch, "_robots", {})
+        monkeypatch.setattr(ch, "_state", {"last": -1e9, "requests": 0, "fails": 0, "budget": 10})
+        return fake
+
+    return make
+
+
+def test_closed_path_is_not_requested(fake_session):
+    fake = fake_session(FakeResponse(200, "User-agent: *\nDisallow: /*/hotel/all/\n"))
+    with pytest.raises(ch.Disallowed):
+        ch.check_robots("h.example", "/ru-ru/x/hotel/all/y.html")
+    ch.check_robots("h.example", "/ru-ru/x/hotel/y.html")
+    assert fake.calls == ["https://h.example/robots.txt"]
+
+
+def test_robots_that_is_not_200_stops_the_run(fake_session):
+    # a WAF challenge page (202) must not read as «everything allowed»
+    fake_session(FakeResponse(202, "<html>challenge</html>"))
+    with pytest.raises(ch.Refused, match="HTTP 202"):
+        ch.check_robots("h.example", "/anything")
