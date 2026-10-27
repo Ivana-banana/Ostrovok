@@ -5,6 +5,7 @@ Run this file after you assign your own adapter to api.cart.BOOKING.
 """
 
 import inspect
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -50,13 +51,16 @@ def pay(client, r, total):
 
 
 class Foreign(cart.SimulatedBooking):
-    """A test adapter of another provider: counts calls, can refuse or change prices."""
+    """A test adapter of another provider: counts calls, can refuse or change prices.
+    Idempotent like a real one: the same key returns the same booking. `voucher_extra_rub`
+    spoils only the first booking."""
 
     def __init__(self, refuse=None, extra_rub=0, drop=False, voucher_extra_rub=0):
         self.refuse, self.extra_rub, self.drop = refuse, extra_rub, drop
         self.voucher_extra_rub = voucher_extra_rub
         self.booked: list[str] = []
         self.cancelled: list[str] = []
+        self.by_key: dict = {}
 
     def quote(self, spec: TripSpec, c: Cart) -> Cart:
         items = [o.model_copy(update={"price_rub": o.price_rub + self.extra_rub}) for o in c.items]
@@ -66,13 +70,19 @@ class Foreign(cart.SimulatedBooking):
         if self.refuse:
             raise self.refuse
         self.booked.append(session_id)
-        v = cart.book(spec, c)
-        total = v.total_rub + self.voucher_extra_rub
-        update = {"booking_id": f"F-{len(self.booked)}", "simulated": False, "total_rub": total}
-        return v.model_copy(update=update)
+        if session_id not in self.by_key:
+            v = cart.book(spec, c)
+            extra = self.voucher_extra_rub if not self.by_key else 0
+            n = len(self.by_key) + 1
+            update = {"booking_id": f"F-{n}", "simulated": False, "total_rub": v.total_rub + extra}
+            self.by_key[session_id] = v.model_copy(update=update)
+        return self.by_key[session_id]
 
     def cancel(self, booking_id):
         self.cancelled.append(booking_id)
+        for key, v in self.by_key.items():
+            if v.booking_id == booking_id:
+                self.by_key[key] = v.model_copy(update={"status": "cancelled"})
 
 
 def test_simulated_booking_has_the_methods_of_the_port():
@@ -192,6 +202,84 @@ def test_voucher_with_another_total_than_the_quote_is_409_and_cancelled(
     assert res.status_code == 409 and "вместо" in res.json()["detail"]
     assert foreign.cancelled == ["F-1"]
     assert store.get(r.session_id).voucher is None
+    # Not a dead end (B1): attempt 1 is closed, the next confirmation books under a new key.
+    v = pay(client, r, r.cart.total_rub).json()
+    assert v["booking_id"] == "F-2" and v["total_rub"] == r.cart.total_rub
+    assert foreign.booked == [r.session_id, f"{r.session_id}:2"]
+    assert store.get(r.session_id).voucher.booking_id == "F-2"
+
+
+def test_cancelled_voucher_from_the_provider_opens_a_new_attempt(
+    client, store, at_checkout, monkeypatch
+):
+    """B1: an idempotent provider returns a cancelled booking; the next key is new."""
+    r = at_checkout
+
+    class CancelsFirst(Foreign):
+        def book(self, spec, c, session_id):
+            v = super().book(spec, c, session_id)
+            return v.model_copy(update={"status": "cancelled"}) if v.booking_id == "F-1" else v
+
+    foreign = CancelsFirst()
+    monkeypatch.setattr(cart, "BOOKING", foreign)
+    assert pay(client, r, r.cart.total_rub).status_code == 409
+    v = pay(client, r, r.cart.total_rub).json()
+    assert v["booking_id"] == "F-2" and foreign.booked == [r.session_id, f"{r.session_id}:2"]
+
+
+def test_simulated_booking_returns_the_same_booking_for_the_same_key(at_checkout):
+    """The reference adapter keeps the port invariant: same key, same booking; cancel marks it."""
+    sim = cart.SimulatedBooking()
+    spec, c = at_checkout.plan.spec, at_checkout.cart
+    first = sim.book(spec, c, "k")
+    assert sim.book(spec, c, "k") == first and sim.book(spec, c, "k:2") != first
+    sim.cancel(first.booking_id)
+    assert sim.book(spec, c, "k").status == "cancelled"
+
+
+def test_two_concurrent_confirms_of_one_session_store_one_booking(
+    client, store, at_checkout, monkeypatch
+):
+    r = at_checkout
+    gate = threading.Barrier(2, timeout=10)
+
+    class Slow(Foreign):
+        def quote(self, spec, c):
+            gate.wait()  # both requests are past the session read
+            return super().quote(spec, c)
+
+    foreign = Slow()
+    monkeypatch.setattr(cart, "BOOKING", foreign)
+    out: list = []
+    threads = [
+        threading.Thread(target=lambda: out.append(pay(client, r, r.cart.total_rub)))
+        for _ in range(2)
+    ]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert [x.status_code for x in out] == [200, 200]
+    ids = {x.json()["booking_id"] for x in out}
+    assert ids == {"F-1"} and store.get(r.session_id).voucher.booking_id == "F-1"
+    assert set(foreign.booked) == {r.session_id}
+
+
+def test_cart_edited_during_the_payment_is_said_in_the_reply(
+    client, store, at_checkout, monkeypatch
+):
+    """The booking is the confirmed cart; an edit made meanwhile is not lost silently."""
+    r = at_checkout
+    gone = r.cart.items[-1].offer_id
+
+    class EditsMeanwhile(Foreign):
+        def book(self, spec, c, session_id):
+            cart_post = {"session_id": r.session_id, "action": "remove", "offer_id": gone}
+            assert client.post("/api/cart", json=cart_post).status_code == 200
+            return super().book(spec, c, session_id)
+
+    monkeypatch.setattr(cart, "BOOKING", EditsMeanwhile())
+    v = pay(client, r, r.cart.total_rub).json()
+    assert gone in [i["offer_id"] for i in v["items"]]
+    assert "изменили во время оплаты" in store.get(r.session_id).reply
 
 
 def test_programming_error_of_an_adapter_is_not_masked_as_a_provider_failure(
