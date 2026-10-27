@@ -100,6 +100,7 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
+from api.timeline import VERBS
 
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
@@ -1549,13 +1550,25 @@ def _text_compare(plan: Plan) -> str:
         # #349: the hotels and legs are on the board; the chat keeps a short summary.
         (
             "Отели и рейсы — на доске: детали и номера там. "
-            f"Отелей: {len(rows)}, рейсов: {sum(o.kind == 'transport' for o in plan.offers)}."
+            f"Отелей: {len(rows)}, вариантов транспорта: {sum(o.kind == 'transport' for o in plan.offers)}."
         ),
     ]
     if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
         lines.append(f"Нет отметки о животных: у {n} из {len(rows)} отелей.")
-    chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
-    lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
+    chosen = []
+    for o in plan.offers:
+        if o.offer_id not in plan.selected:
+            continue
+        if o.kind != "transport":
+            chosen.append(o.title)
+            continue
+        # C14 (#364, TRAP-5): the chosen leg keeps local times with zones and the duration.
+        start, end = (v.lower() for v in VERBS[o.mode])
+        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
+        chosen.append(
+            f"{title} ({start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)})"
+        )
+    lines.append(f"Предлагаю: {'; '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:
         lines.append(f"Почему: {e.why}." + "".join(f" {_cap(x)}." for x in e.tradeoffs))
         lines += [f"Риск: {r}." for r in e.risks]
