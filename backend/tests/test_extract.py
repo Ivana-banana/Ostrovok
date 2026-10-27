@@ -878,6 +878,11 @@ def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
         "Добавь на 2 дня",
         "Убери на 1 день",
         "Отдых в ноябре",
+        "Отдыха в ноябре",
+        "Путёвка в мае",
+        "Путевка в мае",
+        "Пляжи в июне",
+        "Пляж в июне",
         "Поездка в декабре",
         "Отпуск в мае",
         "Тур в июне",
@@ -905,6 +910,14 @@ REBUILD_VERB_FORMS = [  # imperative sg/pl, «мы» form, infinitive, «-ка»
     "Сократи Сократите Сократим Сократить Сократи-ка",
     "Исправь Исправьте Исправим Исправить Исправь-ка",
     "Пересобери Пересоберите Пересоберём Пересобрать Пересобери-ка",
+    "Подвинь Подвиньте Подвинем Подвинуть Подвинь-ка",
+    "Передвинь Передвиньте Передвинем Передвинуть Передвинь-ка",
+    "Смени Смените Сменим Сменить Смени-ка Сменяй",
+    "Верни Верните Вернём Вернуть Верни-ка",
+    "Растяни Растяните Растянем Растянуть Растяни-ка",
+    "Укороти Укоротите Укоротим Укоротить Укороти-ка",
+    "Отмени Отмените Отменим Отменить Отмени-ка Отменяй",
+    "Поставь Поставьте Поставим Поставить Поставь-ка",
 ]
 REBUILD_WORDS = [w for row in REBUILD_VERB_FORMS for w in row.split()]
 
@@ -916,7 +929,11 @@ def test_trap3_every_rebuild_verb_form_is_not_a_city(word, has_destination):
     assert "destinations" not in found and not any("каталоге" in n for n in notes)
 
 
-@pytest.mark.parametrize("word", ["Сдвинь", "Перенести", "Перенеси", "Отдых"])
+@pytest.mark.parametrize(
+    "word",
+    ["Сдвинь", "Перенести", "Перенеси", "Отдых", "Подвиньте", "Смени", "Верни", "Растяни",
+     "Укороти", "Отмени", "Поставь", "Передвинь", "Путёвка", "Пляжи", "Отдыха"],
+)  # fmt: skip
 def test_trap3_verb_at_the_start_gives_no_unknown_destination_reply(word):
     r = step(None, "s", f"{word} на 3 дня")
     assert r.plan.spec.destinations == []
@@ -925,7 +942,9 @@ def test_trap3_verb_at_the_start_gives_no_unknown_destination_reply(word):
 
 def test_trap3_rebuild_verb_after_inspiration_keeps_no_fake_city():
     first = step(None, "s", "Хочу на море в ноябре")
-    for word in ["Сдвинь", "Перенести", "Перенеси", "Заменить"]:
+    words = ["Сдвинь", "Перенести", "Перенеси", "Заменить", "Подвиньте", "Передвинь", "Смени",
+             "Верни", "Растяни", "Укороти", "Отмени", "Поставь", "Отдых"]  # fmt: skip
+    for word in words:
         r = step(first, "s", f"{word} на 3 дня")
         assert r.plan.spec.destinations == first.plan.spec.destinations
         assert not any("каталоге" in m for m in [r.reply, *r.questions])
@@ -952,6 +971,11 @@ def test_trap3_common_noun_as_the_first_message_gives_no_fake_city():
         ("Морозовск в мае", "Морозовск"),
         ("Измаил в мае", "Измаил"),
         ("Сдвинск на 3 дня", "Сдвинск"),
+        ("Поставы в мае", "Поставы"),
+        ("Вернадовка в мае", "Вернадовка"),
+        ("Смоленск в мае", "Смоленск"),
+        ("Отменск на 3 дня", "Отменск"),
+        ("Подвинск на 3 дня", "Подвинск"),
     ],
 )
 def test_trap3_real_first_word_city_survives_the_veto(text, city):
