@@ -7,14 +7,13 @@ catalogue (api/catalog.py, #8) and the transport formula of api/offers.py.
 
 from datetime import date
 
-from api import catalog
-from api.contracts import Destination, Offer, TripSpec
-from api.offers import find_offers, transport_offers
+from api.contracts import Offer, TripSpec
+from api.offers import find_offers, transport_offers  # noqa: F401  find_offers: api/dag.py
 from api.optimizer import rank  # noqa: F401  T7 (#13): the seam is the optimizer now
 from api.timeline import build_timeline  # noqa: F401  # T8 (#14) lives in api/timeline.py
 
-# TODO(T12, #20): inspiration ranking over the whole catalogue instead of these seven places.
-# name -> stems for api/extract.py, why, tradeoffs (team text).
+# Seven places the extractor knows by their stems (api/extract.py, api/answers.py).
+# Inspiration ranks the whole catalogue in api/inspire.py (T12, #20). name -> stems, why, tradeoffs.
 # fmt: off
 _KEYS = ("stems", "why", "tradeoffs")
 _ROWS = [
@@ -54,9 +53,8 @@ def _min_price(offers: list[Offer], pred) -> int:
     return min((o.price_rub for o in offers if pred(o)), default=0)
 
 
-def trip_cost(spec: TripSpec, name: str) -> int:
-    """Cheapest hotel plus the cheapest flight each way."""
-    offers = find_offers(spec, name)
+def trip_cost(spec: TripSpec, offers: list[Offer]) -> int:
+    """Cheapest hotel plus the cheapest flight each way, from the offers of one place."""
     return (
         _min_price(offers, lambda o: o.kind == "hotel")
         + _min_price(offers, lambda o: o.kind == "transport" and o.origin == spec.origin)
@@ -75,46 +73,3 @@ def travel_hours(spec: TripSpec, origin: dict, place: dict) -> float:
     return min(
         (round((x.arrive_at - x.depart_at).total_seconds() / 3600, 1) for x in legs), default=0
     )
-
-
-def suggest_destinations(
-    spec: TripSpec, limit: int = 4, exclude: list[str] | None = None
-) -> list[Destination]:
-    """2–4 destinations (up to `limit`) for the spec, violations marked.
-
-    exclude: refused cities and countries (#113); «Турция» drops every city of Turkey.
-
-    TODO(T12, #20): replace with the inspiration ranking over the catalogue.
-    """
-    sea = "море" in spec.wishes
-    exclude = exclude or []
-    hub, note = catalog.origin_hub(spec.origin or "Москва")
-    out = []
-    for name, c in CATALOG.items():
-        place = catalog.resolve(name)
-        if (sea and not place["sea"]) or name in exclude or place["country"] in exclude:
-            continue
-        air, water = catalog.month_climate(place, spec.month) if spec.month else (None, None)
-        hours = travel_hours(spec, hub, place)
-        violates = []
-        if spec.max_travel_hours and hours > spec.max_travel_hours:
-            violates.append(f"в пути {hours:g} ч — дольше {spec.max_travel_hours:g} ч")
-        if sea and water is not None and water < WARM_WATER_C:
-            violates.append(f"море холодное для купания: вода {water:g} °C")
-        out.append(
-            Destination(
-                name=name,
-                country=place["country"],
-                lat=place["lat"],
-                lon=place["lon"],
-                why=c["why"],
-                est_total_rub=trip_cost(spec, name),
-                air_c=air,
-                water_c=water,
-                travel_hours=hours,
-                tradeoffs=c["tradeoffs"] + [note] * bool(note),
-                violates=violates,
-            )
-        )
-    out.sort(key=lambda d: (bool(d.violates), d.est_total_rub))
-    return out[:limit]

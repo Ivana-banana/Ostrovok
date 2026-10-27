@@ -7,6 +7,7 @@ no model (TRAP-1).
 
 import pytest
 
+from api import catalog
 from api.contracts import ChatRequest
 from api.extract import extract
 from api.model import chat
@@ -225,6 +226,7 @@ def test_warm_refusal_does_not_pick_warm_places(store):
 def test_warm_reply_shows_the_air_of_the_month(store):
     """«тепло» in January: only places with the January air of catalog.json ≥ 15 °C, number shown."""
     r = say(store, "Куда-нибудь где тепло в январе, до 6 часов лёту, из Екатеринбурга")
-    assert [d.name for d in r.plan.destinations] == ["Хургада", "Дубай"]
-    assert "Хургада (Египет)" in r.reply and "воздух 20.9 °C" in r.reply
-    assert "Дубай (ОАЭ)" in r.reply and "воздух 24.4 °C" in r.reply
+    assert len(r.plan.destinations) >= 2
+    for d in r.plan.destinations:
+        assert d.air_c >= 15 and d.air_c == catalog.month_climate(catalog.resolve(d.name), 1)[0]
+        assert f"{d.name} ({d.country})" in r.reply and f"воздух {d.air_c:g} °C" in r.reply
