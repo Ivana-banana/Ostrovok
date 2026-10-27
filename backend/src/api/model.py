@@ -46,12 +46,14 @@ from api.dag import (
 from api.extract import (
     DATE_KEYS,
     DEFAULT_NIGHTS,
+    MAX_NIGHTS,
     MONTH_NAMES,
     excluded_places,
     extract,
     is_chip_message,
     is_excluded,
     is_past_note,
+    too_long_note,
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date
@@ -238,6 +240,8 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
         if "даты" not in stated and assumed:  # the dates were guessed, not said; a shift is said
             data["date_from"] = None
             stated.add("даты")
+    if any(n.startswith("длительность: срок «") for n in notes):
+        stated.add("длительность")  # a length not taken: its note replaces the old one (#160)
     kept = [a for a in data["assumptions"] if _label(a) not in stated]
     data["assumptions"] = kept + [n for n in notes if n not in kept]
     for k, v in found.items():
@@ -786,6 +790,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             # The rules read the shift (which end, how far); the model must not add other dates.
             for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
                 llm_found.pop(k, None)
+    if llm_found and llm_found.get("nights", 0) > MAX_NIGHTS:
+        said = llm_found.pop("nights")  # the model may not set a length the rules would not take
+        llm_found.pop("date_to", None)
+        if "nights" not in found and not any(n.startswith("длительность: срок «") for n in notes):
+            notes.append(too_long_note(f"{said} ночей", old.plan.spec.nights or DEFAULT_NIGHTS))
     if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
         notes.append(PARTY_UNKNOWN)
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):

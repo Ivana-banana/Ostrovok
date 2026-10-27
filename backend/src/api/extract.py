@@ -879,8 +879,15 @@ DEFAULT_NIGHTS = 7  # the length when none is named; model.assume() adds the not
 MAX_NIGHTS = 60  # a longer stay is named and not taken (#160)
 
 
-def _nights(t: str, found: dict, notes: list[str]) -> None:
-    """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на месяц» (30), «на выходные» (пятница–воскресенье)."""
+def too_long_note(said: str, nights: int) -> str:
+    """A length over MAX_NIGHTS is not taken; `nights` is the length that stays in the plan."""
+    return f"длительность: срок «{said}» не принял — взято {nights} ночей"
+
+
+def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
+    """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на месяц» (30), «на выходные» (пятница–воскресенье).
+
+    kept: the length of the plan now (an edit keeps it); DEFAULT_NIGHTS in a new session."""
     if "nights" in found:
         return
     starts = rf"\bчерез\s+(?:{NUM}\s*)?(?:дн\w*|день|недел\w*)|\bследующ\w*\s+недел\w*"
@@ -888,7 +895,7 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
     # «Сократить расходы на 3 дня» names a cost, not the trip: the object word is no edit
     starts += rf"|\b{EDIT_VERB}\w*(?:\s+(?!расход|бюджет|затрат|цен)\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*|месяц\w*)"
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
-    if m := re.search(r"\bна\s+(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
+    if m := re.search(r"\b(?:на\s+)?(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
         found["nights"] = MAX_NIGHTS + 1  # too long, the 3 digits are no number the rules read
     elif m := re.search(rf"\b{NUM}\s*ноч\w*", t):
         n = _num(m.group(1))
@@ -915,7 +922,7 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
         found["nights"] = 30 * (_num(m.group(1)) if m.group(1) else 1)
         if found["nights"] <= MAX_NIGHTS:
             notes.append(f"длительность: «{m.group(0)}» — {found['nights']} ночей")
-    elif m := re.search(rf"\b(?:{NUM}\s+)?недел", t):
+    elif m := re.search(rf"\b(?:{NUM}\s+)?недел\w*", t):
         found["nights"] = 7 * (_num(m.group(1)) if m.group(1) else 1)
     elif m := re.search(rf"\bдн(?:я|ей)\s+(\d{{1,2}})\b{NOT_LENGTH_AFTER}", t):
         # «дней 10» (#114): after every named length; «день 3» is a day of a programme
@@ -939,8 +946,7 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
             notes.append(f"даты: выходные {start:%d.%m}–{end:%d.%m} (ближайшие)")
     if found.get("nights", 0) > MAX_NIGHTS:
         found.pop("nights")
-        # model.assume() sets DEFAULT_NIGHTS; its «не названа» note is skipped as this label is taken
-        notes.append(f"длительность: срок «{m.group(0)}» не принял — взято {DEFAULT_NIGHTS} ночей")
+        notes.append(too_long_note(m.group(0), kept))
 
 
 def _people(t: str, found: dict, notes: list[str]) -> None:
@@ -1082,7 +1088,7 @@ def extract(
     _places(text, t, found, notes, has_destination)
     _english_places(t, found)
     _dates(t, found, notes)
-    _nights(t, found, notes)
+    _nights(t, found, notes, nights)
     _people(t, found, notes)
     _budget(t, found, notes, nights, adults)
     if re.search(
