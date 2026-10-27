@@ -88,6 +88,31 @@ def test_trap_3_gagra_is_not_agra(written):
     assert catalog.resolve(written) is None
 
 
+@pytest.mark.parametrize(
+    "written,name",
+    [
+        ("Эссентуки", "Ессентуки"),  # е/э
+        ("Экатеринбург", "Екатеринбург"),
+        ("Иошкар-Ола", "Йошкар-Ола"),  # и/й
+        ("Йркутск", "Иркутск"),
+        ("Ерусалим", "Иерусалим"),  # a vowel less at the start
+        ("Истамбул", "Стамбул"),  # a vowel more at the start
+        ("Опорту", "Порту"),
+        ("Hania", "Ханья"),  # h/c
+        ("Kopenhagen", "Копенгаген"),  # k/c
+        ("Jerevan", "Ереван"),  # j/y
+    ],
+)
+def test_trap_3_first_letter_typos_still_resolve(written, name):
+    """TRAP-3 (#267): the first-letter rule keeps the typos people really make."""
+    assert catalog.resolve(written)["name"] == name
+
+
+def test_trap_3_dropped_first_consonant_is_not_the_second_best():
+    """TRAP-3 (#267): «Емал» is close to «Чемал»; it must not become «Мале»."""
+    assert catalog.resolve("Емал") is None
+
+
 def test_trap_3_gagra_neighbours_still_resolve():
     """TRAP-3 (#267): the exact names next to the failure keep their place."""
     assert catalog.resolve("Агра")["name"] == "Агра"
