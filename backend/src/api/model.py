@@ -22,7 +22,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import llm
-from api.answers import plan_fact, without_plan_fields
+from api.answers import is_hotel_compare, plan_fact, span, without_plan_fields
 from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
 from api.contracts import (
     Cart,
@@ -1084,7 +1084,9 @@ def _question_fact(old: ChatReply, low: str) -> str:
         return f"{hotel.title}: бесплатная отмена{until}."
     if topic == "transfer":
         rows = [
-            f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in chosen if o.kind == "transfer"
+            f"{o.title} — {_rub(o.price_rub)} (синтетика), в пути {span(o)}"
+            for o in chosen
+            if o.kind == "transfer"
         ]
         return "Трансфер в плане: " + "; ".join(rows) + "." if rows else "Трансфера в плане нет."
     if topic == "kids":
@@ -1098,14 +1100,14 @@ def _question_fact(old: ChatReply, low: str) -> str:
     return ""
 
 
-def _question_answer(old: ChatReply, low: str = "") -> str:
+def _question_answer(old: ChatReply, low: str = "", message: str = "") -> str:
     """The reply to a question at assemble or checkout: the facts of the plan or the cart only
     (TRAP-4), the stage and the cart stay. Weather, visas and «почему не <отель>» get the fact
     and the hint of the stage, not a repeat of the plan (#186)."""
     head = "Это вопрос: план и корзину не меняю."
     if old.stage == "compare":
         head = "Это вопрос: план не меняю."
-    if fact := plan_fact(old.plan, low):
+    if fact := plan_fact(old.plan, low, message):
         return f"{head}\n{fact}\n{HINTS[old.stage]}"
     if fact := _question_fact(old, low):
         head += "\n" + fact
@@ -1402,6 +1404,22 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         )
     if no_transfer and not rules_found:
         return drop_transfers(old)
+    # #186, #216: «какая погода в декабре?» at a December plan names no new field: still a
+    # question. A question with a fact to give («погода?», «почему не Бульвар?», «почему не
+    # поезд?») goes to no model, changes nothing, and is no transport pick.
+    fact = plan_fact(old.plan, low, message) if prev and old.stage in PLAN3 else ""
+    asked = without_plan_fields(rules_found, old.plan) if fact else rules_found
+    if (
+        fact
+        and ASKING_NOTE not in rules_notes
+        and (
+            is_question(low, asked)
+            or (is_hotel_compare(old.plan, low) and not EDIT_KEYS & set(asked))
+        )
+    ):
+        return old.model_copy(
+            update={"reply": _question_answer(old, low, message), "questions": [], "llm": False}
+        )
     pure = (
         set(rules_found) <= {"modes"}
         and not SHIFT_RE.search(low)
@@ -1423,25 +1441,22 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return old.model_copy(
                 update={"plan": plan or old.plan, "reply": text, "questions": [], "llm": False}
             )
-    # #186: «какая погода в декабре?» at a December plan names no new field: still a question.
-    fact = plan_fact(old.plan, low) if prev and old.stage in PLAN3 else ""
-    asked = without_plan_fields(rules_found, old.plan) if fact else rules_found
     if (
         prev
         and old.stage == "compare"
         and ASKING_NOTE not in rules_notes  # «а дети бесплатно?» has its own answer (#179)
         and is_question(low, asked)
-        and (fact or _question_fact(old, low))
+        and _question_fact(old, low)
     ):
-        # #186: a question at compare with a fact to give («погода?», «почему не Бульвар?»)
-        # goes to no model and changes nothing; other questions go on as before.
+        # #186: a question at compare with a fact to give («сколько стоит трансфер?») goes to
+        # no model and changes nothing; other questions go on as before.
         return old.model_copy(
-            update={"reply": _question_answer(old, low), "questions": [], "llm": False}
+            update={"reply": _question_answer(old, low, message), "questions": [], "llm": False}
         )
     if prev and old.stage in ("assemble", "checkout") and is_question(low, asked):
         # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
         kids_only = asking and ASKING_NOTE in rules_notes and not rules_found
-        text = _text_kids_question(old) if kids_only else _question_answer(old, low)
+        text = _text_kids_question(old) if kids_only else _question_answer(old, low, message)
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     # A month after dates the user named (#190): a clear request moves them below (merge);
     # a refusal or a doubt moves nothing and is never a consent («давай в январе?»).
