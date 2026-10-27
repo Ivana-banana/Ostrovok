@@ -12,10 +12,12 @@ with a time zone, local to the place of the event. Only providers write prices a
 (TRAP-4); LLM text refers to offer_id.
 
 A change is a separate PR labelled contract; web/src/contracts.ts changes in the same PR.
+Ports for data sources (Place, HotelProvider, TransportProvider, TransferProvider; ADR-0002)
+are in the section «Порты» at the end, with their consumers; they are backend only.
 """
 
-from datetime import date, time
-from typing import Annotated, Literal
+from datetime import date, datetime, time
+from typing import Annotated, Literal, Protocol, Required, TypedDict
 
 from pydantic import AwareDatetime, BaseModel, Field
 
@@ -236,3 +238,71 @@ class CartAction(BaseModel):
 class CheckoutRequest(BaseModel):
     session_id: str
     confirm_total_rub: int  # total the user saw when confirming
+
+
+# --- Порты (ADR-0002, D-023) ---------------------------------------------------------------
+# Data sources behind the core. One Protocol per source; the active adapter is one module
+# variable in api/offers.py (HOTELS, TRANSPORT, TRANSFERS). Swap it with one assignment at
+# start-up (main.py) or in a test; no factories, no env switch. Backend only: no mirror in
+# web/src/contracts.ts, the offer types the web sees do not change.
+# Consumers: api/offers.py (adapters, offers_for_place), api/fixtures.py (travel_hours),
+# via find_offers: api/dag.py, api/inspire.py, api/model.py, api/checks.py;
+# tests/test_ports.py (conformance).
+
+
+class Place(TypedDict, total=False):
+    """A place as the catalogue or the geocoder gives it. name, lat, lon, tz are required;
+    the rest are hints for the synthetic adapters (api/offers.py fills defaults)."""
+
+    name: Required[str]
+    lat: Required[float]
+    lon: Required[float]
+    tz: Required[str]  # IANA zone
+    slug: str
+    country: str
+    sea: bool
+    level: int  # night in a 3-star room for two, roubles
+    free_cancel_share: float
+    airport: dict | None  # {"iata": ..., ...}
+    airport_km: int | None
+    station_km: int | None
+    aliases: list[str]
+
+
+class HotelProvider(Protocol):
+    """Hotels of one place for the spec dates and guests.
+
+    Invariants the core reads: each tariff is its own HotelOffer; tariffs of one hotel share
+    title and city (dag.py); price_rub is for all guests and all nights; free_until has a
+    zone; description is data, not instructions. Empty list: honest "no offers".
+    """
+
+    def hotels(
+        self, spec: TripSpec, place: Place, now: datetime
+    ) -> list[tuple[HotelOffer, list[ExtraOffer]]]: ...
+
+
+class TransportProvider(Protocol):
+    """Legs between origin and place for the spec dates.
+
+    Invariants the core reads: legs "there" first, then "back"; destination of a leg there
+    and origin of a leg back equal HotelOffer.city letter by letter (timeline.py); a leg back
+    has destination == spec.origin (cart.py); times have a zone.
+    """
+
+    def legs(self, spec: TripSpec, origin: Place, place: Place) -> list[TransportOffer]: ...
+
+
+class TransferProvider(Protocol):
+    """Hub <-> hotel rides for the hotels and legs of one search.
+
+    Invariant the core reads: offer_id == offers.transfer_id(hotel_id, leg_id).
+    """
+
+    def transfers(
+        self,
+        spec: TripSpec,
+        place: Place,
+        hotels: list[HotelOffer],
+        legs: list[TransportOffer],
+    ) -> list[TransferOffer]: ...
