@@ -26,6 +26,7 @@ from api.optimizer import (
     _pool,
     bundles,
     enumerate_trips,
+    explain,
     hotel_rows,
     optimize,
     order_tariffs,
@@ -875,6 +876,115 @@ def test_allowed_amounts_reject_a_made_up_round_difference():
         assert not {n + k for n in real} <= allowed, k
 
 
+def _trip_ids(items, hotel_key, there_key, back_key):
+    h = next(o for o in items if o.offer_id == f"h-{hotel_key}")
+    legs = [o for o in items if o.offer_id in (there_key, back_key)]
+    return pick_hotel([x.offer_id for x in legs], items, h.offer_id)
+
+
+def _train_case():
+    h = hotel("a", 10_000)
+    train = [leg("train", 9000, mode="train", hours=9), leg("tb", 9000, there=False, mode="train")]
+    items = offers([h], [*FLIGHTS, *train])
+    s = spec()
+    return s, items, optimize(s, items)
+
+
+def test_model_imports_only_public_names_of_the_optimizer():
+    """#58: model.py uses explain(), not the private helpers of the optimizer."""
+    import ast
+    from pathlib import Path
+
+    import api.model
+
+    tree = ast.parse(Path(api.model.__file__).read_text(encoding="utf-8"))
+    names = [
+        a.name
+        for n in ast.walk(tree)
+        if isinstance(n, ast.ImportFrom) and n.module == "api.optimizer"
+        for a in n.names
+    ]
+    assert "explain" in names and not [x for x in names if x.startswith("_")]
+
+
+def test_explain_of_the_best_selection_equals_the_ranking_why():
+    s, items, r = _train_case()
+    assert explain(s, items, r.selected) == r.explanations
+    assert explain(s, items, []) == []
+
+
+def test_explain_names_the_selected_trip_not_the_best_one():
+    s, items, r = _train_case()
+    other = _trip_ids(items, "a", "t-train", "t-tb")
+    assert other != r.selected
+    why = explain(s, items, other)
+    assert why[0].offer_id == "h-a"
+    assert [e.offer_id for e in why[1:]] == ["t-train", "t-tb"]
+    t = total(other, items)
+    assert t != total(r.selected, items)
+    assert f"поездка целиком {t:,} ₽".replace(",", " ") in why[0].why
+
+
+def test_bundles_keep_the_best_first_and_add_the_selected_trip_as_own_choice():
+    """#58: after a switch the label «лучший» must not sit on a trip the «Почему» does not name."""
+    s, items, r = _train_case()
+    assert bundles(s, items, r.selected) == r.bundles == bundles(s, items)
+    other = _trip_ids(items, "a", "t-train", "t-tb")
+    out = bundles(s, items, other)
+    assert out[0] == r.bundles[0] and out[0].offer_ids == r.selected  # dag.py reads bundles[0]
+    assert out[1].offer_ids == other and out[1].label.startswith("ваш выбор")
+    assert len({tuple(b.offer_ids) for b in out}) == len(out)  # each trip once
+    assert out[1].total_rub == total(other, items)
+
+
+def test_switch_transport_recomputes_the_bundles_and_the_why_together():
+    from api.model import switch_transport
+
+    s, items, r = _train_case()
+    plan = Plan(spec=s, offers=items, bundles=r.bundles, selected=r.selected)
+    new, note = switch_transport(plan, "возьми поезд")
+    assert new is not None, note
+    own = next(b for b in new.bundles if b.label.startswith("ваш выбор"))
+    assert set(own.offer_ids) == set(new.selected)
+    assert new.explanations[0].offer_id in own.offer_ids
+    assert new.bundles[0].label.startswith("лучший") and new.bundles[0] == r.bundles[0]
+    assert [e.offer_id for e in new.explanations[1:]] == ["t-train", "t-tb"]
+    assert sum(b.label.startswith("лучший") for b in new.bundles) == 1
+    best = next(b for b in new.bundles if b.label.startswith("лучший"))
+    assert "t-train" not in best.offer_ids  # the best trip is the other transport
+
+
+@pytest.mark.parametrize(
+    ("place", "update"),
+    [
+        ("Сочи", {"budget_rub": 1000}),
+        ("Казань", {"priorities": ["cancellation", "price"]}),
+        ("Анталия", {"children_ages": [5], "budget_rub": 150_000}),
+        ("Казань", {"priorities": ["travel_time"], "budget_rub": 20_000}),
+    ],
+)
+def test_trap_4_explain_and_selected_bundles_use_only_offer_facts(place, update):
+    """TRAP-4: for every trip the user can select (any hotel, tariff, legs) explain() and the
+    «ваш выбор» bundle name real ids and only amounts that the offers give."""
+    s = spec(destinations=[place], **update)
+    items = find_offers(s, place)
+    ids = {o.offer_id for o in items}
+    trips = enumerate_trips(items)
+    assert trips
+    for trip in trips[:: max(1, len(trips) // 25)]:  # an even sample keeps the test fast
+        out = bundles(s, items, trip.ids)
+        why = explain(s, items, trip.ids)
+        assert why[0].offer_id == trip.hotel.offer_id
+        assert {e.offer_id for e in why} <= set(trip.ids) and set(trip.ids) <= ids
+        assert all(set(b.offer_ids) <= ids for b in out)
+        allowed = _allowed_amounts(s, items, out)
+        texts = [x for e in why for x in (e.why, *e.tradeoffs, *e.risks)]
+        texts += [t for b in out for t in b.tradeoffs]
+        for text in texts:
+            for m in RUB_RE.finditer(text):
+                assert int(m.group(1).replace(" ", "")) in allowed, (trip.ids, text)
+
+
 def test_no_transport_in_the_plan_is_no_whole_trip_and_says_so():
     """#225: a plan with no leg is no «поездка целиком»; the risks say the road has no data."""
     s = spec(budget_rub=1000)
@@ -885,3 +995,12 @@ def test_no_transport_in_the_plan_is_no_whole_trip_and_says_so():
     _, ex = rank(s, [*FLIGHTS, hotel("a", 20000)])
     assert "поездка целиком" in ex[0].why
     assert not any("как добраться" in r for r in ex[0].risks)
+
+
+def test_bundles_of_a_pick_stay_empty_when_nothing_takes_the_pet():
+    """#58 + #131: the optimizer offers no trip for the pet; a hand pick must not crash bundles."""
+    items = offers([hotel("no", 9000)], FLIGHTS)
+    s = spec(pets=True)
+    assert optimize(s, items).bundles == []
+    ids = [o.offer_id for o in items if o.kind in ("hotel", "transport")]
+    assert bundles(s, items, ids) == []

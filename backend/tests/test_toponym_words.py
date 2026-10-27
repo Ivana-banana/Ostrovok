@@ -21,6 +21,25 @@ def test_trap_3_doubled_last_letter_still_resolves():
         ("Стамбулл", "Стамбул"),
         ("Барселонаа", "Барселона"),
         ("Тбилисии", "Тбилиси"),
+        ("Ереванн", "Ереван"),
+        ("Калининградд", "Калининград"),
+        ("Лазаревскоее", "Лазаревское"),
+        ("Петропавловск-Камчатскийй", "Петропавловск-Камчатский"),
+        ("Переславль-Залесскийй", "Переславль-Залесский"),
     ]:
         r = catalog.resolve(typo)
-        assert r is not None and r["name"] == city
+        assert r is not None and r["name"] == city, typo
+
+
+def test_trap_3_instrumental_of_compound_names_resolves():
+    from api import catalog
+
+    for written, city in [
+        ("Тель-Авивом", "Тель-Авив"),
+        ("Шарм-эль-Шейхом", "Шарм-эль-Шейх"),
+        ("Южно-Сахалинском", "Южно-Сахалинск"),
+        ("Горно-Алтайском", "Горно-Алтайск"),
+        ("Плая-дель-Карменом", "Плая-дель-Кармен"),
+    ]:
+        r = catalog.resolve(written)
+        assert r is not None and r["name"] == city, written

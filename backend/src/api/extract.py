@@ -9,7 +9,8 @@ Invalid values (31 ноября, 0 ночей) are skipped with a note, never an
 
 import functools
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from api import catalog
 from api.fixtures import CATALOG, future_date
@@ -1199,6 +1200,27 @@ def llm_past_dates(llm_found: dict, today: date | None = None) -> str | None:
     return f"даты: от модели {start:%d.%m.%Y} {PAST_GONE_MARK} — не применены"
 
 
+# #362: «в конце января» is the end of the month. The day is inside the named part (check-in may
+# run past the month end): start 5th, middle 15th, end 25th.
+MONTH_PART = re.compile(
+    rf"\b(?:(?:ближе\s+к|под)\s+)?(конец|конц\w*|начал\w*|середин\w*|перв\w+\s+числ\w*"
+    rf"|последн\w+\s+числ\w*)\s+{MONTH}"
+)
+MONTH_PART_DAY = (("нач", 5, 10), ("перв", 5, 10), ("сер", 15, 20))  # (stem, day, last day)
+
+
+def _month_part(t: str, today: date) -> tuple[date, str] | None:
+    """Check-in date and the said words for «в конце января»; None if no part is named."""
+    if re.search(r"\bвыходн|\bуик[-\s]?[эе]нд", t) or not (m := MONTH_PART.search(t)):
+        return None
+    month = _month(m.group(2))
+    day, last = next(((d, e) for s, d, e in MONTH_PART_DAY if m.group(1).startswith(s)), (25, 31))
+    start = future_date(month, day, today)
+    if month == today.month and start.year > today.year and today.day < last:
+        start = today + timedelta(days=1)  # the part is under way: tomorrow is still inside it
+    return start, m.group(0)
+
+
 # The day of the return after the start: «улетаем 18-го», «обратно 3 декабря»; not «в 18:30».
 BACK_DAY_RE = re.compile(
     rf"\b(?:улета\w*|уезжа\w*|возвраща\w*|обратно)\s+(\d{{1,2}})(?![\d:.]|\s*(?:ноч|дн|сут|недел|час|чел))(?:-?(?:го|е)\b)?"
@@ -1265,6 +1287,9 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         elif re.search(r"\bследующ\w*\s+недел", t):
             found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
             notes.append(f"даты: с понедельника {found['date_from']:%d.%m} («на следующей неделе»)")
+        elif part := _month_part(t, today):
+            found["date_from"], said = part
+            notes.append(f"даты: с {part[0]:%d.%m} («{said}», допущение: день внутри части месяца)")
         if "date_from" in found:
             found["month"] = found["date_from"].month
         return
@@ -1409,6 +1434,33 @@ def _holiday_end(said: str, found: dict, notes: list[str]) -> None:
         f"даты: {start:%d.%m}–{found['date_to']:%d.%m} («{said}»: праздники 1–8 января, "
         f"заезд {start:%d.%m} — допущение)"
     )
+
+
+# C5 (#408): «билеты у нас уже куплены», «свои билеты», «уже купили билеты».
+OWN_TICKETS_RE = re.compile(
+    r"\bбилет\w*\s+(?:у\s+(?:нас|меня)\s+)?(?:уже\s+)?(?:есть|куплен\w*|взят\w*)"
+    r"|\bсво\w+\s+билет\w*|\bуже\s+(?:купил\w*|взял\w*)\s+билет\w*"
+)
+# The clock time of the own arrival and departure in one clause: «прилетаем 14 ноября в 01:30».
+CLOCK = r"[^.,;!?]*?\bв\s+(\d{1,2})[:.](\d{2})\b"
+ARRIVE_RE = re.compile(rf"\b(?:прилет|приезж|прибыв|приезд|прибыт)\w*{CLOCK}")
+LEAVE_RE = re.compile(rf"\b(?:улет|уезжа|отъезд|обратн)\w*{CLOCK}")
+
+
+def _own_tickets(t: str, found: dict) -> None:
+    """Own tickets and their times at the destination of this message (offers.own_legs)."""
+    if not OWN_TICKETS_RE.search(t):
+        return
+    found["own_transport"] = True
+    place = resolve_place(found["destinations"][0]) if found.get("destinations") else None
+    if place is None:
+        return  # no zone for the clock time
+    tz = ZoneInfo(place["tz"])
+    for key, day, rx in (("arrive_at", "date_from", ARRIVE_RE), ("leave_at", "date_to", LEAVE_RE)):
+        m = rx.search(t)
+        if m and found.get(day) and int(m.group(1)) < 24 and int(m.group(2)) < 60:
+            at = time(int(m.group(1)), int(m.group(2)))
+            found[key] = datetime.combine(found[day], at, tz)
 
 
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
@@ -1904,6 +1956,7 @@ def extract(
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     if holiday:
         _holiday_end(holiday, found, notes)
+    _own_tickets(t, found)
     _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
     if re.search(

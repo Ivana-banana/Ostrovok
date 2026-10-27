@@ -5,7 +5,8 @@ _source. Free text resolves to a place: case, ё/е, a leading preposition, Russ
 ru/en aliases (TRAP-3), a country name (its main place), then a close spelling (same first letter up to
 LEAD_CLASSES, or a vowel more or less at the start).
 A name outside the snapshot goes to lookup_online: the Open-Meteo geocoder and one year of
-climate with a short timeout. Any error there gives None, never an exception (TRAP-2, TRAP-6).
+climate with a short timeout. A geocoder error gives None; climate errors keep the city with
+unknown climate values and an absent sea hint (TRAP-2, TRAP-6).
 """
 
 import difflib
@@ -62,6 +63,7 @@ COLLOQUIAL = {"ебург": "Екатеринбург", "екат": "Екате�
               "владик": "Владивосток", "питербург": "Санкт-Петербург", "петербург": "Санкт-Петербург"}  # fmt: skip
 TYPO_MIN_LEN = 6  # a shorter word may differ by one letter from another place: «Омск», «Томск»
 TYPO_EDITS, TYPO_LONG = 1, 9  # letters to change in a name; 2 for a name of TYPO_LONG letters
+ORIGIN_WORDS = ("из", "от", "с", "со")
 PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _deadline: ContextVar[float | None] = ContextVar("geocode_deadline", default=None)
@@ -114,11 +116,12 @@ def _lead_close(q: str, k: str) -> bool:
     return b[0] in VOWELS and len(b) > 2 and b[1:3] == a[:2]
 
 
-def _another_word(q: str, k: str) -> bool:
+def _another_word(q: str, k: str, q_full: str, k_full: str) -> bool:
     """The stem q is not a typo of the stem k but a longer or a cut word (#306): «Петербургский»
     is an adjective built on «Петербург», «Выбора» is «выбор» (choice), not «Выборг». A word cut by
-    a letter from a long name stays a typo: «Кисловодс»."""
-    if len(q) - len(k) >= 2:
+    a letter from a long name stays a typo: «Кисловодс». The tail is measured on the whole written
+    names, not on stems: «Лазаревскоее» has a tail of one letter over «лазаревское»."""
+    if len(q_full) - len(k_full) >= 2:
         return q.startswith(k)
     if len(q) > len(k):
         return False
@@ -128,7 +131,7 @@ def _another_word(q: str, k: str) -> bool:
 def _same_words(query: list[str], key: list[str]) -> bool:
     """Same words up to a Russian case ending: «нижнем новгороде» = «нижний новгород»."""
     return len(query) == len(key) and all(
-        q.startswith(_stem(k)) and q[len(_stem(k)) :] in CASES
+        q == k or (q.startswith(_stem(k)) and q[len(_stem(k)) :] in CASES)
         for q, k in zip(query, key, strict=True)
     )
 
@@ -167,6 +170,22 @@ def country_of(text: str) -> str | None:
     )  # fmt: skip
 
 
+def country_in(text: str) -> str | None:
+    """The country a message names beside a place: «Ушуайя, Аргентина» -> «Аргентина».
+
+    A country after «из», «от», «с» is the origin or a distance, not the place: None for it."""
+    words = re.findall(r"[\w-]+", text.lower())
+    for i, w in enumerate(words):
+        if w in ORIGIN_WORDS:
+            continue
+        if i and words[i - 1] in ORIGIN_WORDS:
+            continue
+        for n in (1, 2, 3):
+            if c := country_of(" ".join(words[i : i + n])):
+                return c
+    return None
+
+
 def by_country(text: str) -> list[dict]:
     """Places of the country in the text, the main place first, then by population."""
     c = country_of(text)
@@ -190,10 +209,11 @@ def resolve(text: str) -> dict | None:
     if len(q) < 4:
         return None
     stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
+    full = {_stems(k): k for k, _ in _keys() if len(k.split()) == len(q.split())}
     close = difflib.get_close_matches(_stems(q), stems, n=1, cutoff=FUZZY)
     # Only the best match counts: if it fails _lead_close, the answer is None, not the second
     # best. «Гагра» is not «Агра»; «Емал» is close to «Чемал», so it is not «Мале» (#267).
-    if close and _another_word(_stems(q), close[0]):
+    if close and _another_word(_stems(q), close[0], q, full[close[0]]):
         return None
     if close and _lead_close(_stems(q), close[0]):
         return stems[close[0]]
@@ -211,7 +231,8 @@ def _respelled(q: str) -> dict | None:
     # A wrong letter or two in a long name. Only one such place, else it is a guess.
     stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
     typo = [s for s in stems if len(s) >= TYPO_MIN_LEN and s != _stems(q) and _typo(_stems(q), s)]
-    typo = [s for s in typo if not _another_word(_stems(q), s)]
+    full = {_stems(k): k for k, _ in _keys() if len(k.split()) == len(q.split())}
+    typo = [s for s in typo if not _another_word(_stems(q), s, q, full[s])]
     if len(typo) == 1 and _lead_close(_stems(q), typo[0]):
         return stems[typo[0]]
     return None
@@ -398,14 +419,26 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     lat, lon = round(g["latitude"], 4), round(g["longitude"], 4)
     span = {"latitude": lat, "longitude": lon, "start_date": f"{YEAR}-01-01",
             "end_date": f"{YEAR}-12-31", "timezone": "auto"}  # fmt: skip
-    d = fetch(ARCHIVE, {**span, "daily": "temperature_2m_max,precipitation_sum"})["daily"]
-    air = _monthly(d["time"], d["temperature_2m_max"])
-    rain = _monthly(d["time"], d["precipitation_sum"], sum)  # mm in the month
-    s = fetch(MARINE, {**span, "daily": "sea_surface_temperature_mean"})
+    air, rain, notes = [None] * 12, [None] * 12, []
+    try:
+        d = fetch(ARCHIVE, {**span, "daily": "temperature_2m_max,precipitation_sum"})["daily"]
+        air = _monthly(d["time"], d["temperature_2m_max"])
+        rain = _monthly(d["time"], d["precipitation_sum"], sum)  # mm in the month
+    except (OSError, KeyError, IndexError, TypeError, ValueError):
+        air, rain = [None] * 12, [None] * 12
+        notes.append("Климат не загрузился: температура воздуха и осадки неизвестны.")
     here, sea = {"lat": lat, "lon": lon}, None
-    if km_between(here, {"lat": s["latitude"], "lon": s["longitude"]}) <= SEA_KM:
-        sea = _monthly(s["daily"]["time"], s["daily"]["sea_surface_temperature_mean"])
-        sea = sea if any(x is not None for x in sea) else None
+    sea_known = True
+    try:
+        s = fetch(MARINE, {**span, "daily": "sea_surface_temperature_mean"})
+        if km_between(here, {"lat": s["latitude"], "lon": s["longitude"]}) <= SEA_KM:
+            sea = _monthly(s["daily"]["time"], s["daily"]["sea_surface_temperature_mean"])
+            sea = sea if any(x is not None for x in sea) else None
+            sea_known = sea is not None
+    except (OSError, KeyError, IndexError, TypeError, ValueError):
+        sea_known = False
+    if not sea_known:
+        notes.append("Данные о море не загрузились: наличие моря и температура воды неизвестны.")
     airport, line, flaky = _airport(here, fetch)
     country = g.get("country", "")
     levels = [p["level"] for p in places() if p["country"] == country]
@@ -416,7 +449,11 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
         "tags": ["sea"] * (sea is not None) + ["swim"] * swims(sea), "aliases": [norm(name)] if norm(name) != norm(g["name"]) else [],
         "airport": airport, "airport_km": airport["km"] if line <= AIRPORT_KM else None,
         "climate": {"air": air, "rain": rain, "sea": sea}, "source": "online",
-    } | ({"_flaky": True} if flaky else {})  # fmt: skip
+    } | ({"_flaky": True} if flaky or notes else {})  # fmt: skip
+    if not sea_known:
+        del place["sea"]  # Place.sea is optional: unknown is not False.
+    if notes:
+        place["climate_notes"] = notes
     if levels:
         place["level"] = int(statistics.median(levels))
     return place

@@ -440,3 +440,20 @@ def test_trap_3_ordinary_word_near_a_place_is_no_place(word):
 )  # fmt: skip
 def test_trap_3_case_forms_and_typos_still_resolve_after_word_guard(written, name):
     assert catalog.resolve(written)["name"] == name
+
+
+def test_airport_is_of_the_places_own_country():
+    """#409: Брянск was GME (Gomel, Belarus, 237 km) and Смоленск MVQ (Mogilev); both are Russian."""
+    for name in ("Брянск", "Смоленск"):
+        place = catalog.resolve(name)
+        assert place["airport"]["iata"] not in {"GME", "MVQ"}, name
+        assert place["airport"]["tz"] != "Europe/Minsk", name
+    spec = importlib.util.spec_from_file_location(
+        "build_catalog", Path(__file__).parents[2] / "scripts" / "build_catalog.py"
+    )
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    place = {"ru": "X", "lat": 0.0, "lon": 0.0, "cc": "XX"}
+    ports = [["FOR", 0.5, 0.0, "UTC", "YY"], ["OWN", 3.0, 0.0, "UTC", "XX"]]
+    assert build.airport_fields(place, ports, {}, 1)["airport"]["iata"] == "OWN"
+    assert build.airport_fields(place, ports[:1], {}, 1)["airport"]["iata"] == "FOR"

@@ -258,6 +258,17 @@ def test_metric_counts_booked_sessions_questions_and_first_recommendation_time()
     assert any("ошибки стыковок" in x for x in lines)
 
 
+def test_walk_notes_a_stage_without_a_scripted_answer_instead_of_raising(monkeypatch):
+    """#79: stage «select» has no scripted answer; stop=("compare",) must not raise KeyError."""
+    rewrite(monkeypatch, lambda r: r.model_copy(update={"stage": "select"}))
+    with checks._api() as (client, _):
+        exact = checks._quotes(BY_ID["S3"])[0]
+        run = checks._walk(client, "T", "select", exact, stop=("compare",))
+    assert run.last.stage == "select" and len(run.replies) == 1 and not run.booked
+    assert run.note.startswith("чат не довёл до «compare»") and "«select»" in run.note
+    assert any("чат не довёл до" in x for x in checks.metric("visible")["details"])
+
+
 def test_metric_is_none_without_sessions():
     assert checks.metric("visible") is None
 

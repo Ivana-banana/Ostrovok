@@ -115,3 +115,25 @@ def test_C8_far_substitute_airport_gives_way_to_a_train(store):
     r = say(store, "беру", r.session_id)
     assert any(o.mode == "train" for o in chosen(r, "transport"))
     assert not [o for o in chosen(r, "transfer") if "DME" in o.title]
+
+
+def test_C5_own_tickets_no_flight_a_night_transfer_and_the_night_before(store):
+    """#408: own tickets — the cart has the hotel and the transfer from 01:30, no transport;
+    the 11-hour wait for the check-in is a warning fixed by the night before."""
+    r = say(store, C5)
+    assert r.plan.spec.own_transport and r.plan.spec.arrive_at.hour == 1
+    assert not [o for o in r.plan.offers if o.kind == "transport"]
+    warn = next(i for i in r.plan.issues if "заезд с 14:00" in i.text)
+    assert any(f.endswith("-prev") for f in warn.fixes)
+    r = say(store, "да", say(store, "беру", r.session_id).session_id)
+    assert r.stage == "checkout"
+    assert not [o for o in r.cart.items if o.kind == "transport"]
+    ride = next(o for o in r.cart.items if o.kind == "transfer")
+    assert "аэропорт KGD →" in ride.title and time(1, 30) <= ride.depart_at.time() <= time(2, 30)
+
+
+def test_C5_own_departure_time_gets_a_transfer_before_it(store):
+    r = say(store, "Билеты уже есть, Калининград с 14 ноября, улетаем 18-го в 15:00, двое взрослых")
+    r = say(store, "беру", r.session_id)
+    ride = next(o for o in chosen(r, "transfer") if "→ аэропорт" in o.title)
+    assert ride.arrive_at <= r.plan.spec.leave_at - timedelta(hours=2)

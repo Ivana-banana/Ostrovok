@@ -270,11 +270,11 @@ def _hotel_base(place: dict, key: str, name: str, stars: int, lat: float, lon: f
     pets = pet_tag in ("yes", "leashed")
     if synthetic:
         flags = {
-            "family": r("family") < (0.8 if stars >= 4 or place["sea"] else 0.3),
-            "kids_club": place["sea"] and stars == 5,
+            "family": r("family") < (0.8 if stars >= 4 or place.get("sea", False) else 0.3),
+            "kids_club": place.get("sea", False) and stars == 5,
             "wheelchair": r("wheelchair") < (0.7 if stars >= 4 else 0.2),
             "elevator": stars >= 4 or r("elevator") < 0.6,
-            "beach": place["sea"] and (km <= 1.5 or stars >= 4),
+            "beach": place.get("sea", False) and (km <= 1.5 or stars >= 4),
             "parking": stars <= 2 or r("parking") < 0.6,
         }
         flags["elevator"] = flags["elevator"] or flags["wheelchair"]
@@ -310,7 +310,7 @@ def _osm_bases(place: dict) -> list[dict]:
 
 
 def _synthetic_bases(place: dict) -> list[dict]:
-    names = SEA_NAMES + CITY_NAMES if place["sea"] else CITY_NAMES
+    names = SEA_NAMES + CITY_NAMES if place.get("sea", False) else CITY_NAMES
     shift = int(_rand(place["name"], "names") * len(names))
     out = []
     for i, stars in enumerate(SYNTH_STARS):
@@ -334,8 +334,8 @@ def _default_meal(place: dict, base: dict) -> Meal:
     if stars == 3:
         return "BB" if r < 0.5 else "RO"
     if stars == 4:
-        return "HB" if place["sea"] and r < 0.5 else "BB"
-    return "AI" if place["sea"] else "BB"
+        return "HB" if place.get("sea", False) and r < 0.5 else "BB"
+    return "AI" if place.get("sea", False) else "BB"
 
 
 def _meals(place: dict, base: dict) -> list[Meal]:
@@ -824,9 +824,44 @@ def offers_for_place(
     now = now or datetime.now(UTC)  # only the cancellation state depends on it
     pairs = HOTELS.hotels(spec, place, now)
     hotels = [h for h, _ in pairs]
-    legs = TRANSPORT.legs(spec, _complete(origin), place) if origin else []
-    transfers = TRANSFERS.transfers(spec, place, hotels, legs)
+    legs = (
+        TRANSPORT.legs(spec, _complete(origin), place) if origin and not spec.own_transport else []
+    )
+    own = own_legs(spec, place["name"])
+    transfers = TRANSFERS.transfers(spec, place, hotels, legs + own)
     return [*hotels, *legs, *transfers, *(x for _, extras in pairs for x in extras)]
+
+
+OWN_THERE, OWN_BACK = "own-there", "own-back"  # leg_id of the user's own tickets (C5, #408)
+
+
+def own_legs(spec: TripSpec, city: str) -> list[TransportOffer]:
+    """The user's own arrival and departure as legs for the transfers and the timeline only.
+
+    They are never offers: nothing to buy. A leg there is spec.arrive_at, a leg back
+    spec.leave_at; a train when the user named only the train, else a flight.
+    """
+    if not spec.own_transport:
+        return []
+    mode: Mode = "train" if spec.modes == ["train"] else "flight"
+    out = []
+    for leg_id, at, there in ((OWN_THERE, spec.arrive_at, True), (OWN_BACK, spec.leave_at, False)):
+        if at is None:
+            continue
+        ends = (spec.origin or "", city) if there else (city, spec.origin or "")
+        out.append(
+            TransportOffer(
+                offer_id=leg_id,
+                title="Свои билеты",
+                mode=mode,
+                origin=ends[0],
+                destination=ends[1],
+                depart_at=at,
+                arrive_at=at,
+                price_rub=1,  # never shown or summed: not an offer
+            )
+        )
+    return out
 
 
 def find_offers(spec: TripSpec, name: str, now: datetime | None = None) -> list[Offer]:
