@@ -817,6 +817,7 @@ def _transit_dropped(t: str, hits: list) -> list:
     """Hits without transit points (#274): the place after «с пересадкой в», or after «через» when
     it has its own airport that serves another named place («через Минводы» to Кисловодск, MRV).
     «через Нижний в Сочи» is a route stop and stays. The last place is never dropped."""
+
     def iata(name: str) -> str | None:
         p = resolve_place(name)
         return (p or {}).get("airport", {}).get("iata")
@@ -825,8 +826,14 @@ def _transit_dropped(t: str, hits: list) -> list:
     for h in hits:
         before = t[: h[0]]
         own = ((resolve_place(h[1]) or {}).get("airport") or {}).get("km", 99) <= 25  # own airport
-        hub = VIA.search(before) and own and iata(h[1]) and any(
-            o[1] != h[1] and not VIA.search(t[: o[0]]) and iata(o[1]) == iata(h[1]) for o in hits
+        hub = (
+            VIA.search(before)
+            and own
+            and iata(h[1])
+            and any(
+                o[1] != h[1] and not VIA.search(t[: o[0]]) and iata(o[1]) == iata(h[1])
+                for o in hits
+            )
         )
         if TRANSFER.search(before) or hub:
             continue
