@@ -1709,10 +1709,13 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # The DAG recomputes only the nodes that depend on the changed fields (T6, #10).
         plan, cart, done = replan(old.plan, spec, old.cart)
         if not plan.offers:
-            # TODO(T4, #8): the geocoder and synthetic offers cover any city.
+            # TRAP-2 (#88): neither catalog.json nor the geocoder knows the place (or no network).
+            # Its coordinates are unknown, so the variants are not «nearby»: the reply says why.
             text = (
-                f"Направления «{spec.destinations[0]}» пока {NOT_IN_CATALOG}, предложений нет. "
-                f"{HINTS['select']}"
+                f"Направления «{spec.destinations[0]}» пока {NOT_IN_CATALOG}, "
+                "и геокодер его не нашёл (или нет сети). Где это место, не знаю. "
+                f"{HINTS['select']} Подойдёт и ближайший к нему крупный город. "
+                "Ниже — направления под ваши даты и пожелания, не по близости к этому месту."
             )
             text, questions = _no_offers(plan, text)
             # «Ханой или Сочи»: Сочи is named (#142)
