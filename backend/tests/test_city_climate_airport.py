@@ -352,3 +352,21 @@ def test_an_order_with_a_city_still_changes_the_destination(store, request_text)
     r = at(store, "compare")
     r2 = say(store, request_text, r.session_id)
     assert r2.plan.spec.destinations == ["Анталия"], r2.reply
+
+
+def test_train_and_car_labels_have_no_via_label(store):
+    """Only a flight goes through an airport: «Поезд Москва → Казань» is not «через »."""
+    default = first_answer(store, "Казань из Москвы с 3 по 8 декабря, двое взрослых")
+    car = first_answer(store, "Казань из Москвы с 3 по 8 декабря, двое взрослых, на машине")
+    titles = [o.title for r in (default, car) for o in r.plan.offers if o.kind == "transport"]
+    ground = [t for t in titles if t.startswith(("Поезд", "На своей машине"))]
+    assert any(t.startswith("Поезд ") for t in ground), titles
+    assert any(t.startswith("На своей машине") for t in ground), titles
+    assert not any("через" in t for t in ground), ground
+    kazan = [t for t in titles if t.startswith("Перелёт Москва → Казань")]
+    assert kazan and all("→ Казань (KZN)," in t and "через" not in t for t in kazan), kazan
+
+
+def test_flight_to_vyborg_is_still_through_led(store):
+    r = first_answer(store, VYBORG)
+    assert any("Перелёт Москва → Выборг через LED," in t for t in flights(r)), flights(r)

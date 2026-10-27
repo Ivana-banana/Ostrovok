@@ -355,8 +355,17 @@ def is_airport_question(low: str) -> bool:
     )
 
 
-def _name_key(name: str) -> str:
+def _place(name: str) -> dict | None:
+    """The place of a name as typed. A genitive or dative the geocoder does not know («у Тихвина»,
+    «к Тихвину») is asked once more without its last vowel."""
     place = resolve_place(name)
+    if place is None and len(name) > 4 and name[-1] in "ауюы":
+        place = resolve_place(name[:-1])
+    return place
+
+
+def _name_key(name: str) -> str:
+    place = _place(name)
     return place["name"] if place else catalog.norm(name)[:5]
 
 
@@ -379,7 +388,7 @@ def _named_places(plan: Plan, message: str, found: dict) -> list[str]:
         # «Нижнем Новгороде» is one name; «Анталии Бульвар» is a name and a word: the first fits.
         # Two words that the data knows neither as a whole nor the first are one name («Новом Афоне»).
         joined = " ".join(words)
-        whole = len(words) == 1 or resolve_place(joined) or not resolve_place(words[0])
+        whole = len(words) == 1 or _place(joined) or not _place(words[0])
         typed.append(joined if whole else words[0])
     # Extract keeps the first word of «Новом Афоне» and of «в Новом году»: the text decides.
     names = [n for n in found.get("destinations") or [] if n not in heads]
@@ -435,7 +444,7 @@ def weather_fact(plan: Plan, low: str = "", cities: list[str] | None = None, mon
     when = IN_MONTH[month - 1] if month else ""
     lines = []
     for city in cities or _places(plan):
-        place = resolve_place(city)
+        place = _place(city)
         if place is None:
             lines.append(f"Климата для {city} в данных нет — {NO_DATA}.")
             continue
@@ -458,7 +467,7 @@ def destination_line(plan: Plan) -> str:
     airport, from the catalogue or the geocoder place. A part without data is left out, never
     guessed (TRAP-4); no data at all gives an empty line."""
     month = _month(plan)
-    place = resolve_place(plan.spec.destinations[0]) if plan.spec.destinations else None
+    place = _place(plan.spec.destinations[0]) if plan.spec.destinations else None
     if place is None:
         return ""
     parts = []
@@ -481,7 +490,7 @@ def airport_fact(plan: Plan, cities: list[str] | None = None) -> str:
     far from it has no airport of its own; a flight of the plan to it goes through that airport."""
     lines = []
     for city in cities or _places(plan):
-        place = resolve_place(city)
+        place = _place(city)
         port = place.get("airport") if place else None
         if not port:
             lines.append(f"Аэропорта для {city} в данных нет — {NO_DATA}.")

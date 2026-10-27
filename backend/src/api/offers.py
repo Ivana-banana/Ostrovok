@@ -361,13 +361,12 @@ def _leg(
     arrive = _shift(depart, _minutes(hours)).astimezone(ZoneInfo(b["tz"]))
     what = {"flight": "Перелёт", "train": "Поезд", "car": "На своей машине"}[mode]
     port = b["airport"]["iata"] if mode == "flight" and b.get("airport") else ""
-    via = _via_airport(mode, a, b)
+    via = _via_airport(mode, a, b)  # a flight only: a train or a car has no airport
     # The airport of arrival (#247); a place far from its airport is reached through it (#123).
-    tail = (
-        f" через {via}"
-        if via == port
-        else (f" ({port})" if port else "") + (f" через {via}" if via else "")
-    )
+    if via and via == port:
+        tail = f" через {via}"
+    else:
+        tail = (f" ({port})" if port else "") + (f" через {via}" if via else "")
     title = f"{what} {a['name']} → {b['name']}{tail}, {depart:%d.%m %H:%M}"
     if changes:
         title += f", пересадок: {changes}"
