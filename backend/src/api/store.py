@@ -1,11 +1,17 @@
-"""Session store: session_id -> the last ChatReply as JSON (stdlib sqlite3)."""
+"""Session store: session_id -> the last ChatReply as JSON (stdlib sqlite3).
+
+Table `booking_attempts` keeps the booking attempts of a session (#376): POST /api/checkout
+and the chat confirmation book through it (#382, cart.checkout_reply). The attempt
+is saved before the provider call and its voucher right after it, outside the session lock.
+A repeat after a failed session write finds the voucher here and does not book again.
+"""
 
 import os
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-from api.contracts import ChatReply
+from api.contracts import ChatReply, Voucher
 
 DEFAULT_DB = Path(__file__).resolve().parents[3] / "data" / "sessions.db"
 
@@ -23,6 +29,11 @@ class SessionStore:
             "id TEXT PRIMARY KEY, reply TEXT NOT NULL, "
             "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
+        self._run(
+            "CREATE TABLE IF NOT EXISTS booking_attempts ("
+            "session_id TEXT NOT NULL, attempt INTEGER NOT NULL, voucher TEXT, "
+            "PRIMARY KEY (session_id, attempt))"
+        )
 
     def _run(self, sql: str, args: tuple = ()) -> tuple | None:
         con = sqlite3.connect(self.path)
@@ -35,6 +46,37 @@ class SessionStore:
     def get(self, session_id: str) -> ChatReply | None:
         row = self._run("SELECT reply FROM sessions WHERE id = ?", (session_id,))
         return ChatReply.model_validate_json(row[0]) if row else None
+
+    def last_attempt(self, session_id: str) -> tuple[int, Voucher | None]:
+        """The last booking attempt of the session and its voucher; (0, None) without one."""
+        row = self._run(
+            "SELECT attempt, voucher FROM booking_attempts WHERE session_id = ? "
+            "ORDER BY attempt DESC LIMIT 1",
+            (session_id,),
+        )
+        if not row:
+            return 0, None
+        return row[0], Voucher.model_validate_json(row[1]) if row[1] else None
+
+    def start_attempt(self, session_id: str, attempt: int) -> None:
+        self._run(
+            "INSERT OR IGNORE INTO booking_attempts (session_id, attempt) VALUES (?, ?)",
+            (session_id, attempt),
+        )
+
+    def save_voucher(self, session_id: str, attempt: int, voucher: Voucher) -> Voucher:
+        """Keep the first voucher of the attempt and return the kept one: of two parallel
+        requests with one attempt key, both store the same booking in the session."""
+        self._run(
+            "UPDATE booking_attempts SET voucher = ? "
+            "WHERE session_id = ? AND attempt = ? AND voucher IS NULL",
+            (voucher.model_dump_json(), session_id, attempt),
+        )
+        row = self._run(
+            "SELECT voucher FROM booking_attempts WHERE session_id = ? AND attempt = ?",
+            (session_id, attempt),
+        )
+        return Voucher.model_validate_json(row[0]) if row and row[0] else voucher
 
     def put(self, reply: ChatReply) -> None:
         self._write(reply)
