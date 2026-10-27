@@ -369,10 +369,16 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     stop = r"нельзя|отпадает|отпадают|исключен|невозможн"
     verbs = (
         r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|над|нуж|вариант|устраива|катит"
-        r"|поед|полет|лет|ед[еи]м|рассматр|будет|удобн"
+        r"|рассматр|будет|удобн"
     )
+    # «не поедем» ends the part: «не поедем на самолёте» only drops a way to travel
+    moves = r"поед|полет|лет|ед[еи]м"
+    end = r"(?=\s*(?:,|;|$))"
     gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{stop})"
-    refusing = rf"\s*(?:не\s+(?:очень\s+)?(?:{verbs})|{stop})"
+    refusing = (
+        rf"\s*(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
+        rf"|не\s+(?:{moves})\w*{end}|не{end}|{stop})"
+    )
     if negated or re.match(gone, near) or re.match(refusing, after):
         return "stay", month
     return "move", month

@@ -356,6 +356,12 @@ REFUSALS = [
     "в январе не очень удобно",
     "в январе не, лучше в феврале",
     "в январе не дорого",  # no comma: the «не» stays with the month, as on main
+    "в январе и феврале не поедем",
+    "январь и февраль не подходят",
+    "в январе, увы, не получится",
+    "в январе, но не получится",
+    "январь, не",
+    "в январе, не",
 ]
 
 
@@ -377,7 +383,17 @@ def test_a_negated_neighbour_after_a_comma_is_no_refusal(store, text):
     assert r.plan.spec.date_from == date(2027, 1, 3) and "Они остаются" not in r.reply
 
 
-@pytest.mark.parametrize("text", ["в январе не поедем, подтверждаю", "январь не, оформляй"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "в январе не поедем, подтверждаю",
+        "январь не, оформляй",
+        "в январе и феврале не поедем, подтверждаю",
+        "в январе, увы, не получится, подтверждаю",
+        "январь, не, подтверждаю",
+        "январь и февраль не подходят, беру",
+    ],
+)
 @pytest.mark.parametrize("stages", [1, 2])
 def test_a_refusal_is_no_consent_at_assemble_and_checkout(store, text, stages):
     r = named(store)
@@ -398,3 +414,24 @@ def test_no_shift_means_no_refused_shift_line(store):
         s = r.plan.spec
         assert (s.date_from, s.date_to) == (date(2026, 12, 27), date(2027, 1, 3))
         assert s.budget_rub == 100_000 and "Сдвиг не применён" not in r.reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "в январе, не в феврале",
+        "в январе а не в феврале",
+        "январь, а не декабрь",
+        "лучше в январе, но не дорого",
+        "в январе, но не поедем на самолёте",
+        "в январе, не дороже 100 тысяч",
+        "в январе и не дороже 100 тысяч",
+        "в январе и подешевле",
+    ],
+)
+def test_a_negated_neighbour_after_the_month_is_still_a_move(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2027, 1, 3), date(2027, 1, 8), 1)
+    assert "Они остаются" not in r.reply and r.stage == "compare"
