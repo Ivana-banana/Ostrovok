@@ -1,11 +1,12 @@
 """Inspiration (T12, #20): 2–4 destinations from catalog.json for a spec without a destination.
 
 The wishes pick the places by catalogue fields only: «море» — sea, «лыжи» — tag ski, «горы» —
-tag mountains, «санаторий» — tag spa; with no theme the pool is the big cities (tag city and
-CITY_POP). «Европа» and «юг» narrow the pool by country and by latitude. The climate of the
-month marks the places that break the request («тепло», warm sea). Only CANDIDATES places get
-the price and travel time of api/offers.py, never the whole catalogue. A card that breaks the
-request goes below the others; places closer than SPREAD_KM to a shown one wait for a free slot.
+tag mountains, «санаторий» — tag spa, «лес», «природа», «озеро» — tag nature (no big city);
+with no theme the pool is the big cities (tag city and CITY_POP). «Европа» and «юг» narrow the
+pool by country and by latitude. The climate of the month marks the places that break the
+request («тепло», warm sea). Only CANDIDATES places get the price and travel time of
+api/offers.py, never the whole catalogue. A card that breaks the request goes below the others;
+places closer than SPREAD_KM to a shown one wait for a free slot.
 """
 
 from collections import Counter
@@ -25,6 +26,8 @@ PER_COUNTRY = 3  # candidates of one country: the 21 places of Турция leav
 # #114: estimate without a source: in the cold half of the year a place is warm from this air.
 WARM_AIR_C = 15.0
 # Estimates without a source, for the prefilter and the minus lines only.
+ROAD_KM = 1745  # a drive up to 24 h: api/offers.py drives road / 80 h × 1.1, road = 1.3 × the line
+RAIL_KM = 3000  # api/offers.py builds a train up to 3000 km of route, route = 1.2 × the line
 KM_PER_HOUR = 800  # a flight with the airport time; the exact hours come from api/offers.py
 CAR_KM = 1900  # api/offers.py drives up to 2500 km of road, road = 1.3 × the straight line
 SOUTH_DEG = 5.0  # «на юг»: this many degrees of latitude south of the departure hub
@@ -47,6 +50,7 @@ TAGS = {
     "лыжи": ("ski", "горнолыжный курорт", "не горнолыжный курорт"),
     "горы": ("mountains", "горы", "не в горах"),
     "санаторий": ("spa", "лечебный курорт", "не лечебный курорт"),
+    "природа": ("nature", "природа, тишина", "не природа"),
 }
 MODES = {"flight": "самолётом", "train": "поездом", "car": "на машине"}
 # No trip at all, not a worse one: such a card goes below the cards that only break a wish.
@@ -158,6 +162,16 @@ def card(spec: TripSpec, hub: dict, place: dict, note: str = "") -> Destination:
     )
 
 
+def _reachable(spec: TripSpec, hub: dict, place: dict) -> bool:
+    """A way without a plane, as api/offers.py builds it: a train between two stations, and,
+    when the car is allowed, a drive of up to 24 h (a banned flight, not a chosen car)."""
+    km = catalog.km_between(hub, place)
+    train = hub["station_km"] is not None and place["station_km"] is not None
+    return ("train" in spec.modes and train and km * 1.2 <= RAIL_KM) or (
+        "car" in spec.modes and km * 1.3 <= ROAD_KM
+    )
+
+
 def _pool(spec: TripSpec, hub: dict, exclude: list[str]) -> list[dict]:
     """Places of the theme, without the refused ones and the departure city."""
     origin = catalog.resolve(spec.origin) if spec.origin else None
@@ -174,9 +188,15 @@ def _pool(spec: TripSpec, hub: dict, exclude: list[str]) -> list[dict]:
         out = near or out
     if spec.modes == ["car"]:
         out = [p for p in out if catalog.km_between(hub, p) <= CAR_KM] or out
-    return (
-        out if _themed(spec) else [p for p in out if "city" in p["tags"] and p["pop"] >= CITY_POP]
-    )
+    if "природа" in spec.wishes:  # quiet and forest: no big city (a city with the nature tag stays)
+        out = [p for p in out if "nature" in p["tags"] or p["pop"] < CITY_POP]
+    if not _themed(spec):
+        out = [p for p in out if "city" in p["tags"] and p["pop"] >= CITY_POP]
+    if spec.modes and "flight" not in spec.modes and spec.modes != ["car"]:
+        # #277: a banned flight is no soft wish: the places only a plane reaches go out while
+        # others stay; nothing reachable: all stay, each card then says «сюда не добраться»
+        out = [p for p in out if _reachable(spec, hub, p)] or out
+    return out
 
 
 def _level(violates: list[str]) -> int:
