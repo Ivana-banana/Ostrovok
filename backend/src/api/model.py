@@ -87,7 +87,7 @@ from api.extract import (
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
-from api.inspire import ROAD_LINE, suggest_destinations, unchecked_wishes
+from api.inspire import ROAD_LINE, card, suggest_destinations, unchecked_wishes
 from api.offers import find_offers, resolve_place, road_nights
 from api.optimizer import (
     _hotel_why,
@@ -1622,6 +1622,40 @@ def with_offers(names: list[str]) -> list[str]:
     return [d for d in names if resolve_place(d) is not None]
 
 
+def _unknown_place(plan: Plan, message: str, asked: list[Question]) -> tuple[str, list[Question]]:
+    """A place that neither the catalogue nor the geocoder knows (TRAP-2, #88, #346).
+
+    Its coordinates are unknown, so no city is «nearby». The country is read from the message
+    («Ушуайя, Аргентина»; the answer «Аргентина» to the question): then the catalogue cities of
+    that country are offered; a later message without a country keeps the one of the last question.
+    Without a country the reply asks for it: no unrelated cities."""
+    spec, place = plan.spec, plan.spec.destinations[0]
+    text = (
+        f"Направления «{place}» пока {NOT_IN_CATALOG}, "
+        "и геокодер его не нашёл (или нет сети). Где это место, не знаю."
+    )
+    kept = re.search(r"страны «(.+?)»", asked[0].text) if asked else None
+    country = catalog.country_in(message) or (kept.group(1) if kept else None)
+    skip = [spec.origin, *refused_before(spec)]
+    found = [
+        p
+        for p in catalog.by_country(country or "")
+        if p["name"] not in skip and resolve_place(p["name"]) is not None
+    ][:3]
+    names = [p["name"] for p in found]
+    if not names:
+        ask = f"В какой стране или регионе находится «{place}»?"
+        hint = "Назовите страну или регион — предложу город этой страны из каталога."
+        return f"{text} {hint} Или выберите другое направление.", [Question(text=ask)]
+    hub, note = catalog.origin_hub(spec.origin or "Москва")
+    plan.destinations = [card(spec, hub, p, note) for p in found]  # «1» picks by this order
+    text += (
+        f" Раз это {country}, предлагаю города этой страны из каталога: {', '.join(names)}. "
+        "Они не обязательно рядом с этим местом: расстояние до него я не знаю."
+    )
+    return text, [Question(text=f"Какой город страны «{country}» берём?", options=names)]
+
+
 def _no_offers(plan: Plan, text: str, skip: list[str] | None = None) -> tuple[str, list[Question]]:
     """The «choose another» exit of the select stage: 2–3 destinations as the text and buttons."""
     names = _alternatives(plan.spec, [*plan.spec.destinations, plan.spec.origin, *(skip or [])])
@@ -2108,13 +2142,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if not plan.offers:
             # TRAP-2 (#88): neither catalog.json nor the geocoder knows the place (or no network).
             # Its coordinates are unknown, so the variants are not «nearby»: the reply says why.
-            text = (
-                f"Направления «{spec.destinations[0]}» пока {NOT_IN_CATALOG}, "
-                "и геокодер его не нашёл (или нет сети). Где это место, не знаю. "
-                f"{HINTS['select']} Подойдёт и ближайший к нему крупный город. "
-                "Ниже — направления под ваши даты и пожелания, не по близости к этому месту."
-            )
-            text, questions = _no_offers(plan, text)
+            same = old.plan.spec.destinations == spec.destinations  # the country is of that place
+            text, questions = _unknown_place(plan, message, old.questions if same else [])
             # «Ханой или Сочи»: Сочи is named (#142)
             chips = with_offers(spec.destinations[1:MAX_CANDIDATES]) if route else []
             if chips:

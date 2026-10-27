@@ -105,12 +105,14 @@ def test_other_destination_clears_the_city_and_offers_variants(store, stage):
 def test_unknown_city_answer_has_two_or_three_variants(store):
     r = say(store, "Хиврии, 3 ночи с 20 ноября")
     assert r.stage == "select" and "другое направление" in r.reply
+    assert r.questions[0].options == []  # #346: the country is asked, no unrelated cities
+    # A message with no new city and no country gets the question again.
+    again = say(store, "не знаю", r.session_id)
+    assert again.stage == "select" and again.questions[0].options == []
+    r = say(store, "Хорватия", r.session_id)
     options = r.questions[0].options
     assert 2 <= len(options) <= 3 and all(in_catalog(o) for o in options)
     assert all(o in r.reply for o in options)
-    # A message with no new city on the select stage gets the variants again.
-    again = say(store, "не знаю", r.session_id)
-    assert again.stage == "select" and 2 <= len(again.questions[0].options) <= 3
     # A variant as a button text and as a number both lead on.
     assert say(store, options[1], r.session_id).plan.spec.destinations == [options[1]]
     assert say(store, "2", r.session_id).plan.spec.destinations == [options[1]]

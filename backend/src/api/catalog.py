@@ -62,6 +62,7 @@ COLLOQUIAL = {"ебург": "Екатеринбург", "екат": "Екате�
               "владик": "Владивосток", "питербург": "Санкт-Петербург", "петербург": "Санкт-Петербург"}  # fmt: skip
 TYPO_MIN_LEN = 6  # a shorter word may differ by one letter from another place: «Омск», «Томск»
 TYPO_EDITS, TYPO_LONG = 1, 9  # letters to change in a name; 2 for a name of TYPO_LONG letters
+ORIGIN_WORDS = ("из", "от", "с", "со")
 PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _deadline: ContextVar[float | None] = ContextVar("geocode_deadline", default=None)
@@ -154,6 +155,22 @@ def country_of(text: str) -> str | None:
          for k in keys if q == k.split() or _same_words(q, k.split())),
         None,
     )  # fmt: skip
+
+
+def country_in(text: str) -> str | None:
+    """The country a message names beside a place: «Ушуайя, Аргентина» -> «Аргентина».
+
+    A country after «из», «от», «с» is the origin or a distance, not the place: None for it."""
+    words = re.findall(r"[\w-]+", text.lower())
+    for i, w in enumerate(words):
+        if w in ORIGIN_WORDS:
+            continue
+        for n in (1, 2, 3):
+            if i and words[i - 1] in ORIGIN_WORDS:
+                break
+            if c := country_of(" ".join(words[i : i + n])):
+                return c
+    return None
 
 
 def by_country(text: str) -> list[dict]:
