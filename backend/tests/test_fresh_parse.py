@@ -126,22 +126,35 @@ def test_other_modes_stay(text, modes):
 # ---------------------------------------------------------------- the origin is not named
 
 
+# #351: the question comes from the road share, not from the distance. Бали for 100 000 ₽ on
+# all: the cheapest Москва round trip of the offers is over half of it.
+BALI = "Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч"
+
+
 def test_far_trip_with_a_whole_budget_asks_the_origin(store):
-    """F15: «Байкал… 200 тысяч на всё» and no origin. The road from Москва or from Иркутск
-    changes the total by a lot, so one question about the origin, not a silent «Москва»."""
-    r = say(store, F15)
+    """A whole budget the road from Москва eats over half of, and no origin: one question about
+    the origin, not a silent «Москва»."""
+    r = say(store, BALI)
     assert r.stage == "clarify" and len(r.questions) == 1
     q = r.questions[0]
     assert "откуда" in q.text.lower() and q.options[0] == "Из Москвы"
     after = say(store, "из Новосибирска", r.session_id)
     assert after.stage == "compare" and after.plan.spec.origin == "Новосибирск"
     assert after.plan.spec.destinations == r.plan.spec.destinations
-    assert after.plan.spec.budget_rub == 200_000 and after.questions == []
+    assert after.plan.spec.budget_rub == 100_000 and after.questions == []
+
+
+def test_f15_road_under_half_is_an_assumption(store):
+    """F15 (#351): the Москва round trip is about 28% of 200 000 ₽: the origin is assumed aloud.
+    It was a question by the 3000 km rule of #302."""
+    r = say(store, F15)
+    assert r.stage == "compare" and r.questions == []
+    assert ORIGIN_NOTE in r.plan.spec.assumptions
 
 
 def test_far_trip_origin_option_keeps_the_trip(store):
     """The first option is the old default: the session goes on as before (make eval)."""
-    r = say(store, F15)
+    r = say(store, BALI)
     after = say(store, r.questions[0].options[0], r.session_id)
     assert after.stage == "compare" and after.plan.spec.origin == "Москва"
     assert ORIGIN_NOTE not in after.plan.spec.assumptions
@@ -235,7 +248,7 @@ def test_counted_children_ask_nothing(store, text):
 
 
 def test_one_question_per_turn_the_origin_first(store):
-    """Far trip, whole budget, no origin and «с детьми»: the origin comes first, then nothing
+    """The road over half of the whole budget, no origin and «с детьми»: the origin comes first, then nothing
     more is asked (the plan goes on with the children as an assumption)."""
-    r = say(store, "Байкал с детьми в марте, 10 дней, двое взрослых, 200 тысяч на всё")
+    r = say(store, "Бали на 12 ночей, двое взрослых с детьми, перелёт и отель до 100 тысяч")
     assert len(r.questions) == 1 and "откуда" in r.questions[0].text.lower()

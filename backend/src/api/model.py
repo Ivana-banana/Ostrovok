@@ -71,6 +71,7 @@ from api.extract import (
     PLACE_RES,
     SEASONS,
     _known,
+    asks_booking,
     asks_stay,
     children_uncounted,
     excluded_places,
@@ -272,9 +273,9 @@ ROUTE_RE = re.compile(
     r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
 )
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
-# #302: from this far (straight line from DEFAULT_ORIGIN) the road is a large part of a whole-trip
-# budget, so an unnamed origin is asked. Team estimate: Иркутск 4200 km asks, Анталия 2160 not.
-FAR_KM = 3000
+# #351: an unnamed origin is asked when the cheapest round trip from DEFAULT_ORIGIN (offers,
+# TRAP-4) takes more than this share of a whole-trip budget. Team estimate (README).
+ROAD_SHARE = 0.5
 ORIGIN_OPTIONS = ("Москвы", "Санкт-Петербурга", "Екатеринбурга", "Новосибирска")
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
 STAY_RE = re.compile(
@@ -470,16 +471,25 @@ def party_question(spec: TripSpec) -> list[Question]:
 
 
 def far_origin_question(spec: TripSpec) -> list[Question]:
-    """F15 (#302): no origin, a far place and a budget for the whole trip. The road from the
-    default origin is a large part of that budget, so the origin is asked, not assumed."""
+    """#302, #351: no origin and a budget for the whole trip. When the cheapest round trip from
+    DEFAULT_ORIGIN for the party (offers, TRAP-4) takes over ROAD_SHARE of that budget, the
+    origin decides whether the trip fits, so it is asked. Otherwise it stays an assumption."""
     if spec.origin or spec.budget_rub is None or not spec.destinations:
         return []
-    start, place = catalog.resolve(DEFAULT_ORIGIN), catalog.resolve(spec.destinations[0])
-    if not (start and place) or catalog.km_between(start, place) < FAR_KM:
+    probe = assume(spec)  # the dates and the party the plan would have, origin DEFAULT_ORIGIN
+    legs = [o for o in find_offers(probe, spec.destinations[0]) if isinstance(o, TransportOffer)]
+    there = _cheapest([o for o in legs if o.origin == probe.origin])
+    back = _cheapest([o for o in legs if o.destination == probe.origin])
+    if not (there and back) or there.price_rub + back.price_rub <= ROAD_SHARE * spec.budget_rub:
         return []
+    road = there.price_rub + back.price_rub
     options = [f"Из {w}" for w in ORIGIN_OPTIONS]
-    text = "Откуда вы едете? От города вылета зависит цена дороги, а она в вашем бюджете."
-    return [Question(text=text + " Если города нет в кнопках, напишите «из …».", options=options)]
+    text = (
+        f"Откуда вы едете? Дорога из Москвы туда и обратно — от {_rub(road)}, "
+        f"это больше половины бюджета {_rub(spec.budget_rub)}. "
+        "Если города нет в кнопках, напишите «из …»."
+    )
+    return [Question(text=text, options=options)]
 
 
 def children_question(message: str, spec: TripSpec) -> list[Question]:
@@ -495,13 +505,15 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
 
     A place or a wish is enough to move on: the rest becomes assumptions named in the reply.
     Exceptions ask one question, the most important first (#302): the city of a hotel request
-    (F14), the origin of a far trip with a whole budget (F15), the children without a number
+    (F14) or of a booking (#351), the origin when the road eats the whole budget (F15), the children without a number
     (F25), then the adults next to a child (#112). The guest count sets the price and the
     booking, so it is asked, not assumed. Without a place the adults question only goes next to
     the options (party_question), it never replaces them.
     """
     if not (spec.destinations or spec.wishes) and asks_stay(message):
         return [Question(text="В каком городе нужна гостиница?", options=[])]
+    if not (spec.destinations or spec.wishes) and asks_booking(message):
+        return [Question(text="Куда едете? Напишите город.", options=[])]  # #351: tickets
     party = party_question(spec) if spec.destinations else []
     if spec.destinations:
         first = far_origin_question(spec) or children_question(message, spec) or party
