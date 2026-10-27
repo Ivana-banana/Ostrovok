@@ -58,6 +58,8 @@ export function Price({ value, synthetic = true }: { value: number; synthetic?: 
 const AMOUNT = /\d[\d\s\u00a0]*\s?₽/g;
 const AFTER_BUDGET = /бюджет[а-яё]*(\s+отеля)?\s*$/i;
 const LABELLED = /^\s*\(?синтетика/;
+// A destination tradeoff of a car with nights on the road starts with it (api/inspire.py, #321).
+const ROAD_LINE = "за рулём ";
 export function Money({ text, synthetic = true }: { text: string; synthetic?: boolean }) {
   if (!synthetic) return <>{text}</>;
   const out: ReactNode[] = [];
@@ -231,6 +233,9 @@ function Destinations({ plan, stage, busy, onSend }: {
       <div className="cards">
         {plan.destinations.map((d: Destination, i) => {
           const word = ordinal(i);
+          // #321: a car with nights on the road: the hours at the wheel (api/inspire.py ROAD_LINE)
+          const road = d.tradeoffs.find((t) => t.startsWith(ROAD_LINE));
+          const minuses = d.tradeoffs.filter((t) => t !== road);
           return (
             <article key={d.name} className="card dest">
               <h3>
@@ -243,14 +248,14 @@ function Destinations({ plan, stage, busy, onSend }: {
                 от <Price value={d.est_total_rub} synthetic={d.synthetic} /> на всех
               </p>
               <p className="muted">
-                в пути {hours(d.travel_hours)}
+                {road ?? `в пути ${hours(d.travel_hours)}`}
                 {d.air_c !== null && `, днём ${d.air_c} °C`}
                 {d.water_c !== null && `, вода ${d.water_c} °C`}
                 {(d.air_c !== null || d.water_c !== null) && " (оценка)"}
               </p>
-              {d.tradeoffs.length > 0 && (
+              {minuses.length > 0 && (
                 <p className="muted">
-                  Минусы: <Money text={d.tradeoffs.join("; ")} synthetic={d.synthetic} />
+                  Минусы: <Money text={minuses.join("; ")} synthetic={d.synthetic} />
                 </p>
               )}
               {d.violates.length > 0 && (
@@ -678,12 +683,22 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   );
 }
 
+const BOOKING_STATUS: Record<Voucher["status"], string> = {
+  created: "создана, ждёт подтверждения",
+  confirmed: "подтверждена",
+  cancelled: "отменена",
+};
+
 function VoucherView({ voucher }: { voucher: Voucher }) {
   const s = voucher.spec;
   return (
     <section className="card voucher" aria-label="Ваучер">
       <h2>Ваучер {voucher.booking_id}</h2>
-      <p className="warn">Бронь и оплата имитированы. Это не настоящий заказ.</p>
+      {voucher.simulated ? (
+        <p className="warn">Бронь и оплата имитированы. Это не настоящий заказ.</p>
+      ) : (
+        <p>Статус брони: {BOOKING_STATUS[voucher.status]}.</p>
+      )}
       <dl className="spec">
         <div>
           <dt>Номер брони</dt>

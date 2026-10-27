@@ -10,21 +10,26 @@ places closer than SPREAD_KM to a shown one wait for a free slot.
 """
 
 from collections import Counter
+from datetime import timedelta
 
 from api import catalog
-from api.contracts import Destination, TripSpec
-from api.fixtures import COLD_MONTHS, WARM_WATER_C, travel_hours, trip_cost
-from api.offers import FAR_AIRPORT_KM, find_offers
+from api import offers as ports  # TRANSPORT is read at call time: a test may swap it
+from api.contracts import Destination, TransportOffer, TripSpec
+from api.fixtures import COLD_MONTHS, WARM_WATER_C, future_date, trip_cost
+from api.offers import FAR_AIRPORT_KM, drive_time, find_offers, road_nights
 from api.optimizer import pets_possible
 
 # Places priced per call: find_offers runs for each, so the cost grows with this number.
 CANDIDATES = 16
+MAX_CANDIDATES = 48  # when every card of the first 16 is a dead end, up to this many are priced
 SPREAD_KM = 150  # Анталия and Кемер are one choice for the user, not two
 SHOWN_PER_COUNTRY = 2
 CITY_POP = 1_000_000  # with no theme: the big cities (GeoNames population), nearest first
 PER_COUNTRY = 3  # candidates of one country: the 21 places of Турция leave room for Египет
 # #114: estimate without a source: in the cold half of the year a place is warm from this air.
-WARM_AIR_C = 15.0
+WARM_AIR_C = 15.0  # «на юг» in the cold half of the year
+# #342: «тепло», «погреться»: team estimate (D-027), no source for the beach air.
+WARM_ASKED_C = 22.0
 # Estimates without a source, for the prefilter and the minus lines only.
 ROAD_KM = 1745  # a drive up to 24 h: api/offers.py drives road / 80 h × 1.1, road = 1.3 × the line
 RAIL_KM = 3000  # api/offers.py builds a train up to 3000 km of route, route = 1.2 × the line
@@ -60,10 +65,28 @@ NO_SEA = "моря нет"
 NO_SWIM = "море не для купания"  # #224: the sea is near, but its water is warm for 1–2 months only
 NOT_EUROPE = "не в Европе"
 NOT_SOUTH = "не южнее, чем"
+NOT_WARM = "не тепло"
+NO_AURORA = "северного сияния нет"
+# #361: «горы и море» — no place has both tags: a place with one, the other within this distance
+NEAR_KM = 100
+AURORA_LAT = 64.0  # the aurora oval; the dark season is September–March (team estimate)
+AURORA_MONTHS = (9, 10, 11, 12, 1, 2, 3)
+# Wishes the catalogue has no field for: the reply names them as not checked (TRAP-7).
+UNCHECKED = (
+    "киты", "термальные источники", "фестиваль", "дайвинг",
+    "серфинг", "рыбалка", "сафари", "шопинг", "музеи", "йога", "вино и еда", "романтика",
+    "красиво", "с удобствами",
+)  # fmt: skip
 # Not the asked kind of place: below a place of the theme with cold water or a long road.
 OFF_THEME = {NO_SEA, NO_SWIM, NOT_EUROPE, *(miss for _, _, miss in TAGS.values())}
 WHY = {tag: why for tag, why, _ in TAGS.values()}
-THEMES = (*TAGS, "море", "Европа", "юг")  # wishes that pick places by catalogue facts
+THEMES = (
+    *TAGS,
+    "море",
+    "Европа",
+    "юг",
+    "северное сияние",
+)  # wishes that pick places by catalogue facts
 
 
 def _month(spec: TripSpec) -> int | None:
@@ -76,10 +99,44 @@ def _themed(spec: TripSpec) -> bool:
     return warm or any(w in spec.wishes for w in THEMES)
 
 
+def unchecked_wishes(spec: TripSpec) -> list[str]:
+    """The wishes of the spec that no catalogue field checks: the reply says so (#361)."""
+    return [w for w in UNCHECKED if w in spec.wishes]
+
+
+def _km_to(place: dict, field: str) -> float | None:
+    """Km to the nearest place with the feature (tag mountains, the sea), 0 for the place itself;
+    None when it is farther than NEAR_KM."""
+    has = (lambda p: p["sea"]) if field == "sea" else (lambda p: field in p["tags"])
+    km = min((catalog.km_between(place, q) for q in catalog.places() if has(q)), default=None)
+    return km if km is not None and km <= NEAR_KM else None
+
+
+def _near(place: dict, field: str) -> bool:
+    return _km_to(place, field) is not None
+
+
+def _both(spec: TripSpec, place: dict) -> bool:
+    """«горы и море»: a place with one, the other close (Сочи — Красная Поляна, 50 км)."""
+    return (
+        "горы" in spec.wishes
+        and "море" in spec.wishes
+        and _near(place, "mountains")
+        and _near(place, "sea")
+    )
+
+
 def _rule_breaks(spec: TripSpec, place: dict, hub: dict, month: int | None) -> list[str]:
     """What breaks the request without the price and the travel time: theme, region, climate."""
+    both = _both(spec, place)
     out = [miss for wish, (tag, _, miss) in TAGS.items()
-           if wish in spec.wishes and tag not in place["tags"]]  # fmt: skip
+           if wish in spec.wishes and tag not in place["tags"]
+           and not (both and wish == "горы")]  # fmt: skip
+    if "северное сияние" in spec.wishes:
+        if month and month not in AURORA_MONTHS:
+            out.append(f"{NO_AURORA}: светлый сезон")
+        elif place["lat"] < AURORA_LAT:
+            out.append(f"{NO_AURORA}: широта ниже {AURORA_LAT:g}°")
     if "Европа" in spec.wishes and place["country"] not in EUROPE:
         out.append(NOT_EUROPE)
     if "юг" in spec.wishes and place["lat"] > hub["lat"] - SOUTH_DEG:
@@ -87,14 +144,17 @@ def _rule_breaks(spec: TripSpec, place: dict, hub: dict, month: int | None) -> l
     air, water = catalog.month_climate(place, month) if month else (None, None)
     if "море" in spec.wishes:
         if not place["sea"]:
-            out.append(NO_SEA)
+            if not both:
+                out.append(NO_SEA)
         elif water is not None and water < WARM_WATER_C:
             out.append(f"море холодное для купания: вода {water:g} °C")
         elif "swim" not in place["tags"]:
             out.append(NO_SWIM)
-    warm_asked = "тепло" in spec.wishes or "юг" in spec.wishes  # #235: «на юг» in winter = warm
-    if warm_asked and month in COLD_MONTHS and air is not None and air < WARM_AIR_C:
-        out.append(f"не тёплое направление: днём {air:g} °C")
+    warm_wish = "тепло" in spec.wishes
+    limit = WARM_ASKED_C if warm_wish else WARM_AIR_C  # #235: «на юг» in winter = warm
+    asked = warm_wish or "юг" in spec.wishes
+    if asked and month in COLD_MONTHS and air is not None and air < limit:
+        out.append(f"{NOT_WARM}: днём {air:g} °C")
     return out
 
 
@@ -109,15 +169,64 @@ def _why(spec: TripSpec, place: dict, water: float | None) -> str:
         swim = "swim" in place["tags"] and (water or 0) >= WARM_WATER_C
         sea = "море для купания" if swim else "у моря"
         parts.insert(0 if "море" in spec.wishes else len(parts), sea)
+    if _both(spec, place):
+        if "mountains" not in place["tags"]:
+            parts.append(f"горы в {_km_to(place, 'mountains'):.0f} км")
+        if not place["sea"]:
+            parts.insert(0, f"море в {_km_to(place, 'sea'):.0f} км")
     return ", ".join(parts) or ("природа" if "nature" in place["tags"] else "город")
 
 
-def _minuses(place: dict, month: int | None, hours: float, note: str) -> list[str]:
+def _road(spec: TripSpec, hub: dict, place: dict) -> tuple[float, float, int]:
+    """The way there by the transport port (offers.TRANSPORT), hours: door to door (the
+    fastest leg, as Destination.travel_hours), at the wheel (#321: a car without its nights on
+    the road, any other leg door to door), and the nights on the road of that leg. 0 at the
+    origin."""
+    probe = (
+        spec
+        if spec.date_from
+        else spec.model_copy(update={"date_from": future_date(spec.month or 1, 15)})
+    )
+    legs = [x for x in ports.TRANSPORT.legs(probe, hub, place) if x.origin == hub["name"]]
+    if not legs:
+        return 0, 0, 0
+    door = min(_hours(x.arrive_at - x.depart_at) for x in legs)
+    best: TransportOffer = min(legs, key=drive_time)
+    return door, _hours(drive_time(best)), road_nights(best)
+
+
+def _hours(delta: timedelta) -> float:
+    return round(delta.total_seconds() / 3600, 1)
+
+
+def _nights_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} ночёвка"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} ночёвки"
+    return f"{n} ночёвок"
+
+
+# A tradeoff that starts with ROAD_LINE is the road of a car with nights on the road (#321):
+# model._text_inspire and web Board.tsx show it in place of «в пути N ч».
+ROAD_LINE = "за рулём "
+
+
+def _road_text(door: float, wheel: float, nights: int) -> str:
+    if not nights:
+        return f"дорога {door:g} ч"
+    return f"{ROAD_LINE}{wheel:g} ч, {_nights_word(nights)} в пути"
+
+
+def _minuses(
+    place: dict, month: int | None, road: tuple[float, float, int], note: str
+) -> list[str]:
     air, water = catalog.month_climate(place, month) if month else (None, None)
     rain = place["climate"]["rain"][month - 1] if month else None
+    door, wheel, nights = road
     out = []
-    if hours >= LONG_ROAD_H:
-        out.append(f"дорога {hours:g} ч")
+    if door >= LONG_ROAD_H:
+        out.append(_road_text(door, wheel, nights))
     if water is not None and place["sea"] and WARM_WATER_C <= water < WARM_WATER_C + 2:
         out.append(f"вода {water:g} °C — на границе комфорта")
     if air is not None and air >= HOT_C:
@@ -127,14 +236,15 @@ def _minuses(place: dict, month: int | None, hours: float, note: str) -> list[st
     if (place["airport_km"] or 0) > FAR_AIRPORT_KM:
         out.append(f"от аэропорта {place['airport_km']} км")
     out += [note] * bool(note)
-    return out or [f"дорога {hours:g} ч"]
+    return out or [_road_text(door, wheel, nights)]
 
 
 def card(spec: TripSpec, hub: dict, place: dict, note: str = "") -> Destination:
     """One destination: price and travel time from api/offers.py, the rest from catalog.json."""
     month = _month(spec)
     air, water = catalog.month_climate(place, month) if month else (None, None)
-    hours = travel_hours(spec, hub, place)
+    road = _road(spec, hub, place)
+    hours, wheel, nights = road
     offers = find_offers(spec, place["name"])
     cost = trip_cost(spec, offers)
     violates = _rule_breaks(spec, place, hub, month)
@@ -143,8 +253,10 @@ def card(spec: TripSpec, hub: dict, place: dict, note: str = "") -> Destination:
         violates.append(f"{'/'.join(MODES[m] for m in spec.modes)} {NO_WAY}")
     if not pets_possible(spec, offers):
         violates.append(NO_PETS)
-    if spec.max_travel_hours and hours > spec.max_travel_hours:
-        violates.append(f"в пути {hours:g} ч — дольше {spec.max_travel_hours:g} ч")
+    # #321: a car is filtered by the hours at the wheel, its nights on the road do not count.
+    if spec.max_travel_hours and wheel > spec.max_travel_hours:
+        what = "за рулём" if nights else "в пути"
+        violates.append(f"{what} {wheel:g} ч — дольше {spec.max_travel_hours:g} ч")
     if spec.budget_rub is not None and cost > spec.budget_rub:
         violates.append(f"дороже бюджета: {cost:,} ₽ при {spec.budget_rub:,} ₽".replace(",", " "))
     return Destination(
@@ -157,7 +269,7 @@ def card(spec: TripSpec, hub: dict, place: dict, note: str = "") -> Destination:
         air_c=air,
         water_c=water,
         travel_hours=hours,
-        tradeoffs=_minuses(place, month, hours, note),
+        tradeoffs=_minuses(place, month, road, note),
         violates=violates,
     )
 
@@ -204,13 +316,18 @@ def _level(violates: list[str]) -> int:
     3 no trip at all."""
     if any(v == NO_PETS or v.endswith(NO_WAY) for v in violates):
         return 3
-    if any(v in OFF_THEME or v.startswith(NOT_SOUTH) for v in violates):
+    if any(v in OFF_THEME or v.startswith((NOT_SOUTH, NOT_WARM, NO_AURORA)) for v in violates):
         return 2
     return int(bool(violates))
 
 
+def _coldness(violates: list[str], air: float | None) -> float:
+    """Cards that are «не тепло» go from the warmest to the coldest (Сочи before Дмитров)."""
+    return -(air or 0.0) if any(v.startswith(NOT_WARM) for v in violates) else 0.0
+
+
 def _rank(d: Destination) -> tuple:
-    return _level(d.violates), d.est_total_rub
+    return _level(d.violates), _coldness(d.violates, d.air_c), d.est_total_rub
 
 
 def _spread(cards: list[Destination], limit: int) -> list[Destination]:
@@ -229,6 +346,14 @@ def _spread(cards: list[Destination], limit: int) -> list[Destination]:
     return sorted(shown[:limit], key=_rank)
 
 
+def _sea_first(spec: TripSpec, place: dict, month: int | None) -> float:
+    """The «море» refill goes from the warmest sea; a place without a sea goes last (#356)."""
+    if "море" not in spec.wishes:
+        return 0.0
+    water = catalog.month_climate(place, month)[1] if month and place["sea"] else None
+    return 1000.0 if water is None else -water
+
+
 def suggest_destinations(
     spec: TripSpec, limit: int = 4, exclude: list[str] | None = None
 ) -> list[Destination]:
@@ -241,14 +366,30 @@ def suggest_destinations(
     month = _month(spec)
 
     def order(p: dict) -> tuple:
-        return _level(_rule_breaks(spec, p, hub, month)), catalog.km_between(hub, p)
+        breaks = _rule_breaks(spec, p, hub, month)
+        air = catalog.month_climate(p, month)[0] if month else None
+        level = _level(breaks)
+        sea = _sea_first(spec, p, month) if level else 0.0  # a breaking card: the warmest sea
+        return level, _coldness(breaks, air), sea, catalog.km_between(hub, p)
 
-    picked, per_country = [], Counter()
+    ordered, per_country = [], Counter()
     for p in sorted(_pool(spec, hub, exclude), key=order):
         if per_country[p["country"]] < PER_COUNTRY:
-            picked.append(p)
+            ordered.append(p)
             per_country[p["country"]] += 1
-        if len(picked) == max(CANDIDATES, limit):
-            break
-    cards = sorted((card(spec, hub, p, note) for p in picked), key=_rank)
-    return _spread(cards, limit)
+    step = max(CANDIDATES, limit)
+    cards = [card(spec, hub, p, note) for p in ordered[:step]]
+    cards.sort(key=_rank)
+    shown = _spread(cards, limit)
+    if all(_level(d.violates) == 3 for d in shown):
+        # #342: every shown card is a dead end (a pet needs a flight): price the places a train
+        # or a car reaches, the warmest first, before more of the far places that fit the wish
+        ground = spec.model_copy(update={"modes": ["train", "car"]})
+        rest = sorted(
+            (p for p in ordered[step:] if _reachable(ground, hub, p)),
+            key=lambda p: order(p)[1:],
+        )
+        cards += [card(spec, hub, p, note) for p in rest[: MAX_CANDIDATES - step]]
+        cards.sort(key=_rank)
+        shown = _spread(cards, limit)
+    return shown

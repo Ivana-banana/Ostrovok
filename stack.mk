@@ -2,6 +2,7 @@
 # Демо-путь живёт с первого коммита: API на заглушке + страница + e2e сценария демо.
 # Контракт целей — Makefile шаблона.
 STACK := web-fullstack
+export PYTHONTZPATH := # one tz base: the tzdata package of uv.lock, not the system one (#340)
 NICE := nice -n 15
 UV := cd backend && $(NICE) uv run --frozen
 PORT ?= 8080

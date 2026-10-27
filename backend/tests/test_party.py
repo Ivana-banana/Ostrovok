@@ -404,3 +404,250 @@ def test_next_to_grandparents_is_a_hotel_wish_not_a_party(store):
     r = say(store, "Едем 4 взрослых в Сочи на 5 ночей с 1 июля")
     r = say(store, "Хочу отель рядом с бабушкой и дедушкой", r.session_id)
     assert r.plan.spec.adults == 4
+
+
+# --- #322: «его/её/их» inside the chain; ages without «лет» ---
+
+
+@pytest.mark.parametrize(
+    "text, adults",
+    [
+        ("Мы с женой и с её родителями едем в Сочи", 4),
+        ("Едем с другом и его женой в Сочи", 3),
+        ("Я с подругой и её мамой летим в Сочи", 3),
+        ("Едем с сестрой и её мужем в Сочи", 3),
+    ],
+)
+def test_possessive_does_not_break_the_chain(text, adults):
+    found, _ = extract(text)
+    assert found["adults"] == adults
+
+
+def test_ages_without_a_unit_after_a_counted_child():
+    found, _ = extract("Трое детей 3, 5 и 8, едем в Сочи")
+    assert found["children_ages"] == [3, 5, 8]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Трое детей, 5 ночей в Сочи",
+        "Двое детей, бюджет 100 тысяч",
+        "Дети 2 и 3 класса, Сочи",
+        "Двое детей 5, 8 ночей в Сочи",
+        "Трое детей 5 и 8, Сочи",
+        "Сочи с детьми 3 и 4 ноября, на 5 ночей",
+        "Едем в Анапу с детьми 5 и 8 июля на неделю",
+        "Казань с двумя детьми 1 и 2 мая",
+        "Сочи с детьми 2 и 4 звезды",
+        "Двое детей 1 и 2 этаж",
+        "Сочи с детьми 10 и 12 часов в пути",
+        "Сочи с детьми 10 и 12 числа",
+        "Сочи с детьми 1, 2 и 3 мая",
+        "Сочи с детьми 5, 6 и 7 июля",
+        "Сочи с детьми 3, 5 и 8 ночей",
+        "Сочи с детьми 3 и 4 ноя",
+        "Сочи с детьми 5 и 8 (июль)",
+    ],
+)
+def test_numbers_that_are_not_ages_stay_default(text):
+    found, _ = extract(text)
+    assert set(found.get("children_ages", [])) <= {7}
+
+
+def test_grown_son_with_his_wife_is_an_adult_party():
+    found, _ = extract("Я с сыном и с его женой едем в Сочи")
+    assert found["adults"] == 3 and "children_ages" not in found
+
+
+def test_ages_in_brackets():
+    found, _ = extract("Двое детей (5 и 8), едем в Сочи")
+    assert found["children_ages"] == [5, 8]
+
+
+def test_bracketed_ages_do_not_break_the_kin_chain():
+    found, _ = extract("Едем я, муж, двое детей (3 и 11) и бабушка на море в Анапу в июле")
+    assert found["adults"] == 3 and found["children_ages"] == [3, 11]
+
+
+# --- #337: units per age, age adjectives, twins ---
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("Дети 1 год и 4 года, едем в Сочи", [1, 4]),
+        ("Дети 4 года и 1 год, едем в Сочи", [4, 1]),
+        ("С детьми 1 года и 4 лет в Сочи", [1, 4]),
+        ("Дети 6 месяцев и 3 года, Сочи", [0, 3]),
+        ("С годовалым ребёнком в Сочи", [1]),
+        ("С годовалой дочкой в Сочи", [1]),
+        ("С полуторагодовалым ребёнком в Сочи", [1]),
+        ("Близнецы по 2 года, едем в Сочи", [2, 2]),
+        ("Двойняшки 5 лет, Сочи", [5, 5]),
+        ("Сын 10, дочь 3 года, Сочи", [10, 3]),
+        (
+            "Мы с подругой и наши дети: у меня близнецы по 2 года, у неё сын 10. Хотим в Сочи",
+            [2, 2, 10],
+        ),
+    ],
+)
+def test_337_ages(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
+
+
+def test_337_triplets_without_age_are_three_children_with_the_note():
+    found, notes = extract("Тройняшки едут в Сочи")
+    assert found["children_ages"] == [7, 7, 7]
+    assert "возраст ребёнка: 7 лет (возраст не назван)" in notes
+
+
+@pytest.mark.parametrize(
+    "text", ["С сыном 10 июля в Сочи", "С сыном 10.07 в Сочи", "С сыном 10 ночей в Сочи"]
+)
+def test_337_a_bare_number_after_a_child_that_is_no_age(text):
+    found, _ = extract(text)
+    assert found["children_ages"] == [7]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Номер с двойной кроватью, едем в Сочи вдвоём",
+        "Двойной номер в Сочи, нас двое",
+        "Хочу тройной номер в Сочи, нас трое",
+        "Двойная кровать нужна, Сочи вдвоём",
+    ],
+)
+def test_337_double_and_triple_adjectives_are_no_children(text):
+    found, _ = extract(text)
+    assert not found.get("children_ages")
+
+
+def test_337_double_bed_in_a_dialog_keeps_the_party(store):
+    r = say(store, "Едем с женой в Сочи на 5 ночей с 1 июля")
+    r = say(store, "Нужен номер с двойной кроватью", r.session_id)
+    assert r.plan.spec.adults == 2 and not r.plan.spec.children_ages
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("Наши дети: сын 5 лет и дочь 8 лет, едем в Сочи", [5, 8]),
+        ("С детьми 5 лет и 8, едем в Сочи", [5, 8]),
+    ],
+)
+def test_337_list_after_children(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Едем с ребенком 5 лет и 2 собаки в Сочи",
+        "Едем с ребенком 5 лет и 2 бабушки в Сочи",
+        "Едем с детьми 5 лет и 2 номера в Сочи",
+        "Едем с ребенком 5 лет и 3 чемодана в Сочи",
+    ],
+)
+def test_337_tail_after_a_unit_is_not_a_second_age(text):
+    found, _ = extract(text)
+    assert found["children_ages"] == [5]
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("Дети: 5 и 8 лет, сын любит море, едем в Сочи", [5, 8, 7]),
+        ("Дети: 5 и 8 лет. Ребёнок 5 лет плохо переносит перелёт", [5, 8, 5]),
+        ("Наши дети: сын 5 лет и дочь 8 лет, едем в Сочи", [5, 8]),
+    ],
+)
+def test_337_children_header_keeps_its_own_ages(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("Едем с малышом 1 год и 8 месяцев в Сочи", [1]),
+        ("Едем с дочкой 2 года и 3 месяца, Анапа", [2]),
+        ("Ребёнок 1 год и 2 месяца, Сочи на 5 ночей", [1]),
+        ("Едем с сыном 3 года и 2 месяца в Сочи", [3]),
+        ("Дети 6 месяцев и 3 года, Сочи", [0, 3]),
+    ],
+)
+def test_337_years_and_months_of_one_child_are_one_age(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
+
+
+def test_337_months_added_in_a_dialog_do_not_add_a_child(store):
+    r = say(store, "Едем с женой и сыном 6 лет в Сочи на 5 ночей с 1 июля")
+    r = say(store, "сын 6 лет и 3 месяца, это важно?", r.session_id)
+    assert r.plan.spec.children_ages == [6]
+
+
+# --- #341: a head count in words: «с друзьями, 4 человека», «4 чел.», «на 4 персоны» ---
+
+
+@pytest.mark.parametrize(
+    "text, adults, ages",
+    [
+        ("Поеду в Питербург из Казани на 3 дня с друзьями, 4 человека", 4, None),
+        ("Нас 4 человека, едем в Сочи", 4, None),
+        ("Сочи, компания из 5 человек", 5, None),
+        ("Сочи вчетвером", 4, None),
+        ("Сочи впятером", 5, None),
+        ("Сочи, 4 чел.", 4, None),
+        ("Сочи на 4 персоны", 4, None),
+        ("Сочи, 4 гостя", 4, None),
+        ("Едем компанией в 4 человека в Сочи", 4, None),
+        ("Сочи, 4 человека, из них двое детей 5 и 8", 2, [5, 8]),
+        ("Сочи, 2 человека", 2, None),
+        ("Сочи, 1 человек", 1, None),
+    ],
+)
+def test_341_head_count(text, adults, ages):
+    found, _ = extract(text)
+    assert found["adults"] == adults and found.get("children_ages") == ages
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "4 человека в номере максимум?",
+        "Рейтинг 4 человека из 5",
+        "Сочи на 4 ночи",
+        "Отель 4 звезды в Сочи",
+        "Номер до 4 человек, Сочи",
+    ],
+)
+def test_341_numbers_that_are_no_head_count(text):
+    found, _ = extract(text)
+    assert "adults" not in found
+
+
+@pytest.mark.parametrize(
+    "text, adults, ages",
+    [
+        ("Сочи, 2 человека и ребёнок 5 лет, на 5 ночей с 1 июля", 2, [5]),
+        ("Сочи с ребёнком 5 лет, номер на 2 человек", None, [5]),
+        ("Номер на 2 человека, едем с мужем и ребёнком 5 лет в Сочи", 2, [5]),
+        ("Сочи, 4 человека с детьми", 2, [7, 7]),
+        ("Сочи, 3 человека + ребёнок 4 года", 3, [4]),
+    ],
+)
+def test_341_children_are_inside_the_count_only_when_the_text_says_so(text, adults, ages):
+    found, notes = extract(text)
+    assert found.get("adults") == adults and found["children_ages"] == ages
+    if text.endswith("с детьми"):
+        assert "взрослых: 2 (из «4 человека», дети в счёте)" in notes
+
+
+def test_341_six_guests_note():
+    found, notes = extract("Нужен номер на 6 гостей в Сочи")
+    assert found["adults"] == 6 and "взрослых: 6 (по «6 гостей»)" in notes

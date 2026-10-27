@@ -23,6 +23,7 @@ place with 101hotels facts come from scripts/calibrate_prices.py (catalog.json _
 import hashlib
 import json
 import math
+import re
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
 from pathlib import Path
@@ -60,10 +61,12 @@ SEA_NAMES = ["Морской бриз", "Лазурный берег", "Ривь
 NO_DIRECT = {"Италия", "Франция", "Испания", "Чехия", "Австрия", "Венгрия", "Германия",
              "Греция", "Кипр"}  # fmt: skip
 OUT_FLIGHTS = [(time(10, 30), 1.0), (time(17, 40), 0.9)]  # arrival, local to the place
-# A car (#276): at most MAX_DRIVE at the wheel a day, then a night on the road. Every
+# A car (#276, #321): at most MAX_DRIVE at the wheel a day, then a night on the road. Every
 # driving day starts at the same clock time: there at CAR_OUT, so that the car comes on the
-# check-in day; back at CAR_BACK, the hotel check-out (HotelOffer.check_out). A night on the
-# road costs ROAD_NIGHT_RUB a room, one room per car. Team estimates without a source.
+# check-in day; back at CAR_BACK, the hotel check-out (HotelOffer.check_out). MAX_DRIVE and
+# ROAD_NIGHT_RUB (a room, one room per car) are team estimates without a source (D-026). For
+# reference: Regulation (EC) 561/2006 lets a professional driver drive 9-10 h a day; a private
+# driver has no limit (research/domain.md).
 MAX_DRIVE = timedelta(hours=12)
 CAR_OUT, CAR_BACK = time(8, 0), time(12, 0)
 ROAD_NIGHT_RUB = 3500
@@ -145,13 +148,56 @@ def _room_factor(spec: TripSpec) -> float:
     return adults + sum(0 if a < 2 else 0.25 if a < 12 else 0.45 for a in spec.children_ages)
 
 
+# Child fares by mode: (age below, share of a full fare, takes a seat). An age from the last
+# bound up pays the full fare. A car is paid per car elsewhere.
+CHILD_FARES: dict[Mode, list[tuple[int, float, bool]]] = {
+    "train": [(5, 0.0, False), (10, 0.5, True)],
+    "flight": [(2, 0.1, False), (12, 0.75, True)],
+}
+
+
+def _child_fare(mode: Mode, age: int) -> tuple[float, bool, bool]:
+    """Share of a full fare, a seat, a child fare (#323): one rule for the price and the label."""
+    for below, share, seat in CHILD_FARES.get(mode, []):
+        if age < below:
+            return share, seat, seat
+    return 1.0, True, False
+
+
 def _fares(spec: TripSpec, mode: Mode) -> float:
-    """Full fares for these guests: children pay less, a car is paid per car elsewhere."""
-    if mode == "train":
-        kids = sum(0 if a < 5 else 0.5 if a < 10 else 1 for a in spec.children_ages)
-    else:
-        kids = sum(0.1 if a < 2 else 0.75 if a < 12 else 1 for a in spec.children_ages)
-    return spec.adults + kids
+    """Full fares for these guests: children pay less (CHILD_FARES)."""
+    return spec.adults + sum(_child_fare(mode, a)[0] for a in spec.children_ages)
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} {one}"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} {few}"
+    return f"{n} {many}"
+
+
+def _seats_label(spec: TripSpec, mode: Mode) -> str:
+    """«6 мест (2 детских тарифа)» for a train or a plane: the seats and the child fares the
+    price counts (_fares, TRAP-4). Empty for a car: it is paid per car."""
+    if mode not in CHILD_FARES:
+        return ""
+    rules = [_child_fare(mode, a) for a in spec.children_ages]
+    seats = spec.adults + sum(seat for _, seat, _ in rules)
+    child = sum(kid for _, _, kid in rules)
+    free = sum(not seat for _, seat, _ in rules)
+    notes = []
+    if child:
+        notes.append(_plural(child, "детский тариф", "детских тарифа", "детских тарифов"))
+    below, share, _ = CHILD_FARES[mode][0]  # the youngest go without a seat
+    if free and mode == "train":
+        notes.append(_plural(free, "ребёнок", "ребёнка", "детей") + f" до {below} лет без места")
+    elif free:
+        notes.append(_plural(free, "младенец", "младенца", "младенцев") + " без места")
+    if free and share:  # #334: not free, the label names the share of the price
+        notes[-1] += f", {round(share * 100, 1):g} % тарифа"
+    label = _plural(seats, "место", "места", "мест")
+    return f"{label} ({', '.join(notes)})" if notes else label
 
 
 def _dates(spec: TripSpec) -> tuple[date, date]:
@@ -386,6 +432,8 @@ def _leg(
     title = f"{what} {a['name']} → {b['name']}{tail}, {depart:%d.%m %H:%M}"
     if changes:
         title += f", пересадок: {changes}"
+    if seats := _seats_label(spec, mode):
+        title += f", {seats}"
     if mode == "car":
         title += " (бензин и платные дороги, оценка)"
     return TransportOffer(
@@ -421,9 +469,101 @@ def _car(
     return leg.model_copy(update={"arrive_at": arrive, "title": title})
 
 
+ROAD_NIGHTS_RE = re.compile(r"ночёвок в пути: (\d+)")  # written by _car into the title
+
+
+def road_nights(leg: TransportOffer) -> int:
+    """Nights on the road of a car leg, from its title (_car); 0 for any other leg."""
+    m = ROAD_NIGHTS_RE.search(leg.title) if leg.mode == "car" else None
+    return int(m.group(1)) if m else 0
+
+
+def drive_time(leg: TransportOffer) -> timedelta:
+    """Time at the wheel of a car leg without its nights on the road; elapsed time otherwise.
+
+    _car drives 1 + nights equal days, each from the clock time of the start, so the last day
+    is the elapsed time without the full days."""
+    elapsed = leg.arrive_at.astimezone(UTC) - leg.depart_at.astimezone(UTC)
+    nights = road_nights(leg)
+    return (elapsed - timedelta(days=nights)) * (nights + 1)
+
+
 def _span_h(delta: timedelta) -> str:
     hours, minutes = divmod(int(delta.total_seconds() // 60), 60)
     return f"{hours} ч {minutes:02d} мин" if minutes else f"{hours} ч"
+
+
+# Rail (#343): the route is RAIL_DETOUR x the straight line. A day train goes DAY_TRAIN_KMH on
+# average with its stops, an overnight one 70 km/h. A high-speed corridor (FAST_LINES) has its
+# own time between its ends; a place within FAST_END_KM of an end adds a local leg at
+# DAY_TRAIN_KMH. Corridor times (research/domain.md): «Сапсан» Москва - Санкт-Петербург
+# 3:30-4:15; Москва - Нижний Новгород 3:55; Москва - Владимир 1:46. Calibrated on the pairs of
+# tests/test_rail_time.py within ±20 %; the rest are team estimates (D-028). Prices do not
+# depend on the speed.
+# A day train comes by DAY_ARRIVE_BY (no arrival at night, TRAP-5). Back it leaves at DAY_BACK,
+# earlier when it would come later, never before _back_from (check-out and the way to the
+# station, #370); a longer ride back goes by the overnight train only.
+RAIL_DETOUR = 1.2
+DAY_TRAIN_KMH = 75
+FAST_LINES = {
+    frozenset(("Москва", "Санкт-Петербург")): 4.0,
+    frozenset(("Москва", "Нижний Новгород")): 3.9,
+    frozenset(("Москва", "Владимир")): 1.8,
+}
+FAST_END_KM = 60
+DAY_OUT, DAY_BACK, DAY_ARRIVE_BY = time(7, 40), time(16, 20), time(23, 0)
+# #370 (TRAP-5): a leg back leaves no earlier than the check-out, the transfer from the
+# farthest hotel to the hub and the margin at the hub, so its transfer never starts before the
+# check-out. CHECK_OUT is HotelOffer.check_out; FAR_HOTEL_KM the farthest synthetic hotel
+# (SYNTH_KM); HUB_MARGIN as transfer_offers. Times of the transfer: _ride.
+CHECK_OUT = time(12, 0)
+FAR_HOTEL_KM = max(hi for _, hi in SYNTH_KM.values())
+HUB_MARGIN = {"flight": timedelta(minutes=120), "train": timedelta(minutes=40)}
+
+
+def _hub_road(hub_km: float, hotel_km: float) -> float:
+    """Road between a hotel and the airport or the station, km (the hub is out of the centre)."""
+    return round(hub_km + 0.6 * hotel_km, 1)
+
+
+def _ride(road: float) -> timedelta:
+    """A transfer ride: 10 minutes to board and 35 km/h."""
+    return _minutes((10 + road / 35 * 60) / 60)
+
+
+def _back_from(place: dict, mode: Mode, day: date) -> datetime:
+    """The earliest departure back from `place` on `day`: check-out, ride, margin; 5 min up."""
+    hub_km = place["airport_km"] if mode == "flight" else place["station_km"]
+    out = datetime.combine(day, CHECK_OUT, ZoneInfo(place["tz"]))
+    at = _shift(out, _ride(_hub_road(hub_km, FAR_HOTEL_KM)) + HUB_MARGIN[mode])
+    up = (-at.minute) % 5
+    return _shift(at, timedelta(minutes=up)).replace(second=0, microsecond=0)
+
+
+def _ends(p: dict) -> list[tuple[str, float]]:
+    """Corridor ends near a place, with the local leg to each, hours."""
+    names = {n for line in FAST_LINES for n in line}
+    out = [(p["name"], 0.0)] if p["name"] in names else []
+    for n in names - {p["name"]}:
+        end = catalog.resolve(n)
+        km = km_between(p, end) if end else FAST_END_KM + 1
+        if km <= FAST_END_KM:
+            out.append((n, km * RAIL_DETOUR / DAY_TRAIN_KMH))
+    return out
+
+
+def _day_train_hours(a: dict, b: dict, route: float) -> float | None:
+    """Hours of the day train a -> b: a corridor with its local legs when it is faster, else
+    route / DAY_TRAIN_KMH up to 800 km of route; None when no day train goes."""
+    slow = max(0.5, route / DAY_TRAIN_KMH) if route <= 800 else None
+    fast = [
+        line + x + y
+        for ea, x in _ends(a)
+        for eb, y in _ends(b)
+        if (line := FAST_LINES.get(frozenset((ea, eb))))
+    ]
+    best = min([*fast, *([slow] if slow else [])], default=None)
+    return round(best, 2) if best else None
 
 
 def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[TransportOffer]:
@@ -449,26 +589,44 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
             depart = _shift(datetime.combine(there, slot, tb), -_minutes(hours))
             price = fare("flight", base * k, there, slot)
             legs.append(_leg(spec, "flight", a, b, depart, hours, price, changes))
+        earliest, taken = _back_from(b, "flight", back), set()
         for slot, k in BACK_FLIGHTS:
-            depart = datetime.combine(back, slot, tb)
+            # A far airport (#370): the slot moves after the check-out and the transfer.
+            depart = max(datetime.combine(back, slot, tb), earliest)
+            if depart in taken:
+                continue
+            taken.add(depart)
             price = fare("flight", base * k, back, slot)
             legs.append(_leg(spec, "flight", b, a, depart, hours, price, changes))
-    route = km * 1.2
+    route = km * RAIL_DETOUR
     if a["station_km"] is not None and b["station_km"] is not None and route <= 3000:
-        trains = []
-        if route <= 800:  # day train
-            hours, base = max(0.5, route / 170), 700 + 3.4 * route
-            trains.append((hours, base, datetime.combine(there, time(7, 40), ta), time(16, 20)))
+        # (hours, fare base, start there, start back or None, fare slot back)
+        trains: list[tuple[float, float, datetime, datetime | None, time]] = []
+        day = _day_train_hours(a, b, route)
+        earliest = _back_from(b, "train", back)
+        if day is not None:  # a day train comes by DAY_ARRIVE_BY both ways (#343, TRAP-5)
+            out = datetime.combine(there, DAY_OUT, ta)
+            by = datetime.combine(back, DAY_ARRIVE_BY, ta)
+            latest = _shift(by, -_minutes(day)).astimezone(tb)
+            latest = latest.replace(minute=latest.minute - latest.minute % 5)
+            ret = min(max(datetime.combine(back, DAY_BACK, tb), earliest), latest)
+            if ret < earliest:
+                ret = None
+            if _shift(out, _minutes(day)).astimezone(tb) <= datetime.combine(
+                there, DAY_ARRIVE_BY, tb
+            ):
+                trains.append((day, 700 + 3.4 * route, out, ret, DAY_BACK))
         if route >= 600:  # overnight train: arrives in the morning
             hours, base = route / 70, 1100 + 3.0 * route
             out = _shift(datetime.combine(there, time(7, 10), tb), -_minutes(hours))
-            trains.append((hours, base, out, time(21, 40)))
-        for hours, base, out, back_at in trains:
-            ret = datetime.combine(back, back_at, tb)
+            ret = max(datetime.combine(back, time(21, 40), tb), earliest)
+            trains.append((hours, base, out, ret, time(21, 40)))
+        for hours, base, out, ret, slot in trains:
             legs.append(
                 _leg(spec, "train", a, b, out, hours, fare("train", base, there, out.time()))
             )
-            legs.append(_leg(spec, "train", b, a, ret, hours, fare("train", base, back, back_at)))
+            if ret is not None:  # the fare noise keys on the slot: the price does not move
+                legs.append(_leg(spec, "train", b, a, ret, hours, fare("train", base, back, slot)))
     road = km * 1.3
     if road <= 2500 and ("car" in spec.modes or not legs):
         hours = road / 80 * 1.1
@@ -507,17 +665,15 @@ def transfer_offers(
         if flight and place.get("airport"):
             hub += " " + place["airport"]["iata"]
         for h in hotels:
-            road = round(hub_km + 0.6 * (h.distance_center_km or 0), 1)
-            ride = _minutes((10 + road / 35 * 60) / 60)
+            road = _hub_road(hub_km, h.distance_center_km or 0)
+            ride = _ride(road)
             if leg.destination == place["name"]:
                 start = _shift(
                     leg.arrive_at.astimezone(tz), timedelta(minutes=40 if flight else 15)
                 )
                 title = f"Трансфер: {hub} → {h.title}, ≈{road:g} км"
             else:
-                end = _shift(
-                    leg.depart_at.astimezone(tz), -timedelta(minutes=120 if flight else 40)
-                )
+                end = _shift(leg.depart_at.astimezone(tz), -HUB_MARGIN[leg.mode])
                 start = _shift(end, -ride)
                 title = f"Трансфер: {h.title} → {hub}, ≈{road:g} км"
             out.append(

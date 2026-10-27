@@ -71,6 +71,9 @@ from api.extract import (
     PLACE_RES,
     SEASONS,
     _known,
+    asks_booking,
+    asks_stay,
+    children_uncounted,
     excluded_places,
     extract,
     is_child_question,
@@ -84,8 +87,8 @@ from api.extract import (
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
-from api.inspire import suggest_destinations
-from api.offers import find_offers, resolve_place
+from api.inspire import ROAD_LINE, suggest_destinations, unchecked_wishes
+from api.offers import find_offers, resolve_place, road_nights
 from api.optimizer import (
     _hotel_why,
     _leg_why,
@@ -270,6 +273,13 @@ ROUTE_RE = re.compile(
     r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
 )
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
+# #351: an unnamed origin is asked when the fit of a whole-trip budget depends on it: the round
+# trip from DEFAULT_ORIGIN costs ROAD_GAP of the budget more than from the cheapest big hub, or
+# takes over ROAD_SHARE of it alone. Sums from the offers (TRAP-4). Team estimates (README).
+ROAD_GAP = 0.15
+ROAD_SHARE = 0.5
+BIG_HUBS = 10  # the hubs by population compared with DEFAULT_ORIGIN
+ORIGIN_OPTIONS = ("Москвы", "Санкт-Петербурга", "Екатеринбурга", "Новосибирска")
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
 STAY_RE = re.compile(
     r"\b(?:\d+|од(?:ин|на|ну)|дв(?:а|е|ое)|тр(?:и|ое)|четыре|пять|шесть|семь|восемь|девять|десять)"
@@ -463,16 +473,142 @@ def party_question(spec: TripSpec) -> list[Question]:
     return [Question(text="Кто едет с ребёнком — сколько взрослых?", options=options)]
 
 
-def blocking_questions(spec: TripSpec) -> list[Question]:
+def _round_trip(probe: TripSpec, origin: str) -> int | None:
+    """The cheapest round trip origin -> destination -> origin for the party, from the offers."""
+    spec = probe.model_copy(update={"origin": origin})
+    legs = [o for o in find_offers(spec, spec.destinations[0]) if isinstance(o, TransportOffer)]
+    there = _cheapest([o for o in legs if o.origin == origin])
+    back = _cheapest([o for o in legs if o.destination == origin])
+    return there.price_rub + back.price_rub if there and back else None
+
+
+ADJ_GENITIVE = (("кий", "кого"), ("ний", "него"), ("ий", "ого"), ("ый", "ого"), ("ой", "ого"))
+
+
+def _adj_genitive(word: str) -> str | None:
+    return next((word[: -len(a)] + g for a, g in ADJ_GENITIVE if word.endswith(a)), None)
+
+
+def _noun_genitive(word: str) -> str | None:
+    if word.endswith("ль"):
+        return word[:-1] + "я"  # «Ярославль», «Ставрополь»
+    if word.endswith("ь"):
+        return word[:-1] + "и"  # «Казань», «Пермь»
+    if word.endswith("ы"):
+        return None  # «Чебоксары»: a plural, the rule does not decline it
+    if word.endswith("а"):
+        return word[:-1] + ("и" if word[-2] in "гкхжчшщ" else "ы")
+    if word[-1] in "бвгджзклмнпрстфхцчшщ":
+        return word + "а"
+    return word  # «Сочи», «Улан-Удэ»: not declined
+
+
+def _genitive(name: str) -> str | None:
+    """«Новосибирск» -> «Новосибирска», «Ростов-на-Дону» -> «Ростова-на-Дону», «Нижний Новгород»
+    -> «Нижнего Новгорода», «Санкт-Петербург» -> «Санкт-Петербурга» for the chip «Из …». None
+    when the rules would not read the form back as this city (the chip is then left out)."""
+    if "-на-" in name:
+        head, sep, tail = name.partition("-на-")
+        parts = [_noun_genitive(head), sep + tail]
+        form = None if None in parts else "".join(parts)
+    elif " " in name:
+        *adjs, noun = name.split()
+        parts = [*map(_adj_genitive, adjs), _noun_genitive(noun)]
+        form = None if None in parts else " ".join(parts)  # «Набережные Челны»: None
+    elif "-" in name:
+        first, last = name.rsplit("-", 1)
+        if (adj := _adj_genitive(last)) and (noun := _noun_genitive(first)):
+            form = f"{noun}-{adj}"  # «Петропавловска-Камчатского»
+        else:
+            form = (noun := _noun_genitive(last)) and f"{first}-{noun}"  # «Санкт-Петербурга»
+    else:
+        form = _noun_genitive(name)
+    if not form:
+        return None
+    origin = extract(f"из {form}", has_destination=True)[0].get("origin")
+    return form if origin and catalog.origin_hub(origin)[0]["name"] == name else None
+
+
+def _from(name: str) -> str:
+    """«из Новосибирска»; «из города X» when the rule has no form for X."""
+    return f"из {gen}" if (gen := _genitive(name)) else f"из города {name}"
+
+
+def _share(rub: int, budget: int) -> str:
+    return f"{round(100 * rub / budget)} %"
+
+
+def far_origin_question(spec: TripSpec) -> list[Question]:
+    """#302, #351: no origin and a budget for the whole trip. The origin is asked when the road
+    from DEFAULT_ORIGIN (a round trip for the party) costs over ROAD_GAP of the budget more than
+    from the cheapest big hub, or over ROAD_SHARE of the budget alone. The question names what
+    is measured: the road sums (offers, TRAP-4), their difference and its share of the budget.
+    It claims nothing about the whole trip. Otherwise the origin is an assumption."""
+    if spec.origin or spec.budget_rub is None or not spec.destinations:
+        return []
+    probe = assume(spec)  # the dates and the party the plan would have
+    home = _round_trip(probe, DEFAULT_ORIGIN)
+    if home is None:
+        return []
+    hubs = sorted(catalog.hubs(), key=lambda h: -h["pop"])
+    names = [h["name"] for h in hubs if h["name"] != DEFAULT_ORIGIN][:BIG_HUBS]
+    if place := catalog.resolve(spec.destinations[0]):
+        # The place itself is no origin to compare: «Казань» from Казань has no road. The hub
+        # nearest the place is not added either: its road is always small (Чебоксары — Казань
+        # 4 900 ₽), so the gap would measure the distance to the nearest city, not the origin.
+        names = [n for n in names if n != place["name"]]
+    sums = [(r, n) for n in dict.fromkeys(names) if (r := _round_trip(probe, n)) is not None]
+    best = min(sums, default=None)
+    budget = spec.budget_rub
+    gap = best is not None and home - best[0] > ROAD_GAP * budget
+    if not (gap or home > ROAD_SHARE * budget):
+        return []
+    text = f"Откуда начинается поездка? Из Москвы дорога туда и обратно ≈ {_rub(home)}"
+    if best and best[0] < home:
+        diff = home - best[0]
+        text += (
+            f", {_from(best[1])} ≈ {_rub(best[0])} — разница ≈ {_rub(diff)}, "
+            f"это {_share(diff, budget)} бюджета."
+        )
+    else:
+        text += "."
+    if home > ROAD_SHARE * budget:
+        text += f" Дорога из Москвы — {_share(home, budget)} бюджета {_rub(budget)}."
+    text += " Если города нет в кнопках, напишите «из …»."
+    options = [f"Из {w}" for w in ORIGIN_OPTIONS]
+    if best and (gen := _genitive(best[1])) and f"Из {gen}" not in options:
+        options.insert(1, f"Из {gen}")
+    return [Question(text=text, options=options)]
+
+
+def children_question(message: str, spec: TripSpec) -> list[Question]:
+    """F25 (#302): «с детьми» without a number and ages: asked, not two children of 7."""
+    if not (spec.children_ages and children_uncounted(message)):
+        return []
+    options = ["Один ребёнок, 5 лет", "Двое детей, 5 и 10 лет", "Трое детей, 3, 6 и 10 лет"]
+    return [Question(text="Сколько детей едет и сколько им лет?", options=options)]
+
+
+def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     """At most 2 questions, only when the message names neither a place nor a wish.
 
     A place or a wish is enough to move on: the rest becomes assumptions named in the reply.
-    One exception (#112): a child, no word about the adults and a fixed place. The guest count
-    sets the price and the booking, so it is asked, not assumed. Without a place the question
-    only goes next to the options (party_question), it never replaces them.
+    Exceptions ask one question, the most important first (#302): the city of a hotel request
+    (F14) or the place of a booking (#351); the origin when the fit of a whole budget depends on
+    it (F15, far_origin_question); the children without a number (F25); the adults next to a
+    child (#112). The guest count sets the price and the
+    booking, so it is asked, not assumed. Without a place the adults question only goes next to
+    the options (party_question), it never replaces them.
     """
+    if not (spec.destinations or spec.wishes) and asks_stay(message):
+        return [Question(text="В каком городе нужна гостиница?", options=[])]
+    if not (spec.destinations or spec.wishes) and asks_booking(message):
+        return [Question(text="Куда хотите поехать? Напишите город.", options=[])]  # #351: tickets
     party = party_question(spec) if spec.destinations else []
-    if spec.destinations or spec.wishes:
+    if spec.destinations:
+        first = far_origin_question(spec) or children_question(message, spec) or party
+        return first[:1]
+    if spec.wishes:
         return party
     out = []
     if not spec.month and not spec.date_from:
@@ -1224,6 +1360,37 @@ def _question_fact(old: ChatReply, low: str) -> str:
     return ""
 
 
+# #369: «сколько это на 1 человека?», «покажи цену на человека»: a price per head from the plan
+# total; the party stays. «Есть номер на 2 человека?» asks about a room, not about the party.
+PER_HEAD_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
+PER_HEAD_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж\w*\s+цен")
+ROOM_FOR_RE = re.compile(r"\bномер\w*\s+на\s+(?:\d{1,2}|двоих|троих|четверых)\b")
+
+
+def _per_head_reply(old: ChatReply, low: str) -> str:
+    """The reply to a price-per-head question, from the plan only (TRAP-4); "" if it is none."""
+    spec = old.plan.spec
+    people = spec.adults + len(spec.children_ages)
+    if PER_HEAD_RE.search(low) and PER_HEAD_CUE_RE.search(low):
+        total = old.cart.total_rub or sum(
+            o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
+        )
+        if not total:
+            return f"Состав не меняю: {people} чел. Итог пока не посчитан, цену на человека назвать не могу."
+        return (
+            f"Состав не меняю: {people} чел. Итого {_rub(total)} (синтетика), "
+            f"{'в среднем ' if spec.children_ages else ''}на человека около "
+            f"{_rub(round(total / people))} (синтетика)"
+            + (", дети по детскому тарифу." if spec.children_ages else ".")
+        )
+    if ROOM_FOR_RE.search(low) and "?" in low:
+        return (
+            f"Состав не меняю: в плане {people} чел. Чтобы пересчитать на другой состав, "
+            "напишите, кто едет: например, «нас двое»."
+        )
+    return ""
+
+
 def _question_answer(
     old: ChatReply, low: str = "", message: str = "", found: dict | None = None
 ) -> str:
@@ -1256,13 +1423,43 @@ def _question_answer(
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
 
 
-def _tail(spec: TripSpec, hint: str) -> list[str]:
-    head = ["Допущения: " + "; ".join(spec.assumptions) + "."] if spec.assumptions else []
+def _tail(spec: TripSpec, hint: str, extra: list[str] | None = None) -> list[str]:
+    said = [*spec.assumptions, *(extra or [])]
+    head = ["Допущения: " + "; ".join(said) + "."] if said else []
     return head + [hint]
+
+
+def _road_note(plan: Plan) -> list[str]:
+    """#321: nights on the road move the car start before the check-in and the return home
+    after the check-out. The dates and the nights come from the selected legs (TRAP-4)."""
+    by_id = {o.offer_id: o for o in plan.offers}
+    cars = sorted(
+        (
+            o
+            for i in plan.selected
+            if isinstance(o := by_id.get(i), TransportOffer) and o.mode == "car"
+        ),
+        key=lambda o: o.depart_at,
+    )
+    if len(cars) != 2 or not any(map(road_nights, cars)):
+        return []
+    there, back = cars
+    n_there, n_back = road_nights(there), road_nights(back)
+    nights = (
+        f"{n_there} в каждую сторону" if n_there == n_back else f"туда {n_there}, обратно {n_back}"
+    )
+    days = f"выезд {there.depart_at:%d.%m}, возврат {back.arrive_at:%d.%m}"
+    return [f"дорога: {days}, ночёвок в пути: {nights} (оценка)"]
 
 
 def _text_clarify(questions: list[Question]) -> str:
     return "Чтобы подобрать поездку, уточню: " + " ".join(q.text for q in questions)
+
+
+def _unchecked_lines(spec: TripSpec) -> list[str]:
+    """#361: a wish with no data is named in the reply, not dropped."""
+    unchecked = unchecked_wishes(spec)
+    return [f"Не проверяю по данным: {', '.join(unchecked)}."] if unchecked else []
 
 
 def _text_inspire(plan: Plan) -> str:
@@ -1273,15 +1470,19 @@ def _text_inspire(plan: Plan) -> str:
         climate = "".join(
             f", {label} {v:g} °C" for label, v in (("днём", d.air_c), ("вода", d.water_c)) if v
         )
+        # #321: a car with nights on the road shows its hours at the wheel (inspire.ROAD_LINE).
+        road = next((t for t in d.tradeoffs if t.startswith(ROAD_LINE)), None)
+        minuses = [t for t in d.tradeoffs if t != road]
         line = (
             f"{i}. {d.name} ({d.country}) — от {_rub(d.est_total_rub)} на {guests} чел., "
-            f"в пути {d.travel_hours:g} ч{climate}. {_cap(d.why)}."
+            f"{road or f'в пути {d.travel_hours:g} ч'}{climate}. {_cap(d.why)}."
         )
-        if d.tradeoffs:
-            line += f" Минусы: {'; '.join(d.tradeoffs)}."
+        if minuses:
+            line += f" Минусы: {'; '.join(minuses)}."
         if d.violates:
             line += f" Нарушает требования: {'; '.join(d.violates)}."
         lines.append(line)
+    lines += _unchecked_lines(spec)
     return "\n".join(lines + _tail(spec, "Напишите номер или название направления."))
 
 
@@ -1341,9 +1542,14 @@ def _text_compare(plan: Plan) -> str:
         lines += [f"Риск: {r}." for r in e.risks]
     for c in plan.changes:
         lines.append(f"Изменено {c.what}: {c.before} → {c.after}.")
+    lines += _unchecked_lines(spec)
     return "\n".join(
         lines
-        + _tail(spec, "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».")
+        + _tail(
+            spec,
+            "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».",
+            _road_note(plan),
+        )
     )
 
 
@@ -1351,6 +1557,7 @@ def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
     lines += [f"{e.at:%d.%m %H:%M} — {e.title}" for e in plan.timeline]
     lines += [f"Внимание: {i.text}." for i in plan.issues]
+    lines += _unchecked_lines(plan.spec)
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
 
@@ -1541,6 +1748,14 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return old.model_copy(
             update={"reply": _question_answer(old, low), "questions": [], "llm": False}
         )
+    if (
+        prev
+        and old.stage in PLAN3
+        and not rules_found  # an edit in the same message is a rebuild, as before
+        and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
+        and (reply := _per_head_reply(old, low))
+    ):
+        return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
         return drop_transfers(old)
     # #186, #216: «какая погода в декабре?» at a December plan names no new field: still a
@@ -1808,7 +2023,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
         )
 
-    if prev is None and (questions := blocking_questions(spec)):
+    if prev is None and (questions := blocking_questions(spec, message)):
         return reply("clarify", Plan(spec=spec), _text_clarify(questions), questions=questions)
     spec = assume(spec)
     if not spec.destinations:
