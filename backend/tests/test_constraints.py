@@ -228,5 +228,6 @@ def test_warm_reply_shows_the_air_of_the_month(store):
     r = say(store, "Куда-нибудь где тепло в январе, до 6 часов лёту, из Екатеринбурга")
     assert len(r.plan.destinations) >= 2
     for d in r.plan.destinations:
+        assert not d.violates
         assert d.air_c >= 15 and d.air_c == catalog.month_climate(catalog.resolve(d.name), 1)[0]
         assert f"{d.name} ({d.country})" in r.reply and f"воздух {d.air_c:g} °C" in r.reply
