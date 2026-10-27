@@ -69,6 +69,16 @@ def test_south_in_a_cold_month_means_warm(store):
     assert any(not d.violates for d in every)
 
 
+def test_sea_in_july_does_not_give_a_sea_without_swimming():
+    """#224: Санкт-Петербург has `sea`, but the water of its coast is warm for 2 months only."""
+    spec = TripSpec(origin="Москва", month=7, wishes=["море"])
+    every = inspire.suggest_destinations(spec, 16)
+    assert all("swim" in tags(d.name) for d in every if not d.violates)
+    spb = [d for d in every if d.name == "Санкт-Петербург"]
+    assert all(inspire.NO_SWIM in d.violates for d in spb)
+    assert not any(d.why.startswith("море для купания") for d in spb)
+
+
 def test_cards_that_break_the_request_go_below():
     """Operator: a card marked «Нарушает требования» goes below the fitting ones."""
     spec = TripSpec(origin="Москва", month=11, wishes=["море"], max_travel_hours=4)
