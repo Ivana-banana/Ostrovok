@@ -104,3 +104,14 @@ def test_C8_gelendzhik_return_leaves_before_the_airport_closes(store):
     r = say(store, "Геленджик из Москвы, 3 ночи с 20 января")
     back = [o for o in r.plan.offers if o.kind == "transport" and o.origin == "Геленджик"]
     assert back and all(o.depart_at.time() <= time(20, 0) for o in back if o.mode == "flight")
+
+
+def test_C8_far_substitute_airport_gives_way_to_a_train(store):
+    """Белгород (EGO closed): DME is 542 km away, farther than catalog.AIRPORT_KM; a train goes
+    from Санкт-Петербург, so the cart has the train, not a flight and a 7-hour taxi."""
+    r = say(store, "Белгород из Санкт-Петербурга, 7 ночей с 1 августа, двое взрослых")
+    legs = [o for o in r.plan.offers if o.kind == "transport"]
+    assert legs and all(o.mode != "flight" for o in legs)
+    r = say(store, "беру", r.session_id)
+    assert any(o.mode == "train" for o in chosen(r, "transport"))
+    assert not [o for o in chosen(r, "transfer") if "DME" in o.title]

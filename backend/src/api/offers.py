@@ -132,7 +132,8 @@ def _complete(p: dict) -> dict:
 
 def _open_airport(p: dict) -> dict:
     """C8 (#363): a place behind a closed airport gets the nearest open airport of its country
-    (no border on the way), km by the straight line; the transfer prices the road by these km."""
+    (no border on the way), km by the straight line; the transfer prices the road by these km.
+    A substitute farther than catalog.AIRPORT_KM flies only without a train (transport_offers)."""
     if not closed_airport(p):
         return p
     port = min(_open_ports(p.get("cc", "")), key=lambda a: km_between(p, a), default=None)
@@ -652,7 +653,12 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
     legs: list[TransportOffer] = []
     # A substitute airport (C8) counts: Москва -> Воронеж through DME is no flight.
     hops = km_between(_port(a), _port(b))
-    flies = not closed_airport(a) and not closed_airport(b) and min(km, hops) >= 300
+    route = km * RAIL_DETOUR
+    rail = a["station_km"] is not None and b["station_km"] is not None and route <= 3000
+    # The rule of the catalogue (catalog.AIRPORT_KM): a far substitute counts only without a train
+    far = any((x.get("airport") or {}).get("km", 0) > catalog.AIRPORT_KM for x in (a, b))
+    flies = (not closed_airport(a) and not closed_airport(b) and min(km, hops) >= 300
+             and not (far and rail))  # fmt: skip
     if a["airport_km"] is not None and b["airport_km"] is not None and flies:
         pair = {a["country"], b["country"]}
         changes = int("Россия" in pair and bool(pair & NO_DIRECT))
@@ -674,8 +680,7 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
             taken.add(depart)
             price = fare("flight", base * k, back, slot)
             legs.append(_leg(spec, "flight", b, a, depart, hours, price, changes))
-    route = km * RAIL_DETOUR
-    if a["station_km"] is not None and b["station_km"] is not None and route <= 3000:
+    if rail:
         # (hours, fare base, start there, start back or None, fare slot back)
         trains: list[tuple[float, float, datetime, datetime | None, time]] = []
         day = _day_train_hours(a, b, route)
