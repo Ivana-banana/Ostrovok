@@ -412,6 +412,23 @@ def _adds_place(t: str, spans: list[tuple[int, int]], i: int, refused: list[bool
     )
 
 
+def _wanted_pair(t: str, spans: list[tuple[int, int]], i: int) -> bool:
+    """#151: «Не хочу в Египет, Турция или Кипр»: a nominative after the comma names the wish.
+
+    «в Египет» has the case of «в»; «Турция» (not «Турцию») cannot be in the refused list.
+    The places of the «или» group after the comma are checked; «а/я» is the nominative sign."""
+    if not re.fullmatch(r"\s*,\s*", t[spans[i - 1][1] : spans[i][0]]):
+        return False
+    if not re.search(r"\b(?:в|во|на)\s+$", t[: spans[i - 1][0]]):
+        return False  # «кроме Египта, Кипра или Турции»: «Кипра» is no nominative
+    group = [i]
+    while group[-1] + 1 < len(spans) and re.fullmatch(
+        r"\s+(?:или|либо)\s+", t[spans[group[-1]][1] : spans[group[-1] + 1][0]]
+    ):
+        group.append(group[-1] + 1)
+    return any(re.match(r"[\w-]*[ая]\b", t[spans[j][0] :]) for j in group)
+
+
 def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
     """Which of the place mentions (start, end; sorted) a negation refuses.
 
@@ -438,6 +455,7 @@ def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
     neg = [False] * n
     for i in range(n):
         in_list = i > 0 and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : spans[i][0]]))
+        in_list = in_list and not _wanted_pair(t, spans, i)
         neg[i] = (
             strong[i]
             or (exc[i] and not _adds_place(t, spans, i, strong))
@@ -484,16 +502,50 @@ OR_PAIR = re.compile(
 )
 
 
+# #151: nouns of a request that are no place, also with a capital: «Экскурсии или Казань»,
+# «Сочи или Дети». The capital of the first word of a sentence tells nothing.
+NOT_PAIR_PLACE = re.compile(
+    r"(?:экскурс|музе|прогулк|шопинг|театр|ресторан|развлеч|отдых|поход|рыбалк|дайвинг|серфинг"
+    r"|аквапарк|зоопарк|достопримеч|концерт|фестивал|природ|взросл|реб[её]н|дет[иейяь]|малыш"
+    r"|сын|доч|внук|семь)"
+)
+NAME_WORD = r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*"
+
+
+def _ordinary(word: str, low: str) -> bool:
+    """A word that is no name of a place outside the catalogue."""
+    ordinary = [low in NOT_PLACES, len(low) < 3, not word[0].isupper(), low in NUMS]
+    ordinary += [bool(re.match(MONTH, low)), bool(NOT_CITY_START.match(low))]
+    ordinary += [bool(NOT_PAIR_PLACE.match(low)), any(re.search(p, low) for _, p in WISHES)]
+    return any(ordinary)
+
+
 def _pair_name(word: str, low: str) -> str | None:
     """The place a word of a pair names: a known city, a country, or a capitalized unknown name."""
     if known := _known(word):
         return known
     if country := next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None):
         return country
-    ordinary = [low in NOT_PLACES, len(low) < 3, not word[0].isupper(), low in NUMS]
-    ordinary += [bool(re.match(MONTH, low)), bool(NOT_CITY_START.match(low))]
-    ordinary += [bool(NOT_CITY_END.search(low)), any(re.search(p, low) for _, p in WISHES)]
-    return None if any(ordinary) else _nominative(word)
+    return None if _ordinary(word, low) or NOT_CITY_END.search(low) else _nominative(word)
+
+
+def _two_word_name(text: str, t: str, s: int, e: int, side: int) -> tuple[int, str, int] | None:
+    """«Роза Хутор или Сочи», «Сочи или Новый Афон»: two capitalized words are one name.
+
+    The first word may be an adjective («Новый»), the second one is checked as a pair word."""
+    if side == 0:
+        m = re.search(rf"(?:^|[\s,(])({NAME_WORD}) $", text[:s])
+    else:
+        m = re.compile(rf" ({NAME_WORD})\b").match(text, e)
+    if not m or not text[s].isupper():
+        return None
+    (a, b), (hs, he) = ((m.start(1), m.end(1)), (s, e)) if side == 0 else ((s, e), m.span(1))
+    first, low = text[a:b], t[a:b]
+    if _ordinary(first, low) and low not in NOT_PLACES or re.search(r"(?:ом|ем|ть)$", low):
+        return None  # «Хочу Ханой», «Летом Ханой»; «Новый» of NOT_PLACES may lead a name
+    if _known(first) or (name := _pair_name(text[hs:he], t[hs:he])) is None:
+        return None
+    return a, f"{first} {name}", he
 
 
 def _or_pairs(text: str, t: str, hits: list) -> set[int]:
@@ -517,9 +569,15 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
         ]
         if not any(sure):
             continue
-        for s, e, w in words:
+        for side, (s, e, w) in enumerate(words):
             sides.add(s)
-            if not taken(s) and (name := _pair_name(w, t[s:e])):
+            if taken(s):
+                continue
+            two = _two_word_name(text, t, s, e, side)
+            if two and not taken(two[0]) and not taken(two[2] - 1):
+                sides.add(two[0])
+                hits.append(two)
+            elif name := _pair_name(w, t[s:e]):
                 hits.append((s, name, e))
     return sides
 
@@ -580,6 +638,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         if s in pair_sides and name in COUNTRIES and (city := resolve_place(name)):
             name = city["name"]  # «Египет или Турция»: the city of the catalogue for the country
         place = resolve_place(name)
+        if place and place["country"] in refused:
+            continue  # «Турция или Египет, в Египте уже были»: no Хургада (#151)
         if place and mentions[s][2] in COUNTRIES and place["name"] in refused:
             # The country is named, its city is refused: another city of the country.
             alt = _other_city(place, refused)

@@ -9,6 +9,7 @@ name; the second one is the chip «План: …» (#139).
 import pytest
 
 from api.contracts import ChatRequest
+from api.extract import excluded_places
 from api.model import chat
 from api.store import SessionStore
 
@@ -90,3 +91,43 @@ def test_word_inside_a_two_word_city_is_no_second_name_trap_3(store, text, dests
 def test_origin_in_a_pair_is_no_destination_trap_2(store):
     r = say(store, "Вылет из Казани или Самары, хотим в Турцию в ноябре")
     assert r.plan.spec.destinations == ["Турция"]
+
+
+# #151: the tails of the pair after the review of #142.
+@pytest.mark.parametrize(
+    "text, dests",
+    [("Экскурсии или Казань", ["Казань"]), ("Сочи или Дети", ["Сочи"])],
+)
+def test_ordinary_word_in_a_pair_is_no_place_trap_2(store, text, dests):
+    r = say(store, text)
+    assert r.plan.spec.destinations == dests
+    assert "нет в каталоге" not in r.reply
+
+
+@pytest.mark.parametrize(
+    "text, dests",
+    [
+        ("Роза Хутор или Сочи", ["Роза Хутор", "Сочи"]),
+        ("Новый Афон или Сочи", ["Новый Афон", "Сочи"]),
+        ("Сочи или Роза Хутор", ["Сочи", "Роза Хутор"]),
+    ],
+)
+def test_two_word_name_outside_the_catalogue_is_whole_trap_3(store, text, dests):
+    r = say(store, text)
+    assert r.plan.spec.destinations == dests
+    assert dests[0] in r.reply or dests[1] in r.reply  # the whole name, not «Хутор»
+
+
+def test_refusal_does_not_take_the_alternatives_of_the_pair_trap_2(store):
+    r = say(store, "Не хочу в Египет, Турция или Кипр")
+    assert r.plan.spec.destinations == ["Анталия", "Ларнака"]
+
+
+def test_refused_place_of_the_pair_gets_no_chip_trap_2(store):
+    r = say(store, "Турция или Египет, в Египте уже были")
+    assert r.plan.spec.destinations == ["Анталия"]
+    assert "План: Хургада" not in [o for q in r.questions for o in q.options]
+
+
+def test_refusal_in_the_case_of_the_preposition_takes_the_whole_list_trap_2():
+    assert excluded_places("Не хочу в Египет, Турцию или Кипр") == ["Египет", "Турция", "Кипр"]
