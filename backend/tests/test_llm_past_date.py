@@ -181,3 +181,54 @@ def test_day_boundaries_of_the_window(today):
         assert (found.get("date_from") == day.replace(year=2027)) == moved
     today_found = {"date_from": date(2026, 10, 27)}
     assert llm_past_dates(today_found) is None and today_found == {"date_from": date(2026, 10, 27)}
+
+
+DEC = "Сочи из Москвы с 11 по 13 декабря, двое взрослых"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [{"nights": 2}, {"month": 12}, {"date_from": "2026-12-11", "month": 12}],
+)
+def test_a_part_of_the_model_dates_does_not_replace_the_dates_of_the_rules(
+    today, model, store, patch
+):
+    """#258: the model alone may say less than the rules read; the exact dates stay."""
+    model.patch = patch
+    r = say(store, DEC)
+    assert (r.plan.spec.date_from, r.plan.spec.date_to) == (date(2026, 12, 11), date(2026, 12, 13))
+
+
+def test_a_model_date_to_does_not_break_the_length_of_the_rules(today, model, store):
+    model.patch = {"destinations": ["Сочи"]}
+    r = say(store, "Сочи из Москвы в декабре, двое взрослых")
+    model.patch = {"date_to": "2026-12-15"}
+    r = say(store, "с 5 по 15 декабря", r.session_id)
+    spec = r.plan.spec
+    assert (spec.date_from, spec.date_to, spec.nights) == (
+        date(2026, 12, 5),
+        date(2026, 12, 15),
+        10,
+    )
+
+
+def test_the_full_model_dates_replace_the_dates_of_the_rules(today, model, store):
+    model.patch = {"date_from": "2026-12-20", "date_to": "2026-12-24"}
+    r = say(store, DEC)
+    assert (r.plan.spec.date_from, r.plan.spec.date_to) == (date(2026, 12, 20), date(2026, 12, 24))
+
+
+def test_both_readings_of_a_recent_past_date_give_one_note(today, model, store):
+    model.patch = {"destinations": ["Сочи"], "date_from": "2026-10-20", "date_to": "2026-10-25"}
+    r = say(store, "Сочи из Москвы с 20 по 25 октября, двое взрослых")
+    assert r.plan.spec.date_from == date(2027, 10, 20)
+    assert len(past_notes(r.plan.spec)) == 1
+
+
+def test_the_model_does_not_overwrite_a_destination_chosen_by_number(today, model, store):
+    r = say(store, "Хочу куда-нибудь на море в январе из Москвы, нас двое")
+    names = [d.name for d in r.plan.destinations]
+    assert len(names) >= 2 and r.stage in ("inspire", "select")
+    model.patch = {"destinations": ["Мурманск"]}
+    r2 = say(store, "второй вариант", r.session_id)
+    assert r2.plan.spec.destinations == [names[1]]
