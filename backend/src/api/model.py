@@ -1139,7 +1139,7 @@ def _text_inspire(plan: Plan) -> str:
     lines = ["Подходящие направления (цены, климат и время в пути — оценка, синтетика):"]
     for i, d in enumerate(plan.destinations, 1):
         climate = "".join(
-            f", {label} {v:g} °C" for label, v in (("воздух", d.air_c), ("вода", d.water_c)) if v
+            f", {label} {v:g} °C" for label, v in (("днём", d.air_c), ("вода", d.water_c)) if v
         )
         line = (
             f"{i}. {d.name} ({d.country}) — от {_rub(d.est_total_rub)} на {guests} чел., "

@@ -59,7 +59,7 @@ def test_trap_4_january_climate_is_the_catalogue_month(store):
     r = say(store, JANUARY)
     for d in r.plan.destinations:
         assert (d.air_c, d.water_c) == catalog.month_climate(catalog.resolve(d.name), 1), d.name
-        assert f"воздух {d.air_c:g} °C, вода {d.water_c:g} °C" in r.reply
+        assert f"днём {d.air_c:g} °C, вода {d.water_c:g} °C" in r.reply
         assert not any(UNCHECKED in x.lower() for x in [*d.tradeoffs, *d.violates]), d.name
     assert UNCHECKED not in r.reply.lower()
     assert "вода 22.5 °C" in r.reply  # Хургада in January

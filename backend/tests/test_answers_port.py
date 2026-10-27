@@ -134,14 +134,14 @@ def test_transfer_has_price_and_duration(store, stage):
 def test_trap_4_precipitation_is_the_catalogue_month(store, stage, question):
     """TRAP-4: precipitation is the November sum of catalog.json for Сочи; no days, no forecast."""
     _, r2 = ask(store, stage, question)
-    assert "Сочи в ноябре: воздух 15.7 °C, вода 17.1 °C, осадки 135 мм за месяц" in r2.reply
-    assert "Прогноза погоды в данных нет." in r2.reply and "дн" not in r2.reply
+    assert "Сочи в ноябре: днём 15.7 °C, вода 17.1 °C, осадки 135 мм за месяц" in r2.reply
+    assert "Прогноза погоды в данных нет." in r2.reply and "дн" not in r2.reply.replace("днём", "")
 
 
 @pytest.mark.parametrize("question", ["тепло будет?", "а жарко там будет?"])
 def test_weather_without_li_is_a_weather_question(store, question):
     _, r2 = ask(store, "assemble", question)
-    assert "воздух 15.7 °C" in r2.reply and PLAN_REPEAT not in r2.reply
+    assert "днём 15.7 °C" in r2.reply and PLAN_REPEAT not in r2.reply
 
 
 @pytest.mark.parametrize("stage", STAGES)
@@ -301,7 +301,7 @@ def test_trap_4_a_place_of_the_catalogue_is_not_missing_from_the_data(store, sta
 
 def test_a_country_with_a_reason_is_the_weather_question_as_on_main(store):
     _, r2 = ask(store, "assemble", "Почему не Египет, там теплее?", ANTALYA)
-    assert "Анталия в ноябре: воздух 21.5 °C" in r2.reply and "нет в данных" not in r2.reply
+    assert "Анталия в ноябре: днём 21.5 °C" in r2.reply and "нет в данных" not in r2.reply
 
 
 @pytest.mark.parametrize("text", ["почему не All inclusive?", "почему не UAI?", "почему не BB?"])
