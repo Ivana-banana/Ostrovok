@@ -53,6 +53,15 @@ def test_trap_4_january_cold_sea_is_marked_by_the_november_water(store):
         assert any("море холодное" in v and "в январе не теплее" in v for v in d.violates)
 
 
+def test_october_sea_does_not_claim_it_is_not_warmer(store):
+    r = say(store, "Хочу тёплое море в октябре, недорого, 2 взрослых, из Москвы")
+    cold = [d for d in r.plan.destinations if d.name in ("Калининград", "Сочи")]
+    assert cold
+    for d in cold:
+        assert any("°C в ноябре" in v for v in d.violates)
+        assert not any("не теплее" in v for v in d.violates)
+
+
 def test_november_sea_unchanged(store):
     r = say(store, NOVEMBER)
     for d in r.plan.destinations:

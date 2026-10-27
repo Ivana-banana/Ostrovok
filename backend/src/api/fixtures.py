@@ -95,10 +95,10 @@ def suggest_destinations(
         if sea and spec.month != 11:  # #157: no data is not «passes»; model.py says so once
             nov_water = c["nov"][1]
             if spec.month in COLD_MONTHS and nov_water is not None and nov_water < WARM_WATER_C:
-                violates.append(
-                    f"море холодное для купания: вода {nov_water:g} °C в ноябре, "
-                    f"{IN_MONTH[spec.month - 1]} не теплее"
-                )
+                note = f"море холодное для купания: вода {nov_water:g} °C в ноябре"
+                if spec.month != 10:  # October is usually warmer than November: no claim
+                    note += f", {IN_MONTH[spec.month - 1]} не теплее"
+                violates.append(note)
         out.append(
             Destination(
                 name=name,
