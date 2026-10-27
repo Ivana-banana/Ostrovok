@@ -22,7 +22,13 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import catalog, llm
-from api.answers import is_hotel_compare, plan_fact, span, without_plan_fields
+from api.answers import (
+    destination_line,
+    is_hotel_compare,
+    plan_fact,
+    span,
+    without_plan_fields,
+)
 from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
 from api.contracts import (
     Cart,
@@ -1186,6 +1192,7 @@ def _text_compare(plan: Plan) -> str:
             f"{spec.destinations[0]}, {period(spec)}, "
             f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
         ),
+        *([line] if (line := destination_line(plan)) else []),
         *([line] if (line := missing_mode(plan)) else []),
         "Отели:",
     ]

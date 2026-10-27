@@ -12,7 +12,7 @@ from api import catalog
 from api.contracts import HotelOffer, Plan, TransportOffer
 from api.extract import MONTH, NOT_PLACES
 from api.fixtures import CATALOG, IN_MONTH
-from api.offers import places, resolve_place
+from api.offers import FAR_AIRPORT_KM, places, resolve_place
 from api.optimizer import hotel_rows
 
 WEATHER_RE = re.compile(
@@ -41,7 +41,6 @@ PLACE_AFTER_RE = re.compile(
     r"([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*(?:\s+[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)?)"
 )
 NOT_A_PLACE_RE = re.compile(r"(?:нов|рожд|пасх|масленич|крещ|троиц|марта|январ|феврал)")
-FAR_AIRPORT_KM = 60  # as in inspire.py: a farther airport is not the city's own
 VISA_RE = re.compile(r"\bвиз[аыуеой]{0,2}\b|\bвизов\w*|загранпаспорт\w*|правил\w*\s+въезд")
 # «почему не Бульвар?», «чем Гранд хуже?», «а не Парк?»: a hotel of the plan is named.
 VERSUS_RE = re.compile(
@@ -439,6 +438,28 @@ def weather_fact(plan: Plan, low: str = "", cities: list[str] | None = None, mon
     if not lines:
         return f"Направление не выбрано — климата {NO_DATA}."
     return "\n".join(lines) + "\nПрогноза погоды в данных нет."
+
+
+def destination_line(plan: Plan) -> str:
+    """One line of the first answer for the main place: the climate of the month and the nearest
+    airport, from the catalogue or the geocoder place. A part without data is left out, never
+    guessed (TRAP-4); no data at all gives an empty line."""
+    month = _month(plan)
+    place = resolve_place(plan.spec.destinations[0]) if plan.spec.destinations else None
+    if place is None:
+        return ""
+    parts = []
+    air, _ = catalog.month_climate(place, month) if month else (None, None)
+    if air is not None:
+        rain = place["climate"]["rain"][month - 1]
+        parts.append(
+            f"{IN_MONTH[month - 1]} ≈ {air:g} °C" + (f", {rain:g} мм" if rain is not None else "")
+        )
+    if port := place.get("airport"):
+        parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км")
+    if not parts:
+        return ""
+    return "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
 
 
 def airport_fact(plan: Plan, cities: list[str] | None = None) -> str:

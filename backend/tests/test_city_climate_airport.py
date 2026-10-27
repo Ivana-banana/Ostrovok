@@ -7,8 +7,8 @@ city is a question, not an edit: the plan, the cart and the stage stay and it is
 
 import pytest
 
-from api import catalog, llm
-from api.contracts import ChatRequest
+from api import answers, catalog, llm
+from api.contracts import ChatRequest, Plan, TripSpec
 from api.model import chat
 from api.offers import resolve_place
 from api.store import SessionStore
@@ -168,30 +168,91 @@ def test_weather_and_airport_in_one_question(store):
     assert r.plan == say(store, "погода?", r.session_id).plan
 
 
+def tikhvin_fetch(url, params):
+    """Open-Meteo with one place: Тихвин, 184 km from LED; the air is the number of the month."""
+    days = [f"2025-{m:02d}-15" for m in range(1, 13)]
+    if url == catalog.GEOCODE:
+        if params["name"] != "Тихвин":
+            return {}
+        return {"results": [{"id": 7, "name": "Тихвин", "latitude": 59.6451,
+                             "longitude": 33.5163, "timezone": "Europe/Moscow",
+                             "country": "Россия"}]}  # fmt: skip
+    if url == catalog.ARCHIVE:
+        return {"daily": {"time": days, "temperature_2m_max": [float(m) for m in range(12)],
+                          "precipitation_sum": [31.0] * 12}}  # fmt: skip
+    return {"latitude": 0.0, "longitude": 0.0, "daily": {}}
+
+
 def test_trap_6_geocoder_city_airport_and_climate(store, monkeypatch):
     """Тихвин is outside the snapshot: the place of the geocoder (cached after one call)."""
-    days = [f"2025-{m:02d}-15" for m in range(1, 13)]
-
-    def fetch(url, params):
-        if url == catalog.GEOCODE:
-            if params["name"] != "Тихвин":
-                return {}
-            return {"results": [{"id": 7, "name": "Тихвин", "latitude": 59.6451,
-                                 "longitude": 33.5163, "timezone": "Europe/Moscow",
-                                 "country": "Россия"}]}  # fmt: skip
-        if url == catalog.ARCHIVE:
-            return {"daily": {"time": days, "temperature_2m_max": [float(m) for m in range(12)],
-                              "precipitation_sum": [31.0] * 12}}  # fmt: skip
-        return {"latitude": 0.0, "longitude": 0.0, "daily": {}}
-
     r = at(store, "compare")
-    monkeypatch.setattr(catalog, "_get", fetch)
+    monkeypatch.setattr(catalog, "_get", tikhvin_fetch)
     r2 = say(store, "какой ближайший аэропорт у Тихвина и какая там погода?", r.session_id)
     port = resolve_place("Тихвин")["airport"]
     assert port["iata"] == "LED" and 150 < port["km"] < 200
     assert f"Тихвин: своего аэропорта нет, ближайший LED, {port['km']} км." in r2.reply, r2.reply
     assert "Тихвин в декабре: воздух 11 °C" in r2.reply and "не прогноз" in r2.reply
     assert r2.plan == r.plan and r2.stage == "compare"
+
+
+def first_answer(store, text):
+    r = say(store, text)
+    assert r.stage == "compare", r.reply
+    return r
+
+
+def flights(r):
+    return [o.title for o in r.plan.offers if o.kind == "transport" and o.mode == "flight"]
+
+
+def test_trap_6_named_city_first_answer_has_climate_and_airport(store, monkeypatch):
+    """«Тихвин на 8 ночей»: the first answer has the month climate and the airport (#123)."""
+    monkeypatch.setattr(catalog, "_get", tikhvin_fetch)
+    r = first_answer(store, "Тихвин на 8 ночей")
+    port = resolve_place("Тихвин")["airport"]
+    month = r.plan.spec.date_from.month
+    air, _ = catalog.month_climate(resolve_place("Тихвин"), month)
+    line = f"≈ {air:g} °C, 31 мм; ближайший аэропорт LED, {port['km']} км"
+    assert line in r.reply, r.reply
+    assert "оценка по каталогу, не прогноз" in r.reply
+    assert flights(r) and all(" через LED," in t for t in flights(r)), flights(r)
+    assert "Перелёт Москва → Тихвин через LED, " in r.reply
+    assert "Перелёт Тихвин → Москва через LED, " in r.reply
+
+
+def test_trap_4_catalogue_city_first_answer_has_climate_and_airport(store):
+    r = first_answer(store, VYBORG)
+    place = catalog.resolve("Выборг")
+    air, _ = catalog.month_climate(place, 12)
+    rain = place["climate"]["rain"][11]
+    assert f"в декабре ≈ {air:g} °C, {rain:g} мм; ближайший аэропорт LED, 131 км" in r.reply
+    assert "Перелёт Москва → Выборг через LED, " in r.reply
+
+
+def test_city_with_its_own_airport_has_no_via_label(store):
+    """Сочи: AER is 25 km away, the flight is «Москва → Сочи», nothing is added."""
+    r = first_answer(store, SOCHI)
+    rain = catalog.resolve("Сочи")["climate"]["rain"][11]
+    assert f"в декабре ≈ 11.6 °C, {rain:g} мм; ближайший аэропорт AER, 25 км" in r.reply, r.reply
+    assert flights(r) and not any("через" in t for t in flights(r)), flights(r)
+    assert "Перелёт Москва → Сочи, " in r.reply
+
+
+def test_trap_4_no_airport_data_no_line(monkeypatch):
+    """A place without an airport or a climate in the data: no number is made up, no line."""
+    plan = Plan(spec=TripSpec(destinations=["Сочи"], month=12))
+    place = dict(catalog.resolve("Сочи"))
+    monkeypatch.setattr(answers, "resolve_place", lambda name: {**place, "airport": None})
+    assert answers.destination_line(plan) == (
+        f"Климат: в декабре ≈ 11.6 °C, {place['climate']['rain'][11]:g} мм "
+        "(оценка по каталогу, не прогноз)."
+    )
+    monkeypatch.setattr(
+        answers, "resolve_place", lambda name: {**place, "airport": None, "climate": None}
+    )
+    assert answers.destination_line(plan) == ""
+    monkeypatch.setattr(answers, "resolve_place", lambda name: None)
+    assert answers.destination_line(plan) == ""
 
 
 @pytest.mark.parametrize("stage", STAGES)
