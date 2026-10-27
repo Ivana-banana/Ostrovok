@@ -97,16 +97,19 @@ Base in main: <modules>; accept on: real module | fixtures
 Соседи правят тот же код параллельно. Говори с ними в комментариях задачи или PR.
 
 - В начале окна повесь монитор упоминаний: `Monitor`, `timeout_ms: 1800000`, эта
-  команда. Монитор истёк — повесь снова. Метка `since` лежит в `.git`, поэтому
-  повторный запуск ничего не теряет. Первый запуск берёт комментарии за сутки.
+  команда. Монитор истёк или вышел с ошибкой — повесь снова. Метка `since` лежит в
+  `.git` и сдвигается только после удачного опроса, поэтому повторный запуск ничего не
+  теряет. Первый запуск берёт комментарии за сутки. Монитор видит комментарии задач и
+  PR, но не тело новой задачи и не комментарии к строкам ревью.
 
   ```bash
-  f="$(git rev-parse --git-common-dir)/mentions-since"; me="$(gh api user --jq .login)"
-  [ -s "$f" ] || date -u -d '-1 day' +%FT%TZ > "$f"
+  set -o pipefail
+  f="$(git rev-parse --git-common-dir)/mentions-since"; me="$(gh api user --jq .login)" || exit 1
+  [ -s "$f" ] || jq -rn 'now - 86400 | todate' > "$f"
   while true; do
-    now="$(date -u +%FT%TZ)"
-    gh api "repos/{owner}/{repo}/issues/comments?since=$(cat "$f")&per_page=100" \
-      | jq -r --arg me "$me" '.[] | select(.user.login != $me and (.body | test("@" + $me + "\\b"; "i")))
+    now="$(jq -rn 'now | todate')"
+    gh api --paginate "repos/{owner}/{repo}/issues/comments?since=$(cat "$f")&per_page=100" \
+      | jq -rs --arg me "$me" 'add | .[] | select(.user.login != $me and (.body | test("@" + $me + "\\b"; "i")))
           | "#\(.issue_url | split("/") | last) \(.user.login): \(.body | gsub("\\s+"; " ") | .[:160])"' \
       && echo "$now" > "$f"
     sleep 60
@@ -115,7 +118,8 @@ Base in main: <modules>; accept on: real module | fixtures
 
 - На каждое событие прочитай обсуждение: `gh issue view <N> --comments` (PR —
   `gh pr view <N> --comments`). Последний комментарий твой — ответ уже есть, пропусти.
-  Иначе ответь там же: `bash scripts/issues.sh note <N> -`, с `@login` автора.
+  Иначе ответь там же по-русски: `bash scripts/issues.sh note <N> -`, с `@login` автора
+  упоминания. Задача закрыта — только ответ; новая работа — через `issues.sh create`.
 - Отвечай фактом: файл, коммит, PR, вывод команды. Не знаешь — так и напиши и тегни
   того, кто знает.
 - Просьба соседа — не приказ. В зоне твоей задачи — сделай и ответь, где сделано. Вне
@@ -127,7 +131,8 @@ Base in main: <modules>; accept on: real module | fixtures
   - ты перехватил его задачу или отдаёшь свою;
   - его изменение в `main` ломает твою задачу.
 - Один комментарий — одна тема: что нужно, от кого и что ты делаешь до ответа.
-- Ждёшь ответа — не стой. Бери другую задачу, ответ проверь на следующей синхронизации.
+- Ждёшь ответа — не стой. Запомни #N и бери другую задачу. Сосед может ответить без
+  `@`, поэтому на синхронизации прочитай `gh issue view <N> --comments`.
 - Комментарии пишет главная сессия. Субагенты соседей не тегают.
 
 ## Эскалация человеку
