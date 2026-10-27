@@ -1,19 +1,9 @@
-import type { Cart, ChatReply, Meal, Mode, Priority, Stage } from "./contracts";
+import type { Cart, ChatReply, Meal, Mode, Priority, TripSpec } from "./contracts";
 
 // One reply line for the user; the no-model mode is labelled honestly (TRAP-1).
 export function describe(r: ChatReply): string {
   return r.llm ? r.reply : `${r.reply} — упрощённый режим без ИИ`;
 }
-
-export const STAGES: { id: Stage; label: string }[] = [
-  { id: "clarify", label: "Уточнение" },
-  { id: "inspire", label: "Направления" },
-  { id: "select", label: "Выбор" },
-  { id: "compare", label: "Сравнение" },
-  { id: "assemble", label: "План" },
-  { id: "checkout", label: "Корзина" },
-  { id: "booked", label: "Бронь" },
-];
 
 export const MEALS: Record<Meal, string> = {
   RO: "без питания",
@@ -49,6 +39,23 @@ export function ordinal(i: number): string | null {
 
 export function rub(n: number): string {
   return `${String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} ₽`;
+}
+
+// «1 год», «2 года», «5 лет», «11 лет», «21 год»; age 0 (the backend turns months into 0): «до 1 года».
+export function yearsText(n: number): string {
+  if (n === 0) return "до 1 года";
+  const m100 = n % 100;
+  const m10 = n % 10;
+  const word = m100 > 10 && m100 < 15 ? "лет" : m10 === 1 ? "год" : m10 > 1 && m10 < 5 ? "года" : "лет";
+  return `${n} ${word}`;
+}
+
+// «Гости» of the cart and the voucher: «2 взр., дети: 1 год, 5 лет, с питомцем».
+export function guestsText(spec: Pick<TripSpec, "adults" | "children_ages" | "pets">): string {
+  const parts = [`${spec.adults} взр.`];
+  if (spec.children_ages.length) parts.push(`дети: ${spec.children_ages.map(yearsText).join(", ")}`);
+  if (spec.pets) parts.push("с питомцем");
+  return parts.join(", ");
 }
 
 // Chat line after a cart edit: the real count and total (TRAP-7: the sums are mock).

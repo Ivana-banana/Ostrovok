@@ -995,13 +995,14 @@ def read_airports(csv_path: Path, dat_path: Path, towns: list[tuple]) -> list[li
 
 
 def candidates(r: dict, airports: list[list]) -> list[tuple[float, list]]:
-    """(straight km, airport) to compare by road, nearest first: the home ones if one is within
-    AIRPORT_KM (Выборг is LED, not LPP), else all; within ROAD_SPAN of the nearest."""
+    """(straight km, airport) to compare by road, nearest first: the home ones if the country has any
+    (Выборг is LED, not LPP; Брянск is not GME), else all; within ROAD_SPAN of the nearest."""
     by_km = sorted(
         ((km((r["lat"], r["lon"]), (a[1], a[2])), a) for a in airports), key=lambda x: x[0]
     )
     home = [x for x in by_km if x[1][4] == r["cc"]]
-    pool = home if home and home[0][0] <= AIRPORT_KM else by_km
+    # a foreign airport only when the country has none (#409: Брянск is not GME in Belarus)
+    pool = home or by_km
     return [x for x in pool if x[0] <= ROAD_SPAN * pool[0][0] + ROAD_PLUS_KM]
 
 

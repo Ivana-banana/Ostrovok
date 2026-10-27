@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from api.cart import CartRefusal, edit_cart
 from api.contracts import Cart, ChatReply, ChatRequest, ExtraOffer
 from api.main import app, get_store
-from api.model import chat
+from api.model import GUEST_DATA_RE, chat
 from api.store import SessionStore
 
 KAZAN = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."
@@ -234,6 +234,66 @@ def test_checkout_issues_voucher_and_session_keeps_it(client, at_checkout):
     # A second click returns the same booking, not a new one.
     again = client.post("/api/checkout", json=body)
     assert again.status_code == 200 and again.json()["booking_id"] == v["booking_id"]
+
+
+def test_checkout_puts_the_guest_into_the_voucher(client, at_checkout):
+    r = at_checkout
+    guest = {"name": "Иван Петров", "contact": "ivan@example.com"}
+    body = {"session_id": r.session_id, "confirm_total_rub": r.cart.total_rub, "guest": guest}
+    assert client.post("/api/checkout", json=body).json()["guest"] == guest
+    reloaded = client.get(f"/api/session/{r.session_id}").json()
+    assert reloaded["voucher"]["guest"] == guest
+
+
+def test_checkout_without_guest_leaves_it_empty(client, at_checkout):
+    r = at_checkout
+    body = {"session_id": r.session_id, "confirm_total_rub": r.cart.total_rub}
+    assert client.post("/api/checkout", json=body).json()["guest"] is None
+
+
+def test_c23_checkout_hint_directs_to_the_button(at_checkout):
+    assert "нажмите «Подтвердить бронь»" in at_checkout.reply
+    assert "без имени" in at_checkout.reply and "не обязательны" in at_checkout.reply
+
+
+def test_c23_guest_data_after_booking_gets_a_factual_reply(store, at_checkout):
+    booked = say(store, "подтверждаю", at_checkout.session_id)
+    r = say(store, "Иван Петров, +70001234567, ivan@example.com", booked.session_id)
+    assert booked.voucher.booking_id in r.reply and "уже оформлена" in r.reply
+    assert "Контакт из сообщения в неё не добавлен." in r.reply and "имитирована" in r.reply
+    assert r.voucher == booked.voucher
+    assert "не добавлен" not in say(store, "спасибо", booked.session_id).reply
+
+
+def test_c23_reply_after_booking_with_a_guest_keeps_the_guest(client, store, at_checkout):
+    r = at_checkout
+    guest = {"name": "Иван Петров", "contact": ""}
+    body = {"session_id": r.session_id, "confirm_total_rub": r.cart.total_rub, "guest": guest}
+    client.post("/api/checkout", json=body)
+    out = say(store, "мой e-mail ivan@example.com", r.session_id)
+    assert "Контакт из сообщения в неё не добавлен." in out.reply
+    assert out.voucher.guest.name == "Иван Петров" and out.voucher.guest.contact == ""
+
+
+@pytest.mark.parametrize(
+    "text", ["бюджет 150 000", "перенеси на 2026-11-20", "12 000 руб за ночь", "рейс 8 утра"]
+)
+def test_c23_ordinary_messages_after_booking_are_not_guest_data(text):
+    assert not GUEST_DATA_RE.search(text)
+
+
+@pytest.mark.parametrize("text", ["+7 (000) 123-45-67", "89001234567", "ivan@example.com"])
+def test_c23_contacts_are_guest_data(text):
+    assert GUEST_DATA_RE.search(text)
+
+
+def test_repeated_checkout_returns_the_first_guest(client, at_checkout):
+    r = at_checkout
+    body = {"session_id": r.session_id, "confirm_total_rub": r.cart.total_rub}
+    first = {"name": "Иван Петров", "contact": ""}
+    client.post("/api/checkout", json={**body, "guest": first})
+    again = client.post("/api/checkout", json={**body, "guest": {"name": "Другой", "contact": ""}})
+    assert again.json()["guest"] == first
 
 
 def test_trap_7_voucher_prices_are_synthetic(client, at_checkout):

@@ -26,6 +26,9 @@ const sample: ChatReply = {
       "refundable": true,
       "modes": ["train"],
       "max_travel_hours": null,
+      "own_transport": false,
+      "arrive_at": null,
+      "leave_at": null,
       "wishes": ["центр"],
       "priorities": ["price", "cancellation"],
       "assumptions": ["выезд из Москвы"]
@@ -169,6 +172,9 @@ const sample: ChatReply = {
       "refundable": null,
       "modes": [],
       "max_travel_hours": 5.0,
+      "own_transport": false,
+      "arrive_at": null,
+      "leave_at": null,
       "wishes": [],
       "priorities": [],
       "assumptions": []
@@ -176,7 +182,8 @@ const sample: ChatReply = {
     "total_rub": 2500,
     "created_at": "2026-12-01T10:00:00+03:00",
     "status": "confirmed",
-    "simulated": true
+    "simulated": true,
+    "guest": { "name": "Анна Иванова", "contact": "+7 900 000-00-00" }
   },
   "llm": true
 };

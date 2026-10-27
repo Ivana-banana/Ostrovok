@@ -899,3 +899,36 @@ def test_pets_negation_clears_a_flag_set_earlier(tmp_path):  # #294
 def test_pets_unrelated_text_does_not_touch_the_flag():  # #294
     found, _ = extract("Казань на выходные, без детей")
     assert "pets" not in found
+
+
+# #362: «в конце января» is the end of the month, not its first days.
+@pytest.mark.parametrize(
+    ("text", "low", "high"),
+    [("Стамбул в конце января, двое", 20, 31), ("Стамбул, конец января", 20, 31),
+     ("Стамбул под конец января", 20, 31), ("Стамбул ближе к концу января", 20, 31),
+     ("Стамбул в последних числах января", 20, 31),
+     ("Стамбул в начале марта", 1, 10), ("Стамбул, начало марта", 1, 10),
+     ("Стамбул в первых числах марта", 1, 10),
+     ("Стамбул в середине мая", 10, 20)],
+)  # fmt: skip
+def test_month_part_sets_the_check_in_day(tuesday, text, low, high):
+    found, notes = extract(text)
+    assert low <= found["date_from"].day <= high, found
+    assert found["month"] == found["date_from"].month
+    assert any(n.startswith("даты: с ") and "допущение" in n for n in notes), notes
+
+
+def test_month_part_keeps_the_trip_length_past_the_month_end(tuesday):
+    found, _ = extract("Стамбул в конце января на 10 ночей")
+    assert found["date_from"] == date(2027, 1, 25)
+    assert found["nights"] == 10
+
+
+def test_month_part_in_the_current_month_is_not_a_year_ahead(tuesday):
+    found, _ = extract("Казань в конце октября")
+    assert found["date_from"] == date(2026, 10, 28)  # today is 27.10: the end is still ahead
+
+
+def test_month_without_a_part_has_no_day(tuesday):
+    found, _ = extract("Стамбул в январе")
+    assert "date_from" not in found

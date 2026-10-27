@@ -9,7 +9,8 @@ Invalid values (31 ноября, 0 ночей) are skipped with a note, never an
 
 import functools
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from api import catalog
 from api.fixtures import CATALOG, future_date
@@ -340,7 +341,7 @@ NOT_MONEY_RE = re.compile(
 )
 # After the sum: «на каждого», «на человека» (not «на каждого ребёнка»); «в сутки», «за ночь».
 PER_PERSON = (
-    r"(?:(?:на|с|за|для)\s+(?:кажд\w+\b(?!\s+(?:ребен|дет))|челов\w*|чел\b|персон\w+|душу"
+    r"(?:(?:на|с|за|для)\s+(?:1\s+)?(?:кажд\w+\b(?!\s+(?:ребен|дет))|челов\w*|чел\b|персон\w+|душу"
     r"|взросл\w+|одного|нос\b|голов\w+)|кажд\w+\b(?!\s+(?:ребен|дет)))"
 )
 PER_NIGHT = (
@@ -1199,6 +1200,34 @@ def llm_past_dates(llm_found: dict, today: date | None = None) -> str | None:
     return f"даты: от модели {start:%d.%m.%Y} {PAST_GONE_MARK} — не применены"
 
 
+# #362: «в конце января» is the end of the month. The day is inside the named part (check-in may
+# run past the month end): start 5th, middle 15th, end 25th.
+MONTH_PART = re.compile(
+    rf"\b(?:(?:ближе\s+к|под)\s+)?(конец|конц\w*|начал\w*|середин\w*|перв\w+\s+числ\w*"
+    rf"|последн\w+\s+числ\w*)\s+{MONTH}"
+)
+MONTH_PART_DAY = (("нач", 5, 10), ("перв", 5, 10), ("сер", 15, 20))  # (stem, day, last day)
+
+
+def _month_part(t: str, today: date) -> tuple[date, str] | None:
+    """Check-in date and the said words for «в конце января»; None if no part is named."""
+    if re.search(r"\bвыходн|\bуик[-\s]?[эе]нд", t) or not (m := MONTH_PART.search(t)):
+        return None
+    month = _month(m.group(2))
+    day, last = next(((d, e) for s, d, e in MONTH_PART_DAY if m.group(1).startswith(s)), (25, 31))
+    start = future_date(month, day, today)
+    if month == today.month and start.year > today.year and today.day < last:
+        start = today + timedelta(days=1)  # the part is under way: tomorrow is still inside it
+    return start, m.group(0)
+
+
+# The day of the return after the start: «улетаем 18-го», «обратно 3 декабря»; not «в 18:30».
+BACK_DAY_RE = re.compile(
+    rf"\b(?:улета\w*|уезжа\w*|возвраща\w*|обратно)\s+(\d{{1,2}})(?![\d:.]|\s*(?:ноч|дн|сут|недел|час|чел))(?:-?(?:го|е)\b)?"
+    rf"(?:\s+{MONTH})?"
+)
+
+
 def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
     """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day.
 
@@ -1223,6 +1252,12 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         m2 = m1
     elif m := re.search(rf"\b{d}\s+{MONTH}", t):
         (d1, m1), d2, m2 = m.groups(), None, None
+        # C5 (#363): «прилетаем 14 ноября, улетаем 18-го» — the return day ends the stay.
+        # A day alone at or before the start is in the next month: «с 28 ноября, улетаем 3-го».
+        if back := BACK_DAY_RE.search(t, m.end()):
+            d2, m2 = back.group(1), back.group(2) or m1
+            if not back.group(2) and int(d2) <= int(d1):
+                m2 = MONTH_NAMES[_month(m1) % 12]
     else:
         today = date.today()
         if m := re.search(r"\b(сегодня|завтра|послезавтра)\b", t):
@@ -1252,6 +1287,9 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         elif re.search(r"\bследующ\w*\s+недел", t):
             found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
             notes.append(f"даты: с понедельника {found['date_from']:%d.%m} («на следующей неделе»)")
+        elif part := _month_part(t, today):
+            found["date_from"], said = part
+            notes.append(f"даты: с {part[0]:%d.%m} («{said}», допущение: день внутри части месяца)")
         if "date_from" in found:
             found["month"] = found["date_from"].month
         return
@@ -1398,6 +1436,33 @@ def _holiday_end(said: str, found: dict, notes: list[str]) -> None:
     )
 
 
+# C5 (#408): «билеты у нас уже куплены», «свои билеты», «уже купили билеты».
+OWN_TICKETS_RE = re.compile(
+    r"\bбилет\w*\s+(?:у\s+(?:нас|меня)\s+)?(?:уже\s+)?(?:есть|куплен\w*|взят\w*)"
+    r"|\bсво\w+\s+билет\w*|\bуже\s+(?:купил\w*|взял\w*)\s+билет\w*"
+)
+# The clock time of the own arrival and departure in one clause: «прилетаем 14 ноября в 01:30».
+CLOCK = r"[^.,;!?]*?\bв\s+(\d{1,2})[:.](\d{2})\b"
+ARRIVE_RE = re.compile(rf"\b(?:прилет|приезж|прибыв|приезд|прибыт)\w*{CLOCK}")
+LEAVE_RE = re.compile(rf"\b(?:улет|уезжа|отъезд|обратн)\w*{CLOCK}")
+
+
+def _own_tickets(t: str, found: dict) -> None:
+    """Own tickets and their times at the destination of this message (offers.own_legs)."""
+    if not OWN_TICKETS_RE.search(t):
+        return
+    found["own_transport"] = True
+    place = resolve_place(found["destinations"][0]) if found.get("destinations") else None
+    if place is None:
+        return  # no zone for the clock time
+    tz = ZoneInfo(place["tz"])
+    for key, day, rx in (("arrive_at", "date_from", ARRIVE_RE), ("leave_at", "date_to", LEAVE_RE)):
+        m = rx.search(t)
+        if m and found.get(day) and int(m.group(1)) < 24 and int(m.group(2)) < 60:
+            at = time(int(m.group(1)), int(m.group(2)))
+            found[key] = datetime.combine(found[day], at, tz)
+
+
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на месяц» (30), «на выходные» (пятница–воскресенье).
 
@@ -1411,7 +1476,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(r"\bна\s+(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
         found["nights"] = MAX_NIGHTS + 1  # too long, the 3 digits are no number the rules read
-    elif m := re.search(rf"\b{NUM}\s*ноч\w*", t):
+    elif m := re.search(rf"(?<![:.])\b{NUM}\s*ноч\w*", t):  # «в 01:30 ночи» is a time (C5)
         n = _num(m.group(1))
         if n >= 1:
             found["nights"] = n
@@ -1592,13 +1657,28 @@ def _people_count(t: str, kids: int) -> tuple[int, str] | None:
     return None
 
 
-def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None:
+# #369: «по 50 тысяч на 1 человека», «сколько на человека?»: the price per head, no party.
+PER_PERSON_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
+PRICE_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж\w*\s+цен")
+MONEY_PER_PERSON_RE = re.compile(
+    r"((?:тыс\w*|руб\w*|₽|\d\s*к|\bр)\.?)\s+на\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b"
+)
+
+
+def _people(
+    t: str, found: dict, notes: list[str], asking: bool = False, built: bool = False
+) -> None:
     """Adults, children with ages; «нас четверо» counts children out.
+
+    built: the plan exists; «на 1 человека» near a price word is then a unit, not a party (#369).
 
     asking: the message is a question at a built plan; a child without a number or an age in
     it adds nobody (#179)."""
     ages: list[int] = []
     no_kids = False
+    if built and (PRICE_CUE_RE.search(t) or asking):  # only at a built plan
+        t = PER_PERSON_RE.sub(" ", t)  # #369: «на 1 человека» is a unit of price, not a party
+    t = MONEY_PER_PERSON_RE.sub(r"\1", t)
     for m in CHILD_RE.finditer(t):
         if ADULT_KIN_RE.match(t, m.end()):
             continue  # «сын с женой»: a grown-up son is no child (#275)
@@ -1673,7 +1753,9 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     elif (m := FRIENDS_RE.search(t)) and _num(m.group(1)) >= 1:
         found["adults"], note = _friends(t, m)
         notes.append(note)
-    elif not ages and (m := GROUP_RE.search(t)):  # «на двоих с ребёнком»: the child may count
+    elif (
+        not ages and not asking and (m := GROUP_RE.search(t))
+    ):  # a question changes no party  # «на двоих с ребёнком»: the child may count
         total = GROUP[m.group(1)] if m.group(1) else _num(m.group(2))
         found["adults"] = max(total - len(ages), 1)
     elif SOLO_OTHER.search(t) or any(
@@ -1911,7 +1993,8 @@ def extract(
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     if holiday:
         _holiday_end(holiday, found, notes)
-    _people(t, found, notes, asking)
+    _own_tickets(t, found)
+    _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
     if (pets := _pets(t)) is not None:
         found["pets"] = pets

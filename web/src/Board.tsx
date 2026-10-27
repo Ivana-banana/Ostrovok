@@ -1,9 +1,11 @@
-import type { ReactNode } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
+import { motionOk } from "./brand";
 import type {
   Bundle,
   Cart,
   ChatReply,
   Destination,
+  Guest,
   HotelOffer,
   Offer,
   Plan,
@@ -16,11 +18,11 @@ import type {
 import {
   MEALS,
   MODES,
-  STAGES,
   changeValue,
   clock,
   duration,
   fieldLabel,
+  guestsText,
   hours,
   localDate,
   localTime,
@@ -39,7 +41,7 @@ export type BoardProps = {
   removed: Offer[]; // items removed from the cart in this session, to put back
   onSend: (text: string) => void;
   onCart: (action: "add" | "remove", offerId: string) => void;
-  onCheckout: () => void;
+  onCheckout: (guest: Guest | null) => void;
 };
 
 // Every price carries the "синтетика" label when the data is mock (TRAP-7).
@@ -85,30 +87,6 @@ const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
 
-function StageBar({ stage }: { stage: Stage }) {
-  const at = STAGES.findIndex((s) => s.id === stage);
-  return (
-    <ol className="stages" aria-label="Этапы поездки">
-      {STAGES.map((s, i) => (
-        <li
-          key={s.id}
-          className={i === at ? "now" : i < at ? "done" : undefined}
-          aria-current={i === at ? "step" : undefined}
-        >
-          {s.label}
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function guests(spec: TripSpec): string {
-  const kids = spec.children_ages.length
-    ? `, дети: ${spec.children_ages.map((a) => `${a} лет`).join(", ")}`
-    : "";
-  return `${spec.adults} взр.${kids}`;
-}
-
 // Origin, dates, guests and budget are the chips of ParamsBar; the rows keep the rest.
 function SpecSummary({ spec, locked, onSend }: {
   spec: TripSpec;
@@ -119,12 +97,19 @@ function SpecSummary({ spec, locked, onSend }: {
   if (spec.destinations.length) rows.push(["Куда", spec.destinations.join(", ")]);
   if (spec.nights) rows.push(["Ночей", String(spec.nights)]);
   if (spec.pets) rows.push(["Питомец", "да"]);
+  if (spec.own_transport) {
+    const times = [
+      spec.arrive_at && `прилёт ${localTime(spec.arrive_at)}`,
+      spec.leave_at && `вылет ${localTime(spec.leave_at)}`,
+    ].filter(Boolean);
+    rows.push(["Билеты", ["свои", ...times].join(", ")]);
+  }
   if (spec.hotel_budget_rub !== null) rows.push(["Бюджет отеля", rub(spec.hotel_budget_rub)]);
   if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
   if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);
   return (
-    <section className="card" aria-label="Параметры поездки">
-      <h2>Поездка</h2>
+    <section className="sec" aria-label="Параметры поездки">
+      <h2>Параметры</h2>
       <ParamsBar spec={spec} disabled={locked} onSend={onSend} />
       <dl className="spec">
         {rows.map(([k, v]) => (
@@ -160,7 +145,7 @@ function PriorityChips({ order, stage, busy, onSend }: {
   const absent = (Object.keys(PRIORITIES) as Priority[]).filter((p) => !order.includes(p));
   if (!order.length && !editable) return null;
   return (
-    <section className="card" aria-label="Приоритеты">
+    <section className="sec" aria-label="Приоритеты">
       <h2>Что для вас важнее</h2>
       {order.length > 0 ? (
         <ol className="chips">
@@ -221,18 +206,34 @@ function PriorityChips({ order, stage, busy, onSend }: {
   );
 }
 
-function Destinations({ plan, stage, busy, onSend }: {
+// Before a destination is picked the cards live in the chat, after it — on the plan panel.
+export const destinationsInChat = (stage: Stage) => stage === "inspire" || stage === "select";
+
+// Tags of a card: only facts of the reply (the cheapest, the fastest, over the user budget).
+function destTags(d: Destination, all: Destination[], budget: number | null) {
+  const tags: { text: string; kind?: "best" | "warn" }[] = [];
+  if (all.length > 1) {
+    if (d.est_total_rub === Math.min(...all.map((x) => x.est_total_rub))) tags.push({ text: "лучшая цена", kind: "best" });
+    if (d.travel_hours === Math.min(...all.map((x) => x.travel_hours))) tags.push({ text: "быстрее всех" });
+  }
+  if (budget !== null && d.est_total_rub > budget) tags.push({ text: "дороже бюджета", kind: "warn" });
+  if (d.violates.length) tags.push({ text: "нарушает требования", kind: "warn" });
+  return tags;
+}
+
+export function Destinations({ plan, stage, busy, onSend }: {
   plan: Plan;
   stage: Stage;
   busy: boolean;
   onSend: (t: string) => void;
 }) {
   return (
-    <section aria-label="Направления">
+    <section className="dests" aria-label="Направления">
       <h2>Направления</h2>
       <div className="cards">
         {plan.destinations.map((d: Destination, i) => {
           const word = ordinal(i);
+          const tags = destTags(d, plan.destinations, plan.spec.budget_rub);
           // #321: a car with nights on the road: the hours at the wheel (api/inspire.py ROAD_LINE)
           const road = d.tradeoffs.find((t) => t.startsWith(ROAD_LINE));
           const minuses = d.tradeoffs.filter((t) => t !== road);
@@ -262,6 +263,15 @@ function Destinations({ plan, stage, busy, onSend }: {
                 <p className="bad">Нарушает требования: {d.violates.join("; ")}</p>
               )}
               {d.risks.length > 0 && <p className="warn">Риски: {d.risks.join("; ")}</p>}
+              {tags.length > 0 && (
+                <p className="tags">
+                  {tags.map((t) => (
+                    <span key={t.text} className={`tag${t.kind ? ` ${t.kind}` : ""}`}>
+                      {t.text}
+                    </span>
+                  ))}
+                </p>
+              )}
               {stage === "inspire" && word && (
                 <button
                   type="button"
@@ -304,22 +314,24 @@ function Hotels({ plan, stage, busy, onSend }: {
   const hotels = hotelRows(plan);
   if (!hotels.length) return null;
   return (
-    <section aria-label="Сравнение отелей">
-      <h2>Сравнение отелей</h2>
+    <section className="sec" aria-label="Сравнение отелей">
+      <h2>Отели</h2>
       <div className="scroll">
-        <table>
+        <table className="grid-table">
           <thead>
             <tr>
               <th>Отель</th>
-              <th>Цена за всё</th>
-              <th>Звёзды</th>
-              <th>Рейтинг</th>
+              <th className="num">Цена за всё</th>
+              <th className="num">Звёзды</th>
+              <th className="num">Рейтинг</th>
               <th>Питание</th>
               <th>Отмена</th>
-              <th>До центра</th>
+              <th className="num">До центра</th>
               <th>Заезд / выезд</th>
               <th>Питомцы</th>
-              <th />
+              <th className="act">
+                <span className="sr-only">Действие</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -328,15 +340,15 @@ function Hotels({ plan, stage, busy, onSend }: {
               const word = ordinal(i);
               return (
                 <tr key={h.offer_id} className={chosen ? "chosen" : undefined}>
-                  <td>
+                  <td className="name">
                     {h.title}
                     {chosen && <span className="tag">выбран</span>}
                   </td>
-                  <td>
+                  <td className="num cost">
                     <Price value={h.price_rub} synthetic={h.synthetic} />
                   </td>
-                  <td>{h.stars !== null ? `${h.stars}★` : "—"}</td>
-                  <td>{h.rating ?? "—"}</td>
+                  <td className="num">{h.stars !== null ? `${h.stars}★` : "—"}</td>
+                  <td className="num" data-label="Рейтинг">{h.rating ?? "—"}</td>
                   <td>{MEALS[h.meal]}</td>
                   <td>
                     {h.cancellation.refundable
@@ -345,12 +357,14 @@ function Hotels({ plan, stage, busy, onSend }: {
                         : "бесплатная"
                       : "невозвратный"}
                   </td>
-                  <td>{h.distance_center_km !== null ? `${h.distance_center_km} км` : "—"}</td>
-                  <td>
+                  <td className="num" data-label="До центра">
+                    {h.distance_center_km !== null ? `${h.distance_center_km} км` : "—"}
+                  </td>
+                  <td data-label="Заезд / выезд">
                     {clock(h.check_in)} / {clock(h.check_out)}
                   </td>
-                  <td>{h.pets_allowed ? "можно" : "нет отметки"}</td>
-                  <td>
+                  <td data-label="Питомцы">{h.pets_allowed ? "можно" : "нет отметки"}</td>
+                  <td className="act">
                     {stage === "compare" && word && !chosen && (
                       <button
                         type="button"
@@ -382,21 +396,23 @@ function Transport({ plan, stage, busy, onSend }: {
   const legs = plan.offers.filter((o): o is TransportOffer => o.kind === "transport");
   if (!legs.length) return null;
   return (
-    <section aria-label="Сравнение транспорта">
-      <h2>Сравнение транспорта</h2>
+    <section className="sec" aria-label="Сравнение транспорта">
+      <h2>{legs.every((t) => t.mode === "flight") ? "Перелёт" : "Транспорт"}</h2>
       <div className="scroll">
-        <table>
+        <table className="grid-table">
           <thead>
             <tr>
-              <th>№</th>
+              <th className="num">№</th>
               <th>Рейс</th>
               <th>Тип</th>
               <th>Отправление</th>
               <th>Прибытие</th>
-              <th>В пути</th>
-              <th>Пересадки</th>
-              <th>Цена</th>
-              <th />
+              <th className="num">В пути</th>
+              <th className="num">Пересадки</th>
+              <th className="num">Цена</th>
+              <th className="act">
+                <span className="sr-only">Действие</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -404,24 +420,24 @@ function Transport({ plan, stage, busy, onSend }: {
               const chosen = plan.selected.includes(t.offer_id);
               return (
                 <tr key={t.offer_id} className={chosen ? "chosen" : undefined}>
-                  <td>{i + 1}</td>
-                  <td>
+                  <td className="num no">{i + 1}</td>
+                  <td className="name">
                     {t.title}
                     {chosen && <span className="tag">выбран</span>}
                   </td>
                   <td>{MODES[t.mode]}</td>
-                  <td>
-                    {localTime(t.depart_at)} <small>{t.origin}</small>
+                  <td data-label="Отправление">
+                    <span className="when">{localTime(t.depart_at)}</span> <small>{t.origin}</small>
                   </td>
-                  <td>
-                    {localTime(t.arrive_at)} <small>{t.destination}</small>
+                  <td data-label="Прибытие">
+                    <span className="when">{localTime(t.arrive_at)}</span> <small>{t.destination}</small>
                   </td>
-                  <td>{duration(t.depart_at, t.arrive_at)}</td>
-                  <td>{t.changes || "нет"}</td>
-                  <td>
+                  <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
+                  <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
+                  <td className="num cost">
                     <Price value={t.price_rub} synthetic={t.synthetic} />
                   </td>
-                  <td>
+                  <td className="act">
                     {(stage === "compare" || stage === "assemble") && !chosen && (
                       <button
                         type="button"
@@ -454,7 +470,7 @@ function Bundles({ plan }: { plan: Plan }) {
     ? "Варианты поездки целиком"
     : "Варианты проживания: дороги в плане нет";
   return (
-    <section aria-label={heading}>
+    <section className="sec" aria-label={heading}>
       <h2>{heading}</h2>
       <div className="cards">
         {plan.bundles.map((b) => (
@@ -485,9 +501,9 @@ function Explanations({ plan }: { plan: Plan }) {
   const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? id;
   const synth = isSynthetic(plan.offers);
   return (
-    <section className="card" aria-label="Почему этот выбор">
-      <h2>Почему этот выбор</h2>
-      <ul className="plain">
+    <section className="sec" aria-label="Почему этот выбор">
+      <h2>Почему так</h2>
+      <ul className="why">
         {plan.explanations.map((e) => (
           <li key={e.offer_id}>
             <b>{title(e.offer_id)}</b>: <Money text={e.why} synthetic={synth} />
@@ -512,7 +528,7 @@ function Changes({ plan }: { plan: Plan }) {
   if (!plan.changes.length) return null;
   const synth = isSynthetic(plan.offers);
   return (
-    <section className="card" aria-label="Что изменилось">
+    <section className="sec" aria-label="Что изменилось">
       <h2>Что изменилось</h2>
       <ul className="plain">
         {plan.changes.map((c) => (
@@ -552,12 +568,12 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
     return marked && o?.kind === "extra" && o.for_offer_id !== null && gone(o.for_offer_id);
   };
   return (
-    <section className="card" aria-label="Таймлайн">
-      <h2>Таймлайн</h2>
+    <section className="sec" aria-label="Таймлайн">
+      <h2>Стыковки</h2>
       <p className="muted">Время местное для места события.</p>
       <ol className="timeline">
         {plan.timeline.map((e, i) => (
-          <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined}>
+          <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined} style={{ "--i": i } as CSSProperties}>
             <time>{localTime(e.at)}</time> <span className="gone-title">
               <Money text={e.title} synthetic={isSynthetic(plan.offers)} />
             </span>
@@ -601,6 +617,30 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
   );
 }
 
+// The total counts up to a new value (no motion: shows it at once).
+function useCountUp(value: number): number {
+  const [shown, setShown] = useState(value);
+  const from = useRef(value);
+  useEffect(() => {
+    const start = from.current;
+    from.current = value;
+    if (!motionOk() || start === value) {
+      setShown(value);
+      return;
+    }
+    let raf = 0;
+    const t0 = performance.now();
+    const tick = (t: number) => {
+      const k = Math.min(1, (t - t0) / 600);
+      setShown(start + (value - start) * (1 - (1 - k) ** 3));
+      if (k < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return shown;
+}
+
 function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   cart: Cart;
   spec: TripSpec;
@@ -608,9 +648,13 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   removed: Offer[];
   busy: boolean;
   onCart: BoardProps["onCart"];
-  onCheckout: () => void;
+  onCheckout: BoardProps["onCheckout"];
 }) {
+  const [guestName, setGuestName] = useState("");
+  const [guestContact, setGuestContact] = useState("");
   const editable = stage === "checkout";
+  const needName = guestContact.trim() !== "" && guestName.trim() === "";
+  const shownTotal = useCountUp(cart.total_rub);
   const back = removed.filter((r) => !cart.items.some((o) => o.offer_id === r.offer_id));
   if (!cart.items.length && !back.length) return null;
   const over = spec.budget_rub !== null && cart.total_rub > spec.budget_rub;
@@ -621,8 +665,9 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
       : 0;
   const synthetic = isSynthetic(cart.items);
   return (
-    <section className="card" aria-label="Корзина">
+    <section className="sec" aria-label="Корзина">
       <h2>Корзина</h2>
+      <p className="muted">Гости: {guestsText(spec)}</p>
       <ul className="plain">
         {cart.items.map((o) => (
           <li key={o.offer_id} className="row">
@@ -659,8 +704,12 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
         </ul>
       )}
       <p className="total" data-testid="cart-total">
-        Итого: <Price value={cart.total_rub} synthetic={synthetic} />
+        <span>Итого: </span>
+        <b>
+          <Price value={shownTotal} synthetic={synthetic} />
+        </b>
       </p>
+      {synthetic && <span className="sub">все цены — синтетика · оплата имитируется</span>}
       {over && (
         <p className="warn" role="note">
           Итог больше бюджета {rub(spec.budget_rub!)} на{" "}
@@ -674,7 +723,49 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
         </p>
       )}
       {editable && cart.items.length > 0 && (
-        <button type="button" className="primary" disabled={busy} onClick={onCheckout}>
+        <div className="guest-form">
+          <label>
+            Имя гостя (необязательно)
+            <input
+              type="text"
+              maxLength={100}
+              autoComplete="name"
+              aria-describedby="guest-note"
+              value={guestName}
+              onChange={(e) => setGuestName(e.target.value)}
+            />
+          </label>
+          <label>
+            Контакт: телефон или e-mail (необязательно)
+            <input
+              type="text"
+              maxLength={100}
+              autoComplete="off"
+              aria-describedby="guest-note"
+              value={guestContact}
+              onChange={(e) => setGuestContact(e.target.value)}
+            />
+          </label>
+          <span className="sub" id="guest-note">
+            имитация: данные попадут только в ваучер, в систему бронирования не уходят
+          </span>
+          {needName && (
+            <span className="warn" role="note">
+              Укажите имя
+            </span>
+          )}
+        </div>
+      )}
+      {editable && cart.items.length > 0 && (
+        <button
+          type="button"
+          className="primary"
+          disabled={busy || needName}
+          onClick={() => {
+            const name = guestName.trim();
+            onCheckout(name ? { name, contact: guestContact.trim() } : null);
+          }}
+        >
           Подтвердить бронь на {rub(cart.total_rub)}
           {synthetic && " (синтетика)"} · оплата имитируется
         </button>
@@ -692,7 +783,7 @@ const BOOKING_STATUS: Record<Voucher["status"], string> = {
 function VoucherView({ voucher }: { voucher: Voucher }) {
   const s = voucher.spec;
   return (
-    <section className="card voucher" aria-label="Ваучер">
+    <section className="sec voucher" aria-label="Ваучер">
       <h2>Ваучер {voucher.booking_id}</h2>
       {voucher.simulated ? (
         <p className="warn">Бронь и оплата имитированы. Это не настоящий заказ.</p>
@@ -712,13 +803,19 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
         </div>
         <div>
           <dt>Гости</dt>
-          <dd>{guests(s)}</dd>
+          <dd>{guestsText(s)}</dd>
         </div>
         <div>
           <dt>Оформлено</dt>
           <dd>{localTime(voucher.created_at)}</dd>
         </div>
       </dl>
+      <p className="guest-line">
+        Гость:{" "}
+        {voucher.guest
+          ? [voucher.guest.name, voucher.guest.contact].filter(Boolean).join(", ")
+          : `имя не введено${voucher.simulated ? " (имитация)" : ""}`}
+      </p>
       <ul className="plain">
         {voucher.items.map((o) => (
           <li key={o.offer_id} className="row">
@@ -737,7 +834,7 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
 }
 
 const NEXT: Partial<Record<Stage, { label: string; text: string }>> = {
-  compare: { label: "Собрать план", text: "беру" },
+  compare: { label: "Беру этот план", text: "беру" },
   assemble: { label: "Положить в корзину", text: "да" },
 };
 
@@ -746,7 +843,6 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   const next = NEXT[stage];
   return (
     <div className="board">
-      <StageBar stage={stage} />
       {!reply.llm && (
         <p className="badge" role="note">
           без ИИ — упрощённый режим: модель недоступна, агент работает по правилам
@@ -760,7 +856,7 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
       />
       <PriorityChips order={plan.spec.priorities} stage={stage} busy={busy} onSend={onSend} />
       <Changes plan={plan} />
-      {plan.destinations.length > 0 && (
+      {plan.destinations.length > 0 && !destinationsInChat(stage) && (
         <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />
       )}
       <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
@@ -776,9 +872,11 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
         onCart={onCart}
       />
       {next && (
-        <button type="button" className="primary" disabled={busy} onClick={() => onSend(next.text)}>
-          {next.label}
-        </button>
+        <section className="sec next" aria-label="Следующий шаг">
+          <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
+            {next.label}
+          </button>
+        </section>
       )}
       <CartView
         cart={cart}
