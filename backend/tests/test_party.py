@@ -199,6 +199,11 @@ KIDS_QUESTIONS = [
     "Детям есть скидка?",
     "дети бесплатно",
     "Можно ли с детьми?",
+    "Детям до 12 лет скидка?",
+    "Дети до 2 лет бесплатно?",
+    "А двое детей бесплатно?",
+    "А трое детей можно?",
+    "Детям младше 5 лет есть скидка?",
 ]
 
 
@@ -217,7 +222,7 @@ def test_kids_question_at_checkout_keeps_party_and_cart(store, text):
     assert after.stage == "checkout"
     assert after.plan.spec.children_ages == [] and after.plan.spec.adults == 2
     assert after.cart == before.cart and after.cart.items
-    assert "Состав не меняю" in after.reply and "7" not in after.reply.split("Допущения")[0]
+    assert "Состав не меняю" in after.reply and ".." not in after.reply
 
 
 @pytest.mark.parametrize("text", KIDS_QUESTIONS)
@@ -226,6 +231,13 @@ def test_kids_question_at_compare_keeps_the_plan(store, text):
     assert before.stage == "compare"
     after = say(store, text, before.session_id)
     assert after.plan == before.plan and after.stage == "compare"
+
+
+def test_kids_question_at_compare_asks_the_age(store):
+    before = say(store, "Сочи в ноябре на 5 ночей, вдвоём")
+    after = say(store, "Можно с детьми?", before.session_id)
+    assert after.plan.spec.children_ages == [] and after.stage == "compare"
+    assert "напишите возраст" in after.reply and after.cart == before.cart
 
 
 def test_kids_question_keeps_existing_children(store):
@@ -238,6 +250,15 @@ def test_kids_question_with_an_age_still_adds_the_child(store):
     before = say(store, "Сочи в ноябре на 5 ночей, вдвоём")
     after = say(store, "А с ребёнком 5 лет можно?", before.session_id)
     assert after.plan.spec.children_ages == [5]
+
+
+def test_kids_question_with_a_threshold_keeps_existing_children_at_checkout(store):
+    before = say(store, "Сочи в ноябре на 5 ночей, вдвоём с ребёнком 4 года")
+    for msg in ("беру", "да"):
+        before = say(store, msg, before.session_id)
+    after = say(store, "А двое детей до 12 лет бесплатно?", before.session_id)
+    assert after.plan.spec.children_ages == [4] and after.cart == before.cart
+    assert after.stage == "checkout"
 
 
 def test_kids_question_with_other_fields_replans_without_children(store):

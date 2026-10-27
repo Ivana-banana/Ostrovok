@@ -1057,6 +1057,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
 CHILD_QUESTION_RE = re.compile(
     r"\?|\bли\b|\bможно\b|\bбесплатн|\bскидк|\bльгот|\bа\s+(?:с\s+)?(?:дет|реб[её]н)"
 )
+THRESHOLD_RE = re.compile(r"\b(?:до|от|младше|старше|моложе|менее|более|меньше|больше)\b")
 ASKING_NOTE = "дети: вопрос, состав не менял — чтобы добавить, назовите возраст"
 
 
@@ -1072,14 +1073,16 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     ages: list[int] = []
     for m in CHILD_RE.finditer(t):
         a = AGES_RE.match(t, m.end())
+        if asking and a and THRESHOLD_RE.search(t[m.end() : a.start(1)]):
+            a = None  # «детям до 12 лет скидка?»: 12 is a limit of a fare, not an age
         said = [int(x) for x in re.findall(r"\d+", a.group(1))] if a else []
         said = [0 if a.group(2) == "мес" else x for x in said if x <= 17]
-        if asking and not m.group(1) and not said:
+        plural = m.group(0).split()[-1].startswith("дет")
+        count = _num(m.group(1)) if m.group(1) else len(said) or (2 if plural else 1)
+        if asking and len(said) < count:  # no age for every counted child: nobody is added
             if ASKING_NOTE not in notes:
                 notes.append(ASKING_NOTE)
             continue
-        plural = m.group(0).split()[-1].startswith("дет")
-        count = _num(m.group(1)) if m.group(1) else len(said) or (2 if plural else 1)
         if len(said) < count:
             notes.append("возраст ребёнка: 7 лет (возраст не назван)")
         ages += (said + [7] * count)[:count]
