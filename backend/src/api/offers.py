@@ -8,7 +8,8 @@
 - Tariffs: every hotel sells 2-4 tariffs (meal RO/BB or BB/HB/AI x free cancellation or not),
   each its own HotelOffer with its own id, transfers and add-ons. They do not read
   spec.meal or spec.refundable; the optimizer picks the tariff.
-- Transport: flight, train or car from the great-circle distance, fixed local time slots.
+- Transport: flight, train or car from the great-circle distance, fixed local time slots;
+  a car drives at most MAX_DRIVE a day and stops for the night on a longer road (#276).
 - Transfers: hub -> hotel after each arrival, hotel -> hub before each return, per hotel.
 - Add-ons: early check-in, late check-out and the night before, per hotel.
 
@@ -59,6 +60,13 @@ SEA_NAMES = ["Морской бриз", "Лазурный берег", "Ривь
 NO_DIRECT = {"Италия", "Франция", "Испания", "Чехия", "Австрия", "Венгрия", "Германия",
              "Греция", "Кипр"}  # fmt: skip
 OUT_FLIGHTS = [(time(10, 30), 1.0), (time(17, 40), 0.9)]  # arrival, local to the place
+# A car (#276): at most MAX_DRIVE at the wheel a day, then a night on the road. Every
+# driving day starts at the same clock time: there at CAR_OUT, so that the car comes on the
+# check-in day; back at CAR_BACK, the hotel check-out (HotelOffer.check_out). A night on the
+# road costs ROAD_NIGHT_RUB a room, one room per car. Team estimates without a source.
+MAX_DRIVE = timedelta(hours=12)
+CAR_OUT, CAR_BACK = time(8, 0), time(12, 0)
+ROAD_NIGHT_RUB = 3500
 BACK_FLIGHTS = [(time(15, 20), 1.0), (time(21, 5), 0.9)]  # departure, local to the place
 SYNTH_NOTE = (
     "Синтетический отель для демо: такого объекта может не быть. "
@@ -394,6 +402,30 @@ def _leg(
     )
 
 
+def _car(
+    spec: TripSpec, a: dict, b: dict, depart: datetime, hours: float, stops: int, price: float
+) -> TransportOffer:
+    """A car a -> b in 1 + stops driving days of equal length, each one from the clock time
+    of `depart`, with a night on the road between them (#276, TRAP-5)."""
+    drive = _minutes(hours)
+    if not stops:
+        return _leg(spec, "car", a, b, depart, hours, price)
+    day = drive / (stops + 1)
+    leg = _leg(spec, "car", a, b, depart, hours, price)
+    arrive = _shift(depart, timedelta(days=stops) + day).astimezone(ZoneInfo(b["tz"]))
+    title = leg.title.replace(
+        " (бензин и платные дороги, оценка)",
+        f", ночёвок в пути: {stops}, за рулём ≈{_span_h(day)} в день "
+        "(бензин, платные дороги и ночёвки в пути, оценка)",
+    )
+    return leg.model_copy(update={"arrive_at": arrive, "title": title})
+
+
+def _span_h(delta: timedelta) -> str:
+    hours, minutes = divmod(int(delta.total_seconds() // 60), 60)
+    return f"{hours} ч {minutes:02d} мин" if minutes else f"{hours} ч"
+
+
 def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[TransportOffer]:
     """There on date_from and back on date_to: flights, trains, and a car if asked for."""
     km = km_between(origin, place)
@@ -441,9 +473,14 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
     if road <= 2500 and ("car" in spec.modes or not legs):
         hours = road / 80 * 1.1
         cars = math.ceil((spec.adults + len(spec.children_ages)) / 5)
+        stops = math.ceil(_minutes(hours) / MAX_DRIVE) - 1  # nights on the road
         price = road * (8 / 100 * 62 + 1.0) * cars  # 8 l/100 km at 62 ₽ + tolls
-        legs.append(_leg(spec, "car", a, b, datetime.combine(there, time(8, 0), ta), hours, price))
-        legs.append(_leg(spec, "car", b, a, datetime.combine(back, time(10, 0), tb), hours, price))
+        price += stops * ROAD_NIGHT_RUB * cars
+        # The car leaves `stops` days before the check-in and comes on the check-in day.
+        out = datetime.combine(there - timedelta(days=stops), CAR_OUT, ta)
+        ret = datetime.combine(back, CAR_BACK, tb)
+        legs.append(_car(spec, a, b, out, hours, stops, price))
+        legs.append(_car(spec, b, a, ret, hours, stops, price))
     wanted = [leg for leg in legs if leg.mode in spec.modes] or legs
     # There first, then back: the cart lists items in the order of the offers.
     return sorted(wanted, key=lambda leg: leg.origin != a["name"])

@@ -1311,6 +1311,27 @@ def _text_assemble(plan: Plan) -> str:
     return "\n".join(lines)
 
 
+def _text_blocked(plan: Plan) -> str:
+    """#276: the timeline has an error, so the plan stays at compare. The fixes are offers of
+    the plan (TRAP-4): a leg is named by its row in the compare table («рейс N»)."""
+    by_id = {o.offer_id: o for o in plan.offers}
+    rows = [o.offer_id for o in plan.offers if o.kind == "transport"]
+    lines = ["В корзину пока не кладу: в расписании ошибка стыковки."]
+    for i in plan.issues:
+        if i.severity != "error":
+            continue
+        lines.append(f"Ошибка: {i.text}")
+        fixes = [
+            (f"рейс {rows.index(x) + 1} — " if x in rows else "") + by_id[x].title
+            for x in i.fixes
+            if x in by_id
+        ]
+        if fixes:
+            lines.append("Можно исправить: " + "; ".join(fixes) + ".")
+    lines.append(HINTS["compare"])
+    return "\n".join(lines)
+
+
 def _alternatives(spec: TripSpec, skip: list[str]) -> list[str]:
     """Up to 3 destination names from the catalogue (code, never invented), without `skip`
     and without the places the user refused."""
@@ -1920,6 +1941,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             # The hotel brings its own transfers for the selected legs (T7, #13).
             plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
         plan.timeline, plan.issues = build_timeline(plan)
+        if any(i.severity == "error" for i in plan.issues):
+            return reply("compare", plan, _text_blocked(plan))  # #276: no cart with an error
         return reply("assemble", plan, _text_assemble(plan))
     if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
