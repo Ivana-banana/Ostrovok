@@ -135,7 +135,7 @@ def test_trap_4_precipitation_is_the_catalogue_month(store, stage, question):
     """TRAP-4: precipitation is the November sum of catalog.json for Сочи; no days, no forecast."""
     _, r2 = ask(store, stage, question)
     assert "Сочи в ноябре: днём 15.7 °C, вода 17.1 °C, осадки 135 мм за месяц" in r2.reply
-    assert "Прогноза погоды в данных нет." in r2.reply and "дней" not in r2.reply
+    assert "Прогноза погоды в данных нет." in r2.reply and "дн" not in r2.reply.replace("днём", "")
 
 
 @pytest.mark.parametrize("question", ["тепло будет?", "а жарко там будет?"])
