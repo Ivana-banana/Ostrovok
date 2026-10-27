@@ -462,6 +462,12 @@ def weather_fact(plan: Plan, low: str = "", cities: list[str] | None = None, mon
     return "\n".join(lines) + "\nПрогноза погоды в данных нет."
 
 
+def _how(port: dict) -> str:
+    """How the airport km were measured: «по дороге» when the snapshot has the road length
+    (`road`), else «по прямой». The data decides, the word is never guessed (TRAP-4)."""
+    return "по дороге" if port.get("road") else "по прямой"
+
+
 def destination_line(plan: Plan) -> str:
     """One line of the first answer for the main place: the climate of the month and the nearest
     airport, from the catalogue or the geocoder place. A part without data is left out, never
@@ -479,7 +485,7 @@ def destination_line(plan: Plan) -> str:
             + (f", {rain:g} мм" if rain is not None else "")
         )
     if port := place.get("airport"):
-        parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км")
+        parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км {_how(port)}")
     if not parts:
         return ""
     return "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
@@ -497,9 +503,9 @@ def airport_fact(plan: Plan, cities: list[str] | None = None) -> str:
             continue
         name, iata, km = place["name"], port["iata"], port["km"]
         if km <= FAR_AIRPORT_KM:
-            lines.append(f"{name}: ближайший аэропорт {iata}, {km} км от города (по прямой).")
+            lines.append(f"{name}: ближайший аэропорт {iata}, {km} км от города ({_how(port)}).")
             continue
-        line = f"{name}: своего аэропорта нет, ближайший {iata}, {km} км."
+        line = f"{name}: своего аэропорта нет, ближайший {iata}, {km} км {_how(port)}."
         routes = dict.fromkeys(
             f"{o.origin} → {o.destination}"
             for o in plan.offers

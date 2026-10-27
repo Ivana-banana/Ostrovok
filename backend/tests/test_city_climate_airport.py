@@ -197,7 +197,7 @@ def test_trap_4_far_airport_is_through_the_hub(store):
     reply = say(store, "какой ближайший аэропорт?", r.session_id).reply
     port = catalog.resolve("Выборг")["airport"]
     assert port["iata"] == "LED" and port["km"] == 131
-    assert "Выборг: своего аэропорта нет, ближайший LED, 131 км." in reply, reply
+    assert "Выборг: своего аэропорта нет, ближайший LED, 131 км по прямой." in reply, reply
     assert "через LED" in reply and "Москва → Выборг" in reply
     assert "Прилёт" not in reply and "пересадк" not in reply  # no invented connection (TRAP-5)
 
@@ -206,9 +206,41 @@ def test_trap_4_far_airport_of_another_city_names_no_flight(store):
     """The plan has no flight to Выборг: the answer states the airport and invents no route."""
     r = at(store, "compare")
     reply = say(store, "какой аэропорт у Выборга?", r.session_id).reply
-    assert "Выборг: своего аэропорта нет, ближайший LED, 131 км." in reply, reply
+    assert "Выборг: своего аэропорта нет, ближайший LED, 131 км по прямой." in reply, reply
     assert "через LED" not in reply
     assert r.plan == say(store, "погода?", r.session_id).plan
+
+
+@pytest.mark.parametrize(
+    ("city", "gen", "iata", "km", "how"),
+    [
+        ("Владикавказ", "Владикавказа", "OGZ", 26, "по дороге"),
+        ("Мехико", "Мехико", "MEX", 8, "по дороге"),
+        ("Сочи", "Сочи", "AER", 25, "по прямой"),
+    ],
+)
+def test_trap_4_airport_km_say_how_they_were_measured(store, city, gen, iata, km, how):
+    """#266: «по дороге» only when the catalogue km are by road (`road`), else «по прямой»."""
+    port = catalog.resolve(city)["airport"]
+    assert (port["iata"], port["km"], bool(port.get("road"))) == (iata, km, how == "по дороге")
+    r = at(store, "compare")
+    reply = say(store, f"какой аэропорт у {gen}?", r.session_id).reply
+    other = "по прямой" if how == "по дороге" else "по дороге"
+    assert f"{city}: ближайший аэропорт {iata}, {km} км от города ({how})." in reply, reply
+    assert other not in reply
+    line = answers.destination_line(Plan(spec=TripSpec(destinations=[city], month=12)))
+    assert f"ближайший аэропорт {iata}, {km} км {how}" in line, line
+
+
+def test_trap_4_far_airport_by_road_says_so(monkeypatch):
+    place = dict(catalog.resolve("Выборг"))
+    monkeypatch.setattr(
+        answers,
+        "resolve_place",
+        lambda name: {**place, "airport": {**place["airport"], "road": True}},
+    )
+    reply = answers.airport_fact(Plan(spec=TripSpec(destinations=["Выборг"])))
+    assert "своего аэропорта нет, ближайший LED, 131 км по дороге." in reply, reply
 
 
 def test_trap_4_airport_of_unknown_city_has_no_data(store):
@@ -250,7 +282,9 @@ def test_trap_6_geocoder_city_airport_and_climate(store, monkeypatch):
     r2 = say(store, "какой ближайший аэропорт у Тихвина и какая там погода?", r.session_id)
     port = resolve_place("Тихвин")["airport"]
     assert port["iata"] == "LED" and 150 < port["km"] < 200
-    assert f"Тихвин: своего аэропорта нет, ближайший LED, {port['km']} км." in r2.reply, r2.reply
+    assert f"Тихвин: своего аэропорта нет, ближайший LED, {port['km']} км по прямой." in r2.reply, (
+        r2.reply
+    )
     assert "Тихвин в декабре: днём 11 °C" in r2.reply and "не прогноз" in r2.reply
     assert r2.plan == r.plan and r2.stage == "compare"
 
