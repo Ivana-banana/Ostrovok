@@ -44,7 +44,7 @@ from api.fixtures import WARM_WATER_C
 from api.main import app, get_store
 from api.model import NOT_IN_CATALOG
 from api.offers import _norm, find_offers, osm_hotels, resolve_place, transfer_id
-from api.optimizer import optimize, pets_possible
+from api.optimizer import enumerate_trips, optimize, pets_ok
 from api.store import SessionStore
 from api.timeline import build_timeline
 
@@ -1459,9 +1459,9 @@ def check_S9(case: dict) -> tuple[bool, str]:
 
 # ---------------------------------------------------------------- S10
 
-# The two requests of the case and the catalog.json tag each one asks for (an oracle that does
-# not read the wishes the product extracted).
-S10_TAGS = ("mountains", "ski")
+# The two requests of the case: the catalog.json tag each one asks for and whether the dog goes.
+# An oracle that does not read the wishes or the pets the product extracted.
+S10_REF = (("mountains", True), ("ski", False))  # (tag, with a dog), per request of the case
 
 
 def _tags(name: str) -> list[str]:
@@ -1469,18 +1469,19 @@ def _tags(name: str) -> list[str]:
     return place["tags"] if place else []
 
 
-def _s10_items(r: ChatReply, tag: str) -> dict[str, str | None]:
+def _s10_items(r: ChatReply, tag: str, dog: bool) -> dict[str, str | None]:
     """Pass items of one S10 request, on the inspiration cards of the reply."""
     dests = r.plan.destinations
     top = list(itertools.takewhile(lambda d: not d.violates, dests))
     first_break = next((i for i, d in enumerate(dests) if d.violates), len(dests))
     below = [d.name for d in dests[first_break:] if not d.violates]
     off_theme = [d.name for d in dests if tag not in _tags(d.name) and not d.violates]
-    no_pets = [
-        d.name
-        for d in top
-        if r.plan.spec.pets and not pets_possible(r.plan.spec, find_offers(r.plan.spec, d.name))
-    ]
+    spec = r.plan.spec.model_copy(update={"pets": True})
+
+    def dog_goes(name: str) -> bool:  # strict: no trips is no place for the dog
+        return any(pets_ok(t) for t in enumerate_trips(find_offers(spec, name)))
+
+    no_pets = [d.name for d in top if dog and not dog_goes(d.name)]
     return {
         "1": _need(
             r.stage == "inspire" and 2 <= len(dests) <= 4,
@@ -1507,14 +1508,14 @@ def check_S10(case: dict) -> tuple[bool, str]:
     items: dict[str, str | None] = {}
     facts = []
     with _api() as (client, _):
-        for text, tag in zip(queries, S10_TAGS, strict=True):
+        for text, (tag, dog) in zip(queries, S10_REF, strict=True):
             run = _walk(
                 client, "S10", text[:24], text, stop=("inspire", "compare", "select", "booked"),
                 attempt=False,
             )  # fmt: skip
             if not run.replies or run.codes[-1] != 200:
                 return False, f"«{text}»: ответ {run.codes[-1] if run.codes else 'нет'}"
-            got = _s10_items(run.last, tag)
+            got = _s10_items(run.last, tag, dog)
             facts.append(f"«{text}»: {', '.join(d.name for d in run.last.plan.destinations)}")
             for k, why in got.items():
                 if why and not items.get(k):

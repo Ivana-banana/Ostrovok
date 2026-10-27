@@ -599,3 +599,29 @@ def test_s10_fails_when_a_card_without_the_theme_has_no_mark(monkeypatch):
     monkeypatch.setattr(model, "suggest_destinations", unmarked)
     ok, note = checks.check_S10(BY_ID["S10"])
     assert not ok and "п.2" in note, note
+
+
+def test_s10_fails_when_the_product_does_not_extract_the_dog(monkeypatch):
+    """The dog is fixed by the check, not read from the spec the product extracted."""
+    real = model.extract
+
+    def blind(*args, **kwargs):
+        found, notes = real(*args, **kwargs)
+        return {k: v for k, v in found.items() if k != "pets"}, notes
+
+    monkeypatch.setattr(model, "extract", blind)
+    ok, note = checks.check_S10(BY_ID["S10"])
+    assert not ok and "п.4" in note, note
+
+
+def test_s10_fails_when_non_pet_places_are_on_top(monkeypatch):
+    real = inspire.suggest_destinations
+
+    def mestia_first(spec, limit=4, exclude=None):
+        cards = real(spec, len(catalog.places()), exclude)
+        bad = [d.model_copy(update={"violates": []}) for d in cards if d.name == "Местиа"]
+        return [*bad, *[d for d in cards if d.name != "Местиа"]][:limit]
+
+    monkeypatch.setattr(model, "suggest_destinations", mestia_first)
+    ok, note = checks.check_S10(BY_ID["S10"])
+    assert not ok and "п.4" in note and "Местиа" in note, note
