@@ -1034,13 +1034,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
                 month_verdict = "ask"  # the stay already reaches into that month
             elif target == now.date_from.month:
                 month_verdict = ""  # the dates are in that month: nothing to move
-        if month_verdict == "ask":
-            text, questions = month_reply(now, target, "")
-            plan = old.plan.model_copy(update={"changes": []})
-            return old.model_copy(
-                update={"plan": plan, "reply": text, "questions": questions, "llm": False}
-            )
-    refused_month = month_verdict in ("stay", "skip")
+    # What the user is told about the dates; the other fields of the message are applied (#197).
+    month_note = None
+    if month_verdict in ("ask", "stay"):
+        month_note = month_reply(now, target if month_verdict == "ask" else now.date_from.month, "")
+    refused_month = month_verdict in ("ask", "stay", "skip")
     idx = _ordinal(message)
     deadline = llm.deadline()
     # A service turn («беру», «да», «подтверждаю», a number) goes to no model: a field it
@@ -1050,7 +1048,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # A new session, clarify and select are never service turns.
     consent = (
         old.stage in ("compare", "assemble", "checkout")
-        and month_verdict not in ("stay", "skip")
+        and not refused_month
         and (_confirmed(t) or bool(BOOK_RE.search(t)))
     )
     pick = old.stage in ("inspire", "compare") and idx is not None
@@ -1066,18 +1064,12 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if refused_month:
         found.pop("month", None)  # «не в январе», «отпуск до января»: no new month (#190)
         notes[:] = [n for n in notes if _label(n) != "когда"]
-        if month_verdict == "stay" and not found:
-            text, _ = month_reply(now, now.date_from.month, HINTS.get(old.stage, ""))
-            plan = old.plan.model_copy(update={"changes": []})
-            return old.model_copy(
-                update={"plan": plan, "reply": text, "questions": [], "llm": False}
-            )
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
     # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
     # «беру, на месяц вперёд спасибо» is a consent: shift_matches skips a remark after a booking.
     shifts = bool(shift_matches(t.replace("ё", "е"), prev is not None))
-    yes = _confirmed(t) and not asks_length and not shifts and month_verdict not in ("stay", "skip")
+    yes = _confirmed(t) and not asks_length and not shifts and not refused_month
     service = prev is not None and (pick or (consent and not asks_length and not shifts))
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
@@ -1184,6 +1176,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         route = next((k for k in (ROUTE, CANDIDATES) if _noted(spec, k)), None)
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
+        if month_note:  # the dates stay: the answer says so, and the question has its button
+            text = f"{text}\n{month_note[0]}"
+            kw["questions"] = [*month_note[1], *kw.get("questions", [])]
         return ChatReply(
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
         )
@@ -1214,6 +1209,15 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         text = gone_text + _text_inspire(plan)
         return reply("inspire", plan, text, Cart(), questions=[question, *party_question(spec)])
 
+    if month_note and not dirty_nodes(old.plan.spec, spec):
+        # Nothing else changed: the answer is about the dates only.
+        text, questions = month_note
+        if month_verdict == "stay":
+            text = f"{text} {HINTS.get(old.stage, '')}".strip()
+        plan = old.plan.model_copy(update={"changes": []})
+        return old.model_copy(
+            update={"plan": plan, "reply": text, "questions": questions, "llm": False}
+        )
     dated = bool(old.plan.spec.date_from and old.plan.spec.date_to)
     te = t.replace("ё", "е")
     date_edit = DATE_EDIT_RE.search(te)
