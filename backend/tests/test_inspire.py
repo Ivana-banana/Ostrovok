@@ -6,6 +6,7 @@ Rules only, no model (TRAP-1). The requests are the jury and operator comments o
 import pytest
 
 from api import catalog, inspire
+from api.extract import extract
 from api.contracts import ChatRequest, TripSpec
 from api.fixtures import WARM_WATER_C, future_date
 from api.model import chat
@@ -152,11 +153,44 @@ def test_c17_quiet_forest_no_planes_gives_nature_without_flights(store):
         assert "nature" in place["tags"] or place["pop"] < inspire.CITY_POP, d.name
         assert d.name != "Бухарест"
         assert not any(v.endswith(inspire.NO_WAY) for v in d.violates), d.violates
+        assert d.travel_hours <= 24, (d.name, d.travel_hours)
 
 
-def test_no_flight_pool_too_small_says_so():
-    """A banned mode is not dropped silently: few reachable places → fewer cards, never a plane."""
+def test_nature_wish_with_banned_flight_gives_nature_places_without_big_cities():
+    """The pool of «природа» with a banned flight: nature places, no city from a million
+    (on main the wish was unknown and the pool was the big cities)."""
     spec = TripSpec(modes=["train", "car"], wishes=["природа"], month=11, origin="Москва")
     dests = inspire.suggest_destinations(spec, 4)
-    assert dests
-    assert all(not any(v.endswith(inspire.NO_WAY) for v in d.violates) for d in dests)
+    assert sum("nature" in tags(d.name) for d in dests) >= 2
+    for d in dests:
+        place = catalog.resolve(d.name)
+        assert "nature" in place["tags"] or place["pop"] < inspire.CITY_POP, d.name
+        assert not any(v.endswith(inspire.NO_WAY) for v in d.violates), d.violates
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "К тёплому морю в ноябре вдвоём, не хочу лететь долго, из Москвы, тысяч 150",
+        "не хочу лететь больше 4 часов",
+        "не хочу лететь с пересадками",
+        "без авиабилетов, у нас уже есть",
+    ],
+)
+def test_c17_long_flight_or_owned_tickets_is_no_flight_ban(text):
+    """Review of #277: «не хочу лететь долго» kept the flights; only «без самолётов» bans them."""
+    assert not extract(text)[0].get("modes")
+
+
+@pytest.mark.parametrize(
+    "text", ["тихий отдых на море", "тишина и море", "не нужна тишина", "без лесов", "Озерки"]
+)
+def test_c17_quiet_or_negated_words_are_no_nature_theme(text):
+    assert "природа" not in extract(text)[0].get("wishes", [])
+
+
+def test_c17_warm_sea_with_quiet_rest_keeps_the_sea_pool(store):
+    dests = inspired(
+        store, "Хочу тихий отдых на тёплом море в ноябре с ребёнком 5 лет, из Москвы, тысяч 150"
+    )
+    assert all(d.water_c is not None and d.water_c >= WARM_WATER_C for d in dests)
