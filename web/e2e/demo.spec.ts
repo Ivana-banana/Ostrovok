@@ -80,6 +80,8 @@ test("S6: запрос → сравнение → план → корзина �
 
   // Выбор другого отеля — один клик; агент собирает план с таймлайном.
   await hotels.getByRole("button", { name: /^Выбрать/ }).first().click();
+  // Таймлайн виден уже на сравнении; этап сборки — кнопка «Положить в корзину» (на сравнении «Собрать план»).
+  await expect(page.getByRole("button", { name: "Положить в корзину" })).toBeVisible();
   const timeline = page.getByRole("region", { name: "Таймлайн" });
   await expect(timeline).toBeVisible();
 
