@@ -193,24 +193,29 @@ def test_every_month_is_checked_the_first_length_wins(store, text):
 
 
 @pytest.mark.parametrize(
-    "text", ["давай на месяц позже", "давай на 2 месяца позже", "ок, на год вперёд"]
+    ("text", "months"),
+    [("давай на месяц позже", 1), ("давай на 2 месяца позже", 2), ("ок, на год вперёд", 12)],
 )
-def test_a_month_shift_on_compare_is_no_consent(store, text):
-    first = say(store, "Сочи на 5 ночей в ноябре, двое взрослых")
+def test_a_month_shift_on_compare_moves_the_dates(store, text, months):
+    """#176: a month or a year shift is a re-plan of the dates (the length stays), no consent."""
+    first = say(store, "Сочи на 5 ночей с 7 ноября, двое взрослых")
     reply = say(store, text, first.session_id)
     assert reply.stage == "compare" and not reply.cart.items
     assert reply.plan.spec.nights == 5
-    assert reply.plan.spec.date_from == first.plan.spec.date_from
+    was, now = first.plan.spec.date_from, reply.plan.spec.date_from
+    assert (now.year * 12 + now.month) - (was.year * 12 + was.month) == months
+    assert now.day == was.day
     assert length_notes(reply) == length_notes(first)
-    assert "на два дня позже" in reply.reply  # says what the plan can shift
+    assert "Было → стало" in reply.reply
 
 
-def test_a_month_shift_on_assemble_is_no_consent(store):
+def test_a_month_shift_on_assemble_moves_the_dates(store):
     first = say(store, "Сочи на 5 ночей в ноябре, двое взрослых")
     second = say(store, "давай", first.session_id)
     reply = say(store, "давай на месяц позже", second.session_id)
-    assert reply.stage == "assemble" and not reply.cart.items
-    assert reply.plan.spec.date_from == second.plan.spec.date_from
+    assert reply.stage == "compare" and not reply.cart.items
+    assert reply.plan.spec.nights == 5
+    assert reply.plan.spec.date_from > second.plan.spec.date_from
 
 
 def test_a_week_shift_still_moves_the_dates(store):
