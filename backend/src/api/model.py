@@ -2233,11 +2233,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             f"(синтетика, оплата имитируется). {HINTS['checkout']}"
         )
         return reply("checkout", plan, text, cart)
-    if booking:
-        try:  # the same rules as POST /api/checkout; the user saw the stored cart total
-            return checkout_reply(old, old.cart.total_rub).model_copy(update={"llm": used})
-        except CartRefusal as e:
-            return reply(old.stage, plan, e.text)
+    if booking:  # chat() books outside the session lock; the user saw the stored cart total
+        raise _Confirm(old.cart.total_rub)
     text = HINTS.get(old.stage, "Уточните запрос.")
     if old.stage == "select":
         text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
@@ -2255,5 +2252,21 @@ def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
     """
     sid = req.session_id or uuid4().hex
     prev = store.get(sid)
-    draft = step(prev, sid, req.message, use_llm=True)
-    return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
+    try:
+        draft = step(prev, sid, req.message, use_llm=True)
+        return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
+    except _Confirm as c:
+        # «подтверждаю» books by the path of POST /api/checkout, with its attempt table (#382).
+        try:
+            return checkout_reply(store, sid, c.total_rub)
+        except CartRefusal as e:  # the cart stays open; the reply says why
+            why = {"reply": e.text, "questions": []}
+            return store.update(sid, lambda cur: cur.model_copy(update=why))
+
+
+class _Confirm(Exception):  # a signal from step() to chat(), not an error
+    """step() met «подтверждаю» at checkout; chat() books the cart of this total."""
+
+    def __init__(self, total_rub: int):
+        super().__init__(total_rub)
+        self.total_rub = total_rub
