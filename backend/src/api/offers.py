@@ -189,11 +189,13 @@ def _seats_label(spec: TripSpec, mode: Mode) -> str:
     notes = []
     if child:
         notes.append(_plural(child, "детский тариф", "детских тарифа", "детских тарифов"))
+    below, share, _ = CHILD_FARES[mode][0]  # the youngest go without a seat
     if free and mode == "train":
-        below = CHILD_FARES[mode][0][0]
         notes.append(_plural(free, "ребёнок", "ребёнка", "детей") + f" до {below} лет без места")
     elif free:
         notes.append(_plural(free, "младенец", "младенца", "младенцев") + " без места")
+    if free and share:  # #334: not free, the label names the share of the price
+        notes[-1] += f", {round(share * 100, 1):g} % тарифа"
     label = _plural(seats, "место", "места", "мест")
     return f"{label} ({', '.join(notes)})" if notes else label
 

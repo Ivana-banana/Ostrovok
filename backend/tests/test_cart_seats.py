@@ -1,8 +1,10 @@
 """#323 (C1, eval/cases_critic.json): a transport line names its seats and child fares.
 
-The label comes from the same fare rules as the price (offers._passengers, TRAP-4): a train
+The label comes from the same fare rules as the price (offers.CHILD_FARES, the table both
+offers._fares and offers._seats_label read; TRAP-4): a train
 gives half a fare from 5 to 9 years and a free place without a seat under 5; a plane gives a
-child fare from 2 to 11 years and an infant without a seat under 2. The cart, the voucher and
+child fare from 2 to 11 years and an infant without a seat under 2 for a share of the fare
+(#334: the label names the share). The cart, the voucher and
 the web show the offer title, so the label is in the title. Offline, rules only (TRAP-1).
 """
 
@@ -10,6 +12,7 @@ from datetime import date
 
 import pytest
 
+from api import offers
 from api.contracts import ChatRequest, TransportOffer, TripSpec
 from api.model import chat
 from api.offers import _fares, resolve_place, transport_offers
@@ -59,7 +62,7 @@ def test_TRAP_4_train_under_five_travels_free_without_a_seat():
 
 def test_TRAP_4_flight_child_fare_and_infant_without_a_seat():
     for leg in legs("flight", 2, [1, 4, 12], place="Сочи"):
-        assert ", 4 места (1 детский тариф, 1 младенец без места)" in leg.title
+        assert ", 4 места (1 детский тариф, 1 младенец без места, 10 % тарифа)" in leg.title
 
 
 def test_TRAP_4_adults_only_name_the_seats_without_a_child_note():
@@ -99,3 +102,18 @@ def test_C1_TRAP_4_cart_and_voucher_lines_show_the_seats(store):
     r = say(store, "подтверждаю", r.session_id)
     assert r.stage == "booked" and r.voucher
     assert [o.title for o in r.voucher.items if o.kind == "transport"] == [o.title for o in trains]
+
+
+def test_TRAP_4_infant_share_in_the_label_comes_from_the_fare_table(monkeypatch):
+    """#334: the infant share is read from CHILD_FARES, the table of the price, not a literal."""
+    monkeypatch.setitem(offers.CHILD_FARES, "flight", [(2, 0.25, False), (12, 0.75, True)])
+    spec = TripSpec(adults=2, children_ages=[1])
+    assert _fares(spec, "flight") == 2.25
+    for leg in legs("flight", 2, [1], place="Сочи"):
+        assert ", 2 места (1 младенец без места, 25 % тарифа)" in leg.title
+
+
+def test_TRAP_4_free_child_on_a_train_has_no_share_in_the_label():
+    for leg in legs("train", 2, [3]):
+        assert ", 2 места (1 ребёнок до 5 лет без места)" in leg.title
+        assert "% тарифа" not in leg.title
