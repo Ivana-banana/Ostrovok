@@ -102,6 +102,7 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
+from api.timeline import VERBS
 
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
@@ -1496,9 +1497,12 @@ def _text_compare(plan: Plan) -> str:
         lines.append("Транспорт:")
     for i, o in enumerate(legs, 1):
         no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
-        # C14 (#364, TRAP-5): local times with their zones and the duration of the leg.
-        when = f"вылет {_at(o.depart_at)} → прилёт {_at(o.arrive_at)}, в пути {span(o)}"
-        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}{no_pet} · {when}")
+        # C14 (#364, TRAP-5): local times with their zones, the verbs of the mode and the
+        # duration; the start time leaves the title so it is not shown twice.
+        start, end = (v.lower() for v in VERBS[o.mode])
+        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
+        when = f"{start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)}"
+        lines.append(f"Рейс {i}. {title} — {_rub(o.price_rub)}{no_pet} · {when}")
     chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
     lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:
@@ -1533,7 +1537,7 @@ def _at(dt: datetime) -> str:
 def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
     lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
-    lines += [f"Внимание: {i.text}." for i in plan.issues]
+    lines += [f"Внимание: {i.text.rstrip('.')}." for i in plan.issues]
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
 
