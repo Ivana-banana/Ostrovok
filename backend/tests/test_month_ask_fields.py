@@ -281,3 +281,24 @@ def test_the_reason_for_no_change_comes_with_the_month_question(store):
     assert "Даты 03.12–08.12 вы назвали сами. Перенести на январь" in r.reply
     assert next(q.options for q in r.questions) == ["Перенести на январь"]
     assert r.plan.spec.date_from == date(2026, 12, 3) and r.stage == "compare"
+
+
+# #198 with a model: it may neither refuse the month nor bring it back.
+
+
+def test_a_neighbouring_negation_with_a_model_still_moves_the_dates(store, model):
+    first = named(store)
+    model.patch = {"wishes": ["тихо"]}
+    r = say(store, "не дорого, в январе, нам бы потише", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2027, 1, 3), date(2027, 1, 8), 1)
+    assert "тихо" in s.wishes and "Они остаются" not in r.reply
+
+
+def test_the_model_may_not_shift_into_the_refused_month(store, model):
+    first = named(store)
+    model.patch = {"month": 1, "date_from": "2027-01-03", "date_to": "2027-01-08"}
+    r = say(store, "не в январе, на месяц позже", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+    assert "Сдвиг не применён" in r.reply and r.stage == "compare"
