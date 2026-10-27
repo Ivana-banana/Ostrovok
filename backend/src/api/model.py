@@ -275,11 +275,14 @@ ROUTE_RE = re.compile(
 )
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
 # #351: an unnamed origin is asked when the fit of a whole-trip budget depends on it: the round
-# trip from DEFAULT_ORIGIN costs ROAD_GAP of the budget more than from the cheapest big hub, or
-# takes over ROAD_SHARE of it alone. Sums from the offers (TRAP-4). Team estimates (README).
-ROAD_GAP = 0.15
-ROAD_SHARE = 0.5
+# trip from DEFAULT_ORIGIN costs ROAD_GAP % of the budget or more over the cheapest big hub, or
+# takes ROAD_SHARE % of it or more alone. Sums from the offers (TRAP-4). Team estimates (README).
+ROAD_GAP = 15  # % of the budget, integer: 15.0 % exactly asks (#380)
+ROAD_SHARE = 50
 BIG_HUBS = 10  # the hubs by population compared with DEFAULT_ORIGIN
+# #380: a hub nearer the place is its neighbour (Ростов-на-Дону — Сочи 403 км, Анапа 318 км):
+# its cheap road measures the distance to the place, not the traveller's origin. F15: 1 434 км.
+NEIGHBOUR_HUB_KM = 500
 ORIGIN_OPTIONS = ("Москвы", "Санкт-Петербурга", "Екатеринбурга", "Новосибирска")
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
 STAY_RE = re.compile(
@@ -536,13 +539,15 @@ def _from(name: str) -> str:
 
 
 def _share(rub: int, budget: int) -> str:
-    return f"{round(100 * rub / budget)} %"
+    """Rounded down: a share that passes ROAD_GAP or ROAD_SHARE never reads below it (#380)."""
+    return f"{100 * rub // budget} %"
 
 
 def far_origin_question(spec: TripSpec) -> list[Question]:
     """#302, #351: no origin and a budget for the whole trip. The origin is asked when the road
-    from DEFAULT_ORIGIN (a round trip for the party) costs over ROAD_GAP of the budget more than
-    from the cheapest big hub, or over ROAD_SHARE of the budget alone. The question names what
+    from DEFAULT_ORIGIN (a round trip for the party) costs ROAD_GAP % of the budget or more over
+    the cheapest big hub out of NEIGHBOUR_HUB_KM of the place (#380), or ROAD_SHARE % of the
+    budget or more alone. The question names what
     is measured: the road sums (offers, TRAP-4), their difference and its share of the budget.
     It claims nothing about the whole trip. Otherwise the origin is an assumption."""
     if spec.origin or spec.budget_rub is None or not spec.destinations:
@@ -554,15 +559,16 @@ def far_origin_question(spec: TripSpec) -> list[Question]:
     hubs = sorted(catalog.hubs(), key=lambda h: -h["pop"])
     names = [h["name"] for h in hubs if h["name"] != DEFAULT_ORIGIN][:BIG_HUBS]
     if place := catalog.resolve(spec.destinations[0]):
-        # The place itself is no origin to compare: «Казань» from Казань has no road. The hub
-        # nearest the place is not added either: its road is always small (Чебоксары — Казань
-        # 4 900 ₽), so the gap would measure the distance to the nearest city, not the origin.
-        names = [n for n in names if n != place["name"]]
+        # The place itself and its neighbour hubs are no origin to compare: their road is always
+        # small (Ростов-на-Дону — Геленджик 5 000 ₽), so the gap would measure the distance to
+        # the nearest city, not the origin (#380).
+        near = {h["name"] for h in hubs if catalog.km_between(place, h) < NEIGHBOUR_HUB_KM}
+        names = [n for n in names if n not in near]
     sums = [(r, n) for n in dict.fromkeys(names) if (r := _round_trip(probe, n)) is not None]
     best = min(sums, default=None)
     budget = spec.budget_rub
-    gap = best is not None and home - best[0] > ROAD_GAP * budget
-    if not (gap or home > ROAD_SHARE * budget):
+    gap = best is not None and 100 * (home - best[0]) >= ROAD_GAP * budget
+    if not (gap or 100 * home >= ROAD_SHARE * budget):
         return []
     text = f"Откуда начинается поездка? Из Москвы дорога туда и обратно ≈ {_rub(home)}"
     if best and best[0] < home:
@@ -573,7 +579,7 @@ def far_origin_question(spec: TripSpec) -> list[Question]:
         )
     else:
         text += "."
-    if home > ROAD_SHARE * budget:
+    if 100 * home >= ROAD_SHARE * budget:
         text += f" Дорога из Москвы — {_share(home, budget)} бюджета {_rub(budget)}."
     text += " Если города нет в кнопках, напишите «из …»."
     options = [f"Из {w}" for w in ORIGIN_OPTIONS]
