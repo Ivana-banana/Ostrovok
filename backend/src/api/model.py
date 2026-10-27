@@ -366,18 +366,20 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     # refusing makes it one (#198).
     parts = re.split(r",|\s(?:но|и|а)\s", clause, maxsplit=1)
     near, after = parts[0], parts[1] if len(parts) > 1 else ""
-    stop = r"нельзя|отпадает|отпадают|исключен|невозможн"
+    stop = r"нельзя|отпадает|отпадают|исключен|невозможн|отменя|неудобн"
     verbs = (
-        r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|над|нуж|вариант|устраива|катит"
+        r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|надо\b|нуж|вариант|устраива|катит"
         r"|рассматр|будет|удобн"
     )
     # «не поедем» ends the part: «не поедем на самолёте» only drops a way to travel
-    moves = r"поед|полет|лет|ед[еи]м"
+    moves = r"(?:по)?(?:еду|едем|едут|лечу|летим|летят)"
     end = r"(?=\s*(?:,|;|$))"
-    gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{stop})"
+    # «январь нет», «январь — нет», «январь мимо», «в январе никак»: a bare no ends the part (#215)
+    bare = rf"(?:нет|никак|мимо){end}"
+    gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{stop}|{bare})"
     refusing = (
         rf"\s*(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
-        rf"|не\s+(?:{moves})\w*{end}|не{end}|{stop})"
+        rf"|не\s+{moves}{end}|не{end}|{stop}|{bare})"
     )
     if negated or re.match(gone, near) or re.match(refusing, after):
         return "stay", month
