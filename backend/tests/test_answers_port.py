@@ -252,3 +252,97 @@ def test_trap_7_every_price_in_the_answer_is_marked(store, stage, question):
         if not line.startswith("Итого"):
             assert r2.reply[m.end() :].startswith(" (синтетика)"), r2.reply
     prices_known(r, r2.reply)
+
+
+KALININGRAD = "Калининград, 3 ночи с 20 ноября, двое взрослых"
+ISTANBUL = "Стамбул, 3 ночи с 20 ноября, двое взрослых"
+ANTALYA = "Анталия, 3 ночи с 20 ноября, двое взрослых"
+PETERSBURG = "Санкт-Петербург из Москвы, 3 ночи с 20 ноября, двое взрослых"
+
+
+def test_a_hotel_with_a_word_of_the_question_in_its_name_is_not_named(store):
+    """«Северная звезда» is a hotel of Калининград; «4 звезды» names no hotel."""
+    r = at(store, "compare", KALININGRAD)
+    assert any("Северная звезда" in h.title for h in rows(r))
+    for text in ("почему не 4 звезды?", "почему не 5 звезд?", "почему не пять звёзд?"):
+        r2 = say(store, text, r.session_id)
+        assert "Северная звезда" not in r2.reply and "против" not in r2.reply, text
+        assert r2.plan == r.plan
+
+
+def test_a_hotel_whose_name_has_a_star_is_still_named(store):
+    r, r2 = ask(store, "compare", "почему не Северная звезда?", KALININGRAD)
+    assert f"{money(hotel(r, 'Северная звезда').price_rub)} (синтетика)" in r2.reply
+
+
+def test_a_word_is_not_a_hotel_by_a_two_letter_ending(store):
+    """«на берегу» is no «Лазурный берег»; «границу» is no «Гранд»."""
+    r = at(store, "compare", ISTANBUL)
+    assert any("Лазурный берег" in h.title for h in rows(r))
+    r2 = say(store, "почему не на берегу?", r.session_id)
+    assert "Лазурный берег" not in r2.reply and "против" not in r2.reply
+    r, r2 = ask(store, "assemble", "почему мы не пересекаем границу?")
+    assert "Гранд" not in r2.reply
+
+
+@pytest.mark.parametrize("stage", ["compare", "assemble"])
+@pytest.mark.parametrize(
+    "text",
+    ["почему не Сочи?", "почему не Хургада?", "почему не Стамбул?", "почему не Турция?"],
+)
+def test_trap_4_a_place_of_the_catalogue_is_not_missing_from_the_data(store, stage, text):
+    """The place is in the catalogue: no «нет в данных»; the older rules read the question."""
+    r = at(store, stage, ANTALYA)
+    r2 = say(store, text, r.session_id)
+    assert "нет в данных" not in r2.reply
+
+
+def test_a_country_with_a_reason_is_the_weather_question_as_on_main(store):
+    _, r2 = ask(store, "assemble", "Почему не Египет, там теплее?", ANTALYA)
+    assert "Анталия в ноябре: воздух 21 °C" in r2.reply and "нет в данных" not in r2.reply
+
+
+@pytest.mark.parametrize("text", ["почему не All inclusive?", "почему не UAI?", "почему не BB?"])
+def test_a_meal_word_is_not_a_hotel_name(store, text):
+    r = at(store, "assemble", ANTALYA)
+    r2 = say(store, text, r.session_id)
+    assert "нет в данных" not in r2.reply
+
+
+def test_an_order_with_chem_luchshe_is_not_a_question(store):
+    r = at(store, "assemble", PETERSBURG)
+    r2 = say(store, "давай самолётом, чем быстрее тем лучше", r.session_id)
+    assert not r2.reply.startswith("Это вопрос")
+    assert any(o.kind == "transport" and o.mode == "flight" for o in r2.plan.offers)
+
+
+def test_chem_luchshe_with_a_hotel_between_is_a_question(store):
+    r, r2 = ask(store, "assemble", "чем Бульвар лучше?")
+    assert r2.reply.startswith("Это вопрос")
+    assert f"{money(hotel(r, 'Бульвар').price_rub)} (синтетика)" in r2.reply
+
+
+@pytest.mark.parametrize("stage", STAGES)
+@pytest.mark.parametrize("text", ["почему выбрали самолёт?", "почему выбрали перелёт?"])
+def test_why_the_mode_is_no_hotel_card(store, stage, text):
+    r, r2 = ask(store, stage, text)
+    assert "Почему он" not in r2.reply and "★" not in r2.reply
+    assert "Перелёт Москва → Сочи" in r2.reply and "в пути" in r2.reply
+    prices_known(r, r2.reply)
+
+
+def test_why_the_race_shows_the_legs_of_the_plan(store):
+    _, r2 = ask(store, "assemble", "почему этот рейс?")
+    assert "Почему он" not in r2.reply and "Перелёт Москва → Сочи" in r2.reply
+
+
+@pytest.mark.parametrize("stage", STAGES)
+def test_why_the_price_is_no_hotel_card(store, stage):
+    _, r2 = ask(store, stage, "почему эта цена?")
+    assert "Почему он" not in r2.reply and "★" not in r2.reply
+
+
+def test_a_mode_missing_from_the_offers_is_named(store):
+    """No train to Antalya: the answer names the mode and the route."""
+    _, r2 = ask(store, "assemble", "почему не поезд?", ANTALYA)
+    assert "Поездов Москва → Анталия в предложениях плана нет" in r2.reply

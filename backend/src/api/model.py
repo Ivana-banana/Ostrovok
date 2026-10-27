@@ -22,7 +22,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import llm
-from api.answers import CHEM_RE, plan_fact, span, without_plan_fields
+from api.answers import is_hotel_compare, plan_fact, span, without_plan_fields
 from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, sync_plan
 from api.contracts import (
     Cart,
@@ -1389,7 +1389,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if (
         fact
         and ASKING_NOTE not in rules_notes
-        and (is_question(low, asked) or (CHEM_RE.search(low) and not EDIT_KEYS & set(asked)))
+        and (
+            is_question(low, asked)
+            or (is_hotel_compare(old.plan, low) and not EDIT_KEYS & set(asked))
+        )
     ):
         return old.model_copy(
             update={"reply": _question_answer(old, low, message), "questions": [], "llm": False}

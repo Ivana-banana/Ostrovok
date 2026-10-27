@@ -11,6 +11,7 @@ from datetime import timedelta
 from api.contracts import HotelOffer, Plan, TransportOffer
 from api.extract import MONTH
 from api.fixtures import CATALOG, IN_MONTH
+from api.offers import places, resolve_place
 from api.optimizer import hotel_rows
 
 WEATHER_RE = re.compile(
@@ -25,19 +26,23 @@ VERSUS_RE = re.compile(
 NAME_RE = re.compile(r"«([^»]+)»")
 # «чем Бульвар лучше?»: «лучше» here is a comparison, not a wish to change the hotel.
 CHEM_RE = re.compile(r"\bчем\b[^?.!]*\b(?:лучше|хуже)\b")
+CHOICE_WORDS_RE = re.compile(r"\b(?:давай\w*|хоч\w+|хотим|возьм\w+|бер[уиё]\w*|замен\w+|смен\w+)\b")
 WHY_NOT_RE = re.compile(r"\b(?:почему|зачем)\s+(?:же\s+|бы\s+)?не\s+(.+?)\s*\??\s*$")
-THIS_HOTEL_RE = re.compile(
-    r"\b(?:почему|зачем)\b.*(?:\bотел|гостиниц|\bэт(?:от|у|а)\b|\bименно\b|\bвыбра)"
-)
+# Only a question that says «отель» is about the chosen hotel: «почему эта цена?» is not.
+THIS_HOTEL_RE = re.compile(r"\b(?:почему|зачем)\b.*(?:\bотел|гостиниц)")
+RACE_RE = re.compile(r"\bрейс\w*|\bпереезд\w*")
+MODE_NOUN = {"train": "Поездов", "flight": "Перелётов", "car": "Поездки на машине"}
 # A word of a hotel name that is no name: «Шаляпин Палас Отель» is named by «Шаляпин».
 GENERIC_WORDS = {"отель", "hotel", "палас", "город", "апарт", "гостиница", "хостел", "курорт"}
 # What a «почему не …» tail may not be to count as a hotel name: a month, a number, a star,
 # a meal, a comparative, a preposition («в январе», «4 звезды», «с завтраком», «дешевле»).
 NOT_A_NAME_RE = re.compile(
-    r"\d|★|звезд|завтрак|питани|ужин|обед|включен|пансион|парковк|бассейн|"
-    r"(?:по)?(?:дешевле|дороже|ближе|лучше|больше|меньше)|"
-    rf"{MONTH}|^(?:в|во|на|с|со|без|для|по|к|у|за|из|при)\s"
+    r"\d|★|\b(?:одн\w+|дв[ауе]\w*|тр[её]х\w*|четыр\w*|пят\w*)\s+звезд|завтрак|питани|ужин|обед"
+    r"|включен|пансион|парковк|бассейн|\ball\s+inclusive\b|\b(?:u?ai|bb|hb|fb|ro)\b"
+    r"|(?:по)?(?:дешевле|дороже|ближе|лучше|больше|меньше)"
+    rf"|{MONTH}"
 )
+PREPOSITION_RE = re.compile(r"^(?:в|во|на|с|со|без|для|по|к|у|за|из|при)\s")
 MODES = {
     "train": re.compile(r"\bпоезд\w*|\bж/?д\b|сапсан|ласточк"),
     "flight": re.compile(r"\bсамол[её]т\w*|\bперел[её]т\w*|\bавиа\w*"),
@@ -65,11 +70,13 @@ def _words(name: str, shortest: int = 4) -> list[str]:
     return [w for w in ws if len(w) >= shortest and w not in GENERIC_WORDS]
 
 
-def _hit(tokens: list[str], word: str) -> int | None:
-    """Index of the token that is this word with a case ending («Бульвара»); «парковки» is
-    not «Парк»: the ending is two letters at most."""
+def _hit(tokens: list[str], word: str, loose: bool = False) -> int | None:
+    """Index of the token that is this word with a case ending («Бульвара», «Панораму»).
+    A short word (up to 6 letters) is taken whole: «границу» is no «Гранд», «парковки» no «Парк».
+    `loose`: the names of places, which change more («Москву»)."""
+    cut = max(3, len(word) - 2) if loose else (len(word) - 1 if len(word) >= 7 else len(word))
     for i, t in enumerate(tokens):
-        if t.startswith(word[: max(4, len(word) - 2)]) and len(t) <= len(word) + 2:
+        if t.startswith(word[:cut]) and len(t) <= len(word) + 2:
             return i
     return None
 
@@ -81,14 +88,28 @@ def _name_of(hotel: HotelOffer) -> str:
 
 
 def _named_at(low: str, hotel: HotelOffer) -> int | None:
-    """Position of the hotel in the question: one significant word of its name is there."""
+    """Position of the hotel in the question: every significant word of its name is there
+    («Лазурный берег» is not «на берегу», «Северная звезда» is not «4 звезды»)."""
     tokens = re.findall(r"\w+", low)
-    hits = [i for w in _words(_name_of(hotel)) if (i := _hit(tokens, w)) is not None]
-    return min(hits) if hits else None
+    words = _words(_name_of(hotel))
+    hits = [_hit(tokens, w) for w in words]
+    if not words or None in hits:
+        return None
+    return min(i for i in hits if i is not None)
 
 
 def _named(low: str, hotel: HotelOffer) -> bool:
     return _named_at(low, hotel) is not None
+
+
+def is_hotel_compare(plan: Plan, low: str) -> bool:
+    """«Чем Бульвар лучше?»: a hotel stands between «чем» and «лучше/хуже», and nobody orders
+    anything. «давай самолётом, чем быстрее тем лучше» is an order, not a comparison."""
+    m = CHEM_RE.search(low)
+    if not m or CHOICE_WORDS_RE.search(low):
+        return False
+    segment = m.group(0)
+    return any(_named_at(segment, h) is not None for h in hotel_rows(plan.offers, plan.selected))
 
 
 def _cancel(h: HotelOffer) -> str:
@@ -200,11 +221,12 @@ def _line(h: HotelOffer) -> str:
 
 
 def mode_fact(plan: Plan, low: str) -> str:
-    """«Почему не поезд?»: for each chosen leg, the cheapest leg of that mode on its route."""
+    """«Почему не поезд?»: for each chosen leg, the cheapest leg of that mode on its route.
+    «Почему выбрали поезд?», «почему этот рейс?» show the legs of the plan."""
     if not re.search(r"\b(?:почему|зачем|чем)\b", low):
         return ""
     mode = next((m for m, p in MODES.items() if p.search(low)), "")
-    if not mode:
+    if not mode and not RACE_RE.search(low):
         return ""
     legs = [o for o in plan.offers if o.offer_id in plan.selected and isinstance(o, TransportOffer)]
 
@@ -221,35 +243,64 @@ def mode_fact(plan: Plan, low: str) -> str:
             and (o.origin, o.destination) == (leg.origin, leg.destination)
         ]
         route = f"{leg.origin} → {leg.destination}"
-        if leg.mode == mode:
+        if not mode:  # «почему этот рейс?»: the leg of the plan
+            rows.append(f"{route}: в плане {text(leg)}.")
+        elif leg.mode == mode:
             rows.append(f"{route}: в плане уже так — {text(leg)}.")
         elif same:
             alt = min(same, key=lambda o: (o.price_rub, o.offer_id))
             rows.append(f"{route}: в плане {text(leg)}; для сравнения {text(alt)}.")
         else:
-            rows.append(f"{route}: такого транспорта в предложениях плана нет.")
+            rows.append(f"{MODE_NOUN[mode]} {route} в предложениях плана нет.")
     return "\n".join(rows)
+
+
+def why_not_tail(text: str) -> str:
+    """What comes after «почему не», up to a comma: «Бульвар, там же дешевле» is «Бульвар»."""
+    m = WHY_NOT_RE.search(text)
+    return m.group(1).split(",")[0].strip(" ?!.") if m else ""
+
+
+def _is_place(tail: str) -> bool:
+    """A city or a country of the catalogue or of the places snapshot (TRAP-3 spellings)."""
+    if resolve_place(tail):
+        return True
+    tokens = re.findall(r"\w+", tail.lower().replace("ё", "е"))
+    stems = [st for c in CATALOG.values() for st in c["stems"]]
+    countries = {p.get("country", "") for p in places()} | {c["country"] for c in CATALOG.values()}
+    words = [w for c in countries for w in _words(c, 3)]
+    return any(t.startswith(st) for t in tokens for st in stems) or any(
+        _hit(tokens, w, loose=True) is not None for w in words
+    )
 
 
 def unknown_name_fact(plan: Plan, message: str) -> str:
     """«Почему не Лазурь?»: the tail is no hotel of the data. The city of departure and the
-    destination are no hotels either; a tail that is no name («в январе», «дешевле») gets
-    nothing here: the older rules read it. `message` keeps the case: a name starts with a capital."""
-    m = WHY_NOT_RE.search(message.lower().replace("ё", "е"))
-    if not m:
+    destination are no hotels either; a tail that is no name («в январе», «дешевле»,
+    «All inclusive») or another place of the catalogue gets nothing here: the older rules read
+    it. `message` keeps the case: a name starts with a capital."""
+    named = why_not_tail(message.lower().replace("ё", "е"))
+    if not named:
         return ""
-    named = message[m.start(1) : m.end(1)].strip(" ?!.,")
+    m = WHY_NOT_RE.search(message.lower().replace("ё", "е"))
+    named = message[m.start(1) : m.start(1) + len(named)]
     low = named.lower().replace("ё", "е")
-    if not named[:1].isupper() or len(named.split()) > 4 or NOT_A_NAME_RE.search(low):
+    if not named[:1].isupper() or len(named.split()) > 4:
+        return ""
+    if NOT_A_NAME_RE.search(low) or PREPOSITION_RE.search(low):
         return ""
     tokens = re.findall(r"\w+", low)
     rows = hotel_rows(plan.offers, plan.selected)
     have = ", ".join(_name_of(h) for h in rows)
-    if plan.spec.origin and any(_hit(tokens, w) is not None for w in _words(plan.spec.origin, 3)):
+    if plan.spec.origin and any(
+        _hit(tokens, w, loose=True) is not None for w in _words(plan.spec.origin, 3)
+    ):
         return f"«{named}» — город вылета, а не отель. Отели в данных: {have}."
     spots = plan.spec.destinations
-    if any(_hit(tokens, w) is not None for d in spots for w in _words(d, 3)):
+    if any(_hit(tokens, w, loose=True) is not None for d in spots for w in _words(d, 3)):
         return f"«{named}» — это и есть направление плана, а не отель. Отели в данных: {have}."
+    if _is_place(named):
+        return ""  # another place: the older rules offer the change of the destination
     city = spots[0] if spots else "этого направления"
     return (
         f"«{named}» нет в данных (отели: {city}); сравнить не с чем, выдумывать не буду. "
@@ -323,9 +374,13 @@ def plan_fact(plan: Plan, low: str, message: str = "") -> str:
     `low` is the message in lower case without «ё»; `message` is the same with its case, for
     the name of a hotel that is not in the data. A named hotel goes first: «почему не
     Бульвар, там же море ближе?» asks about the hotel, not the weather."""
-    if fact := versus_fact(plan, low):
+    tail = why_not_tail(low)
+    hotel_tail = not (tail and NOT_A_NAME_RE.search(tail))  # «почему не 4 звезды?» names none
+    if hotel_tail and (fact := versus_fact(plan, low)):
         return fact
-    if fact := this_hotel_fact(plan, low) or mode_fact(plan, low):
+    if fact := mode_fact(plan, low):  # «почему выбрали поезд?» is no question about a hotel
+        return fact
+    if hotel_tail and (fact := this_hotel_fact(plan, low)):
         return fact
     if message and (fact := unknown_name_fact(plan, message)):
         return fact
