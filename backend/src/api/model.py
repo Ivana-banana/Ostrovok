@@ -56,6 +56,7 @@ from api.dag import (
 from api.dag import changes as plan_changes
 from api.extract import (
     ASKING_NOTE,
+    CAPITAL_PLACES,
     DATE_KEYS,
     DEFAULT_NIGHTS,
     HOTEL_NOTE,
@@ -67,6 +68,7 @@ from api.extract import (
     NUMS,
     PAST_WINDOW,
     PER_NIGHT_NOTE_RE,
+    PLACE_RES,
     SEASONS,
     excluded_places,
     extract,
@@ -255,9 +257,12 @@ LABELS = {
 # #139: cities as candidates («Сочи или Анапа») get the same notice and chips.
 ROUTE = "маршрут"
 CANDIDATES = "варианты"
-# A link word makes a route only right before a city: «потом в Казань», not «потом решим».
-LINK = r"\b(?:потом|затем|далее|оттуда|следом|а\s+после(?:\s+(?:этого|того|чего))?|после\s+(?:этого|того|чего))"
-LINK_RE = re.compile(LINK + r"(?:\s+(?:еще|тоже))?\s+(?:(?:в|во|на|к|ко)\s+)?([\w-]+)")
+# A link word makes a route when a later city of the message stands in its clause:
+# «потом в Казань», «потом поедем в Казань»; not «потом решим», «потом на море».
+LINK_RE = re.compile(
+    r"\b(?:потом|затем|далее|оттуда|следом|а\s+после(?:\s+(?:этого|того|чего))?"
+    r"|после\s+(?:этого|того|чего))\b([^,.;!?\n]*)"
+)
 ROUTE_RE = re.compile(
     r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
 )
@@ -520,6 +525,26 @@ def assume(spec: TripSpec) -> TripSpec:
     return TripSpec.model_validate(data)
 
 
+def _city_in_clause(message: str, low: str, link: re.Match, later: list[str]) -> bool:
+    """A city of `later` is named for the first time inside the clause of the link word.
+
+    Only the cities extract() found: no geocoder, no catalogue lookup (TRAP-6). Surface forms
+    come from the patterns of extract: «Питер», «в Казани».
+    """
+    start, end = link.start(1), link.end(1)
+    for name in later:
+        found = [rx.search(low) for n, rx in PLACE_RES if n == name]
+        if len(message) == len(low):  # the capital-letter names: «Нижний Новгород»
+            found += [rx.search(message) for n, rx in CAPITAL_PLACES if n == name]
+        stem = name.lower().replace("ё", "е")  # a name outside the patterns: as it is written
+        found.append(re.search(r"\b" + re.escape(stem[:-1] if len(stem) > 4 else stem), low))
+        if any(m and start <= m.start() < end for m in found):
+            first = min((m.start() for m in found if m), default=start)
+            if first >= link.start():
+                return True
+    return False
+
+
 def is_route(message: str, destinations: list[str]) -> bool:
     """#128: several cities named as a route («потом в Казань», two cities each with nights).
 
@@ -529,7 +554,7 @@ def is_route(message: str, destinations: list[str]) -> bool:
     if len(destinations) < 2 or OR_RE.search(low):
         return False
     stays = STAY_RE.findall(AHEAD_RE.sub(" ", low))
-    linked = any(resolve_place(m.group(1)) for m in LINK_RE.finditer(low))
+    linked = any(_city_in_clause(message, low, m, destinations[1:]) for m in LINK_RE.finditer(low))
     return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1
 
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from api import checks, model
+from api import catalog, checks, model
 from api.contracts import ChatRequest
 from api.model import CANDIDATES, ROUTE, chat, is_route, severals
 from api.store import SessionStore
@@ -27,6 +27,7 @@ NOT_ROUTES = [
     ("Либо Сочи, либо Анапа, а там посмотрим", ["Сочи", "Анапа"]),
     ("Сочи и Анапа на неделю, затем сравню", ["Сочи", "Анапа"]),
     ("Сочи или Анапа, потом в Казань", ["Сочи", "Анапа", "Казань"]),  # accepted risk
+    ("Сочи и Анапа на 5 ночей, потом поищу отель в Анапе", ["Сочи", "Анапа"]),  # named before
 ]
 ROUTES = [
     ("Из Москвы в Питер на 2 ночи, потом в Казань на 2 ночи", ["Санкт-Петербург", "Казань"]),
@@ -40,6 +41,12 @@ ROUTES = [
     ("Питер, а после этого в Казань", ["Санкт-Петербург", "Казань"]),
     ("Сочи 3 дня, Анапа 4 дня", ["Сочи", "Анапа"]),
     ("Москва — Питер — Казань", ["Санкт-Петербург", "Казань"]),
+    # Routes on main: the city stands later in the clause of the link word, not right after it.
+    ("Из Москвы в Питер, потом поедем в Казань", ["Санкт-Петербург", "Казань"]),
+    ("Сначала Питер на 3 ночи, потом хотим в Казань", ["Санкт-Петербург", "Казань"]),
+    ("Питер, затем на поезде в Казань", ["Санкт-Петербург", "Казань"]),
+    ("В Питер, потом на пару дней в Казань", ["Санкт-Петербург", "Казань"]),
+    ("Питер, потом заедем в Казань", ["Санкт-Петербург", "Казань"]),
 ]
 
 
@@ -93,5 +100,40 @@ def test_s11_fails_when_the_second_city_is_lost_silently(fresh_runs, monkeypatch
     monkeypatch.setattr(model, "severals", lambda message, destinations: None)
     ok, note = checks.check_S11(S11)
     assert not ok
-    assert "п.1" in note and "п.2" in note and "п.4" in note
+    assert all(f"п.{i}" in note for i in "1245")
     assert "п.3" not in note  # the booking of the first city itself goes through
+
+
+@pytest.mark.parametrize(
+    "text", ["Сочи и Анапа на 5 ночей, потом на море", "Сочи и Анапа на 5 ночей, потом решим"]
+)
+def test_trap_6_is_route_does_not_ask_the_geocoder(monkeypatch, geo, text):
+    """TRAP-6: a word after the link is no place query: no network call, no «Море» of France."""
+    answer = geo("море")
+    calls = []
+
+    def fetch(url, params):
+        calls.append(params)
+        return answer(url, params)
+
+    monkeypatch.setattr(catalog, "_get", fetch)
+    assert not is_route(text, ["Сочи", "Анапа"])
+    assert severals(text, ["Сочи", "Анапа"]) == CANDIDATES
+    assert calls == []
+    assert not catalog.ONLINE_CACHE.exists()
+
+
+def test_trap_6_the_sea_after_the_link_is_still_candidates(store, monkeypatch, geo):
+    monkeypatch.setattr(catalog, "_get", geo("море"))
+    r = chat(ChatRequest(session_id=None, message="Сочи и Анапа на 5 ночей, потом на море"), store)
+    assert [a for a in r.plan.spec.assumptions if a.startswith("варианты:")]
+    assert not [a for a in r.plan.spec.assumptions if a.startswith("маршрут:")]
+    assert "В плане только:" not in r.reply
+
+
+def test_s11_fails_when_the_route_notice_is_missing(fresh_runs, monkeypatch):
+    """The route is taken for candidates: the second city is named, but not as a lost one."""
+    monkeypatch.setattr(model, "is_route", lambda message, destinations: False)
+    ok, note = checks.check_S11(S11)
+    assert not ok
+    assert "п.5" in note

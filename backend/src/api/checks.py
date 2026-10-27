@@ -1556,6 +1556,14 @@ def _s11_items(run: Run) -> dict[str, str | None]:
             f"кнопки с {S11_SECOND} нет",
         ),
         "3": _need(voucher is not None, f"до ваучера не дошли: {_stuck(run)}"),
+        "5": _need(
+            first is not None
+            and (
+                any(a.startswith("маршрут:") for a in first.plan.spec.assumptions)
+                or "В плане только" in first.reply
+            ),
+            "ответ не говорит, что в плане только первый город (нет строки «маршрут:»)",
+        ),
         "4": _need(
             covered or (cart_notice and voucher_notice),
             f"бронь одного города без пометки о втором: корзина {cart_notice}, "
