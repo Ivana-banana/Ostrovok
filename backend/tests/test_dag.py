@@ -170,7 +170,7 @@ def test_spec_edit_at_compare_shows_the_issues_line(store):
     r = say(store, SOCHI)
     assert r.stage == "compare" and r.plan.issues
     old_issues = "; ".join(i.text for i in r.plan.issues)
-    r = say(store, "а 4 ночи", r.session_id)
+    r = say(store, "а с 25 ноября", r.session_id)
     assert r.stage == "compare"
     line = next(c for c in r.plan.changes if c.what == "стыковки")
     new_issues = "; ".join(i.text for i in r.plan.issues)
