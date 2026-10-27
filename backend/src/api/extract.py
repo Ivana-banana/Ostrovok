@@ -1158,12 +1158,18 @@ def llm_past_dates(llm_found: dict, today: date | None = None) -> str | None:
     return f"даты: от модели {start:%d.%m.%Y} {PAST_GONE_MARK} — не применены"
 
 
+# «через 3 дня», «через неделю»: groups are the number and the unit.
+IN_DAYS = re.compile(rf"\bчерез\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)")
+
+
 def _busy_days(t: str, m: re.Match) -> bool:
-    """«с понедельника по пятницу работаю»: working days, not trip dates."""
-    busy = r"(?:работа\w+|занят\w*|учу\w*|дежур\w+|на работе)"
+    """«с понедельника по пятницу работаю»: working days, not trip dates.
+
+    Only first-person words next to the range count: «занятия для ребёнка» is no busy day."""
+    busy = r"(?:работаю|работаем|занят[аы]?|учусь|учимся|дежурю)\b"
     return bool(
-        re.match(rf"[\s,.;—-]*(?:я\s+)?{busy}", t[m.end() :])
-        or re.search(rf"\b{busy}\s+$", t[: m.start()])
+        re.match(rf"[\s,.;—-]*(?:я\s+|мы\s+)?(?:{busy}|на работе\s*(?:[,.;!]|$))", t[m.end() :])
+        or re.search(rf"\b(?:{busy}|на работе)\s+$", t[: m.start()])
     )
 
 

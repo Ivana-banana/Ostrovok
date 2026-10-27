@@ -942,3 +942,12 @@ def test_weekday_range_of_work_days_is_no_trip_range(tuesday, text):
         assert (found["date_from"], found["date_to"]) == (date(2026, 10, 30), date(2026, 11, 1))
     else:
         assert "date_to" not in found
+
+
+@pytest.mark.parametrize(
+    "tail",
+    ["занятия для ребёнка в отеле", "работает ли аквапарк", "на работе отпустят"],
+)
+def test_weekday_range_stays_when_a_busy_word_is_no_first_person_busy_day(tuesday, tail):
+    found, _ = extract(f"Казань с пятницы по воскресенье, {tail}")
+    assert (found["date_from"], found["date_to"]) == (date(2026, 10, 30), date(2026, 11, 1))
