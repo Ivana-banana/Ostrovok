@@ -94,3 +94,14 @@ def test_trap_2_the_country_is_not_kept_for_another_unknown_place(store):
     other = say(store, "давай в Кандалакшу", r.session_id)
     assert other.plan.spec.destinations[0].startswith("Кандалакш")
     assert [q.options for q in other.questions] == [[]]
+
+
+@pytest.mark.parametrize("region", ["Патагония", "Краснодарский край"])
+def test_trap_2_region_answer_does_not_loop(store, region):
+    first = say(store, ASK)
+    assert "регион" not in first.questions[0].text and "регион" not in first.reply
+    r = say(store, region, first.session_id)
+    assert r.stage == "select" and NOT_IN_CATALOG in r.reply
+    assert r.questions and r.questions[0].text != first.questions[0].text
+    assert r.questions[0].options  # honest fallback: catalogue variants as buttons
+    assert "не рядом" in r.reply or "не обязательно рядом" in r.reply

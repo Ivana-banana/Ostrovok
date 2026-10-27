@@ -165,9 +165,9 @@ def country_in(text: str) -> str | None:
     for i, w in enumerate(words):
         if w in ORIGIN_WORDS:
             continue
+        if i and words[i - 1] in ORIGIN_WORDS:
+            continue
         for n in (1, 2, 3):
-            if i and words[i - 1] in ORIGIN_WORDS:
-                break
             if c := country_of(" ".join(words[i : i + n])):
                 return c
     return None

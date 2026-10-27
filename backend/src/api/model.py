@@ -1664,7 +1664,7 @@ def _unknown_place(plan: Plan, message: str, asked: list[Question]) -> tuple[str
         f"Направления «{place}» пока {NOT_IN_CATALOG}, "
         "и геокодер его не нашёл (или нет сети). Где это место, не знаю."
     )
-    kept = re.search(r"страны «(.+?)»", asked[0].text) if asked else None
+    kept = next((m for q in asked if (m := re.search(r"страны «(.+?)»", q.text))), None)
     country = catalog.country_in(message) or (kept.group(1) if kept else None)
     skip = [spec.origin, *refused_before(spec)]
     found = [
@@ -1674,8 +1674,15 @@ def _unknown_place(plan: Plan, message: str, asked: list[Question]) -> tuple[str
     ][:3]
     names = [p["name"] for p in found]
     if not names:
-        ask = f"В какой стране или регионе находится «{place}»?"
-        hint = "Назовите страну или регион — предложу город этой страны из каталога."
+        ask = f"В какой стране находится «{place}»?"
+        if any(q.text == ask for q in asked):
+            # The country was asked and not recognised (a region, a country outside the catalogue):
+            # no dialog loop — the catalogue variants, said honestly to be unrelated to the place.
+            text += " Страну по вашему ответу не определил: я узнаю только страну, не регион."
+            text, questions = _no_offers(plan, text, [place])
+            if questions:
+                return text + " Они не обязательно рядом с этим местом.", questions
+        hint = "Назовите страну — предложу город этой страны из каталога."
         return f"{text} {hint} Или выберите другое направление.", [Question(text=ask)]
     hub, note = catalog.origin_hub(spec.origin or "Москва")
     plan.destinations = [card(spec, hub, p, note) for p in found]  # «1» picks by this order

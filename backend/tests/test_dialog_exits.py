@@ -106,9 +106,10 @@ def test_unknown_city_answer_has_two_or_three_variants(store):
     r = say(store, "Хиврии, 3 ночи с 20 ноября")
     assert r.stage == "select" and "другое направление" in r.reply
     assert r.questions[0].options == []  # #346: the country is asked, no unrelated cities
-    # A message with no new city and no country gets the question again.
+    # No country the second time: no loop, honest catalogue variants (not near the place).
     again = say(store, "не знаю", r.session_id)
-    assert again.stage == "select" and again.questions[0].options == []
+    assert again.stage == "select" and again.questions[0].options
+    assert "не обязательно рядом" in again.reply
     r = say(store, "Хорватия", r.session_id)
     options = r.questions[0].options
     assert 2 <= len(options) <= 3 and all(in_catalog(o) for o in options)
