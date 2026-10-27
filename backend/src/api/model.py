@@ -19,6 +19,7 @@ import re
 from calendar import monthrange
 from datetime import date, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from api import llm
 from api.cart import CartRefusal, checkout_reply, fill_cart
@@ -126,12 +127,27 @@ QUESTION_WORD_RE = re.compile(r"\b(?:сколько|есть\s+ли|включе
 STRONG_CONFIRM_RE = re.compile(r"\b(?:да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*)\b")
 # «нужен ли трансфер?» and «можно ли …?» ask; «нужен трансфер» and «можно с бассейном» order.
 # A comparative («подешевле», «ближе») or «а есть что-нибудь…» asks for other offers: an edit.
+# «а трансфер нужен?» and «можно будет отменить?» ask too (#181). A wish after «есть» or «можно
+# ли с» («а с бассейном есть?», «можно ли с бассейном?») is a request: the model reads it.
 REQUEST_RE = re.compile(
-    r"\b(?:можно|нужен|нужн\w+|надо)\b(?!\s+ли\b)"
+    r"\b(?:можно|нужен|нужн\w+|надо)\b(?!\s+(?:ли|будет)\b)"
+    r"|\bс\s+\w+\s+есть\b|\bесть\s+с\s+\w|\bможно\s+(?:ли|будет)\s+с\s+\w"
     r"|\b(?:хоч\w+|хотим|добав\w+|убер\w+|замен\w+|смен\w+|поменя\w+|измен\w+|перенес\w+"
     r"|подвин\w+|сдвин\w+|исключ\w+|с\s+нами|поедем|планиру\w+"
     r"|(?:по)?(?:дешевле|дороже|ближе|лучше|больше|меньше)"
     r"|а\s+есть\s+(?:что-нибудь|что-то|вариант\w*|друг\w+))\b"
+)
+# A bare «трансфер нужен?» or «можно?» asks. «с бассейном можно?», «поездом можно?», «у моря
+# нужно?» name a wish before the word: a request, as before #181.
+BARE_ASK_RE = re.compile(r"\b(?:можно|нужен|нужн\w+|надо)\s*\?")
+WISH_BEFORE_RE = re.compile(
+    r"\b(?:с|со|без|у)\s+\w+|\b(?:поезд|самол|перел|рейс|авиа|автобус|машин|такси|мор)\w*"
+)
+# «что если рейс задержат?» asks what would happen: it picks no transport. «возьми поезд, если
+# есть?» has a choice verb: it picks.
+HYPOTHESIS_RE = re.compile(r"\bесли\b[^?]*\?|\b(?:задерж|опозда)\w*")
+CHOICE_RE = re.compile(
+    r"\b(?:возьм|бер[уие]|давай|хоч|хотим|поменя|смен|замен|переключ|выбер|оформ)\w*"
 )
 EDIT_KEYS = {
     "destinations", "date_from", "date_to", "month", "nights", "adults", "children_ages",
@@ -676,7 +692,10 @@ def is_question(low: str, found: dict) -> bool:
     """A question about the plan or the cart, not an edit (#81). `low` is lower case, no «ё»."""
     if (
         BOOK_RE.search(low)
-        or REQUEST_RE.search(low)
+        or any(
+            not (BARE_ASK_RE.match(low, m.start()) and not WISH_BEFORE_RE.search(low[: m.start()]))
+            for m in REQUEST_RE.finditer(low)
+        )
         or SHIFT_RE.search(low)
         or DATE_EDIT_RE.search(low)
         or OTHER_RE.search(low)
@@ -689,10 +708,58 @@ def is_question(low: str, found: dict) -> bool:
     return "?" in low and not CONFIRM_RE.search(low)
 
 
-def _question_answer(old: ChatReply) -> str:
+FACT_TOPICS = (
+    (re.compile(r"отмен|возврат|вернут|вернет"), "cancel"),
+    (re.compile(r"трансфер"), "transfer"),
+    (re.compile(r"\bдет|реб[её]н"), "kids"),
+    (re.compile(r"задерж|опозда"), "delay"),
+)
+
+
+def _question_fact(old: ChatReply, low: str) -> str:
+    """One line with the fact the question asks about. It comes from the plan or the spec only
+    (TRAP-4); no data in the plan means we say so. Each price is marked as synthetic (TRAP-7)."""
+    plan = old.plan
+    chosen = [o for o in plan.offers if o.offer_id in plan.selected]
+    topic = next((t for r, t in FACT_TOPICS if r.search(low)), "")
+    if topic == "delay":
+        return (
+            "Данных о задержках рейсов нет, прогноз не даю: время в плане — по расписанию "
+            "каталога (синтетика)."
+        )
+    if topic == "cancel":
+        hotel = next((o for o in chosen if o.kind == "hotel"), None)
+        if hotel is None:
+            return "Отель в плане не выбран, условий отмены назвать не могу."
+        c = hotel.cancellation
+        if not c.refundable:
+            return f"{hotel.title}: тариф невозвратный, бесплатной отмены нет."
+        until = (
+            f" до {c.free_until.astimezone(ZoneInfo(hotel.tz)):%d.%m %H:%M}" if c.free_until else ""
+        )
+        return f"{hotel.title}: бесплатная отмена{until}."
+    if topic == "transfer":
+        rows = [
+            f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in chosen if o.kind == "transfer"
+        ]
+        return "Трансфер в плане: " + "; ".join(rows) + "." if rows else "Трансфера в плане нет."
+    if topic == "kids":
+        ages = plan.spec.children_ages
+        if not ages:
+            return "Детей в составе нет. Чтобы добавить, напишите возраст: «с ребёнком 5 лет»."
+        return (
+            f"В составе: {plan.spec.adults} взр. + дети {', '.join(map(str, ages))} лет. "
+            "Отдельной строки «дети бесплатно» в данных нет."
+        )
+    return ""
+
+
+def _question_answer(old: ChatReply, low: str = "") -> str:
     """The reply to a question at assemble or checkout: the facts of the plan or the cart only
     (TRAP-4), the stage and the cart stay."""
     head = "Это вопрос: план и корзину не меняю."
+    if fact := _question_fact(old, low):
+        head += "\n" + fact
     if old.stage == "assemble":
         return f"{head}\n{_text_assemble(old.plan)}"
     rows = [f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in old.cart.items]
@@ -929,7 +996,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # #179: «А дети бесплатно?» at a built plan is a question, not a party: nobody is added.
     asking = old.stage in PLAN_STAGES and is_child_question(message)
     rules_found, rules_notes = extract(message, bool(old.plan.spec.destinations), asking=asking)
-    pure = set(rules_found) <= {"modes"} and not SHIFT_RE.search(t.replace("ё", "е"))
+    pure = (
+        set(rules_found) <= {"modes"}
+        and not SHIFT_RE.search(low)
+        and not (HYPOTHESIS_RE.search(low) and not CHOICE_RE.search(low))
+    )
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
         plan, note = switch_transport(old.plan, message)
         if old.stage == "checkout" and (plan or note):
@@ -946,7 +1017,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if prev and old.stage in ("assemble", "checkout") and is_question(low, rules_found):
         # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
         kids_only = asking and ASKING_NOTE in rules_notes and not rules_found
-        text = _text_kids_question(old) if kids_only else _question_answer(old)
+        text = _text_kids_question(old) if kids_only else _question_answer(old, low)
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     # A month after dates the user named (#190): a clear request moves them below (merge);
     # a refusal or a doubt moves nothing and is never a consent («давай в январе?»).
