@@ -1,6 +1,6 @@
 ---
 name: builder
-description: Does one GitHub Issues task in the given worktree - code, test, make check, commit, scripts/finish.sh. Use for any task that changes code, data, tests or docs. Does not change a contract or dependencies - stops and reports. Task complexity "высокая" - run with model opus.
+description: Does one GitHub Issues task in the given worktree - code, targeted tests, commit, scripts/finish.sh. Use for any task that changes code, data, tests or docs. Does not change a contract or dependencies - stops and reports. Task complexity "высокая" - run with model opus.
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: sonnet
 color: blue
@@ -34,7 +34,8 @@ Think, plan and work in English. Write in Russian only what people read: the out
 2. A logic bug — first a test that reproduces it. New logic — a test through the public
    contract. A data trap — its own test.
 3. Write the code. Mark a stub in the demo path `TODO(#N)` and name it in the report.
-4. Mode `сборка`: `make check` until green. Mode `финал`: `make lint`; do not run tests
+4. Mode `сборка`: run only the test files the change touches and `make lint` until green.
+   Do not run full `make check`: `finish.sh` runs it once before the PR. Mode `финал`: `make lint`; do not run tests
    unless a human asked for «полный прогон».
 5. The task touches a metric — `make eval`, put "before → after" in the report.
 6. Commit and run `bash scripts/finish.sh`. Code 3 — the PR waits for `reviewer`: return
@@ -51,7 +52,7 @@ Think, plan and work in English. Write in Russian only what people read: the out
 
 ```
 #<N> PR #<k> <sha>: что изменилось для пользователя — одна строка
-Проверки: make check ок | make lint ок, тесты не запускал (финал)
+Проверки: <команда тестов> ок, make lint ок | make lint ок, тесты не запускал (финал)
 eval: <метрика было → стало> | не трогал
 Заглушки в демо-пути: <TODO(#N)…> | нет
 Нужно: reviewer / контракт / зависимость / вопрос | нет

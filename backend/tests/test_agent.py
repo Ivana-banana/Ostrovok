@@ -152,6 +152,14 @@ def test_trap_4_unknown_origin_offline_is_moscow_with_a_note(store):
     assert any(a.startswith("откуда:") and "не нашёл" in a for a in spec.assumptions)
 
 
+def test_hub_origin_named_later_stays_and_drops_the_hub_note(store):
+    """#104: Казань is a hub: a rebuild «из Казани» keeps it and the Суздаль note goes."""
+    r = say(store, "Из Суздаля в Сочи в ноябре на 5 ночей")
+    spec = say(store, "из Казани", r.session_id).plan.spec
+    assert spec.origin == "Казань"
+    assert not any(a.startswith("откуда:") for a in spec.assumptions)
+
+
 def test_origin_city_is_never_offered_as_destination(store):
     # #94: «недорого на выходные из Казани»: Kazan is the origin, not a destination
     assert extract("недорого на выходные из Казани")[0].get("destinations") is None

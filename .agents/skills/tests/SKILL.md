@@ -1,6 +1,6 @@
 ---
 name: "tests"
-description: "Set the test mode for this project, or run the tests now."
+description: "Run the tests now and report the result."
 ---
 <!-- Сгенерировано scripts/codex-sync.py из .claude/skills/tests/SKILL.md — не править руками. -->
 

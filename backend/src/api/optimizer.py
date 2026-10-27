@@ -8,8 +8,10 @@
   refundable=True, modes, max_travel_hours (each leg), pets (hotel and every leg), children
   (family or kids_club), «тяжело ходить» (wheelchair or elevator), car (parking), budget.
 - Fallback when nothing passes: the bundles with the fewest broken requirements other than
-  the budget, then the smallest budget overrun. The budget gives way first: a hotel without
-  the dog is no option, an overrun is a number the user sees. Every broken rule is a risk.
+  the budget, then the smallest budget overrun. The budget gives way first. Every broken rule
+  is a risk. Pets have no fallback (#131): a trip with a hotel or a leg that refuses the pet is
+  never selected. If every trip refuses it, optimize selects the legs that take the pet and no
+  hotel, or nothing if no leg takes it; dead_end_text says why.
 - Score: weights from TripSpec.priorities (order -> weights, DEFAULT_WEIGHTS when empty,
   «недорого» means price first) over min-max scores of the candidates. Ties: lower total,
   shorter trip, then offer ids, so the result does not depend on the offer order.
@@ -91,7 +93,8 @@ class Trip:
     back: TransportOffer | None
     transfers: list[TransferOffer]
     rules: list[str] = field(default_factory=list)  # broken requirements except the budget
-    over: int = 0  # budget overrun, roubles
+    over: int = 0  # overrun of the trip budget and of the hotel budget together, roubles
+    hotel_over: int = 0  # the part of `over` that is the hotel above the hotel budget
     score: float = 0.0
 
     @property
@@ -228,7 +231,7 @@ def broken_rules(spec: TripSpec, t: Trip) -> list[str]:
         if spec.pets and not leg.pets_allowed:
             out.append(f"{leg.title}: животных не берут")
     if spec.pets and not h.pets_allowed:
-        out.append(f"{h.title}: животных не принимают")
+        out.append(f"{h.title}: нет отметки о приёме животных в данных отеля")
     if spec.children_ages and not {"family", "kids_club"} & set(h.amenities):
         out.append(f"{h.title}: нет отметки «для семей с детьми» в данных отеля")
     if "тяжело ходить" in spec.wishes and not {"wheelchair", "elevator"} & set(h.amenities):
@@ -268,13 +271,28 @@ def _score(trips: list[Trip], w: dict[Priority, float]) -> None:
         t.score = sum(w[c] * columns[c][i] for c in CRITERIA)
 
 
+def pets_ok(t: Trip) -> bool:
+    """The hotel and every leg of the trip take pets."""
+    return t.hotel.pets_allowed and all(leg.pets_allowed for leg in t.legs)
+
+
 def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
-    """Trips to choose from and whether they break nothing; sorted best first."""
+    """Trips to choose from and whether they break nothing; sorted best first.
+
+    With a pet only the trips that take it are candidates (#131). When none does, the pool is
+    the old fewest-rules one, for the callers that must rank something; optimize() selects
+    nothing then.
+    """
     for t in trips:
         t.rules = broken_rules(spec, t)
-        t.over = max(0, t.total - spec.budget_rub) if spec.budget_rub is not None else 0
-    fewest = min(len(t.rules) for t in trips)
-    pool = [t for t in trips if len(t.rules) == fewest]
+        trip_over = max(0, t.total - spec.budget_rub) if spec.budget_rub is not None else 0
+        hotel = spec.hotel_budget_rub
+        t.hotel_over = max(0, t.hotel.price_rub - hotel) if hotel is not None else 0
+        t.over = trip_over + t.hotel_over
+    candidates = [t for t in trips if pets_ok(t)] if spec.pets else []
+    candidates = candidates or trips
+    fewest = min(len(t.rules) for t in candidates)
+    pool = [t for t in candidates if len(t.rules) == fewest]
     if any(t.over == 0 for t in pool):
         pool = [t for t in pool if t.over == 0]
     _score(pool, weights(spec))
@@ -289,7 +307,9 @@ def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
     return pool, fewest == 0 and not pool[0].over
 
 
-def _alternatives(best: Trip, pool: list[Trip], trips: list[Trip]) -> list[tuple[str, Trip]]:
+def _alternatives(
+    spec: TripSpec, best: Trip, pool: list[Trip], trips: list[Trip]
+) -> list[tuple[str, Trip]]:
     """(label, trip) of another kind than the best one; each trip once."""
     by_price = sorted(pool, key=lambda t: (t.total, t.key))
     kinds = [
@@ -303,6 +323,7 @@ def _alternatives(best: Trip, pool: list[Trip], trips: list[Trip]) -> list[tuple
         ("самый комфортный", min(pool, key=lambda t: t.comfort_key), None),
     ]
     in_budget = sorted((t for t in trips if t.over == 0), key=lambda t: (len(t.rules), t.key))
+    in_budget = [t for t in in_budget if pets_ok(t)] if spec.pets else in_budget
     if best.over and in_budget:  # first: MAX_ALTERNATIVES must not push it out
         kinds.insert(0, ("в бюджете", in_budget[0], True))
     out: list[tuple[str, Trip]] = []
@@ -351,6 +372,8 @@ def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
     if h.rating is not None:
         facts.append(f"рейтинг {h.rating}")
     facts.append(MEAL_TEXT[h.meal])
+    if spec.pets and h.pets_allowed:
+        facts.append("принимает животных")
     if h.cancellation.refundable and h.cancellation.free_until:
         facts.append(f"бесплатная отмена до {h.cancellation.free_until:%d.%m}")
     else:
@@ -363,6 +386,8 @@ def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
     if t.transfers:
         parts.append(f"трансферы {_rub(t.transfer_rub)}")
     why = f"{', '.join(facts)}; поездка целиком {_rub(t.total)} ({' + '.join(parts)})"
+    if spec.hotel_budget_rub is not None and not t.hotel_over:
+        why += f"; отель в бюджете отеля {_rub(spec.hotel_budget_rub)}"
     order = list(dict.fromkeys(spec.priorities))
     if order:
         why += "; ваш порядок важности: " + " → ".join(PRIORITY_TEXT[p] for p in order)
@@ -432,19 +457,73 @@ def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
     return out
 
 
+def _pets_skipped(spec: TripSpec, trips: list[Trip]) -> list[str]:
+    """Hotels and legs left out because they do not take the pet, from offer fields."""
+    if not spec.pets:
+        return []
+    hotels = sorted({t.hotel.title for t in trips if not t.hotel.pets_allowed})
+    legs = {x.title: x for t in trips for x in t.legs if not x.pets_allowed}
+    out = []
+    if hotels:
+        out.append(
+            f"с животным не выбраны отели без отметки о приёме животных: {'; '.join(hotels)}"
+        )
+    if legs:
+        modes = sorted({MODE_TEXT[x.mode] for x in legs.values()})
+        out.append(f"с животным не выбраны рейсы, где животных не берут ({', '.join(modes)})")
+    return out
+
+
+def pets_possible(spec: TripSpec, offers: list[Offer]) -> bool:
+    """Whether some trip takes the pet; true without a pet or without trips."""
+    trips = enumerate_trips(offers)
+    return not spec.pets or not trips or any(pets_ok(t) for t in trips)
+
+
+def dead_end_text(spec: TripSpec, offers: list[Offer]) -> str:
+    """Why no trip takes the pet and what the user can do; empty when a trip takes it."""
+    if pets_possible(spec, offers):
+        return ""
+    trips = enumerate_trips(offers)
+    place = spec.destinations[0]
+    if any(all(x.pets_allowed for x in t.legs) for t in trips):
+        n = len({t.hotel.title for t in trips})
+        return (
+            f"Направление «{place}»: с питомцем не нашёл отель, который точно принимает животных. "
+            f"Ни у одного из {n} отелей в данных нет отметки о приёме животных. Это не отказ, а условие, "
+            "которое не подтверждено. Варианты: выбрать отель из списка по номеру, предварительно "
+            "уточнив у отеля, что он принимает животных; или другой город, "
+            "где поездка с питомцем возможна."
+        )
+    _pool(spec, trips)
+    closest = min(trips, key=lambda t: (len(t.rules), t.key))
+    why = "; ".join(r for r in closest.rules if "животн" in r)
+    return (
+        f"Направление «{place}»: с питомцем не получается собрать поездку: {why}. "
+        "Выберите другое направление."
+    )
+
+
 def _risks(spec: TripSpec, t: Trip, fits: bool, trips: list[Trip]) -> list[str]:
     out = []
     if not fits:
         out.append("ни один вариант не подходит под все условия — выбран ближайший")
     out += t.rules
-    if t.over and spec.budget_rub is not None:
+    if t.hotel_over and spec.hotel_budget_rub is not None:
+        out.append(
+            f"отель не укладывается в бюджет отеля {_rub(spec.hotel_budget_rub)}: "
+            f"{_rub(t.hotel.price_rub)}, на {_rub(t.hotel_over)} больше"
+        )
+    trip_over = t.over - t.hotel_over
+    if trip_over and spec.budget_rub is not None:
         line = (
             f"не укладывается в бюджет {_rub(spec.budget_rub)}: поездка целиком "
-            f"{_rub(t.total)}, на {_rub(t.over)} больше"
+            f"{_rub(t.total)}, на {_rub(trip_over)} больше"
         )
         if t.hotel.price_rub <= spec.budget_rub < t.total:
             line += f"; отель {_rub(t.hotel.price_rub)} укладывается, сверху дорога и трансферы"
         out.append(line)
+    if t.over:
         cheap = [x for x in trips if x.over == 0]
         if cheap:
             c = min(cheap, key=lambda x: (len(x.rules), x.key))
@@ -503,7 +582,15 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
         return Ranked([], [], [])
     pool, fits = _pool(spec, trips)
     best = pool[0]
-    sacrificed = _sacrificed(spec, best, pool)
+    if spec.pets and not pets_ok(best):
+        # Nothing takes the pet (#131). The legs that take it may stay; no hotel is chosen for
+        # the user: he picks one himself after he checks it, or goes elsewhere.
+        ok = [t for t in trips if all(x.pets_allowed for x in t.legs)]
+        if not ok:
+            return Ranked([], [], [])
+        t = min(ok, key=lambda t: (t.road, t.hours, tuple(x.offer_id for x in t.legs)))
+        return Ranked([x.offer_id for x in t.legs], [_leg_why(t, x, offers) for x in t.legs], [])
+    sacrificed = _sacrificed(spec, best, pool) + _pets_skipped(spec, trips)
     explanations = [
         Explanation(
             offer_id=best.hotel.offer_id,
@@ -515,7 +602,9 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
     explanations += [_leg_why(best, leg, offers) for leg in best.legs]
     label = "лучший по вашим приоритетам" if fits else "ближе всего к условиям"
     bundles = [_bundle(label, best, sacrificed + best.rules)]
-    bundles += [_bundle(lb, t, _versus(t, best)) for lb, t in _alternatives(best, pool, trips)]
+    bundles += [
+        _bundle(lb, t, _versus(t, best)) for lb, t in _alternatives(spec, best, pool, trips)
+    ]
     return Ranked(best.ids, explanations, bundles)
 
 

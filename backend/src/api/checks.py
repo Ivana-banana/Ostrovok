@@ -10,6 +10,7 @@ metric(split) -> {"name", "system", "baseline", "details"} или None.
 """
 
 import functools
+import itertools
 import json
 import math
 import os
@@ -28,7 +29,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
-from api import catalog, dag, fixtures
+from api import catalog, dag
 from api.contracts import (
     Bundle,
     Cancellation,
@@ -41,8 +42,9 @@ from api.contracts import (
 )
 from api.fixtures import WARM_WATER_C
 from api.main import app, get_store
-from api.offers import _norm, osm_hotels, resolve_place, transfer_id
-from api.optimizer import optimize
+from api.model import NOT_IN_CATALOG
+from api.offers import _norm, find_offers, osm_hotels, resolve_place, transfer_id
+from api.optimizer import enumerate_trips, optimize, pets_ok
 from api.store import SessionStore
 from api.timeline import build_timeline
 
@@ -111,10 +113,13 @@ def _record(run: Run) -> Run:
 
 
 GEOCODER_FILE = Path(__file__).resolve().parents[3] / "eval" / "geocoder_answers.json"
+_recording: Callable[[str, dict], dict] | None = None  # set by record_geocoder only
 
 
 def _recorded(url: str, params: dict) -> dict:
     """Open-Meteo answers recorded once (record_geocoder), not the network (TRAP-6)."""
+    if _recording:
+        return _recording(url, params)
     try:
         answers = json.loads(GEOCODER_FILE.read_text(encoding="utf-8"))["answers"]
         return answers[catalog.request_url(url, params)]
@@ -179,13 +184,30 @@ def _walk(
         sid = r.session_id
         if run.first_rec_ms is None and r.stage in ("inspire", "compare"):
             run.first_rec_ms = (time.perf_counter() - started) * 1000
-        if r.stage in stop:
+        dead_end = _is_pets_dead_end(r)
+        if r.stage in stop and not dead_end:
             break
-        if r.stage == "clarify":
+        if dead_end:  # nothing takes the pet there (#131): the user takes the offered city
+            text = r.questions[0].options[0]
+        elif r.stage == "clarify":
             text = " ".join(q.options[0] for q in r.questions if q.options) or "пока не знаю"
         else:
             text = ANSWERS[r.stage]
     return run
+
+
+def _is_pets_dead_end(r: ChatReply) -> bool:
+    """A pets dead end (#131): no hotel is chosen for the user, other cities are offered.
+
+    «Not in the catalogue» (#136) offers cities too, but it is no pet dead end."""
+    return bool(
+        r.plan.spec.pets
+        and r.stage in ("select", "compare")
+        and r.questions
+        and r.questions[0].options
+        and NOT_IN_CATALOG not in r.reply
+        and not any(x.kind == "hotel" for x in _chosen(r.plan))
+    )
 
 
 def _say(client: TestClient, run: Run, text: str) -> ChatReply | None:
@@ -267,7 +289,7 @@ def _s1_items(r: ChatReply, asked: int, messages: int) -> dict[str, bool]:
 
 @rules_mode
 def check_S1(case: dict) -> tuple[bool, str]:
-    """All 4 pass items; climate is an estimate until T12 (#20), the check sees fields only."""
+    """All 4 pass items, checked on plan fields; the climate is per month from catalog.json."""
     with _api() as (client, _):
         run = _walk(
             client,
@@ -286,11 +308,7 @@ def check_S1(case: dict) -> tuple[bool, str]:
     note = (
         f"вопросов {run.asked}, допущений {len(r.plan.spec.assumptions)}, "
         f"направлений {len(r.plan.destinations)}; "
-        + (
-            f"не выполнены п.{', '.join(failed)}"
-            if failed
-            else "п.1–4 выполнены (климат — оценка до T12)"
-        )
+        + (f"не выполнены п.{', '.join(failed)}" if failed else "п.1–4 выполнены")
     )
     return not failed, note
 
@@ -360,8 +378,20 @@ def check_S3(case: dict) -> tuple[bool, str]:
                         fails.append(f"{tag}: точный запрос не разобран ({run.replies[0].stage})")
                     if variant == "A1":
                         total = last.voucher.total_rub if last.voucher else 0
-                        budget = last.plan.spec.budget_rub
-                        over = f" > бюджета {budget}" if budget and total > budget else ""
+                        spec = last.plan.spec
+                        over = (
+                            f" > бюджета {spec.budget_rub}"
+                            if spec.budget_rub and total > spec.budget_rub
+                            else ""
+                        )
+                        hotel = next(
+                            (o for o in _chosen(last.plan) if isinstance(o, HotelOffer)), None
+                        )
+                        if spec.hotel_budget_rub and hotel:  # S3-A: the hotel within its own budget
+                            fits = hotel.price_rub <= spec.hotel_budget_rub
+                            over += f"; отель {hotel.price_rub} {'≤' if fits else '>'} {spec.hotel_budget_rub}"
+                            if not fits:
+                                fails.append(f"{variant}/{name}: отель дороже бюджета отеля")
                         notes.append(
                             f"{name}: вопросов {run.asked}, ходов {len(run.replies)}, "
                             f"итог {total}{over}"
@@ -714,7 +744,7 @@ def check_S4(case: dict) -> tuple[bool, str]:
 def known_place(name: str) -> bool:
     """The team seeded the place: it is in catalog.json (names, aliases) or in osm_hotels.json.
 
-    Snapshot only: a place the geocoder finds online is not seeded (human decision on #8, D-013).
+    Snapshot only: a place the geocoder finds online is not seeded (human decision on #8, D-017).
     """
     return catalog.resolve(name) is not None or name in osm_hotels()
 
@@ -735,7 +765,7 @@ def check_S5(case: dict) -> tuple[bool, str]:
        none, so the separate pool eval/cases_unseen.json (#89) decides: at least one query that
        names a city outside catalog.json and osm_hotels.json must be booked in that city. The agent
        finds such a city with the geocoder; eval gives it recorded answers, so the result is the
-       same on every machine. No recorded answer for any of them: "не проверено", not a pass.
+       same on every machine. No file of recorded answers: "не проверено", not a pass.
     """
     pool = _quotes(case)
     booked, outside, failed = 0, 0, []
@@ -762,7 +792,7 @@ def check_S5(case: dict) -> tuple[bool, str]:
     named = [r for r in results if r["outside"]]
     kept = [r for r in named if r["kept"]]
     note += f"; б) вне catalog.json и osm_hotels.json: бронь в названном городе {len(kept)} из {len(named)}"
-    if not any(r["geocoded"] for r in named):
+    if not GEOCODER_FILE.is_file():
         return (
             False,
             note + f" — не проверено: нет записанных ответов геокодера ({GEOCODER_FILE.name})",
@@ -787,7 +817,7 @@ EXPECT_KEYS = {
 def _same_name(value: str, names: list[str]) -> bool:
     """A name as the offers write it is one of the names the user may mean.
 
-    Same place in places.json (aliases, case endings), or the same full normalised name.
+    Same place in catalog.json (aliases, case endings), or the same full normalised name.
     No prefix guess: Самара is not Самарканд.
     """
     mine = resolve_place(value)
@@ -821,8 +851,8 @@ def _over_budget_with_note(reply: ChatReply, budget: int, total: int) -> bool:
 def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
     """(constraint, OK | VIOLATED | UNKNOWN, why) for the final plan of a booked session.
 
-    Every verdict comes from the voucher and from data the system has: places.json, the
-    November climate of the catalogue, the offers. No data - UNKNOWN, never OK.
+    Every verdict comes from the voucher and from data the system has: catalog.json, the
+    climate of the booking month in it, the offers. No data - UNKNOWN, never OK.
     """
     unknown = set(expect) - EXPECT_KEYS
     if unknown:
@@ -873,18 +903,22 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
         )
     if expect.get("warm_sea"):
         place = resolve_place(first.city)
-        dest = next((c for n, c in fixtures.CATALOG.items() if _same_name(first.city, [n])), None)
         month = first.date_in.month  # the month of the booking, not the one asked for
+        water = catalog.month_climate(place, month)[1] if place else None
         if place is None:
-            out.append(("тёплое море", UNKNOWN, "города нет в places.json"))
+            out.append(("тёплое море", UNKNOWN, "города нет в catalog.json и у геокодера"))
         elif not place["sea"]:
-            put("тёплое море", False, f"{first.city}: моря нет (places.json)")
-        elif month == 11 and dest and dest["nov"][1] is not None:
-            put("тёплое море", dest["nov"][1] >= WARM_WATER_C, f"вода {dest['nov'][1]} °C")
+            put("тёплое море", False, f"{first.city}: моря нет (catalog.json)")
+        elif water is not None:
+            put("тёплое море", water >= WARM_WATER_C, f"вода {water:g} °C")
         else:
             out.append(("тёплое море", UNKNOWN, "море есть, температуры в этом месяце нет"))
     if expect.get("ski"):
-        out.append(("лыжи", UNKNOWN, "в places.json нет признака лыжного курорта"))
+        place = resolve_place(first.city)
+        if place is None:
+            out.append(("лыжи", UNKNOWN, "города нет в catalog.json и у геокодера"))
+        else:
+            put("лыжи", "ski" in place["tags"], f"{first.city}: теги {', '.join(place['tags'])}")
     if expect.get("cheap_without_sum"):
         out.append(("«недорого»", UNKNOWN, "сумма не названа, порога нет"))
     return out
@@ -894,9 +928,8 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
 def _unseen_results(_case: dict | None = None) -> list[dict] | None:
     """Drive every query of the unseen pool through the API (not in RUNS: the main metric stays).
 
-    One dict per query: text, outside (the named city is not in the data), geocoded (outside, and
-    the recorded geocoder knows it), booked, kept (booked in the named city, or no city named),
-    stage, findings (constraint checks of a kept booking).
+    One dict per query: text, outside (the named city is not in the data), booked, kept (booked in
+    the named city, or no city named), stage, findings (constraint checks of a kept booking).
     None: no pool file.
     """
     if not UNSEEN_FILE.is_file():
@@ -917,7 +950,6 @@ def _unseen_results(_case: dict | None = None) -> list[dict] | None:
                 {
                     "text": q["text"],
                     "outside": outside,
-                    "geocoded": outside and any(resolve_place(d) for d in named),
                     "booked": booked,
                     "kept": booked and not wrong,
                     "stage": run.last.stage if run.replies else run.codes,
@@ -928,42 +960,43 @@ def _unseen_results(_case: dict | None = None) -> list[dict] | None:
 
 
 def record_geocoder() -> None:
-    """Record Open-Meteo answers for the pool cities outside the catalogue into GEOCODER_FILE.
+    """Record the Open-Meteo answers the agent asks for on the unseen pool into GEOCODER_FILE.
 
         cd backend && uv run python -c "from api import checks; checks.record_geocoder()"
 
-    Needs the network once; on an error (Open-Meteo 429) it stops and keeps what it recorded.
+    The pool goes through the API as in make eval; each request goes to the network once and is
+    saved under its URL. So eval replays what the agent asked, in its own spelling («Бледе»).
+    A failed request (Open-Meteo 429) is printed and not saved: run it again later.
     """
+    global _recording
     old = json.loads(GEOCODER_FILE.read_text("utf-8"))["answers"] if GEOCODER_FILE.is_file() else {}
-    answers = dict(old)
+    answers, errors, network = dict(old), [], catalog._get
 
     def fetch(url: str, params: dict) -> dict:
         key = catalog.request_url(url, params)
         if key not in answers:
-            answers[key] = catalog._get(url, params)
+            try:
+                answers[key] = network(url, params)
+            except OSError as e:
+                errors.append(f"{e}: {key}")
+                raise
         return answers[key]
 
-    pool = json.loads(UNSEEN_FILE.read_text(encoding="utf-8"))["queries"]
-    named = [q["expect"].get("destination") or [] for q in pool]
+    _recording = fetch
     try:
-        for spellings in (n for n in named if n and not any(known_place(x) for x in n)):
-            for name in spellings:  # the first spelling the geocoder knows is enough
-                place = catalog._online_place(name, fetch)
-                print(f"{name}: {place['name'] + ', ' + place['country'] if place else 'нет'}")
-                if place:
-                    break
-    except OSError as e:
-        print(f"{e}: стоп, файл хранит записанное")
+        _unseen_results({})
+    finally:
+        _recording = None
     note = (
         f"Ответы Open-Meteo (Geocoding, Historical Weather, Marine; CC BY 4.0), записаны "
-        f"{datetime.now():%Y-%m-%d} checks.record_geocoder для городов пула незнакомых вне "
-        "catalog.json. make eval отдаёт их геокодеру агента вместо сети (#8)."
+        f"{datetime.now():%Y-%m-%d} checks.record_geocoder: запросы агента на пуле незнакомых. "
+        "make eval отдаёт их геокодеру агента вместо сети (#8)."
     )
     data = {"_note": note, "answers": answers}
     GEOCODER_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
     )
-    print(f"новых ответов {len(answers) - len(old)}, всего {len(answers)}")
+    print(*errors, f"новых ответов {len(answers) - len(old)}, всего {len(answers)}", sep="\n")
 
 
 @rules_mode
@@ -1422,3 +1455,71 @@ def check_S9(case: dict) -> tuple[bool, str]:
     return _result(
         f"первый вариант: {hotel.title if hotel else '—'}, разница с дешёвым {_rub(gap)}", items
     )
+
+
+# ---------------------------------------------------------------- S10
+
+# The two requests of the case: the catalog.json tag each one asks for and whether the dog goes.
+# An oracle that does not read the wishes or the pets the product extracted.
+S10_REF = (("mountains", True), ("ski", False))  # (tag, with a dog), per request of the case
+
+
+def _tags(name: str) -> list[str]:
+    place = resolve_place(name)
+    return place["tags"] if place else []
+
+
+def _s10_items(r: ChatReply, tag: str, dog: bool) -> dict[str, str | None]:
+    """Pass items of one S10 request, on the inspiration cards of the reply."""
+    dests = r.plan.destinations
+    top = list(itertools.takewhile(lambda d: not d.violates, dests))
+    first_break = next((i for i, d in enumerate(dests) if d.violates), len(dests))
+    below = [d.name for d in dests[first_break:] if not d.violates]
+    off_theme = [d.name for d in dests if tag not in _tags(d.name) and not d.violates]
+    spec = r.plan.spec.model_copy(update={"pets": True})
+
+    def dog_goes(name: str) -> bool:  # strict: no trips is no place for the dog
+        return any(pets_ok(t) for t in enumerate_trips(find_offers(spec, name)))
+
+    no_pets = [d.name for d in top if dog and not dog_goes(d.name)]
+    return {
+        "1": _need(
+            r.stage == "inspire" and 2 <= len(dests) <= 4,
+            f"стадия {r.stage}, карточек {len(dests)}",
+        ),
+        "2": _need(
+            len(top) >= 2 and all(tag in _tags(d.name) for d in top),
+            f"сверху без нарушений {[d.name for d in top]}, тег {tag} есть не у "
+            f"{[d.name for d in top if tag not in _tags(d.name)]}",
+        ),
+        "3": _need(
+            not below and not off_theme,
+            f"ниже карточки с нарушением стоят подходящие: {below}; "
+            f"карточки без темы и без пометки: {off_theme}",
+        ),
+        "4": _need(not no_pets, f"наверху места, куда с питомцем не собрать: {no_pets}"),
+    }
+
+
+@rules_mode
+def check_S10(case: dict) -> tuple[bool, str]:
+    """Inspiration for «в горы» and «горнолыжка»: 2–4 cards, the theme of the request on top."""
+    queries = _quotes(case)
+    items: dict[str, str | None] = {}
+    facts = []
+    with _api() as (client, _):
+        for text, (tag, dog) in zip(queries, S10_REF, strict=True):
+            run = _walk(
+                client, "S10", text[:24], text, stop=("inspire", "compare", "select", "booked"),
+                attempt=False,
+            )  # fmt: skip
+            if not run.replies or run.codes[-1] != 200:
+                return False, f"«{text}»: ответ {run.codes[-1] if run.codes else 'нет'}"
+            got = _s10_items(run.last, tag, dog)
+            facts.append(f"«{text}»: {', '.join(d.name for d in run.last.plan.destinations)}")
+            for k, why in got.items():
+                if why and not items.get(k):
+                    items[k] = f"«{text}»: {why}"
+                else:
+                    items.setdefault(k, None)
+    return _result("; ".join(facts), items)

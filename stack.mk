@@ -17,7 +17,7 @@ stack-lint:
 	cd web && npm run -s typecheck && npm run -s build
 
 stack-check: stack-lint
-	$(UV) pytest
+	$(UV) pytest -n auto
 	cd web && npm run -s test
 
 stack-demo:
