@@ -242,6 +242,15 @@ def test_trap_5_times_are_local_and_transfers_dock():
         assert all(t.arrive_at == leg.depart_at - timedelta(hours=2) for t in of(leg))
 
 
+@pytest.mark.parametrize("name, iata", [("Домбай", "MRV"), ("Сочи", "AER")])
+def test_flight_and_transfer_titles_show_the_arrival_airport_code(name, iata):
+    items = find_offers(spec(), name)
+    there = [o for o in kinds(items, "transport") if o.mode == "flight" and o.destination == name]
+    assert there and all(f"→ {name} ({iata})" in o.title for o in there)
+    ports = [t.title for t in kinds(items, "transfer") if "аэропорт" in t.title]
+    assert ports and all(f"аэропорт {iata}" in t for t in ports)
+
+
 def test_s6_kazan_has_morning_train_and_flight_and_a_rich_comparison():
     """S6: night train arrives 07:10, flight 10:30; ≥ 3 hotels with ≥ 5 features."""
     items = kazan_weekend()
