@@ -83,7 +83,7 @@ from api.extract import (
     too_long_note,
     with_llm,
 )
-from api.fixtures import CATALOG, build_timeline, future_date
+from api.fixtures import CATALOG, build_timeline, future_date, rank
 from api.inspire import suggest_destinations
 from api.offers import find_offers, resolve_place
 from api.optimizer import (
@@ -799,14 +799,25 @@ CHEAPER_RE = re.compile(
     r"\b(?:по)?дешевле\b|\bбюджет\w*\s+(?:по)?меньше|\b(?:по)?меньше\s+бюджет"
     r"|\bэкономнее\b|\bслишком\s+дорого\b|\bдорогов\w+"
 )
+CHEAPER_WORD = r"(?:по)?дешевле|экономнее"
 CHEAPER_ASK_RE = re.compile(
-    r"\b(?:дешевле|экономнее)\s*,?\s*(?:чем|ли)\b|\bли\b|\bпочему\b|\bсколько\b"
+    rf"\b(?:{CHEAPER_WORD})\s*,?\s*(?:чем|ли)\b|\bли\b|\bпочему\b|\bсколько\b"
+    # #310: a refusal is adjacent to the word: «не надо дешевле», «дешевле не надо». A refusal
+    # elsewhere in the phrase («подешевле, не хочу переплачивать») refuses something else.
+    rf"|\bне\s+(?:(?:надо|нужно|нужн\w+|хочу|хотим|стоит)\s+)?(?:{CHEAPER_WORD})\b"
+    rf"|\b(?:{CHEAPER_WORD})\s+не\s+(?:надо|нужно|нужн\w+|хочу|хотим|стоит)\b"
 )
+# «можно ли», «есть ли», «нельзя ли» ask for the thing: a request.
+REQUEST_LI_RE = re.compile(r"\b(?:можно|есть|нельзя|будет)\s+ли\b")
 BUDGET_STEP = 15  # percent off the current total per «подешевле»
 
 
 def asks_cheaper(low: str) -> bool:
-    return bool(CHEAPER_RE.search(low) and not CHEAPER_ASK_RE.search(low))
+    """«Можно ли подешевле?» is a request; «дешевле ли …?», «дешевле, чем …?» and a refusal are not."""
+    clean = REQUEST_LI_RE.sub("можно", low)
+    if re.search(rf"\b(?:{CHEAPER_WORD})\s+не\s+(?:бывает|будет|бывало)\b", clean):
+        return False  # «дешевле не бывает?» is a remark or a question
+    return bool(CHEAPER_RE.search(clean) and not CHEAPER_ASK_RE.search(clean))
 
 
 def is_rebuild(low: str) -> bool:
@@ -814,30 +825,63 @@ def is_rebuild(low: str) -> bool:
     return bool(pick_kinds(low) or NO_FLIGHT_RE.search(low) or stay_delta(low))
 
 
-def lower_budget(plan: Plan, found: dict, notes: list[str]) -> None:
+def _ranked_total(plan: Plan) -> int:
+    """The total of the best set the ranking gives for the spec of the plan, without the hotel
+    the user picked by hand (dag._keep_pick): the real minimum of the offers."""
+    ids, _ = rank(plan.spec, plan.offers)
+    return sum(o.price_rub for o in plan.offers if o.offer_id in ids)
+
+
+def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
     """«Бюджет поменьше» at a built plan: the trip budget is one step (15 %) under the current
-    total, rounded down to 100 ₽. The DAG then re-plans the ranking only (#278)."""
+    total, rounded down to 100 ₽. The DAG then re-plans the ranking only (#278).
+
+    The budget never goes under the cheapest total the offers give for the spec with the other
+    edits of the same message («подешевле, с завтраком»): a trial re-plan finds it (#310). If
+    that is the target or more, the budget is the cheapest total; if nothing is cheaper than the
+    plan and nothing else changes, the budget stays."""
     total = _selected_total(plan)
     if total <= 0 or "budget_rub" in found:
         return
     target = total * (100 - BUDGET_STEP) // 100 // 100 * 100
-    found["budget_rub"] = target
-    notes.append(f"бюджет: {_rub(target)} (на {BUDGET_STEP}% ниже итога {_rub(total)})")
+    edited = merge(plan.spec, {**found, "budget_rub": target}, list(notes))
+    trial, _, _ = replan(plan, edited, cart)
+    cheapest = _ranked_total(trial)
+    if cheapest >= total and not found:
+        return
+    found["budget_rub"] = max(target, cheapest)
+    new = found["budget_rub"]
+    how = "ниже итога" if new < total else "итог был"
+    notes.append(f"бюджет: {_rub(new)} ({how} {_rub(total)})")
 
 
-def cheaper_line(old: Plan, new: Plan) -> str:
-    """The honest line after «подешевле»: the minimum comes from the offers, never invented."""
+def cheaper_line(old: Plan, new: Plan, edited: bool = False) -> str:
+    """The honest line after «подешевле»: the minimum comes from the offers, never invented.
+    `edited`: the message also changed other conditions, so the total may rise for them."""
     a, b = _selected_total(old), _selected_total(new)
     goal = new.spec.budget_rub
-    if b >= a:
+    cheapest = _ranked_total(new)
+    if b > cheapest:  # a hotel picked by hand costs more than the best set (TRAP-4)
+        hotel = _hotel_of(new)
+        who = f"С отелем «{hotel.title}» " if hotel else "С вашим выбором "
         return (
-            f"Дешевле набора в предложениях нет: сейчас {_rub(b)} — это минимум (синтетика). "
-            "Если назовёте сумму, подберу ближайшее к ней."
+            f"{who}дешевле нет; самый дешёвый набор — {_rub(cheapest)} (синтетика). "
+            "Назовите сумму, если нужно другое."
         )
-    if goal is not None and b > goal:
+    if b >= a:
+        if edited:
+            return (
+                f"С вашими условиями итог {_rub(b)} (было {_rub(a)}): дешевле под них набора "
+                "нет (синтетика). Назовите сумму, если нужно другое."
+            )
         return (
-            f"В {_rub(goal)} не уложиться: самый дешёвый набор в предложениях — {_rub(b)} "
-            "(синтетика). Если назовёте другую сумму, пересоберу под неё."
+            f"Дешевле в предложениях нет: сейчас {_rub(b)} — это минимум под ваши условия "
+            "(синтетика). Назовите сумму, если нужно другое."
+        )
+    if goal is not None and b >= goal:
+        return (
+            f"Снизил итог до {_rub(b)} — это минимум под ваши условия (синтетика). "
+            "Назовите сумму, если нужно другое."
         )
     return ""
 
@@ -1587,7 +1631,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # a consent. The spec edits go into `found`; the picks run on the plan after the DAG.
     # A question («сколько стоит ещё ночь?») is none of this: the question rules answer it.
     planned = (
-        prev is not None and old.stage in PLAN3 and bool(old.plan.offers) and not asks_about(low)
+        prev is not None
+        and old.stage in PLAN3
+        and bool(old.plan.offers)
+        and (not asks_about(low) or (old.stage != "checkout" and asks_cheaper(low)))  # #310
     )
     cheaper = planned and asks_cheaper(low) and old.stage != "checkout"
     rebuild = planned and (is_rebuild(low) or cheaper)
@@ -1597,7 +1644,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         rebuild_spec_edit(old.plan.spec, old.plan, low, found, notes, lines) if planned else None
     )
     if cheaper:
-        lower_budget(old.plan, found, notes)  # #278
+        lower_budget(old.plan, old.cart, found, notes)  # #278
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
     # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
@@ -1852,7 +1899,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             lines = [*lines, *more]
             plan.changes = plan_changes(old.plan, plan, old.cart, cart)
         lines = [_replanned(x) for x in lines]
-        if cheaper and (line := cheaper_line(old.plan, plan)):
+        if cheaper and (line := cheaper_line(old.plan, plan, bool(set(found) - {"budget_rub"}))):
             lines.append(line)
         same_trip = (old.plan.spec.destinations, old.plan.spec.origin, old.plan.spec.modes) == (
             spec.destinations,
@@ -1880,7 +1927,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
 
     if cheaper and not plan_dirty:
         # The budget of the last step already holds: the plan is the cheapest one (#278).
-        text = f"{cheaper_line(old.plan, old.plan.model_copy(update={'selected': plan.selected}))} {HINTS[old.stage]}"
+        text = f"{cheaper_line(old.plan, old.plan)} {HINTS[old.stage]}"
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     if (picks or (lines and not yes)) and not plan_dirty:
         # Nothing to re-plan: a pick on the plan, or the reason there is no change (#184).
