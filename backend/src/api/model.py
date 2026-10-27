@@ -160,7 +160,7 @@ NO_TRANSFER_RE = re.compile(
 )
 # «как добраться без трансфера?», «сколько стоит без трансфера?», «без трансфера дороже?» ask.
 # A bare «трансфер не нужен?» asks too; «а давайте без трансфера?» and «можно без трансфера?» order.
-ASKS_RE = re.compile(r"\b(?:как|сколько)\b|\bли\b")
+ASKS_RE = re.compile(r"(?<!\bтак\s)\bкак\b(?!-)|\bсколько\b|\bли\b")
 ASKS_COMPARE_RE = re.compile(r"\b(?:дороже|дешевле|выгодн\w*)\b")
 
 EDIT_KEYS = {
@@ -1047,10 +1047,18 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         and NO_TRANSFER_RE.search(low)
         and not (HYPOTHESIS_RE.search(low) and not CHOICE_RE.search(low))
     )
-    if no_transfer and (
-        ASKS_RE.search(low)
-        or QUESTION_WORD_RE.search(low)
-        or ("?" in low and (ASKS_COMPARE_RE.search(low) or re.search(r"\bне\s+(?:нуж|надо)", low)))
+    if (
+        no_transfer
+        and set(rules_found) <= {"wishes"}
+        and not SHIFT_RE.search(low)
+        and (
+            ASKS_RE.search(low)
+            or QUESTION_WORD_RE.search(low)
+            or (
+                "?" in low
+                and (ASKS_COMPARE_RE.search(low) or re.search(r"\bне\s+(?:нуж|надо)", low))
+            )
+        )
     ):
         # #193: a question about the transfer is answered from the plan and changes nothing.
         return old.model_copy(

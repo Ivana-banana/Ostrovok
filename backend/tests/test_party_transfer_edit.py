@@ -200,3 +200,75 @@ def test_no_transfer_said_as_a_request_is_an_edit(store, text, stage):
     assert r2.stage == stage and transfers(r2) == []
     assert all(o.kind != "transfer" for o in r2.cart.items)
     assert (r2.cart.items == []) == (stage == "assemble")
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize(
+    "text", ["без трансфера дешевле?", "без трансфера выгоднее?", "без трансфера дороже?"]
+)
+def test_comparison_about_no_transfer_is_a_question(monkeypatch, store, text, stage, model):
+    r = at(store, stage)
+    if model:
+        stub_model(monkeypatch, [])
+    r2 = say(store, text, r.session_id)
+    assert "Это вопрос" in r2.reply
+    assert r2.plan == r.plan and r2.cart == r.cart and r2.stage == stage
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize(
+    "text", ["убери трансфер, так как доберёмся сами", "без трансфера, доберёмся как-нибудь сами"]
+)
+def test_as_and_somehow_are_no_question(monkeypatch, store, text, stage, model):
+    r = at(store, stage)
+    if model:
+        stub_model(monkeypatch, [])
+    r2 = say(store, text, r.session_id)
+    assert "Это вопрос" not in r2.reply
+    assert r2.stage == stage and transfers(r2) == []
+    assert all(o.kind != "transfer" for o in r2.cart.items)
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+def test_question_with_dates_keeps_the_date_edit(monkeypatch, store, stage, model):
+    r = at(store, stage)
+    if model:
+        stub_model(monkeypatch, [])
+    r2 = say(store, "без трансфера и на неделю позже, сколько выйдет?", r.session_id)
+    assert r2.plan.spec.date_from > r.plan.spec.date_from
+    assert "Это вопрос" not in r2.reply and r2.cart.items == []
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+def test_question_with_a_city_keeps_the_destination_edit(monkeypatch, store, stage, model):
+    r = at(store, stage)
+    if model:
+        stub_model(monkeypatch, [])
+    r2 = say(store, "без трансфера в Анапу, сколько будет?", r.session_id)
+    assert r2.plan.spec.destinations == ["Анапа"]
+    assert "Это вопрос" not in r2.reply and r2.cart.items == []
+
+
+@pytest.mark.parametrize("model", [False, True])
+def test_question_with_a_mode_switches_at_assemble(monkeypatch, store, model):
+    r = at(store, "assemble")
+    if model:
+        stub_model(monkeypatch, [])
+    r2 = say(store, "давай поездом и без трансфера, сколько выйдет?", r.session_id)
+    legs = [o for o in r2.plan.offers if o.kind == "transport" and o.offer_id in r2.plan.selected]
+    assert legs and all(o.mode == "train" for o in legs)
+    assert "Это вопрос" not in r2.reply and r2.cart.items == []
+
+
+@pytest.mark.parametrize("model", [False, True])
+def test_question_with_a_mode_at_checkout_keeps_the_cart(monkeypatch, store, model):
+    r = at(store, "checkout")
+    if model:
+        stub_model(monkeypatch, [])
+    r2 = say(store, "давай поездом и без трансфера, сколько выйдет?", r.session_id)
+    assert "Корзина уже собрана" in r2.reply
+    assert r2.cart == r.cart and r2.stage == "checkout"
