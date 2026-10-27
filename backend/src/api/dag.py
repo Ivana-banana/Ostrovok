@@ -447,7 +447,9 @@ def own_tickets(s: TripSpec) -> str:
     """«свои билеты, прилёт 14.11 01:30, вылет 18.11 15:00»; "" without own tickets (#408)."""
     if not s.own_transport:
         return ""
-    times = [f"{w} {at:%d.%m %H:%M}" for w, at in (("прилёт", s.arrive_at), ("вылет", s.leave_at)) if at]
+    times = [
+        f"{w} {at:%d.%m %H:%M}" for w, at in (("прилёт", s.arrive_at), ("вылет", s.leave_at)) if at
+    ]
     return ", ".join(["свои билеты", *times])
 
 

@@ -824,7 +824,9 @@ def offers_for_place(
     now = now or datetime.now(UTC)  # only the cancellation state depends on it
     pairs = HOTELS.hotels(spec, place, now)
     hotels = [h for h, _ in pairs]
-    legs = TRANSPORT.legs(spec, _complete(origin), place) if origin and not spec.own_transport else []
+    legs = (
+        TRANSPORT.legs(spec, _complete(origin), place) if origin and not spec.own_transport else []
+    )
     own = own_legs(spec, place["name"])
     transfers = TRANSFERS.transfers(spec, place, hotels, legs + own)
     return [*hotels, *legs, *transfers, *(x for _, extras in pairs for x in extras)]
