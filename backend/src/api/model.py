@@ -81,6 +81,10 @@ CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
 NEGATION_RE = re.compile(r"\b(нет|не)\b")
+# A shift by months or a year: SHIFT_RE moves days and weeks only (#173).
+MONTH_SHIFT_RE = re.compile(
+    r"\bна\s+(?:(?:\d+|пар[уы]|полтора)\s+)?(?:месяц\w*|пол\s?года|год\w*)\s+(?:позже|раньше|вперед|назад)\b"
+)
 BOOK_RE = re.compile(r"\bподтверждаю\b")
 # S4: orders to set a price, to book without the confirmation or to show the prompt are
 # refused. Only orders: «цена 0 ₽ за ребёнка?» or «отель без подтверждения по телефону» pass.
@@ -785,7 +789,6 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         _confirmed(t) or bool(BOOK_RE.search(t))
     )
     pick = old.stage in ("inspire", "compare") and idx is not None
-    service = prev is not None and (consent or pick)
     found, notes = extract(
         message,
         bool(old.plan.spec.destinations),
@@ -794,7 +797,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     )
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
-    yes = _confirmed(t) and not asks_length
+    # «давай на месяц позже» moves the dates, the plan has no such shift: no consent either (#173)
+    month_shift = bool(MONTH_SHIFT_RE.search(low))
+    yes = _confirmed(t) and not asks_length and not month_shift
     service = prev is not None and (pick or (consent and not asks_length))
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
@@ -920,7 +925,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
 
     dated = bool(old.plan.spec.date_from and old.plan.spec.date_to)
     te = t.replace("ё", "е")
-    if not found and prev and dated and not SHIFT_RE.search(te) and DATE_EDIT_RE.search(te):
+    date_edit = DATE_EDIT_RE.search(te) or month_shift
+    if not found and prev and dated and not SHIFT_RE.search(te) and date_edit:
         # The message asks to move the dates but says how far or which way in no known words (S2).
         s = old.plan.spec
         text = (
