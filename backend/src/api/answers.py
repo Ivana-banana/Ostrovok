@@ -197,8 +197,11 @@ def _versus(plan: Plan, chosen: HotelOffer, named: HotelOffer, where: str) -> st
     if theirs:
         lines.append(f"{other} выигрывает: {', '.join(theirs)}.")
     if where:
+        road = any(o.kind == "transport" and o.offer_id in plan.selected for o in plan.offers)
         lines.append(
             "План выбирает поездку целиком: цена отеля, дороги и трансферов, условия и рейтинг."
+            if road
+            else "План выбирает проживание: цена отеля, условия и рейтинг. Как добраться — нет данных."
         )
     return "\n".join(lines)
 
