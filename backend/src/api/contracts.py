@@ -20,7 +20,7 @@ consumers; they are backend only.
 from datetime import date, datetime, time
 from typing import Annotated, Literal, Protocol, Required, TypedDict
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 Stage = Literal["clarify", "inspire", "select", "compare", "assemble", "checkout", "booked"]
 Meal = Literal["RO", "BB", "HB", "FB", "AI"]
@@ -53,6 +53,13 @@ class TripSpec(BaseModel):
     refundable: bool | None = None
     modes: list[Mode] = []
     max_travel_hours: float | None = None
+    # C5 (#408): the user has tickets. No transport is searched; transfers start from the
+    # user's own arrival and end before the own departure (local to the destination).
+    # Consumers: api/extract.py (rules), model.py (assume, compare text), offers.py (own_legs),
+    # optimizer.py, timeline.py, dag.py; web/src/Board.tsx (SpecSummary).
+    own_transport: bool = False
+    arrive_at: AwareDatetime | None = None
+    leave_at: AwareDatetime | None = None
     wishes: list[str] = []  # user's own words: sea, skiing, hard to walk
     priorities: list[Priority] = []  # most important first; empty: default weights
     assumptions: list[str] = []  # what the agent assumed; shown to the user
@@ -207,6 +214,16 @@ class Cart(BaseModel):
     total_rub: int = 0
 
 
+class Guest(BaseModel):
+    """Lead guest typed at checkout (#367). Simulated: stored with the session in the SQLite
+    session store (data/), not sent to the booking provider."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    contact: str = Field("", max_length=100)  # phone or e-mail; "" when not given
+
+
 class Voucher(BaseModel):
     booking_id: str
     items: list[Offer]
@@ -215,6 +232,7 @@ class Voucher(BaseModel):
     created_at: AwareDatetime
     status: BookingStatus = "confirmed"
     simulated: bool = True  # True: booking and payment are simulated; the voucher says so
+    guest: Guest | None = None  # None: no name given (chat «подтверждаю», old clients)
 
 
 class ChatRequest(BaseModel):
@@ -242,6 +260,7 @@ class CartAction(BaseModel):
 class CheckoutRequest(BaseModel):
     session_id: str
     confirm_total_rub: int  # total the user saw when confirming
+    guest: Guest | None = None  # to be copied to Voucher.guest by checkout (#367)
 
 
 # --- Порты (ADR-0002, D-023) ---------------------------------------------------------------
@@ -258,6 +277,8 @@ class CheckoutRequest(BaseModel):
 # «подтверждаю»), api/checks.py (eval); tests/test_booking_port.py (conformance, a foreign
 # adapter). Voucher.status and Voucher.simulated: web/src/contracts.ts, web/src/api.ts,
 # web/src/Board.tsx, Board.test.tsx, App.tsx, App.test.tsx, web/e2e/demo.spec.ts.
+# Guest (CheckoutRequest.guest, Voucher.guest; #367): api/cart.py, api/main.py, api/store.py,
+# api/checks.py, web/src/api.ts, web/src/App.tsx, web/src/Board.tsx and their tests.
 
 
 class Place(TypedDict, total=False):
@@ -342,8 +363,9 @@ class BookingProvider(Protocol):
     A refusal raises BookingRefused.
 
     The `session_id` argument of `book` is the idempotency key of one booking attempt, not
-    the bare session id: the session id for the first attempt, `<session_id>:<n>` for the
-    attempt n after a cancel (cart.attempt_key). A real provider stores it as its order key
+    the bare session id: `<session_id>:<hash>` for the first attempt, `<session_id>:<hash>:<n>`
+    for the attempt n after a cancel; the hash covers the items, prices, dates and party
+    (cart.attempt_key). A real provider stores it as its order key
     (for example `partner_order_id` of ETG) and returns the same booking for the same key.
     While the booking is not "cancelled", the core keeps it and does not call `book` again;
     after `cancel` the session gets a new key and a new booking_id. The core calls `quote`

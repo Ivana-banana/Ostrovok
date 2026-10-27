@@ -9,7 +9,8 @@ Invalid values (31 ноября, 0 ночей) are skipped with a note, never an
 
 import functools
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from api import catalog
 from api.fixtures import CATALOG, future_date
@@ -1219,6 +1220,13 @@ def _busy_days(t: str, m: re.Match) -> bool:
     )
 
 
+# The day of the return after the start: «улетаем 18-го», «обратно 3 декабря»; not «в 18:30».
+BACK_DAY_RE = re.compile(
+    rf"\b(?:улета\w*|уезжа\w*|возвраща\w*|обратно)\s+(\d{{1,2}})(?![\d:.]|\s*(?:ноч|дн|сут|недел|час|чел))(?:-?(?:го|е)\b)?"
+    rf"(?:\s+{MONTH})?"
+)
+
+
 def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
     """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day.
 
@@ -1243,6 +1251,12 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         m2 = m1
     elif m := re.search(rf"\b{d}\s+{MONTH}", t):
         (d1, m1), d2, m2 = m.groups(), None, None
+        # C5 (#363): «прилетаем 14 ноября, улетаем 18-го» — the return day ends the stay.
+        # A day alone at or before the start is in the next month: «с 28 ноября, улетаем 3-го».
+        if back := BACK_DAY_RE.search(t, m.end()):
+            d2, m2 = back.group(1), back.group(2) or m1
+            if not back.group(2) and int(d2) <= int(d1):
+                m2 = MONTH_NAMES[_month(m1) % 12]
     else:
         today = date.today()
         if m := re.search(r"\b(сегодня|завтра|послезавтра)\b", t):
@@ -1436,6 +1450,33 @@ def _holiday_end(said: str, found: dict, notes: list[str]) -> None:
     )
 
 
+# C5 (#408): «билеты у нас уже куплены», «свои билеты», «уже купили билеты».
+OWN_TICKETS_RE = re.compile(
+    r"\bбилет\w*\s+(?:у\s+(?:нас|меня)\s+)?(?:уже\s+)?(?:есть|куплен\w*|взят\w*)"
+    r"|\bсво\w+\s+билет\w*|\bуже\s+(?:купил\w*|взял\w*)\s+билет\w*"
+)
+# The clock time of the own arrival and departure in one clause: «прилетаем 14 ноября в 01:30».
+CLOCK = r"[^.,;!?]*?\bв\s+(\d{1,2})[:.](\d{2})\b"
+ARRIVE_RE = re.compile(rf"\b(?:прилет|приезж|прибыв|приезд|прибыт)\w*{CLOCK}")
+LEAVE_RE = re.compile(rf"\b(?:улет|уезжа|отъезд|обратн)\w*{CLOCK}")
+
+
+def _own_tickets(t: str, found: dict) -> None:
+    """Own tickets and their times at the destination of this message (offers.own_legs)."""
+    if not OWN_TICKETS_RE.search(t):
+        return
+    found["own_transport"] = True
+    place = resolve_place(found["destinations"][0]) if found.get("destinations") else None
+    if place is None:
+        return  # no zone for the clock time
+    tz = ZoneInfo(place["tz"])
+    for key, day, rx in (("arrive_at", "date_from", ARRIVE_RE), ("leave_at", "date_to", LEAVE_RE)):
+        m = rx.search(t)
+        if m and found.get(day) and int(m.group(1)) < 24 and int(m.group(2)) < 60:
+            at = time(int(m.group(1)), int(m.group(2)))
+            found[key] = datetime.combine(found[day], at, tz)
+
+
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на месяц» (30), «на выходные» (пятница–воскресенье).
 
@@ -1449,7 +1490,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(r"\bна\s+(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
         found["nights"] = MAX_NIGHTS + 1  # too long, the 3 digits are no number the rules read
-    elif m := re.search(rf"\b{NUM}\s*ноч\w*", t):
+    elif m := re.search(rf"(?<![:.])\b{NUM}\s*ноч\w*", t):  # «в 01:30 ночи» is a time (C5)
         n = _num(m.group(1))
         if n >= 1:
             found["nights"] = n
@@ -1929,6 +1970,7 @@ def extract(
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     if holiday:
         _holiday_end(holiday, found, notes)
+    _own_tickets(t, found)
     _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
     if re.search(

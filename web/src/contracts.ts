@@ -22,6 +22,9 @@ export type TripSpec = {
   refundable: boolean | null;
   modes: Mode[];
   max_travel_hours: number | null;
+  own_transport: boolean; // C5 (#408): own tickets, no transport searched
+  arrive_at: string | null; // own arrival, zoned
+  leave_at: string | null; // own departure, zoned
   wishes: string[];
   priorities: Priority[];
   assumptions: string[];
@@ -125,7 +128,11 @@ export type Voucher = {
   created_at: string;
   status: BookingStatus;
   simulated: boolean; // true: booking and payment are simulated; the voucher says so
+  guest: Guest | null; // null: no name given
 };
+
+// Lead guest typed at checkout (#367); simulated, stored with the session, not sent to the provider.
+export type Guest = { name: string; contact: string };
 
 export type ChatRequest = { session_id: string | null; message: string };
 
@@ -141,4 +148,8 @@ export type ChatReply = {
 };
 
 export type CartAction = { session_id: string; action: "add" | "remove"; offer_id: string };
-export type CheckoutRequest = { session_id: string; confirm_total_rub: number };
+export type CheckoutRequest = {
+  session_id: string;
+  confirm_total_rub: number;
+  guest?: Guest | null;
+};
