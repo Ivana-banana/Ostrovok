@@ -373,6 +373,8 @@ REFUSALS = [
     "в январе неудобно",
     "январь, к сожалению, не подходит",
     "в январе и в феврале не можем",
+    "в январе, не летаем",
+    "в январе, не поедешь",
 ]
 
 
@@ -455,7 +457,19 @@ def test_a_stem_of_a_refusal_verb_does_not_catch_other_words(store, text):
     assert r.plan.spec.date_from == date(2027, 1, 3) and "Они остаются" not in r.reply
 
 
-@pytest.mark.parametrize("text", ["в январе", "лучше в январе", "в январе, нет проблем"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "в январе",
+        "лучше в январе",
+        "в январе, нет проблем",
+        "лучше в январе, детей нет, двое взрослых",
+        "лучше в январе, в декабре никак",
+        "в январе, в декабре нет",
+        "в январе, багажа нет",
+        "в январе, неудобно в декабре",
+    ],
+)
 def test_a_plain_request_still_moves(store, text):
     first = named(store)
     r = say(store, text, first.session_id)
@@ -463,7 +477,14 @@ def test_a_plain_request_still_moves(store, text):
 
 
 @pytest.mark.parametrize(
-    "text", ["январь нет, подтверждаю", "январь отменяется, беру", "в январе никак, оформляй"]
+    "text",
+    [
+        "январь нет, подтверждаю",
+        "январь отменяется, беру",
+        "в январе никак, оформляй",
+        "в январе, не летаем, подтверждаю",
+        "в январе, не поедешь, подтверждаю",
+    ],
 )
 @pytest.mark.parametrize("stages", [1, 2])
 def test_a_bare_no_is_no_consent_at_assemble_and_checkout(store, text, stages):

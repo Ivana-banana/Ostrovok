@@ -372,14 +372,16 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
         r"|рассматр|будет|удобн"
     )
     # «не поедем» ends the part: «не поедем на самолёте» only drops a way to travel
-    moves = r"(?:по)?(?:еду|едем|едут|лечу|летим|летят)"
+    moves = r"(?:по)?(?:ед|езж|лет(?!ом\b|о\b|н))\w*"  # not «летом», «лето», «летний»
     end = r"(?=\s*(?:,|;|$))"
     # «январь нет», «январь — нет», «январь мимо», «в январе никак»: a bare no ends the part (#215)
     bare = rf"(?:нет|никак|мимо){end}"
     gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{stop}|{bare})"
+    # After a comma only «не» + a verb may follow up to two words («увы, не получится»). A «нет»
+    # or «неудобно» deeper in the part belongs to a neighbour: «детей нет», «в декабре никак».
     refusing = (
-        rf"\s*(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
-        rf"|не\s+{moves}{end}|не{end}|{stop}|{bare})"
+        rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
+        rf"|не\s+{moves}{end}|не{end})|(?:{stop})\w*{end}|{bare})"
     )
     if negated or re.match(gone, near) or re.match(refusing, after):
         return "stay", month
