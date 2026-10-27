@@ -52,8 +52,9 @@ def pay(client, r, total):
 class Foreign(cart.SimulatedBooking):
     """A test adapter of another provider: counts calls, can refuse or change prices."""
 
-    def __init__(self, refuse=None, extra_rub=0, drop=False):
+    def __init__(self, refuse=None, extra_rub=0, drop=False, voucher_extra_rub=0):
         self.refuse, self.extra_rub, self.drop = refuse, extra_rub, drop
+        self.voucher_extra_rub = voucher_extra_rub
         self.booked: list[str] = []
         self.cancelled: list[str] = []
 
@@ -66,7 +67,9 @@ class Foreign(cart.SimulatedBooking):
             raise self.refuse
         self.booked.append(session_id)
         v = cart.book(spec, c)
-        return v.model_copy(update={"booking_id": f"F-{len(self.booked)}", "simulated": False})
+        total = v.total_rub + self.voucher_extra_rub
+        update = {"booking_id": f"F-{len(self.booked)}", "simulated": False, "total_rub": total}
+        return v.model_copy(update=update)
 
     def cancel(self, booking_id):
         self.cancelled.append(booking_id)
@@ -90,7 +93,8 @@ def test_simulated_voucher_is_confirmed_and_marked_simulated(client, at_checkout
     ("error", "reason"),
     [
         (BookingRefused("нет мест в отеле"), "нет мест в отеле"),
-        (RuntimeError("timeout"), "не ответила"),
+        (TimeoutError("timeout"), "не ответила"),
+        (ConnectionResetError("reset"), "не ответила"),
     ],
 )
 def test_refusal_of_a_foreign_adapter_is_409_with_a_reason_and_no_dead_end(
@@ -172,4 +176,87 @@ def test_after_cancel_the_session_gets_a_new_booking(client, store, at_checkout,
     store.update(r.session_id, cancelled)
     second = pay(client, r, r.cart.total_rub).json()
     assert second["booking_id"] == "F-2" != first["booking_id"]
-    assert second["status"] == "confirmed" and foreign.booked == [r.session_id] * 2
+    assert second["status"] == "confirmed"
+    # The attempt key changes after a cancel: a real provider refuses a reused key.
+    assert foreign.booked == [r.session_id, f"{r.session_id}:2"]
+
+
+def test_voucher_with_another_total_than_the_quote_is_409_and_cancelled(
+    client, store, at_checkout, monkeypatch
+):
+    """#376: a foreign adapter books the cart at another total; the core does not keep it."""
+    r = at_checkout
+    foreign = Foreign(voucher_extra_rub=1000)
+    monkeypatch.setattr(cart, "BOOKING", foreign)
+    res = pay(client, r, r.cart.total_rub)
+    assert res.status_code == 409 and "вместо" in res.json()["detail"]
+    assert foreign.cancelled == ["F-1"]
+    assert store.get(r.session_id).voucher is None
+
+
+def test_programming_error_of_an_adapter_is_not_masked_as_a_provider_failure(
+    client, at_checkout, monkeypatch
+):
+    """#376: only BookingRefused and network errors are a 409; a bug goes up with its traceback."""
+    monkeypatch.setattr(cart, "BOOKING", Foreign(refuse=KeyError("bug")))
+    with pytest.raises(KeyError):
+        pay(client, at_checkout, at_checkout.cart.total_rub)
+
+
+def test_repeat_after_a_failed_session_write_books_nothing_new(
+    client, store, at_checkout, monkeypatch
+):
+    """#376: the provider call is outside the session lock; the attempt and its voucher are saved
+    first, so a repeat after a failed write stores that voucher and calls `book` no more."""
+    r = at_checkout
+    foreign = Foreign()
+    monkeypatch.setattr(cart, "BOOKING", foreign)
+    real = store.update
+    calls = []
+
+    def fail_once(sid, change):
+        calls.append(sid)
+        if len(calls) == 1:
+            raise OSError("disk full")
+        return real(sid, change)
+
+    monkeypatch.setattr(store, "update", fail_once)
+    with pytest.raises(OSError):
+        pay(client, r, r.cart.total_rub)
+    assert store.get(r.session_id).voucher is None and foreign.booked == [r.session_id]
+    v = pay(client, r, r.cart.total_rub).json()
+    assert v["booking_id"] == "F-1" and foreign.booked == [r.session_id]
+    assert store.get(r.session_id).voucher.booking_id == "F-1"
+
+
+def test_book_runs_outside_the_session_write_lock(client, store, at_checkout, monkeypatch):
+    """#376: while the provider books, another session can be written."""
+    r = at_checkout
+    other = r.model_copy(update={"session_id": "other"})
+    store.put(other)
+
+    class Probe(Foreign):
+        def book(self, spec, c, session_id):
+            store.update("other", lambda prev: prev.model_copy(update={"reply": "written"}))
+            return super().book(spec, c, session_id)
+
+    monkeypatch.setattr(cart, "BOOKING", Probe())
+    monkeypatch.setattr(
+        store, "update", _no_nested(store.update)
+    )  # fails if book() runs inside an update
+    assert pay(client, r, r.cart.total_rub).status_code == 200
+    assert store.get("other").reply == "written"
+
+
+def _no_nested(update):
+    depth = []
+
+    def wrapped(sid, change):
+        assert not depth, "store.update is called inside another store.update"
+        depth.append(sid)
+        try:
+            return update(sid, change)
+        finally:
+            depth.pop()
+
+    return wrapped
