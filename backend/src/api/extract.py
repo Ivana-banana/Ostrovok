@@ -921,7 +921,14 @@ def _people(t: str, found: dict, notes: list[str]) -> None:
 HOTEL_NOTE = "бюджет отеля"  # the label of the assumption; model.LABELS uses it too
 # «отель до 40 тысяч»: up to 3 words between, none of them a comma or a conjunction
 HOTEL_BEFORE_RE = re.compile(
-    r"(?:отел|гостиниц|проживани)\w*\s+(?:(?!(?:и|а|но|да)\s)[^\s,;.!?]+\s+){0,3}$"
+    r"(?:отел|гостиниц|проживани)\w*\s+(?:(?!(?:и|а|но|да|\+|плюс)\s)[^\s,;.!?]+\s+){0,3}$"
+)
+# «перелёт и отель до 100к», «поездка с отелем до 100к»: the hotel is one item of the trip, so the
+# sum is the trip budget
+_ITEM = r"(?:перел|авиа|билет|дорог|поезд|рейс|транспорт|трансфер)\w*"
+_HOTEL = r"(?:отел|гостиниц|проживани)\w*"
+TRIP_ITEMS_RE = re.compile(
+    rf"\b{_ITEM}\s*(?:и|\+|плюс|с|со)\s+{_HOTEL}\s+(?:(?!(?:и|а|но|да)\s)[^\s,;.!?]+\s+){{0,3}}$"
 )
 HOTEL_AFTER_RE = re.compile(
     r"[\w.]*\s*(?:₽|руб\w*|р\b)?\s*(?:на|за|для)\s+(?:отел|гостиниц|проживани)"
@@ -957,7 +964,8 @@ def _budget(t: str, found: dict, notes: list[str]) -> None:
     hotel_said = False
     for a, b, rub in _sums(t):
         night = NIGHT_AFTER_RE.match(t, b)
-        if not (night or HOTEL_BEFORE_RE.search(t[:a]) or HOTEL_AFTER_RE.match(t, b)):
+        before = HOTEL_BEFORE_RE.search(t[:a]) and not TRIP_ITEMS_RE.search(t[:a])
+        if not (night or before or HOTEL_AFTER_RE.match(t, b)):
             found.setdefault("budget_rub", rub)
         elif hotel_said:
             continue
@@ -1051,6 +1059,8 @@ def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = N
     for k, v in llm_found.items():
         if k == "wishes":
             out["wishes"] = found.get("wishes", []) + [w for w in v if w not in found.get(k, [])]
+        elif k == "budget_rub" and v == found.get("hotel_budget_rub"):
+            continue  # the model took the hotel sum for the trip budget (#41)
         elif k not in found and not (k in DATE_KEYS and DATE_KEYS & found.keys()):
             out[k] = v
     return out

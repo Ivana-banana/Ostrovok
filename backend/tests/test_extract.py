@@ -41,6 +41,14 @@ def test_s3a_exact_request_parses_every_field():
         ("бюджет 80 тыс", None, 80_000),
         ("отель 4 звезды, до 100к", None, 100_000),  # a comma ends the hotel clause
         ("отель и перелёт до 100к", None, 100_000),
+        ("отель + перелёт до 100к", None, 100_000),
+        ("перелёт и отель до 100 тысяч", None, 100_000),  # the hotel is one item of the trip
+        ("авиа + отель до 30 тысяч", None, 30_000),
+        ("билеты и отель до 50к", None, 50_000),
+        ("с перелётом и отелем до 90 тыс", None, 90_000),
+        ("поездка с отелем до 100к", None, 100_000),
+        ("отель 4 звезды до 100к", 100_000, None),  # no comma: the sum is about the hotel
+        ("отель с завтраком до 40к", 40_000, None),
         ("отель до 40 тысяч, всего до 100 тысяч", 40_000, 100_000),
         ("всего до 100 тысяч, из них отель до 40к", 40_000, 100_000),
         ("на отель 40к и всего 150 000 руб", 40_000, 150_000),
@@ -675,3 +683,15 @@ def test_hotel_budget_survives_a_follow_up_with_a_pet(tmp_path):
     hotels = [o for o in r.plan.offers if o.kind == "hotel" and o.offer_id in r.plan.selected]
     assert r.plan.spec.hotel_budget_rub == 40_000 and r.plan.spec.budget_rub is None
     assert len(hotels) == 1 and hotels[0].price_rub <= 40_000 and hotels[0].pets_allowed
+
+
+def test_flight_and_hotel_sum_is_the_trip_budget_and_a_dearer_plan_is_flagged(tmp_path):
+    """#41: «перелёт и отель до 100 тысяч» limits the trip; a dearer booking carries the risk."""
+    store = SessionStore(tmp_path / "s.db")
+    r = chat(ChatRequest(message="Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч"), store)
+    spec = r.plan.spec
+    assert spec.budget_rub == 100_000 and spec.hotel_budget_rub is None
+    total = sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
+    assert total > 100_000
+    risks = [x for e in r.plan.explanations for x in e.risks]
+    assert any("не укладывается в бюджет" in x for x in risks)

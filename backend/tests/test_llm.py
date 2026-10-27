@@ -250,6 +250,14 @@ def test_llm_hotel_budget_gets_an_assumption_the_user_sees(store, fake):
     assert "бюджет отеля: 45 000 ₽ за все ночи" in r.plan.spec.assumptions
 
 
+def test_llm_does_not_turn_the_hotel_sum_into_a_trip_budget():
+    """#41: the rules read «отель до 40 тысяч»; the same sum from the model is not a trip budget."""
+    found, _ = extract(SOCHI)
+    assert found["hotel_budget_rub"] == 40_000
+    assert "budget_rub" not in with_llm(found, {"budget_rub": 40_000})
+    assert with_llm(found, {"budget_rub": 150_000})["budget_rub"] == 150_000
+
+
 def test_rules_win_over_the_llm_and_dates_stay_one_group():
     found, _ = extract(SOCHI)
     patch = {
