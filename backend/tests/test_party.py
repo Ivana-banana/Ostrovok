@@ -509,3 +509,35 @@ def test_337_triplets_without_age_are_three_children_with_the_note():
 def test_337_a_bare_number_after_a_child_that_is_no_age(text):
     found, _ = extract(text)
     assert found["children_ages"] == [7]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Номер с двойной кроватью, едем в Сочи вдвоём",
+        "Двойной номер в Сочи, нас двое",
+        "Хочу тройной номер в Сочи, нас трое",
+        "Двойная кровать нужна, Сочи вдвоём",
+    ],
+)
+def test_337_double_and_triple_adjectives_are_no_children(text):
+    found, _ = extract(text)
+    assert not found.get("children_ages")
+
+
+def test_337_double_bed_in_a_dialog_keeps_the_party(store):
+    r = say(store, "Едем с женой в Сочи на 5 ночей с 1 июля")
+    r = say(store, "Нужен номер с двойной кроватью", r.session_id)
+    assert r.plan.spec.adults == 2 and not r.plan.spec.children_ages
+
+
+@pytest.mark.parametrize(
+    "text, ages",
+    [
+        ("Наши дети: сын 5 лет и дочь 8 лет, едем в Сочи", [5, 8]),
+        ("С детьми 5 лет и 8, едем в Сочи", [5, 8]),
+    ],
+)
+def test_337_list_after_children(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
