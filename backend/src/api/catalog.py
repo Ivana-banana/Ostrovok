@@ -118,8 +118,10 @@ def _another_word(q: str, k: str) -> bool:
     """The stem q is not a typo of the stem k but a longer or a cut word (#306): «Петербургский»
     is an adjective built on «Петербург», «Выбора» is «выбор» (choice), not «Выборг». A word cut by
     a letter from a long name stays a typo: «Кисловодс»."""
-    if len(q) > len(k):
+    if len(q) - len(k) >= 2:
         return q.startswith(k)
+    if len(q) > len(k):
+        return False
     return len(q) < TYPO_MIN_LEN and k.startswith(q)
 
 
