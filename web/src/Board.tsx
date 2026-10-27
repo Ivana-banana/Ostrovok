@@ -21,6 +21,7 @@ import {
   clock,
   duration,
   fieldLabel,
+  guestsText,
   hours,
   localDate,
   localTime,
@@ -100,13 +101,6 @@ function StageBar({ stage }: { stage: Stage }) {
       ))}
     </ol>
   );
-}
-
-function guests(spec: TripSpec): string {
-  const kids = spec.children_ages.length
-    ? `, дети: ${spec.children_ages.map((a) => `${a} лет`).join(", ")}`
-    : "";
-  return `${spec.adults} взр.${kids}`;
 }
 
 // Origin, dates, guests and budget are the chips of ParamsBar; the rows keep the rest.
@@ -623,6 +617,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   return (
     <section className="card" aria-label="Корзина">
       <h2>Корзина</h2>
+      <p className="muted">Гости: {guestsText(spec)}</p>
       <ul className="plain">
         {cart.items.map((o) => (
           <li key={o.offer_id} className="row">
@@ -712,7 +707,7 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
         </div>
         <div>
           <dt>Гости</dt>
-          <dd>{guests(s)}</dd>
+          <dd>{guestsText(s)}</dd>
         </div>
         <div>
           <dt>Оформлено</dt>

@@ -165,6 +165,16 @@ suite("доска поездки", () => {
     expect(v).toContain("имитирован");
   });
 
+  it("#348: питомец и возраст детей — в «Гости» ваучера и в корзине", () => {
+    const r = structuredClone(base);
+    r.plan.spec = { ...r.plan.spec, adults: 2, children_ages: [1, 2, 5], pets: true };
+    r.voucher!.spec = { ...r.voucher!.spec, adults: 2, children_ages: [1, 2, 5], pets: true };
+    const want = "2 взр., дети: 1 год, 2 года, 5 лет, с питомцем";
+    const doc = render(r);
+    expect(doc.querySelector("[aria-label='Ваучер']")?.textContent).toContain(want);
+    expect(doc.querySelector("[aria-label='Корзина']")?.textContent).toContain(want);
+  });
+
   it("корзина: предупреждение о бюджете до подтверждения", () => {
     const r = structuredClone(base);
     r.stage = "checkout";
