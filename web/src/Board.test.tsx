@@ -178,8 +178,10 @@ suite("доска поездки", () => {
     expect(render(r).querySelector(".guest-line")?.textContent).toBe("Гость: Иван Петров");
     r.voucher = { ...r.voucher!, guest: null };
     expect(render(r).querySelector(".guest-line")?.textContent).toBe(
-      "Гость: не указан (имитация, данные не собираем)",
+      "Гость: имя не введено (имитация)",
     );
+    r.voucher = { ...r.voucher!, simulated: false };
+    expect(render(r).querySelector(".guest-line")?.textContent).toBe("Гость: имя не введено");
   });
 
   it("ваучер настоящей брони: статус вместо пометки об имитации (#376)", () => {

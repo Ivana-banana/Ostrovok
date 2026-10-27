@@ -225,6 +225,17 @@ suite("приложение", () => {
     });
   });
 
+  it("#367: контакт без имени — кнопка выключена и просит имя", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    await type("Контакт", "ivan@example.com");
+    expect(button("Подтвердить бронь").disabled).toBe(true);
+    expect(box.querySelector(".guest-form")?.textContent).toContain("Укажите имя");
+    await type("Имя гостя", "Иван");
+    expect(button("Подтвердить бронь").disabled).toBe(false);
+  });
+
   it("подтверждение: 409 показывает текст сервера и не создаёт ваучер", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });

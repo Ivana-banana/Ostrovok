@@ -652,6 +652,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
   const [guestName, setGuestName] = useState("");
   const [guestContact, setGuestContact] = useState("");
   const editable = stage === "checkout";
+  const needName = guestContact.trim() !== "" && guestName.trim() === "";
   const shownTotal = useCountUp(cart.total_rub);
   const back = removed.filter((r) => !cart.items.some((o) => o.offer_id === r.offer_id));
   if (!cart.items.length && !back.length) return null;
@@ -727,6 +728,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
               type="text"
               maxLength={100}
               autoComplete="name"
+              aria-describedby="guest-note"
               value={guestName}
               onChange={(e) => setGuestName(e.target.value)}
             />
@@ -737,18 +739,26 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
               type="text"
               maxLength={100}
               autoComplete="off"
+              aria-describedby="guest-note"
               value={guestContact}
               onChange={(e) => setGuestContact(e.target.value)}
             />
           </label>
-          <span className="sub">имитация: данные попадут только в ваучер, в систему бронирования не уходят</span>
+          <span className="sub" id="guest-note">
+            имитация: данные попадут только в ваучер, в систему бронирования не уходят
+          </span>
+          {needName && (
+            <span className="warn" role="note">
+              Укажите имя
+            </span>
+          )}
         </div>
       )}
       {editable && cart.items.length > 0 && (
         <button
           type="button"
           className="primary"
-          disabled={busy}
+          disabled={busy || needName}
           onClick={() => {
             const name = guestName.trim();
             onCheckout(name ? { name, contact: guestContact.trim() } : null);
@@ -802,7 +812,7 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
         Гость:{" "}
         {voucher.guest
           ? [voucher.guest.name, voucher.guest.contact].filter(Boolean).join(", ")
-          : "не указан (имитация, данные не собираем)"}
+          : `имя не введено${voucher.simulated ? " (имитация)" : ""}`}
       </p>
       <ul className="plain">
         {voucher.items.map((o) => (
