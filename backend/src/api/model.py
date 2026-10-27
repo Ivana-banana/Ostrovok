@@ -546,7 +546,7 @@ def _share(rub: int, budget: int) -> str:
 def far_origin_question(spec: TripSpec) -> list[Question]:
     """#302, #351: no origin and a budget for the whole trip. The origin is asked when the road
     from DEFAULT_ORIGIN (a round trip for the party) costs ROAD_GAP % of the budget or more over
-    the cheapest big hub out of NEIGHBOUR_HUB_KM of the place (#380), or ROAD_SHARE % of the
+    the cheapest big hub farther than NEIGHBOUR_HUB_KM from the place (#380), or ROAD_SHARE % of the
     budget or more alone. The question names what
     is measured: the road sums (offers, TRAP-4), their difference and its share of the budget.
     It claims nothing about the whole trip. Otherwise the origin is an assumption."""

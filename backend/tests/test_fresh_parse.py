@@ -213,6 +213,17 @@ def test_origin_gap_threshold_side(monkeypatch, best, asks):
         assert "это 15 % бюджета" in questions[0].text
 
 
+@pytest.mark.parametrize(("home", "asks"), [(50_000, True), (49_999, False)])
+def test_origin_road_share_threshold_side(monkeypatch, home, asks):
+    """#380: a road from Москва of exactly ROAD_SHARE (50.0 %) of the budget asks."""
+    monkeypatch.setattr(model, "_round_trip", lambda probe, origin: {"Москва": home}.get(origin))
+    spec = TripSpec(destinations=["Сочи"], month=7, adults=2, budget_rub=100_000)
+    questions = model.far_origin_question(spec)
+    assert bool(questions) is asks
+    if asks:
+        assert "Дорога из Москвы — 50 % бюджета" in questions[0].text
+
+
 def test_origin_share_is_rounded_down():
     """#380: the share is rounded down. 15.2 % reads «15 %»; 14.99 % does not read «15 %»."""
     assert model._share(15_200, 100_000) == "15 %" and model._share(14_990, 100_000) == "14 %"
