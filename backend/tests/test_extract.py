@@ -665,3 +665,13 @@ def test_weekday_lookalikes_are_not_dates(tuesday, text):
 def test_weekday_respects_the_named_month(tuesday):
     found, _ = extract("в Сочи в ноябре в пятницу, двое")
     assert found["date_from"] == date(2026, 11, 6) and found["month"] == 11
+
+
+def test_hotel_budget_survives_a_follow_up_with_a_pet(tmp_path):
+    """#41: «отель до 40 тысяч» stays on the hotel after the pet changes the pick."""
+    store = SessionStore(tmp_path / "s.db")
+    r = chat(ChatRequest(message="Отель до 40 тысяч, Сочи на неделю"), store)
+    r = chat(ChatRequest(session_id=r.session_id, message="с собакой"), store)
+    hotels = [o for o in r.plan.offers if o.kind == "hotel" and o.offer_id in r.plan.selected]
+    assert r.plan.spec.hotel_budget_rub == 40_000 and r.plan.spec.budget_rub is None
+    assert len(hotels) == 1 and hotels[0].price_rub <= 40_000 and hotels[0].pets_allowed
