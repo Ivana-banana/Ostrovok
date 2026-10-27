@@ -26,7 +26,7 @@ stack-check: stack-lint
 stack-demo:
 	cd web && npm run -s build
 	@echo "демо: http://localhost:$(PORT)"
-	$(UV) uvicorn api.main:app --port $(PORT)
+	cd backend && uv run --frozen uvicorn api.main:app --port $(PORT)
 
 stack-eval:
 	$(UV) python ../scripts/eval_harness.py --checks src/api/checks.py \
