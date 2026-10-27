@@ -307,6 +307,8 @@ def test_plain_hotel_pick_updates_the_why_and_keeps_the_ranked_bundle_first(stor
         "возьми поезд, отель 4.5 и выше",
         "возьми поезд и отель 3 и 4 звезды",
         "возьми поезд, отель 8,5 рейтинг",
+        "возьми поезд, отель 4 и выше",
+        "отель 3, 4 или 5 звезд, поезд",
     ],
 )
 def test_a_number_after_hotel_that_is_not_a_row_does_not_pick_a_hotel(store, text):
