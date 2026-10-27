@@ -8,6 +8,7 @@ import pytest
 
 from api import catalog
 from api.contracts import ChatRequest, TripSpec
+from api.fixtures import WARM_WATER_C
 from api.guards import resolve_destination
 from api.model import chat
 from api.offers import offers_for_place, resolve_place
@@ -131,6 +132,17 @@ def test_country_in_text_gives_its_places():
     places = catalog.by_country("в Турцию")
     assert len(places) >= 10 and {p["country"] for p in places} == {"Турция"}
     assert catalog.resolve("в Турцию")["name"] == places[0]["name"] == "Анталия"
+
+
+def test_swim_tag_is_the_warm_season_of_the_sea():
+    """#224: «у моря» is not «море для купания»: Санкт-Петербург has the sea, 2 warm months only."""
+    assert catalog.SWIM_WATER_C == WARM_WATER_C
+    for p in catalog.places():
+        assert ("swim" in p["tags"]) == catalog.swims(p["climate"]["sea"]), p["name"]
+        assert "swim" not in p["tags"] or "sea" in p["tags"], p["name"]
+    spb = catalog.resolve("Санкт-Петербург")
+    assert spb["sea"] and "swim" not in spb["tags"]
+    assert "swim" in catalog.resolve("Сочи")["tags"]
 
 
 def test_find_filters_by_month_climate():
