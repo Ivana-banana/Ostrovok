@@ -869,8 +869,10 @@ def is_past_note(assumption: str) -> bool:
     return PAST_MARK in assumption
 
 
-def _dates(t: str, found: dict, notes: list[str]) -> None:
-    """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day."""
+def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
+    """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day.
+
+    kept: the length of the plan now; a range over MAX_NIGHTS is named and not taken (#168)."""
     d = r"(\d{1,2})(?:-?го)?"
     if m := re.search(rf"\b{MONTH}", t):
         found["month"] = _month(m.group(1))
@@ -936,6 +938,9 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
     if end <= start:
         notes.append(f"даты: «{said}» — такого периода нет, конец по длительности")
         return
+    if (end - start).days > MAX_NIGHTS:
+        notes.append(too_long_note(said, kept))  # the start stays, the end goes
+        return
     found["date_to"], found["nights"] = end, (end - start).days
 
 
@@ -954,6 +959,12 @@ def too_long_note(said: str, nights: int) -> str:
 
 def is_too_long_note(assumption: str) -> bool:
     return assumption.startswith("длительность: срок «")
+
+
+# A ruble sum right before «на месяц»: «бюджет 100 тысяч», «100 000 ₽», «100к».
+BUDGET_SUM_BEFORE = re.compile(
+    r"(?:бюджет\w*\W*(?:до\s+|около\s+)?\d[\d\s]*|\d[\d\s.,]*\s*(?:тыс\w*|к|k|₽|руб\w*|р\.?|млн|миллион\w*))\s*$"
+)
 
 
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
@@ -988,10 +999,19 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     elif m := re.search(r"\bна\s+пар[уы]\s+(?:дн\w*|день|суток)", t):
         found["nights"] = 2
         notes.append(f"длительность: 2 ноч. («{m.group(0)}»)")
-    elif m := re.search(
-        rf"\bна\s+(?:{NUM}\s+)?месяц\w*(?!\s*(?:позже|раньше|вперед|вперёд|назад))", t
-    ):
-        found["nights"] = 30 * (_num(m.group(1)) if m.group(1) else 1)
+    elif m := re.search(r"\bна\s+пол\s?года\b", t):
+        found["nights"] = 180  # half a year: over the limit, named
+    elif m := re.search(r"\bна\s+(?:полтора|1[.,]5)\s+месяц\w*", t):
+        found["nights"] = 45
+        notes.append(f"длительность: «{m.group(0)}» — 45 ночей")
+    elif (
+        m := re.search(
+            rf"\bна\s+(?:{NUM}\s+|пар[уы]\s+)?месяц\w*(?!\s*(?:позже|раньше|вперед|вперёд|назад))",
+            t,
+        )
+    ) and not BUDGET_SUM_BEFORE.search(t[: m.start()]):
+        # «на пару месяцев» is 2 months; «бюджет 100 тысяч на месяц» is a budget period (#170)
+        found["nights"] = 30 * (2 if "пар" in m.group(0) else _num(m.group(1)) if m.group(1) else 1)
         if found["nights"] <= MAX_NIGHTS:
             notes.append(f"длительность: «{m.group(0)}» — {found['nights']} ночей")
     elif m := re.search(rf"\b(?:{NUM}\s+)?недел\w*", t):
@@ -1159,7 +1179,7 @@ def extract(
     notes: list[str] = []
     _places(text, t, found, notes, has_destination)
     _english_places(t, found)
-    _dates(t, found, notes)
+    _dates(t, found, notes, nights)
     _nights(t, found, notes, nights)
     _people(t, found, notes)
     _budget(t, found, notes, nights, adults)
