@@ -187,6 +187,41 @@ BUDGET_RES = [  # (pattern, multiplier); «к» counts only right after the numb
     (r"\b(\d{1,3}(?:\s\d{3})+|\d{4,7})\s*(?:₽|руб|р\b)", 1),
     (r"\bбюджет\w*\s*(?:до\s+|около\s+)?(\d{4,7})\b", 1),
 ]
+# #158: a budget in another currency is never read as rubles: (label, symbol, words).
+CURRENCIES = [
+    ("евро", "€", r"евро|eur"),
+    ("долларах", "$", r"долл\w*|usd|бакс\w*"),
+    ("фунтах", "£", r"фунт\w*|gbp"),
+    ("юанях", "¥", r"юан\w*|cny"),
+    ("лирах", "₺", r"лир(?:а|ы|ах|ам|у)?"),
+    ("тенге", "₸", r"тенге|kzt"),
+    ("дирхамах", "", r"дирхам\w*|aed"),
+    ("йенах", "", r"йен\w*|jpy"),
+]
+AMOUNT_UNIT = r"\d(?:[.,]\d+)?\s?(?:[кk]|тыс\w*\.?|млн|миллион\w*)?\s*"
+# #158: «полмиллиона», «потолок миллион»: a word sum. «Миллион» needs a budget word before it.
+MILLION_CUE = (
+    r"\b(?:бюджет\w*|потол\w+|лимит\w*|максимум\w*|до|около|порядка|не\s+(?:больше|более|дороже))"
+)
+MILLION_RES = [
+    (r"\bпол(?:у)?миллиона\b", 500_000),
+    (r"\bполтора\s+миллиона\b", 1_500_000),
+    (MILLION_CUE + r"\s+(?:в\s+)?миллион\w*", 1_000_000),
+]
+# «50 тысяч шагов», «1000 км»: the number counts something else than money.
+NOT_MONEY_RE = re.compile(
+    r"^\w*\s+(?:шаг|км\b|километр|метр|человек|люд|жител|турист|раз\b|раза\b|отзыв|балл"
+    r"|звезд|подписчик|лайк|просмотр|страниц|впечатл)"
+)
+# After the sum: «на каждого», «на человека» (not «на каждого ребёнка»); «в сутки», «за ночь».
+PER_PERSON = (
+    r"(?:(?:на|с|за|для)\s+(?:кажд\w+\b(?!\s+(?:ребен|дет))|челов\w*|чел\b|персон\w+|душу"
+    r"|взросл\w+|одного|нос\b|голов\w+)|кажд\w+\b(?!\s+(?:ребен|дет)))"
+)
+PER_NIGHT = (
+    r"(?:(?:в|за)\s+(?:сутки|сут\b|ночь|день\b(?!\s+(?:рожд|отъезд|прилет|вылет|заезд)))"
+    r"|на\s+ночь|/\s*(?:сут\w*|день|ночь)|посуточно)"
+)
 MEALS = [
     (r"вс[её]\s+включ|all\s*inclusive|олл\s*инклюзив", "AI"),
     (r"полупансион", "HB"),
@@ -930,22 +965,101 @@ def _people(t: str, found: dict, notes: list[str]) -> None:
         notes.append(f"взрослых: 2 (по слову «{m.group(0)}»)")
 
 
-def _budget(t: str, found: dict, notes: list[str]) -> None:
-    """The first sum in the message; said about the hotel, it still counts for the whole trip."""
-    for pattern, k in BUDGET_RES:
-        if m := re.search(pattern, t):
-            found["budget_rub"] = int(float(m.group(1).replace(" ", "").replace(",", ".")) * k)
-            if re.search(r"отел\w*\s+(?:\S+\s+){0,2}$", t[: m.start()]):
-                # TODO(T7, #13): a hotel-only budget; TripSpec has one budget for the trip.
-                rub = f"{found['budget_rub']:,}".replace(",", " ")
-                notes.append(f"бюджет: {rub} ₽ на всю поездку (сказано про отель)")
-            return
+def _night_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "ночь"
+    return "ночи" if 2 <= n % 10 <= 4 and n % 100 not in (12, 13, 14) else "ночей"
 
 
-def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:
+def _rub(n: int) -> str:
+    return f"{n:,}".replace(",", " ")
+
+
+def _currency_of(before: str, after: str) -> str | None:
+    """The foreign currency written right after a sum («1000 евро») or before it («$1500»)."""
+    for label, symbol, words in CURRENCIES:
+        sym = re.escape(symbol) if symbol else "(?!)"
+        if re.match(rf"\s*(?:{sym}|(?:{words})\b)", after) or (
+            symbol and before.rstrip().endswith(symbol)
+        ):
+            return label
+    return None
+
+
+def _standalone_currency(t: str) -> str | None:
+    """A foreign sum no ruble pattern took: «$1500», «1500$», «бюджет 3 евро», «1000 евро» first."""
+    cue = r"(?:бюджет\w*|до|потол\w+|лимит\w*|максимум\w*|около|порядка|не\s+(?:больше|более))"
+    for label, symbol, words in CURRENCIES:
+        sym = re.escape(symbol) if symbol else "(?!)"
+        by_symbol = rf"{sym}\s*\d|\d\s*{sym}"
+        by_word = rf"(?:\A\s*|{cue}\s+(?:\w+\s+)?){AMOUNT_UNIT}(?:{words})\b"
+        if re.search(by_symbol, t) or re.search(by_word, t):
+            return label
+    return None
+
+
+def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> None:
+    """The first sum in the message; said about the hotel, it still counts for the whole trip.
+
+    #158: a foreign currency is no rubles (budget stays unset, the note says so); «на каждого»
+    multiplies by the adults, «в сутки» by the nights (the note names the factors).
+    nights, adults: the plan's values when the message does not state them."""
+    foreign = None
+    hits = [(m, v, True) for p, v in MILLION_RES for m in re.finditer(p, t)]
+    hits += [(m, k, False) for p, k in BUDGET_RES for m in re.finditer(p, t)]
+    for m, k, is_word in hits:
+        if NOT_MONEY_RE.match(t[m.end() :]):
+            continue
+        if is_word:
+            value, tail = k, t[m.end() :]
+        else:
+            value = int(float(m.group(1).replace(" ", "").replace(",", ".")) * k)
+            tail = re.sub(r"^[а-яa-z₽.]*", "", t[m.end() :])  # the rest of «тысяч», «рублей»
+        if label := _currency_of(t[: m.start()], tail):
+            foreign = foreign or label  # not this sum: a ruble sum may follow
+            continue
+        tail = re.sub(r"^\s*(?:(?:₽|руб[а-я]*\.?|р\b\.?)\s*)?", "", tail)
+        per_person = per_night = False
+        for _ in range(2):  # «на человека в сутки»
+            if not per_person and (r := re.match(PER_PERSON, tail)):
+                per_person = True
+            elif not per_night and (r := re.match(PER_NIGHT, tail)):
+                per_night = True
+            else:
+                break
+            tail = tail[r.end() :].lstrip()
+        total, factors = value, []
+        people = found.get("adults", adults)
+        if per_person and people > 1:
+            total *= people
+            kids = " (дети не считаются)" if found.get("children_ages") else ""
+            factors.append(f"{people} взрослых{kids}")
+        stay = found.get("nights", nights)
+        if per_night and stay > 1:
+            total *= stay
+            plan = "" if "nights" in found else " (длительность из плана)"
+            factors.append(f"{stay} {_night_word(stay)}{plan}")
+        if factors:
+            notes.append(f"бюджет: {_rub(value)} ₽ × " + " × ".join(factors))
+        found["budget_rub"] = total
+        if re.search(r"отел\w*\s+(?:\S+\s+){0,2}$", t[: m.start()]):
+            # TODO(T7, #13): a hotel-only budget; TripSpec has one budget for the trip.
+            notes.append(f"бюджет: {_rub(total)} ₽ на всю поездку (сказано про отель)")
+        return
+    # No ruble sum: «бюджет 1000 евро», «$1500». None, not absent: the model must not add rubles.
+    if label := foreign or _standalone_currency(t):
+        found["budget_rub"] = None
+        notes.append(f"бюджет: в {label} — не пересчитываю, уточните в рублях")
+
+
+def extract(
+    text: str, has_destination: bool = False, nights: int = 7, adults: int = 2
+) -> tuple[dict, list[str]]:
     """TripSpec fields stated in one message, plus assumptions made while reading it.
 
-    has_destination: the plan has a city already; an unknown first word is then never a city."""
+    has_destination: the plan has a city already; an unknown first word is then never a city.
+    nights, adults: the plan's values (TripSpec defaults); only a «в сутки» or «на каждого»
+    budget reads them (#158)."""
     t = text.lower().replace("ё", "е")  # same length: positions match the original text
     found: dict = {}
     notes: list[str] = []
@@ -954,7 +1068,7 @@ def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:
     _dates(t, found, notes)
     _nights(t, found, notes)
     _people(t, found, notes)
-    _budget(t, found, notes)
+    _budget(t, found, notes, nights, adults)
     if re.search(
         r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"
         r"|\bпс(?:а|у|ом|е|ы|ов|ам|ами|ах)\b"
