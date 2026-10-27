@@ -34,7 +34,7 @@ from api.contracts import (
     TransferOffer,
     TransportOffer,
 )
-from api.offers import resolve_place, transfer_id
+from api.offers import MAX_DRIVE, resolve_place, transfer_id
 
 EARLY_WAIT = timedelta(hours=3)  # arrival earlier than this before check-in is an issue
 LATE_WAIT = timedelta(hours=3)  # time between check-out and leaving for the station or airport
@@ -60,6 +60,7 @@ VERBS = {
 HUBS = {"flight": "в аэропорт", "train": "на вокзал"}  # with the preposition: «на вокзал»
 DEPARTURE_OF = {"flight": "вылета", "train": "отправления", "car": "старта"}
 TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+STOPS_RE = re.compile(r"ночёвок в пути: (\d+)")  # nights on the road in a car title (offers.py)
 KM_RE = re.compile(r"≈\s*(\d+(?:[.,]\d+)?)\s*км")  # the distance in a transfer title (offers.py)
 
 
@@ -375,6 +376,24 @@ def _leg_issues(t: _Trip) -> list[TimelineIssue]:
     return out
 
 
+def _drive_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[TimelineIssue]:
+    """A car leg with a driving day over MAX_DRIVE (#276). Nights on the road come from the
+    title (offers.py); with them the last driving day is what is left after the full days."""
+    if leg.mode != "car":
+        return []
+    m = STOPS_RE.search(leg.title)
+    stops = int(m.group(1)) if m else 0
+    day = _utc(leg.arrive_at) - _utc(leg.depart_at) - timedelta(days=stops)
+    if day <= MAX_DRIVE:
+        return []
+    what = "без ночёвки" if not stops else "за один день, ночёвок в пути мало"
+    text = (
+        f"{leg.origin} → {leg.destination}: {_span(day)} за рулём {what} — больше "
+        f"{_span(MAX_DRIVE)}. Разбейте дорогу на дни с ночёвкой в пути."
+    )
+    return [TimelineIssue(severity="warn", text=text, fixes=_alt(t, leg, _drive_issues, fixes))]
+
+
 def _leg_events(leg: TransportOffer, t: _Trip) -> list[TimelineEvent]:
     start, end = VERBS[leg.mode]
     depart = _at_place(leg.depart_at, leg.origin)
@@ -453,7 +472,16 @@ def _events(t: _Trip) -> list[TimelineEvent]:
                     offer_id=t.back.offer_id,
                 )
             )
-    return sorted(events, key=lambda e: _utc(e.at))
+
+    # At the same instant the check-out comes before the start back (a car at CAR_BACK).
+    def starts_back(e: TimelineEvent) -> bool:
+        return (
+            t.back is not None
+            and e.offer_id == t.back.offer_id
+            and e.title.startswith(f"{VERBS[t.back.mode][0]}:")
+        )
+
+    return sorted(events, key=lambda e: (_utc(e.at), starts_back(e)))
 
 
 def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]]:
@@ -464,6 +492,8 @@ def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]
     """
     t = _Trip(plan)
     issues = _leg_issues(t)
+    for leg in t.legs:
+        issues += _drive_issues(t, leg)
     if t.hotel:
         if t.out:
             issues += _arrival_issues(t, t.out)
