@@ -937,13 +937,18 @@ CHEAPER_RE = re.compile(
     r"|\bэкономнее\b|\bслишком\s+дорого\b|\bдорогов\w+"
 )
 CHEAPER_WORD = r"(?:по)?дешевле|экономнее"
-CHEAPER_ASK_RE = re.compile(
-    rf"\b(?:{CHEAPER_WORD})\s*,?\s*(?:чем|ли)\b|\bли\b|\bпочему\b|\bсколько\b"
-    # #310: a refusal is adjacent to the word: «не надо дешевле», «дешевле не надо». A refusal
-    # elsewhere in the phrase («подешевле, не хочу переплачивать») refuses something else.
-    rf"|\bне\s+(?:(?:надо|нужно|нужн\w+|хочу|хотим|стоит)\s+)?(?:{CHEAPER_WORD})\b"
+# #310: a refusal is adjacent to the word: «не надо дешевле», «дешевле не надо». A refusal
+# elsewhere in the phrase («подешевле, не хочу переплачивать») refuses something else.
+CHEAPER_REFUSAL_RE = re.compile(
+    rf"\bне\s+(?:(?:надо|нужно|нужн\w+|хочу|хотим|стоит)\s+)?(?:{CHEAPER_WORD})\b"
     rf"|\b(?:{CHEAPER_WORD})\s+не\s+(?:надо|нужно|нужн\w+|хочу|хотим|стоит)\b"
 )
+CHEAPER_ASK_RE = re.compile(
+    rf"\b(?:{CHEAPER_WORD})\s*,?\s*(?:чем|ли)\b|\bли\b|\bпочему\b|\bсколько\b"
+    rf"|{CHEAPER_REFUSAL_RE.pattern}"
+)
+# #316: «дешевле не бывает?» asks for the minimum of the offers.
+CHEAPER_MIN_RE = re.compile(rf"\b(?:{CHEAPER_WORD})\s+не\s+(?:бывает|будет|бывало)\b")
 # «можно ли», «есть ли», «нельзя ли» ask for the thing: a request.
 REQUEST_LI_RE = re.compile(r"\b(?:можно|есть|нельзя|будет)\s+ли\b")
 BUDGET_STEP = 15  # percent off the current total per «подешевле»
@@ -952,7 +957,7 @@ BUDGET_STEP = 15  # percent off the current total per «подешевле»
 def asks_cheaper(low: str) -> bool:
     """«Можно ли подешевле?» is a request; «дешевле ли …?», «дешевле, чем …?» and a refusal are not."""
     clean = REQUEST_LI_RE.sub("можно", low)
-    if re.search(rf"\b(?:{CHEAPER_WORD})\s+не\s+(?:бывает|будет|бывало)\b", clean):
+    if CHEAPER_MIN_RE.search(clean):
         return False  # «дешевле не бывает?» is a remark or a question
     return bool(CHEAPER_RE.search(clean) and not CHEAPER_ASK_RE.search(clean))
 
@@ -967,6 +972,58 @@ def _ranked_total(plan: Plan) -> int:
     the user picked by hand (dag._keep_pick): the real minimum of the offers."""
     ids, _ = rank(plan.spec, plan.offers)
     return sum(o.price_rub for o in plan.offers if o.offer_id in ids)
+
+
+# The wish «недорого» in words other than «дешевле» (see api/extract.py WISHES).
+WISH_CHEAP_RE = re.compile(r"недорог|бюджетн|эконом|cheap")
+
+
+def _other_edits(found: dict) -> bool:
+    """The message changes a condition besides the budget. The wish «недорого» comes from the
+    word «подешевле» itself: it is no other condition (#316)."""
+    rest = set(found) - {"budget_rub"}
+    if set(found.get("wishes", [])) <= {"недорого"}:
+        rest.discard("wishes")
+    return bool(rest)
+
+
+def drop_cheaper_wish(found: dict, low: str) -> dict:
+    """«Не надо дешевле», «дешевле не бывает?» name the word, not a wish: «недорого» does not
+    enter the spec and does not re-plan the trip (#316)."""
+    wishes = found.get("wishes")
+    if not wishes or "недорого" not in wishes:
+        return found
+    if not (CHEAPER_REFUSAL_RE.search(low) or CHEAPER_MIN_RE.search(low)):
+        return found  # «почему не дешевле?» stays a wish, as before
+    if WISH_CHEAP_RE.search(re.sub(rf"\b(?:{CHEAPER_WORD})\b", " ", low)):
+        return found  # «недорогой отель, не надо дешевле»: the wish is said in other words
+    rest = [w for w in wishes if w != "недорого"]
+    kept = {k: v for k, v in found.items() if k != "wishes"}
+    return {**kept, "wishes": rest} if rest else kept
+
+
+def _cheapest_total(plan: Plan, cart: Cart) -> int:
+    """The least total the offers give for the trip: a trial re-plan with a budget nobody meets."""
+    trial, _, _ = replan(plan, merge(plan.spec, {"budget_rub": 0}, []), cart)
+    return _ranked_total(trial)
+
+
+def cheaper_talk_line(old: ChatReply, low: str) -> str:
+    """The answer to «не надо дешевле» (the budget stays) and «дешевле не бывает?» (the minimum
+    of the offers): no budget changes, no plan changes (#316, TRAP-4)."""
+    total = _selected_total(old.plan)
+    if CHEAPER_MIN_RE.search(low):
+        floor = _cheapest_total(old.plan, old.cart)
+        if total <= floor:
+            return (
+                f"Дешевле не бывает: минимум в предложениях — {_rub(floor)}, "
+                "он уже в плане (синтетика)."
+            )
+        return (
+            f"Бывает: минимум в предложениях — {_rub(floor)}, сейчас {_rub(total)} (синтетика). "
+            "Напишите «подешевле», и я пересоберу план."
+        )
+    return f"Хорошо, бюджет не меняю: итог остаётся {_rub(total)} (синтетика)."
 
 
 def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
@@ -984,7 +1041,8 @@ def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
     edited = merge(plan.spec, {**found, "budget_rub": target}, list(notes))
     trial, _, _ = replan(plan, edited, cart)
     cheapest = _ranked_total(trial)
-    if cheapest >= total and not found:
+    if cheapest >= total and not _other_edits(found):
+        found.pop("wishes", None)  # nothing is cheaper: the word «подешевле» changes nothing
         return
     found["budget_rub"] = max(target, cheapest)
     new = found["budget_rub"]
@@ -1977,6 +2035,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     told: list[str] = []
 
     def without_origin(f: dict) -> dict:
+        f = drop_cheaper_wish(f, low) if prev is not None else f
         named_here = f.get("destinations", [])
         start = f.get("origin") or old.plan.spec.origin or DEFAULT_ORIGIN
         if len(named_here) > 1 and start in named_here:
@@ -2155,7 +2214,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             lines = [*lines, *more]
             plan.changes = plan_changes(old.plan, plan, old.cart, cart)
         lines = [_replanned(x) for x in lines]
-        if cheaper and (line := cheaper_line(old.plan, plan, bool(set(found) - {"budget_rub"}))):
+        if cheaper and (line := cheaper_line(old.plan, plan, _other_edits(found))):
             lines.append(line)
         same_trip = (old.plan.spec.destinations, old.plan.spec.origin, old.plan.spec.modes) == (
             spec.destinations,
@@ -2184,6 +2243,14 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if cheaper and not plan_dirty:
         # The budget of the last step already holds: the plan is the cheapest one (#278).
         text = f"{cheaper_line(old.plan, old.plan)} {HINTS[old.stage]}"
+        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    if (
+        old.stage in ("compare", "assemble")
+        and not (plan_dirty or picks or lines)
+        and prev is not None
+        and (CHEAPER_REFUSAL_RE.search(low) or CHEAPER_MIN_RE.search(low))
+    ):
+        text = f"{cheaper_talk_line(old, low)} {HINTS[old.stage]}"  # #316
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     if (picks or (lines and not yes)) and not plan_dirty:
         # Nothing to re-plan: a pick on the plan, or the reason there is no change (#184).
