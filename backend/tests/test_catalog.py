@@ -112,6 +112,14 @@ def test_trap_4_mountain_airport_is_nearest_by_road():
     assert rides and all(road["MRV"] <= x <= road["MRV"] + 10 for x in rides)
 
 
+def test_trap_4_small_road_gain_keeps_the_nearest_airport_by_line():
+    """TRAP-4: Дилижан stays on EVN; LWN is 106 km by road vs 108, a gain under 15 % and 20 km (#246)."""
+    place = catalog.resolve("Дилижан")
+    road = catalog.snapshot()["roads"]["Дилижан"]
+    assert road["LWN"] < road["EVN"] and road["EVN"] - road["LWN"] < 20
+    assert place["airport"]["iata"] == "EVN" and place["airport_km"] == road["EVN"]
+
+
 def test_trap_6_airport_road_from_the_snapshot_else_straight_line():
     """TRAP-6: road km come from the roads snapshot in catalog.json (no network).
 
@@ -123,7 +131,9 @@ def test_trap_6_airport_road_from_the_snapshot_else_straight_line():
         ap = p["airport"]
         if ap.get("road"):
             known = {k: v for k, v in roads[p["name"]].items() if v is not None}
-            assert ap["km"] == known[ap["iata"]] == min(known.values()), p["name"]
+            best = min(known.values())
+            # the road-nearest airport, or the straight-line one when the gain is small (#246)
+            assert ap["km"] == known[ap["iata"]] < max(best + 20, best / 0.85) + 1, p["name"]
         else:
             assert ap["km"] == round(catalog.km_between(p, ports[ap["iata"]])), p["name"]
 
