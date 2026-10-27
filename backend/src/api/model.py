@@ -17,15 +17,17 @@ same path runs on rules (TRAP-1).
 
 import re
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import catalog, llm
 from api.answers import (
+    closed_line,
     destination_line,
     is_hotel_compare,
     plan_fact,
+    rooms_line,
     span,
     without_plan_fields,
 )
@@ -102,6 +104,7 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
+from api.timeline import VERBS
 
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
@@ -274,11 +277,14 @@ ROUTE_RE = re.compile(
 )
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
 # #351: an unnamed origin is asked when the fit of a whole-trip budget depends on it: the round
-# trip from DEFAULT_ORIGIN costs ROAD_GAP of the budget more than from the cheapest big hub, or
-# takes over ROAD_SHARE of it alone. Sums from the offers (TRAP-4). Team estimates (README).
-ROAD_GAP = 0.15
-ROAD_SHARE = 0.5
+# trip from DEFAULT_ORIGIN costs ROAD_GAP % of the budget or more over the cheapest big hub, or
+# takes ROAD_SHARE % of it or more alone. Sums from the offers (TRAP-4). Team estimates (README).
+ROAD_GAP = 15  # % of the budget, integer: 15.0 % exactly asks (#380)
+ROAD_SHARE = 50
 BIG_HUBS = 10  # the hubs by population compared with DEFAULT_ORIGIN
+# #380: a hub nearer the place is its neighbour (Ростов-на-Дону — Сочи 403 км, Анапа 318 км):
+# its cheap road measures the distance to the place, not the traveller's origin. F15: 1 434 км.
+NEIGHBOUR_HUB_KM = 500
 ORIGIN_OPTIONS = ("Москвы", "Санкт-Петербурга", "Екатеринбурга", "Новосибирска")
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
 STAY_RE = re.compile(
@@ -535,13 +541,15 @@ def _from(name: str) -> str:
 
 
 def _share(rub: int, budget: int) -> str:
-    return f"{round(100 * rub / budget)} %"
+    """Rounded down: a share that passes ROAD_GAP or ROAD_SHARE never reads below it (#380)."""
+    return f"{100 * rub // budget} %"
 
 
 def far_origin_question(spec: TripSpec) -> list[Question]:
     """#302, #351: no origin and a budget for the whole trip. The origin is asked when the road
-    from DEFAULT_ORIGIN (a round trip for the party) costs over ROAD_GAP of the budget more than
-    from the cheapest big hub, or over ROAD_SHARE of the budget alone. The question names what
+    from DEFAULT_ORIGIN (a round trip for the party) costs ROAD_GAP % of the budget or more over
+    the cheapest big hub farther than NEIGHBOUR_HUB_KM from the place (#380), or ROAD_SHARE % of the
+    budget or more alone. The question names what
     is measured: the road sums (offers, TRAP-4), their difference and its share of the budget.
     It claims nothing about the whole trip. Otherwise the origin is an assumption."""
     if spec.origin or spec.budget_rub is None or not spec.destinations:
@@ -553,15 +561,16 @@ def far_origin_question(spec: TripSpec) -> list[Question]:
     hubs = sorted(catalog.hubs(), key=lambda h: -h["pop"])
     names = [h["name"] for h in hubs if h["name"] != DEFAULT_ORIGIN][:BIG_HUBS]
     if place := catalog.resolve(spec.destinations[0]):
-        # The place itself is no origin to compare: «Казань» from Казань has no road. The hub
-        # nearest the place is not added either: its road is always small (Чебоксары — Казань
-        # 4 900 ₽), so the gap would measure the distance to the nearest city, not the origin.
-        names = [n for n in names if n != place["name"]]
+        # The place itself and its neighbour hubs are no origin to compare: their road is always
+        # small (Ростов-на-Дону — Геленджик 5 000 ₽), so the gap would measure the distance to
+        # the nearest city, not the origin (#380).
+        near = {h["name"] for h in hubs if catalog.km_between(place, h) < NEIGHBOUR_HUB_KM}
+        names = [n for n in names if n not in near]
     sums = [(r, n) for n in dict.fromkeys(names) if (r := _round_trip(probe, n)) is not None]
     best = min(sums, default=None)
     budget = spec.budget_rub
-    gap = best is not None and home - best[0] > ROAD_GAP * budget
-    if not (gap or home > ROAD_SHARE * budget):
+    gap = best is not None and 100 * (home - best[0]) >= ROAD_GAP * budget
+    if not (gap or 100 * home >= ROAD_SHARE * budget):
         return []
     text = f"Откуда начинается поездка? Из Москвы дорога туда и обратно ≈ {_rub(home)}"
     if best and best[0] < home:
@@ -572,7 +581,7 @@ def far_origin_question(spec: TripSpec) -> list[Question]:
         )
     else:
         text += "."
-    if home > ROAD_SHARE * budget:
+    if 100 * home >= ROAD_SHARE * budget:
         text += f" Дорога из Москвы — {_share(home, budget)} бюджета {_rub(budget)}."
     text += " Если города нет в кнопках, напишите «из …»."
     options = [f"Из {w}" for w in ORIGIN_OPTIONS]
@@ -1417,7 +1426,7 @@ def _question_answer(
     )
     if old.plan.timeline:  # times come from the timeline tool, never from the model
         cart += "\nПлан поездки:\n" + "\n".join(
-            f"{e.at:%d.%m %H:%M} — {e.title}" for e in old.plan.timeline
+            f"{_at(e.at)} — {e.title}" for e in old.plan.timeline
         )
     edit = "Чтобы изменить поездку, напишите, что поменять: например, «хотим с бассейном»."
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
@@ -1517,7 +1526,9 @@ def _text_compare(plan: Plan) -> str:
             f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
         ),
         *([line] if (line := destination_line(plan)) else []),
+        *([line] if (line := closed_line(plan)) else []),
         *([line] if (line := missing_mode(plan)) else []),
+        *([line] if (line := rooms_line(spec)) else []),
         "Отели:",
     ]
     hotels = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
@@ -1534,7 +1545,12 @@ def _text_compare(plan: Plan) -> str:
         lines.append("Транспорт:")
     for i, o in enumerate(legs, 1):
         no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
-        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}{no_pet}")
+        # C14 (#364, TRAP-5): local times with their zones, the verbs of the mode and the
+        # duration; the start time leaves the title so it is not shown twice.
+        start, end = (v.lower() for v in VERBS[o.mode])
+        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
+        when = f"{start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)}"
+        lines.append(f"Рейс {i}. {title} — {_rub(o.price_rub)}{no_pet} · {when}")
     chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
     lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:
@@ -1553,10 +1569,24 @@ def _text_compare(plan: Plan) -> str:
     )
 
 
+def _zone(dt: datetime) -> str:
+    """«UTC+10», «UTC+5:30», «UTC-3»: the offset of a local time from the tools (TRAP-5)."""
+    off = dt.utcoffset() or timedelta()
+    minutes = int(off.total_seconds() // 60)
+    sign, minutes = ("+" if minutes >= 0 else "-"), abs(minutes)
+    h, m = divmod(minutes, 60)
+    return f"UTC{sign}{h}" + (f":{m:02d}" if m else "")
+
+
+def _at(dt: datetime) -> str:
+    """A local time of a leg or an event with its zone (C14, #364)."""
+    return f"{dt:%d.%m %H:%M} ({_zone(dt)})"
+
+
 def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
-    lines += [f"{e.at:%d.%m %H:%M} — {e.title}" for e in plan.timeline]
-    lines += [f"Внимание: {i.text}." for i in plan.issues]
+    lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
+    lines += [f"Внимание: {i.text.rstrip('.')}." for i in plan.issues]
     lines += _unchecked_lines(plan.spec)
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
@@ -1634,11 +1664,17 @@ def _no_offers(plan: Plan, text: str, skip: list[str] | None = None) -> tuple[st
     return text + options, [Question(text="Куда поедем вместо этого?", options=names)]
 
 
+# An e-mail, or a phone with +7 or 8 and 10 digits, in a message after the booking (#367).
+GUEST_DATA_RE = re.compile(r"\S+@\S+\.\w+|(?<!\d)(?:\+7|8)[\s()-]*(?:\d[\s()-]*){10}(?!\d)")
+
 HINTS: dict[Stage, str] = {
     "select": "Выберите другое направление.",
     "compare": "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».",
     "assemble": "Напишите «да», чтобы положить план в корзину.",
-    "checkout": "Чтобы оформить бронь, напишите «подтверждаю».",
+    "checkout": (
+        "Введите имя в форме и нажмите «Подтвердить бронь»; в чате «подтверждаю» оформит "
+        "бронь без имени. В имитации данные гостя не обязательны."
+    ),
 }
 
 
@@ -1691,6 +1727,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
 
     use_llm: ask the model (llm.py) when it is configured; this blocks on the network, so the
     caller runs it outside the store transaction.
+
+    «подтверждаю» at checkout raises _Confirm instead of a reply: the booking calls the
+    provider and the store, so only chat() catches it and books (#382).
     """
     low = message.lower().replace("ё", "е")
     restart = RESTART_RE.search(message) and not NOT_RESTART_RE.search(low)
@@ -1702,6 +1741,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return fresh.model_copy(update={"reply": f"Начинаем заново.{kept} {fresh.reply}"})
     if prev and prev.voucher:
         text = f"Бронь {prev.voucher.booking_id} уже оформлена."
+        if GUEST_DATA_RE.search(message):  # #367: an e-mail or a phone after the booking
+            text += " Контакт из сообщения в неё не добавлен."
+            if prev.voucher.simulated:
+                text += " Бронь имитирована."
         return prev.model_copy(update={"reply": text, "questions": [], "llm": False})
     old = prev or ChatReply(
         session_id=sid,
@@ -2213,11 +2256,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             f"(синтетика, оплата имитируется). {HINTS['checkout']}"
         )
         return reply("checkout", plan, text, cart)
-    if booking:
-        try:  # the same rules as POST /api/checkout; the user saw the stored cart total
-            return checkout_reply(old, old.cart.total_rub).model_copy(update={"llm": used})
-        except CartRefusal as e:
-            return reply(old.stage, plan, e.text)
+    if booking:  # chat() books outside the session lock; the user saw the stored cart total
+        raise _Confirm(old.cart.total_rub)
     text = HINTS.get(old.stage, "Уточните запрос.")
     if old.stage == "select":
         text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
@@ -2232,8 +2272,27 @@ def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
     and a slow model must not hold the other sessions. The draft is written only if the
     session did not change meanwhile; otherwise the step runs again on the new state, rules
     only, inside the transaction.
+
+    «подтверждаю» at checkout (step raises _Confirm) books through cart.checkout_reply, the
+    path of POST /api/checkout: outside the store lock, with the attempt table (#382). The
+    booking reply is a rule-based turn: llm is False.
     """
     sid = req.session_id or uuid4().hex
     prev = store.get(sid)
-    draft = step(prev, sid, req.message, use_llm=True)
-    return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
+    try:
+        draft = step(prev, sid, req.message, use_llm=True)
+        return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
+    except _Confirm as c:
+        try:
+            return checkout_reply(store, sid, c.total_rub).model_copy(update={"llm": False})
+        except CartRefusal as e:  # the cart stays open; the reply says why
+            why = {"reply": e.text, "questions": [], "llm": False}
+            return store.update(sid, lambda cur: cur.model_copy(update=why))
+
+
+class _Confirm(Exception):  # a signal from step() to chat(), not an error
+    """step() met «подтверждаю» at checkout; chat() books the cart of this total."""
+
+    def __init__(self, total_rub: int):
+        super().__init__(total_rub)
+        self.total_rub = total_rub
