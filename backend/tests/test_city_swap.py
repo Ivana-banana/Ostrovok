@@ -1,30 +1,37 @@
 """#93: the agent never books a city the user did not name or explicitly choose (S5, TRAP-2).
 
-Without a model (TRAP-1). The three off-catalogue phrases (Ханой, Лиссабон, Хошимин) are copied from
-eval/cases_unseen.json: after #93 those rows are no longer «unseen» (D-011).
+Without a model (TRAP-1). The phrases of Ханой, Лиссабон, Хошимин (from eval/cases_unseen.json) and
+Сестрорецк stand here with other cities: catalog.json (#8) has those four. Every city below is not in it.
 The sessions answer the way the eval driver does: the first option
 of a clarify question, then «1» / «беру» / «да» / «подтверждаю».
 """
 
 import pytest
 
+from api import catalog
 from api.contracts import ChatRequest, HotelOffer
 from api.extract import extract
-from api.fixtures import CATALOG
 from api.model import chat
 from api.store import SessionStore
 
+
+def in_catalog(name: str) -> bool:
+    """A place of catalog.json under its own name (#20: inspiration ranks the whole catalogue)."""
+    place = catalog.resolve(name)
+    return place is not None and place["name"] == name
+
+
 ANSWERS = {"inspire": "1", "compare": "беру", "assemble": "да", "checkout": "подтверждаю"}
-HANOI = "Ханой на 8 ночей, двое взрослых, бюджет 120 тысяч"
+HANOI = "Кандалакша на 8 ночей, двое взрослых, бюджет 120 тысяч"
 # Table (a): real cities outside the catalogue become the destination, then select.
 OFF_CATALOG = [
-    (HANOI, "Ханой"),
-    ("Хочу в Лиссабон в марте", "Лиссабон"),
-    ("Хошимин на 10 дней", "Хошимин"),
+    (HANOI, "Кандалакша"),
+    ("Хочу в Тихвин в марте", "Тихвин"),
+    ("Котлас на 10 дней", "Котлас"),
     ("Ухта на 3 дня", "Ухта"),
-    ("Ханой, 5 ночей", "Ханой"),
-    ("Сестрорецк в июле", "Сестрорецк"),
-    ("Сестрорецк на 3 дня", "Сестрорецк"),
+    ("Кандалакша, 5 ночей", "Кандалакша"),
+    ("Вытегра в июле", "Вытегра"),
+    ("Вытегра на 3 дня", "Вытегра"),
     ("Большеречье на 3 дня", "Большеречье"),
     ("Уренгой на 3 дня", "Уренгой"),
     ("Друскининкай на 3 дня", "Друскининкай"),
@@ -106,7 +113,7 @@ def test_trap_2_unknown_city_is_not_swapped_for_a_catalogue_city(store, text, ci
     assert r.plan.spec.destinations == [city]
     assert city in r.reply and "нет в каталоге" in r.reply
     options = r.questions[0].options
-    assert 2 <= len(options) <= 3 and set(options) <= set(CATALOG)
+    assert 2 <= len(options) <= 3 and all(in_catalog(o) for o in options)
     # Anything but a pick keeps the named city and books nothing.
     again = say(store, "подтверждаю", r.session_id)
     assert again.stage == "select" and again.plan.spec.destinations == [city]
@@ -118,7 +125,7 @@ def test_trap_2_explicit_pick_is_said_in_the_reply(store):
     name = r.questions[0].options[0]
     picked = say(store, "1", r.session_id)
     assert picked.stage == "compare" and picked.plan.spec.destinations == [name]
-    assert "Ханой" in picked.reply and name in picked.reply
+    assert "Кандалакша" in picked.reply and name in picked.reply
     hotels = [o for o in picked.plan.offers if isinstance(o, HotelOffer)]
     assert hotels and all(h.city == name for h in hotels)
 

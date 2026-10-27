@@ -66,10 +66,10 @@ def test_three_candidates_give_two_chips(store):
 
 
 def test_no_chip_for_a_candidate_without_offers(store):
-    r = say(store, "Хочу в Сочи или в Ханой")
+    r = say(store, "Хочу в Сочи или в Пномпень")
     assert r.stage == "compare"
     assert "Сравниваю сначала Сочи." in r.reply
-    assert "Не вошло: Ханой." in r.reply
+    assert "Не вошло: Пномпень." in r.reply
     assert "кнопкой" not in r.reply
     assert r.questions == []
 

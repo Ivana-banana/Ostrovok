@@ -29,8 +29,8 @@ def say(store, text, sid=None):
         ("Египет или Турция", ["Хургада", "Анталия"], ["План: Анталия"]),
         ("Турция или Египет в ноябре", ["Анталия", "Хургада"], ["План: Хургада"]),
         ("Хочу в Египет или в Турцию", ["Хургада", "Анталия"], ["План: Анталия"]),
-        ("Сочи или Ханой", ["Сочи", "Ханой"], []),
-        ("Сочи, Анапа или Ханой", ["Сочи", "Анапа", "Ханой"], ["План: Анапа"]),
+        ("Сочи или Пномпень", ["Сочи", "Пномпень"], []),
+        ("Сочи, Анапа или Пномпень", ["Сочи", "Анапа", "Пномпень"], ["План: Анапа"]),
     ],
 )
 def test_pair_keeps_both_names_trap_2_trap_3(store, text, dests, chips):
@@ -40,15 +40,15 @@ def test_pair_keeps_both_names_trap_2_trap_3(store, text, dests, chips):
 
 
 def test_first_name_outside_the_catalogue_gives_the_second_as_a_chip_trap_3(store):
-    r = say(store, "Ханой или Сочи")
-    assert r.plan.spec.destinations == ["Ханой", "Сочи"]
+    r = say(store, "Пномпень или Сочи")
+    assert r.plan.spec.destinations == ["Пномпень", "Сочи"]
     assert r.stage == "select"
     assert r.questions[0].options == ["План: Сочи"]
     assert "Сочи — кнопкой ниже" in r.reply
     r = say(store, "План: Сочи", r.session_id)
     assert r.stage == "compare"
     assert r.plan.spec.destinations == ["Сочи"]
-    assert "Ханой" in r.reply  # the lost name is told, not silent
+    assert "Пномпень" in r.reply  # the lost name is told, not silent
 
 
 def test_pair_chip_plans_the_country_city_trap_2(store):

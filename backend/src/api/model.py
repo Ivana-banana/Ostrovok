@@ -22,7 +22,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import llm
-from api.answers import plan_fact, without_plan_fields
+from api.answers import is_hotel_compare, plan_fact, span, without_plan_fields
 from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
 from api.contracts import (
     Cart,
@@ -74,8 +74,8 @@ from api.extract import (
     too_long_note,
     with_llm,
 )
-from api.fixtures import CATALOG, COLD_MONTHS, build_timeline, future_date
-from api.fixtures import suggest_destinations as catalog_destinations
+from api.fixtures import CATALOG, build_timeline, future_date
+from api.inspire import suggest_destinations
 from api.offers import find_offers, resolve_place
 from api.optimizer import (
     _hotel_why,
@@ -265,25 +265,6 @@ OR_RE = re.compile(r"\bили\b")  # cities joined by «или» are candidates,
 PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
 # #113: the refused places live in this assumption (TripSpec has no field for them).
 EXCLUDED = "исключено"
-
-
-# #114: «тепло» in the wishes. Estimate without a source, like the climate of the catalogue:
-# in the cold half of the year a destination counts as warm if its November air is this warm.
-WARM_AIR_C = 15.0
-
-
-def suggest_destinations(spec: TripSpec, limit: int = 4, exclude: list[str] | None = None):
-    """catalog_destinations, and with the «тепло» wish in the cold months: warm places only.
-
-    If no warm place is left (all refused), the others are shown and marked, never hidden."""
-    if "тепло" not in spec.wishes or spec.month not in COLD_MONTHS:
-        return catalog_destinations(spec, limit, exclude)
-    ranked = catalog_destinations(spec, len(CATALOG), exclude)
-    warm = [d for d in ranked if (CATALOG[d.name]["nov"][0] or 0) >= WARM_AIR_C]
-    if warm:
-        return warm[:limit]
-    note = "не тёплое направление: «тепло» в пожеланиях, а тёплых мест не осталось"
-    return [d.model_copy(update={"violates": [*d.violates, note]}) for d in ranked[:limit]]
 
 
 def _label(assumption: str) -> str:
@@ -1084,7 +1065,9 @@ def _question_fact(old: ChatReply, low: str) -> str:
         return f"{hotel.title}: бесплатная отмена{until}."
     if topic == "transfer":
         rows = [
-            f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in chosen if o.kind == "transfer"
+            f"{o.title} — {_rub(o.price_rub)} (синтетика), в пути {span(o)}"
+            for o in chosen
+            if o.kind == "transfer"
         ]
         return "Трансфер в плане: " + "; ".join(rows) + "." if rows else "Трансфера в плане нет."
     if topic == "kids":
@@ -1098,14 +1081,14 @@ def _question_fact(old: ChatReply, low: str) -> str:
     return ""
 
 
-def _question_answer(old: ChatReply, low: str = "") -> str:
+def _question_answer(old: ChatReply, low: str = "", message: str = "") -> str:
     """The reply to a question at assemble or checkout: the facts of the plan or the cart only
     (TRAP-4), the stage and the cart stay. Weather, visas and «почему не <отель>» get the fact
     and the hint of the stage, not a repeat of the plan (#186)."""
     head = "Это вопрос: план и корзину не меняю."
     if old.stage == "compare":
         head = "Это вопрос: план не меняю."
-    if fact := plan_fact(old.plan, low):
+    if fact := plan_fact(old.plan, low, message):
         return f"{head}\n{fact}\n{HINTS[old.stage]}"
     if fact := _question_fact(old, low):
         head += "\n" + fact
@@ -1153,16 +1136,6 @@ def _text_inspire(plan: Plan) -> str:
         if d.violates:
             line += f" Нарушает требования: {'; '.join(d.violates)}."
         lines.append(line)
-    if "тепло" in spec.wishes and spec.month in COLD_MONTHS and spec.month != 11:
-        lines.append(
-            "Тепло оцениваю по климату ноября из каталога: других месяцев в данных нет, "
-            "в вашем месяце может быть холоднее."
-        )
-    elif "море" in spec.wishes and spec.month != 11:
-        lines.append(
-            "Климат месяца не проверен: в данных только ноябрь. Море оцениваю по ноябрьской "
-            "воде, в вашем месяце может быть иначе."
-        )
     return "\n".join(lines + _tail(spec, "Напишите номер или название направления."))
 
 
@@ -1402,6 +1375,22 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         )
     if no_transfer and not rules_found:
         return drop_transfers(old)
+    # #186, #216: «какая погода в декабре?» at a December plan names no new field: still a
+    # question. A question with a fact to give («погода?», «почему не Бульвар?», «почему не
+    # поезд?») goes to no model, changes nothing, and is no transport pick.
+    fact = plan_fact(old.plan, low, message) if prev and old.stage in PLAN3 else ""
+    asked = without_plan_fields(rules_found, old.plan) if fact else rules_found
+    if (
+        fact
+        and ASKING_NOTE not in rules_notes
+        and (
+            is_question(low, asked)
+            or (is_hotel_compare(old.plan, low) and not EDIT_KEYS & set(asked))
+        )
+    ):
+        return old.model_copy(
+            update={"reply": _question_answer(old, low, message), "questions": [], "llm": False}
+        )
     pure = (
         set(rules_found) <= {"modes"}
         and not SHIFT_RE.search(low)
@@ -1423,25 +1412,22 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return old.model_copy(
                 update={"plan": plan or old.plan, "reply": text, "questions": [], "llm": False}
             )
-    # #186: «какая погода в декабре?» at a December plan names no new field: still a question.
-    fact = plan_fact(old.plan, low) if prev and old.stage in PLAN3 else ""
-    asked = without_plan_fields(rules_found, old.plan) if fact else rules_found
     if (
         prev
         and old.stage == "compare"
         and ASKING_NOTE not in rules_notes  # «а дети бесплатно?» has its own answer (#179)
         and is_question(low, asked)
-        and (fact or _question_fact(old, low))
+        and _question_fact(old, low)
     ):
-        # #186: a question at compare with a fact to give («погода?», «почему не Бульвар?»)
-        # goes to no model and changes nothing; other questions go on as before.
+        # #186: a question at compare with a fact to give («сколько стоит трансфер?») goes to
+        # no model and changes nothing; other questions go on as before.
         return old.model_copy(
-            update={"reply": _question_answer(old, low), "questions": [], "llm": False}
+            update={"reply": _question_answer(old, low, message), "questions": [], "llm": False}
         )
     if prev and old.stage in ("assemble", "checkout") and is_question(low, asked):
         # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
         kids_only = asking and ASKING_NOTE in rules_notes and not rules_found
-        text = _text_kids_question(old) if kids_only else _question_answer(old, low)
+        text = _text_kids_question(old) if kids_only else _question_answer(old, low, message)
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     # A month after dates the user named (#190): a clear request moves them below (merge);
     # a refusal or a doubt moves nothing and is never a consent («давай в январе?»).
@@ -1723,10 +1709,13 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # The DAG recomputes only the nodes that depend on the changed fields (T6, #10).
         plan, cart, done = replan(old.plan, spec, old.cart)
         if not plan.offers:
-            # TODO(T4, #8): the geocoder and synthetic offers cover any city.
+            # TRAP-2 (#88): neither catalog.json nor the geocoder knows the place (or no network).
+            # Its coordinates are unknown, so the variants are not «nearby»: the reply says why.
             text = (
-                f"Направления «{spec.destinations[0]}» пока {NOT_IN_CATALOG}, предложений нет. "
-                f"{HINTS['select']}"
+                f"Направления «{spec.destinations[0]}» пока {NOT_IN_CATALOG}, "
+                "и геокодер его не нашёл (или нет сети). Где это место, не знаю. "
+                f"{HINTS['select']} Подойдёт и ближайший к нему крупный город. "
+                "Ниже — направления под ваши даты и пожелания, не по близости к этому месту."
             )
             text, questions = _no_offers(plan, text)
             # «Ханой или Сочи»: Сочи is named (#142)

@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from api import offers
+from api import catalog, offers
 from api.contracts import ChatRequest, TripSpec
-from api.fixtures import rank
+from api.fixtures import rank, travel_hours
 from api.guards import label_synthetic
 from api.model import chat
 from api.offers import find_offers, offers_for_place, resolve_place, transfer_id
@@ -274,7 +274,7 @@ def test_trap_6_offers_need_no_network(monkeypatch):
     def no_network(*args, **kwargs):
         raise OSError("network is down")
 
-    offers.places.cache_clear()
+    catalog.snapshot.cache_clear()
     offers.osm_hotels.cache_clear()
     monkeypatch.setattr(socket.socket, "connect", no_network)
     assert kinds(find_offers(spec(), "Казань"), "hotel")
@@ -364,3 +364,10 @@ def test_near_dates_do_not_double_a_non_refundable_tariff(days):
             assert (re.search(r"-(RO|BB|HB|AI)r-", t.offer_id) is not None) == (
                 t.cancellation.refundable
             )
+
+
+def test_travel_hours_is_the_fastest_leg_there_and_zero_at_home():
+    """No date in the spec: the 15th of the month is the probe; the origin itself is 0 hours."""
+    s = TripSpec(month=11, origin="Москва")
+    msk, kzn = catalog.resolve("Москва"), catalog.resolve("Казань")
+    assert 0 < travel_hours(s, msk, kzn) < 3 and travel_hours(s, msk, msk) == 0
