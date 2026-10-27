@@ -1595,13 +1595,16 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # A route of an earlier message: the notice comes with the first plan (after a question)
         route = next((k for k in (ROUTE, CANDIDATES) if _noted(spec, k)), None)
 
+    def with_month(spec: TripSpec, text: str, questions: list[Question]):
+        """The dates stay: the line is built from the final spec, not from the old dates. The
+        general question is only for a message that changed nothing; here the dates stay."""
+        if not (month_note and spec.date_to):
+            return text, questions
+        line, chips = month_reply(spec, month_target or spec.date_from.month, "")
+        return f"{text}\n{line}", [*chips, *questions]
+
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
-        if month_note and plan.spec.date_to:
-            # The dates stay: the line is built from the final plan, not from the old dates. The
-            # general question is only for a message that changed nothing; here the dates stay.
-            line, chips = month_reply(plan.spec, month_target or plan.spec.date_from.month, "")
-            text = f"{text}\n{line}"
-            kw["questions"] = [*chips, *kw.get("questions", [])]
+        text, kw["questions"] = with_month(plan.spec, text, kw.get("questions", []))
         return ChatReply(
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
         )
@@ -1632,7 +1635,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         text = gone_text + _text_inspire(plan)
         return reply("inspire", plan, text, Cart(), questions=[question, *party_question(spec)])
 
-    if month_note and not dirty_nodes(old.plan.spec, spec):
+    if month_note and not (dirty_nodes(old.plan.spec, spec) or shifts or picks or lines):
         # Nothing else changed: the answer is about the dates only.
         text, questions = month_note
         if month_verdict == "stay":
@@ -1733,17 +1736,12 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             new = plan
         if new is not plan and old.stage == "checkout":
             note = "Корзина уже собрана, поэтому в ней ничего не меняю. Позицию убирает кнопка «Убрать» в корзине."
-            return old.model_copy(
-                update={"reply": f"{note} {HINTS['checkout']}", "questions": [], "llm": False}
-            )
+            text, questions = with_month(spec, f"{note} {HINTS['checkout']}", [])
+            return old.model_copy(update={"reply": text, "questions": questions, "llm": False})
         if new is plan:
+            text, questions = with_month(spec, " ".join([*_merged(lines), HINTS[old.stage]]), [])
             return old.model_copy(
-                update={
-                    "plan": plan,
-                    "reply": " ".join([*_merged(lines), HINTS[old.stage]]),
-                    "questions": [],
-                    "llm": False,
-                }
+                update={"plan": plan, "reply": text, "questions": questions, "llm": False}
             )
         new.changes = plan_changes(old.plan, new, old.cart, old.cart)
         body = (
@@ -1752,7 +1750,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             else _text_compare(new.model_copy(update={"changes": []}))
         )
         text = "\n".join([*_merged(lines), "Было → стало:", *describe(new.changes), body])
-        return old.model_copy(update={"plan": new, "reply": text, "questions": [], "llm": False})
+        text, questions = with_month(spec, text, [])
+        return old.model_copy(
+            update={"plan": new, "reply": text, "questions": questions, "llm": False}
+        )
 
     if old.stage == "compare" and (idx is not None or yes):
         hotels = hotel_rows(plan.offers, plan.selected)
