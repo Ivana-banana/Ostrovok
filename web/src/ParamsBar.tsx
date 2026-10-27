@@ -209,13 +209,13 @@ export function ParamsBar({ spec, disabled, onSend }: {
             >
               <span className="param-name">{c.label}</span>
               <strong className="param-value">{c.value}</strong>
-              {c.assumed && <span className="param-tag">по умолчанию</span>}
+              {c.assumed && <span className="param-tag">агент выбрал</span>}
             </button>
           </li>
         ))}
       </ul>
       {chips.some((c) => c.assumed) && (
-        <p className="muted">Значения «по умолчанию» выбрал агент. Нажмите на параметр, чтобы изменить.</p>
+        <p className="muted">Пунктир — значения, которые агент выбрал сам. Нажмите на параметр, чтобы изменить.</p>
       )}
       {chips.map((c) => {
         const Editor = EDITORS[c.id];

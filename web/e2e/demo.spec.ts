@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Сценарий демо жюри S6 (eval/cases.json): запрос в чат, дальше только клики на доске
 // поездки до ваучера, затем перезагрузка. Работает на агенте с фикстурами (без ключа LLM).
@@ -142,14 +142,43 @@ test("S6: запрос → сравнение → план → корзина �
   expect(errors).toEqual([]);
 });
 
+const noPageScroll = (page: Page) =>
+  page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+
 test("ширина телефона: чат и доска без горизонтальной прокрутки страницы", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await page.getByLabel("Запрос").fill(REQUEST);
   await page.getByRole("button", { name: "Отправить" }).click();
-  await expect(page.getByRole("region", { name: "Сравнение отелей" })).toBeVisible();
-  const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(wide).toBe(false);
+  await expect(page.getByRole("status")).not.toBeEmpty();
+  expect(await noPageScroll(page)).toBe(false);
+  // The plan is a sheet: it opens by the button and closes by ✕.
+  await page.getByRole("button", { name: "План поездки" }).click();
+  const hotels = page.getByRole("region", { name: "Сравнение отелей" });
+  await expect(hotels).toBeVisible();
+  expect(await noPageScroll(page)).toBe(false);
+  // TRAP-7: every price of the tables is visible with «синтетика», inside the screen, no scroll.
+  for (const name of ["Сравнение отелей", "Сравнение транспорта"]) {
+    const prices = page.getByRole("region", { name }).locator("tbody .price");
+    const n = await prices.count();
+    expect(n, `цен в «${name}»`).toBeGreaterThan(0);
+    for (let i = 0; i < n; i++) {
+      const p = prices.nth(i);
+      await p.scrollIntoViewIfNeeded();
+      await expect(p).toBeVisible();
+      await expect(p.locator(".synth")).toHaveText("синтетика");
+      const b = await p.boundingBox();
+      expect(b && b.x >= 0 && b.x + b.width <= 390, `цена ${i + 1} в «${name}» в пределах экрана`).toBe(true);
+    }
+  }
+  const panelScroll = await page.locator(".plan .bd").evaluate((e) => e.scrollWidth > e.clientWidth);
+  expect(panelScroll).toBe(false);
+  await page.getByRole("button", { name: "Свернуть план" }).click();
+  await expect(hotels).toBeHidden();
+  // Chats: a drawer by ☰.
+  await page.getByRole("button", { name: "Список чатов" }).click();
+  await expect(page.getByRole("button", { name: "＋ Новый чат" })).toBeVisible();
+  expect(await noPageScroll(page)).toBe(false);
 });
 
 test("ширина телефона: длинная подпись мест семьи в корзине без горизонтальной прокрутки", async ({ page }) => {
@@ -157,6 +186,7 @@ test("ширина телефона: длинная подпись мест се
   await page.goto("/");
   await page.getByLabel("Запрос").fill(FAMILY);
   await page.getByRole("button", { name: "Отправить" }).click();
+  await page.getByRole("button", { name: "План поездки" }).click();
   const hotels = page.getByRole("region", { name: "Сравнение отелей" });
   await hotels.getByRole("button", { name: /^Выбрать/ }).first().click();
   await expect(page.getByRole("region", { name: "Таймлайн" })).toBeVisible();
@@ -165,12 +195,49 @@ test("ширина телефона: длинная подпись мест се
   const label = "3 места (1 детский тариф, 1 младенец без места, 10 % тарифа)";
   const flights = cart.locator("ul.plain").first().locator("li").filter({ hasText: label });
   await expect(flights).toHaveCount(2); // туда и обратно
-  const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(wide).toBe(false);
+  expect(await noPageScroll(page)).toBe(false);
   // Строка не вылезает за край корзины: длинная подпись переносится.
   const box = await cart.boundingBox();
   for (const row of await flights.all()) {
     const r = await row.boundingBox();
     expect(r && box && r.x + r.width <= box.x + box.width + 1).toBe(true);
   }
+});
+
+test("два чата: переключение возвращает сообщения каждого, «Новый чат» — пустой", async ({ page }) => {
+  await page.goto("/");
+  const ask = async (text: string) => {
+    await page.getByLabel("Запрос").fill(text);
+    await page.getByRole("button", { name: "Отправить" }).click();
+    await expect(page.getByRole("status")).not.toBeEmpty();
+  };
+  const userMsgs = () => page.locator(".msg.user").allTextContents();
+  const chats = page.getByRole("navigation", { name: "Прошлые чаты" });
+  await ask(REQUEST);
+  await expect(chats.locator(".chat-open")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "＋ Новый чат" }).click();
+  expect(await userMsgs()).toEqual([]);
+  await expect(page.getByText("Куда поедем?")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Сравнение отелей" })).toHaveCount(0);
+
+  await ask(FAMILY);
+  await expect(chats.locator(".chat-open")).toHaveCount(2);
+  const kazan = chats.locator(".chat-open").filter({ hasText: "Выходные в Казани" });
+  const sochi = chats.locator(".chat-open").filter({ hasText: "Сочи из Москвы" });
+
+  await kazan.click();
+  await expect(kazan).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".msg.user")).toHaveText([REQUEST]);
+  await expect(page.getByRole("region", { name: "Параметры поездки" })).toContainText("Казань");
+
+  await sochi.click();
+  await expect(sochi).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".msg.user")).toHaveText([FAMILY]);
+  await expect(page.getByRole("region", { name: "Параметры поездки" })).toContainText("Сочи");
+
+  // Reload: the list and the open chat stay.
+  await page.reload();
+  await expect(chats.locator(".chat-open")).toHaveCount(2);
+  await expect(page.locator(".msg.user")).toHaveText([FAMILY]);
 });
