@@ -7,6 +7,7 @@ A name outside the snapshot goes to lookup_online: the Open-Meteo geocoder and o
 climate with a short timeout. Any error there gives None, never an exception (TRAP-2, TRAP-6).
 """
 
+import contextlib
 import difflib
 import json
 import math
@@ -36,6 +37,11 @@ SEA_KM = 30  # as in scripts/build_catalog.py
 SWIM_WATER_C = 21.5
 SWIM_MONTHS = 3  # months of the year with the sea this warm: a season, not two weeks
 AIRPORT_KM = 200
+OSRM = "https://router.project-osrm.org/table/v1/driving/"
+# Road choice of the airport as in scripts/build_catalog.py (ROAD_SPAN, ROAD_PLUS_KM, ROAD_GAIN,
+# ROAD_GAIN_KM; D-020, test_catalog.py checks they are equal), at most ROAD_CANDIDATES of them
+ROAD_SPAN, ROAD_PLUS_KM, ROAD_GAIN, ROAD_GAIN_KM = 1.5, 30, 0.15, 20
+ROAD_CANDIDATES = 3
 FUZZY = 0.85  # «Антлия» -> «Анталия», but «Малага» is not «Мале»
 ENDINGS = ("ий", "ый", "ой", "ая", "ое", "ие", "ые", "ь", "й", "а", "я", "о", "е", "и", "у",
            "ю", "ы")  # fmt: skip
@@ -224,6 +230,36 @@ def _monthly(days: list[str], values: list, how=statistics.fmean) -> list[float 
     return [round(how(by_month[m]), 1) if m in by_month else None for m in range(1, 13)]
 
 
+def _airport(here: dict, fetch: Callable[[str, dict], dict]) -> tuple[dict, float]:
+    """Airport of a place outside the snapshot and the straight km to it.
+
+    The straight-line nearest airport is replaced by the nearest by road (one OSRM table request
+    to the ROAD_CANDIDATES nearest) only for a gain of ROAD_GAIN or ROAD_GAIN_KM, as in the
+    snapshot (build_catalog.airport_fields). "road": True means km are by road. No network or
+    no road: the straight-line nearest, "road": False, the place still works (TRAP-6).
+    """
+    ports = [{"iata": a[0], "lat": a[1], "lon": a[2], "tz": a[3]} for a in snapshot()["airports"]]
+    by_km = sorted(((km_between(here, a), a) for a in ports), key=lambda x: x[0])
+    near = [x for x in by_km if x[0] <= ROAD_SPAN * by_km[0][0] + ROAD_PLUS_KM][:ROAD_CANDIDATES]
+    line, port = near[0]
+    km, road = round(line), False
+    if len(near) > 1:
+        # TRAP-6: no network or a strange answer keeps the straight line
+        with contextlib.suppress(Exception):
+            points = ";".join(f"{p['lon']},{p['lat']}" for p in (here, *(a for _, a in near)))
+            body = fetch(OSRM + points, {"sources": 0, "annotations": "distance"})
+            metres = body["distances"][0][1:]
+            if body["code"] == "Ok" and len(metres) == len(near):
+                ok = [(round(m / 1000), k, a) for (k, a), m in zip(near, metres, strict=True) if m]
+                if ok:
+                    best, bline, bport = min(ok, key=lambda x: x[0])
+                    first = metres[0] and round(metres[0] / 1000)
+                    if first and first - best < min(ROAD_GAIN_KM, ROAD_GAIN * first):
+                        best, bline, bport = first, line, port  # the gain is too small to switch
+                    km, line, port, road = best, bline, bport, True
+    return {"iata": port["iata"], "km": km, "tz": port["tz"], "road": road}, line
+
+
 def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     ask = {"count": 1, "language": "ru", "format": "json"}
     found = fetch(GEOCODE, {**ask, "name": name}).get("results")
@@ -244,9 +280,7 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     if km_between(here, {"lat": s["latitude"], "lon": s["longitude"]}) <= SEA_KM:
         sea = _monthly(s["daily"]["time"], s["daily"]["sea_surface_temperature_mean"])
         sea = sea if any(x is not None for x in sea) else None
-    port = [{"iata": a[0], "lat": a[1], "lon": a[2], "tz": a[3]} for a in snapshot()["airports"]]
-    port = nearest(here, port)
-    ap_km = round(km_between(here, port))
+    airport, line = _airport(here, fetch)
     country = g.get("country", "")
     levels = [p["level"] for p in places() if p["country"] == country]
     place = {
@@ -254,8 +288,7 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
         "lon": lon, "tz": g["timezone"], "elev": g.get("elevation"), "pop": g.get("population") or 0,
         "geonameid": g.get("id"), "hub": False, "main": False, "sea": sea is not None,
         "tags": ["sea"] * (sea is not None) + ["swim"] * swims(sea), "aliases": [norm(name)] if norm(name) != norm(g["name"]) else [],
-        "airport": {"iata": port["iata"], "km": ap_km, "tz": port["tz"]},
-        "airport_km": ap_km if ap_km <= AIRPORT_KM else None,
+        "airport": airport, "airport_km": airport["km"] if line <= AIRPORT_KM else None,
         "climate": {"air": air, "rain": rain, "sea": sea}, "source": "online",
     }  # fmt: skip
     if levels:
