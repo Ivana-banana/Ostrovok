@@ -91,9 +91,11 @@ BOOK_RE = re.compile(r"\bподтверждаю\b")
 REFUSE_RE = re.compile(
     r"\bпромпт|system\s*prompt|(?:системн|служебн)\w*\s+инструкц"
     r"|\b(?:покаж|выведи|раскро|скаж|пришли|напиш|повтори|прочита|озвуч)\w*\s+(?:\w+\s+)?"
-    r"(?:свои|твои|ваши|скрыт\w+|исходн\w+|начальн\w+)\s+(?:\w+\s+)?инструкц"
-    # «ваши инструкции по багажу» asks for the rules of the trip, not for the prompt (#81)
+    # «ваши инструкции по багажу» asks for the rules of the trip, not for the prompt (#81);
+    # a hidden or initial instruction stays an attack with any topic
+    r"(?:(?:свои|твои|ваши)\s+(?:\w+\s+)?инструкц"
     r"(?!\w*\s+(?:по|для)\s+(?:багаж|заселен|выселен|заезд|выезд|трансфер|прилет|вылет|отмен))"
+    r"|(?:скрыт\w+|исходн\w+|начальн\w+)\s+(?:\w+\s+)?инструкц)"
     r"|\bигнорир\w*\s+(?:\w+\s+){0,2}инструкц"
     r"|(?:постав|установ|сдела|измен|смен)\w*\s+(?:\w+\s+)?цен\w*\s+(?:на\s+|в\s+)?(?:0|н[оу]л\w*)\b"
     r"|\bцен\w*\s+должн\w*\s+быть\s+(?:0|н[оу]л\w*)\b"
@@ -114,11 +116,16 @@ NOT_BOOK_RE = re.compile(r"\bне\s+подтверждаю\b")
 # «?» or a question word; a request («хотим», «можно», «с нами едет»), a date move, a new place or
 # party size, or a budget makes it an edit. A bare «?» yields to a consent word; a question word
 # yields to a strong one («да», «беру»), not to «корзин…» (as in «сколько стоит корзина?»).
-QUESTION_WORD_RE = re.compile(r"\b(?:сколько|есть\s+ли|включен\w*|входит|входят|почему|зачем)\b")
+QUESTION_WORD_RE = re.compile(r"\b(?:сколько|есть\s+ли|включен\w*|входит|входят|почему|зачем|ли)\b")
 STRONG_CONFIRM_RE = re.compile(r"\b(?:да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*)\b")
+# «нужен ли трансфер?» and «можно ли …?» ask; «нужен трансфер» and «можно с бассейном» order.
+# A comparative («подешевле», «ближе») or «а есть что-нибудь…» asks for other offers: an edit.
 REQUEST_RE = re.compile(
-    r"\b(?:можно|хоч\w+|хотим|нужен|нужн\w+|надо|добав\w+|убер\w+|замен\w+|смен\w+|поменя\w+"
-    r"|измен\w+|перенес\w+|подвин\w+|сдвин\w+|исключ\w+|с\s+нами|едет|едут|поед\w+|планиру\w+)"
+    r"\b(?:можно|нужен|нужн\w+|надо)\b(?!\s+ли\b)"
+    r"|\b(?:хоч\w+|хотим|добав\w+|убер\w+|замен\w+|смен\w+|поменя\w+|измен\w+|перенес\w+"
+    r"|подвин\w+|сдвин\w+|исключ\w+|с\s+нами|поедем|планиру\w+"
+    r"|(?:по)?(?:дешевле|дороже|ближе|лучше|больше|меньше)"
+    r"|а\s+есть\s+(?:что-нибудь|что-то|вариант\w*|друг\w+))\b"
 )
 EDIT_KEYS = {
     "destinations", "date_from", "date_to", "month", "nights", "adults", "children_ages",
@@ -604,12 +611,16 @@ def _question_answer(old: ChatReply) -> str:
     head = "Это вопрос: план и корзину не меняю."
     if old.stage == "assemble":
         return f"{head}\n{_text_assemble(old.plan)}"
-    rows = [f"{o.title} — {_rub(o.price_rub)}" for o in old.cart.items]
+    rows = [f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in old.cart.items]
     cart = (
         "В корзине:\n" + "\n".join(rows) + f"\nИтого {_rub(old.cart.total_rub)} (синтетика)."
         if rows
         else "Корзина пуста."
     )
+    if old.plan.timeline:  # times come from the timeline tool, never from the model
+        cart += "\nПлан поездки:\n" + "\n".join(
+            f"{e.at:%d.%m %H:%M} — {e.title}" for e in old.plan.timeline
+        )
     edit = "Чтобы изменить поездку, напишите, что поменять: например, «хотим с бассейном»."
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
 

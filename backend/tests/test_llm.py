@@ -551,6 +551,17 @@ def test_free_text_on_checkout_goes_to_the_model(monkeypatch, store, fake):
     assert calls == ["хотим что-нибудь с бассейном"]
 
 
+def test_wish_question_on_checkout_goes_to_the_model(monkeypatch, store, fake):
+    """«а есть что-нибудь с бассейном?» asks for other offers: an edit, the model reads it (#81)."""
+    r = say(store, SOCHI)
+    for text in ("беру", "да"):
+        r = say(store, text, r.session_id)
+    calls = []
+    monkeypatch.setattr(llm, "extract_spec", lambda m, s, until=None, today=None: calls.append(m))
+    say(store, "а есть что-нибудь с бассейном?", r.session_id)
+    assert calls == ["а есть что-нибудь с бассейном?"]
+
+
 def test_second_half_of_a_month_is_no_hotel_pick(store):
     """#49: «второй половине ноября» is not «второй отель»; the selection stays."""
     r = say(store, SOCHI)
