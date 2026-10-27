@@ -107,7 +107,7 @@ def unchecked_wishes(spec: TripSpec) -> list[str]:
 def _km_to(place: dict, field: str) -> float | None:
     """Km to the nearest place with the feature (tag mountains, the sea), 0 for the place itself;
     None when it is farther than NEAR_KM."""
-    has = (lambda p: p["sea"]) if field == "sea" else (lambda p: field in p["tags"])
+    has = (lambda p: p.get("sea", False)) if field == "sea" else (lambda p: field in p["tags"])
     km = min((catalog.km_between(place, q) for q in catalog.places() if has(q)), default=None)
     return km if km is not None and km <= NEAR_KM else None
 
@@ -143,7 +143,9 @@ def _rule_breaks(spec: TripSpec, place: dict, hub: dict, month: int | None) -> l
         out.append(f"{NOT_SOUTH} {hub['name']}")
     air, water = catalog.month_climate(place, month) if month else (None, None)
     if "море" in spec.wishes:
-        if not place["sea"]:
+        if "sea" not in place:
+            out.append("Наличие моря неизвестно: данные о море не загрузились")
+        elif not place["sea"]:
             if not both:
                 out.append(NO_SEA)
         elif water is not None and water < WARM_WATER_C:
@@ -165,14 +167,14 @@ def _why(spec: TripSpec, place: dict, water: float | None) -> str:
     tags.sort(key=lambda t: t not in asked)
     high = (place["elev"] or 0) >= HIGH_M
     parts = [f"горы, {place['elev']} м" if t == "mountains" and high else WHY[t] for t in tags]
-    if place["sea"]:
+    if place.get("sea", False):
         swim = "swim" in place["tags"] and (water or 0) >= WARM_WATER_C
         sea = "море для купания" if swim else "у моря"
         parts.insert(0 if "море" in spec.wishes else len(parts), sea)
     if _both(spec, place):
         if "mountains" not in place["tags"]:
             parts.append(f"горы в {_km_to(place, 'mountains'):.0f} км")
-        if not place["sea"]:
+        if not place.get("sea", False):
             parts.insert(0, f"море в {_km_to(place, 'sea'):.0f} км")
     return ", ".join(parts) or ("природа" if "nature" in place["tags"] else "город")
 
@@ -225,10 +227,10 @@ def _minuses(
     air, water = catalog.month_climate(place, month) if month else (None, None)
     rain = place["climate"]["rain"][month - 1] if month else None
     door, wheel, nights = road
-    out = []
+    out = list(place.get("climate_notes", []))
     if door >= LONG_ROAD_H:
         out.append(_road_text(door, wheel, nights))
-    if water is not None and place["sea"] and WARM_WATER_C <= water < WARM_WATER_C + 2:
+    if water is not None and place.get("sea", False) and WARM_WATER_C <= water < WARM_WATER_C + 2:
         out.append(f"вода {water:g} °C — на границе комфорта")
     if air is not None and air >= HOT_C:
         out.append(f"жарко: днём {air:g} °C")
@@ -351,7 +353,7 @@ def _sea_first(spec: TripSpec, place: dict, month: int | None) -> float:
     """The «море» refill goes from the warmest sea; a place without a sea goes last (#356)."""
     if "море" not in spec.wishes:
         return 0.0
-    water = catalog.month_climate(place, month)[1] if month and place["sea"] else None
+    water = catalog.month_climate(place, month)[1] if month and place.get("sea", False) else None
     return 1000.0 if water is None else -water
 
 
