@@ -66,7 +66,7 @@ OUT_FLIGHTS = [(time(10, 30), 1.0), (time(17, 40), 0.9)]  # arrival, local to th
 # check-in day; back at CAR_BACK, the hotel check-out (HotelOffer.check_out). MAX_DRIVE: the
 # daily driving limit of a professional driver in Regulation (EC) 561/2006, 9 h, twice a week
 # 10 h (research/domain.md); no tolerance above it. A night on the road costs ROAD_NIGHT_RUB a
-# room, one room per car: a team estimate without a source (D-025).
+# room, one room per car: a team estimate without a source (D-026).
 MAX_DRIVE = timedelta(hours=10)
 CAR_OUT, CAR_BACK = time(8, 0), time(12, 0)
 ROAD_NIGHT_RUB = 3500
