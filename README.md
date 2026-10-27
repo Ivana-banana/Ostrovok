@@ -94,6 +94,8 @@ make demo     # собирает web и поднимает http://localhost:8080
 - Без ключа LLM работают экстрактор на правилах и шаблонные объяснения (TRAP-1).
 - Стек: Python 3.12, FastAPI, pydantic, SQLite (сессии); React, Vite, TypeScript. Один контейнер, multi-stage `Dockerfile`, пользователь не root, `HEALTHCHECK`.
 
+**Как подключить своего провайдера.** Источники данных — порты (`docs/adr/ADR-0002-porty-i-adaptery.md`). Интерфейсы `HotelProvider`, `TransportProvider` и `TransferProvider` — раздел «Порты» в `backend/src/api/contracts.py`. Напишите класс с методом порта: `hotels`, `legs` или `transfers`. Присвойте его объект переменной модуля `backend/src/api/offers.py`: `HOTELS`, `TRANSPORT` или `TRANSFERS`. Присваивание делают при старте (`main.py`) или в тесте. Сейчас там адаптеры `OsmOrSynthetic`, `SyntheticTransport`, `SyntheticTransfers`. Затем запустите `make check`: тест `backend/tests/test_ports.py` проверяет инварианты, которые читает ядро (город рейса равен городу отеля, сначала рейсы «туда», id трансфера). Пустой ответ провайдера — «нет предложений», синтетикой он не заменяется.
+
 Все решения — `docs/decisions.md` (D-001…D-010).
 
 ## Данные
@@ -115,18 +117,21 @@ make demo     # собирает web и поднимает http://localhost:8080
 
 ## Переменные окружения
 
-Файл `.env.example`. Все переменные LLM можно оставить пустыми.
+Файл `.env.example`. Ключи LLM можно оставить пустыми: тогда агент работает по правилам.
 
 | Переменная | По умолчанию | Назначение |
 |---|---|---|
-| `LLM_API_KEY` | пусто | ключ OpenAI-совместимого API |
-| `LLM_BASE_URL` | пусто | адрес, например `https://<хост>/v1` |
-| `LLM_MODEL` | пусто | имя модели; модели по умолчанию нет (D-008) |
+| `LLM_API_KEY` | пусто | статичный ключ OpenAI-совместимого API |
+| `GIGACHAT_AUTH_KEY` | пусто | ключ авторизации GigaChat; агент сам меняет его на токен доступа |
+| `GIGACHAT_SCOPE` | `GIGACHAT_API_PERS` | область доступа GigaChat |
+| `GIGACHAT_OAUTH_URL` | пусто → адрес выдачи токена Сбера | адрес выдачи токена GigaChat |
+| `LLM_BASE_URL` | `https://api.giga.chat/v1` | адрес API |
+| `LLM_MODEL` | `GigaChat-3-Lightning` | имя модели (D-022) |
 | `LLM_TIMEOUT_S` | `8` | ожидание ответа модели, секунды |
 | `SESSIONS_DB` | пусто → `data/sessions.db`; в Docker `/app/data/sessions.db` | файл сессий |
 | `APP_PORT` | `8080` (задан в `Dockerfile`) | порт внутри контейнера |
 
-Модель включается, только если заданы все три: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`. Таймаут, 401/403, 5xx и неверный JSON дают ответ по правилам, а не ошибку.
+Модель включается, только если заданы `LLM_BASE_URL`, `LLM_MODEL` и ключ: `LLM_API_KEY` или `GIGACHAT_AUTH_KEY`. Для GigaChat достаточно вписать ключ авторизации: адрес и модель уже есть в `.env.example`. Без ключа — режим правил. Таймаут, 401/403, 429, 5xx и неверный JSON дают ответ по правилам, а не ошибку.
 
 Остальные переменные `.env.example` (`TAKEOVER_MIN`, `MAX_FILE_MB`, `TEMPLATE_REPO`) нужны только процессу команды. Приложению они не нужны.
 
@@ -173,7 +178,7 @@ make demo     # собирает web и поднимает http://localhost:8080
 - **После покупки.** Запрос «сдвинь даты на два дня» после ваучера получил ответ «Бронь уже оформлена». Ранний заезд и смена дат после покупки не сделаны (#18).
 - **Память между сессиями** не сделана (#19).
 - **Известные ошибки экстрактора правил** на редких названиях: города из двух слов в начале фразы (#82), «Добрич» (#87), глагол пересборки как город (#73). Открытые задачи.
-- **LLM-режим** проверен только тестами с подменой ответа модели (`backend/tests/test_llm.py`). С настоящей моделью не проверялся.
+- **LLM-режим** проверен тестами с подменой ответа модели (`backend/tests/test_llm.py`, `backend/tests/test_llm_gigachat.py`) и замером с GigaChat на сценариях eval (#117). `make eval` идёт без LLM. На eval LLM не лучше правил (D-022).
 - **Docker.** Если порт 8080 занят, compose не стартует: освободите порт.
 - **Ресурсы и нагрузка** не измерялись. Один процесс, сессии в SQLite.
 - Платежа нет. Оплата имитируется, ваучер помечен `simulated`.
@@ -182,7 +187,7 @@ make demo     # собирает web и поднимает http://localhost:8080
 ## Внешние зависимости
 
 - В работе приложения: нет (без сети, без БД-сервера, без LLM по умолчанию).
-- Необязательно: любое OpenAI-совместимое API (`POST <LLM_BASE_URL>/chat/completions`) для режима с ИИ.
+- Необязательно: GigaChat или любое OpenAI-совместимое API (`POST <LLM_BASE_URL>/chat/completions`) для режима с ИИ. Сертификат НУЦ Минцифры для GigaChat лежит в `backend/certs/`.
 - При сборке: образы `node:22.23.4-bookworm-slim`, `python:3.12.15-slim-bookworm`, `ghcr.io/astral-sh/uv:0.12.19`; пакеты PyPI и npm (версии закреплены в `backend/uv.lock` и `web/package-lock.json`). Приватных зависимостей нет.
 - Данные OSM: © участники OpenStreetMap, ODbL 1.0, https://www.openstreetmap.org/copyright.
 

@@ -470,3 +470,98 @@ ul.plain li:last-child {
     padding: 0.75rem;
   }
 }
+
+.params ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+}
+
+button.param {
+  display: grid;
+  gap: 0.1rem;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 10px;
+  text-align: left;
+}
+
+button.param.assumed {
+  border-style: dashed;
+  border-color: var(--warn);
+}
+
+.param-name {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.param-tag {
+  color: var(--warn);
+  font-size: 0.7rem;
+}
+
+.params > .muted {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+}
+
+.editor {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 28rem;
+  margin: 0 0 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.editor label {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+
+.editor input {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.editor .options,
+.editor .editor-actions,
+.editor .stepper {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.4rem;
+}
+
+.editor button.alt {
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  background: #fff;
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.editor button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+}
+
+.editor .stepper output {
+  min-width: 1.5rem;
+  text-align: center;
+}
+
+.editor p {
+  margin: 0;
+  font-size: 0.8rem;
+}
