@@ -83,6 +83,50 @@ make demo     # собирает web и поднимает http://localhost:8080
 
 Типы запросов и ответов — `backend/src/api/contracts.py`. Тестовых пользователей нет. Входа нет.
 
+## Как встроить
+
+Базовый адрес после запуска — `http://localhost:8080/api/v1`. Все маршруты таблицы выше доступны и с префиксом `/api/v1`: например, `POST /api/v1/chat` и `GET /api/v1/session/{session_id}`. Старый `/api` остаётся совместимым: оба адреса читают одни сессии. Версия не меняет JSON-контракт.
+
+OpenAPI: [JSON-схема](http://localhost:8080/openapi.json), [Swagger UI](http://localhost:8080/docs), [ReDoc](http://localhost:8080/redoc). Схема содержит оба префикса, модели запросов и ответов. Некорректное тело даёт 422, неизвестная сессия — 404, отказ покупки или изменение итога — 409.
+
+Пример запроса после быстрого старта (без ключа LLM):
+
+```bash
+curl -fsS http://localhost:8080/api/v1/chat \
+  -H 'Content-Type: application/json' \
+  --data-binary @- <<'JSON'
+{"message":"Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."}
+JSON
+```
+
+Ответ — объект `ChatReply`. Ниже показаны только поля для продолжения диалога. Новый диалог получает новый `session_id`; при продолжении диалога id сохраняется:
+
+```json
+{"session_id":"<id из ответа>","stage":"compare","llm":false}
+```
+
+Полный ответ также содержит `reply`, `questions`, `plan`, `cart` и `voucher`. Сохраните `session_id`. Передайте его со следующим `message` в `POST /api/v1/chat` или восстановите ответ через `GET /api/v1/session/{session_id}`. Для покупки используйте `POST /api/v1/checkout` с `session_id` и `confirm_total_rub` из показанной пользователю корзины. Оплата пока имитируется.
+
+Схема портов соответствует [ADR-0002](docs/adr/ADR-0002-porty-i-adaptery.md):
+
+```mermaid
+flowchart LR
+  SPEC[TripSpec] --> DAG[DAG и оптимизатор]
+  DAG --> HP[HotelProvider] & TP[TransportProvider] & XP[TransferProvider]
+  HP --> HOTELS[offers.HOTELS]
+  TP --> TRANSPORT[offers.TRANSPORT]
+  XP --> TRANSFERS[offers.TRANSFERS]
+  DAG --> CART[Корзина]
+  CART --> BP[BookingProvider] --> BOOKING[cart.BOOKING]
+  TEXT[Извлечение и объяснения] --> LLM[OpenAI-совместимое HTTP API]
+```
+
+Своего провайдера отелей подключите классом с методом `HotelProvider.hotels(spec, place, now)`. При старте присвойте его экземпляр `api.offers.HOTELS`. Метод возвращает пары `(HotelOffer, list[ExtraOffer])`. Цены — за всех гостей и все ночи. Пустой ответ означает отсутствие предложений. Методы других портов и проверки перечислены в разделе «Архитектура и стек» ниже. Отдельного переключателя провайдера в `.env` нет.
+
+Для своей LLM задайте в `.env` `LLM_BASE_URL`, `LLM_MODEL` и `LLM_API_KEY`. Клиент вызывает `POST <LLM_BASE_URL>/chat/completions`. Адрес должен быть доступен из процесса приложения; внутри Docker `localhost` указывает на контейнер. GigaChat поддерживает также `GIGACHAT_AUTH_KEY`. После смены настроек перезапустите приложение. Без ключа работают правила, в ответе `llm=false`. Настройки и поведение при отказе API — в разделе «Переменные окружения».
+
+**Реальные данные.** Каталог мест и снапшот OSM уже используются по умолчанию. Цены, наличие, расписания и покупка остаются синтетическими. Для живых данных нужно реализовать и присвоить адаптеры `HOTELS`, `TRANSPORT`, `TRANSFERS` и `BOOKING` для нужных источников. Ключ LLM их не включает. Готового переключателя всех данных на реальные нет; подключение данных поставщика остаётся в #261. Вдохновение оценивает направления синтетически, даже при подключённом живом провайдере. Точный состав данных — в разделе «Данные».
+
 ## Архитектура и стек
 
 Решение D-001 (`docs/decisions.md`, `docs/adr/ADR-0001-avtomat-etapov-dag-optimizator.md`): автомат этапов + `TripSpec` + DAG пересборки + детерминированный оптимизатор.
@@ -94,7 +138,7 @@ make demo     # собирает web и поднимает http://localhost:8080
 - Без ключа LLM работают экстрактор на правилах и шаблонные объяснения (TRAP-1).
 - Стек: Python 3.12, FastAPI, pydantic, SQLite (сессии); React, Vite, TypeScript. Один контейнер, multi-stage `Dockerfile`, пользователь не root, `HEALTHCHECK`.
 
-**Как подключить своего провайдера.** Источники данных — порты (`docs/adr/ADR-0002-porty-i-adaptery.md`). Интерфейсы `HotelProvider`, `TransportProvider` и `TransferProvider` — раздел «Порты» в `backend/src/api/contracts.py`. Напишите класс с методом порта: `hotels`, `legs` или `transfers`. Присвойте его объект переменной модуля `backend/src/api/offers.py`: `HOTELS`, `TRANSPORT` или `TRANSFERS`. Присваивание делают при старте (`main.py`) или в тесте. Сейчас там адаптеры `OsmOrSynthetic`, `SyntheticTransport`, `SyntheticTransfers`. Затем запустите `make check`: тест `backend/tests/test_ports.py` проверяет инварианты, которые читает ядро (город рейса равен городу отеля, сначала рейсы «туда», id трансфера). Пустой ответ провайдера — «нет предложений», синтетикой он не заменяется.
+**Как подключить своего провайдера.** Источники данных — порты (`docs/adr/ADR-0002-porty-i-adaptery.md`). Интерфейсы `HotelProvider`, `TransportProvider` и `TransferProvider` — раздел «Порты» в `backend/src/api/contracts.py`. Напишите класс с методом порта: `hotels`, `legs` или `transfers`. Присвойте его объект переменной модуля `backend/src/api/offers.py`: `HOTELS`, `TRANSPORT` или `TRANSFERS`. Присваивание делают при старте (`main.py`) или в тесте. Сейчас там адаптеры `OsmOrSynthetic`, `SyntheticTransport`, `SyntheticTransfers`. Добавьте тест своего адаптера по образцу `backend/tests/test_ports.py`, затем запустите `make check`. Проверьте инварианты ядра: город рейса равен городу отеля, сначала рейсы «туда», id трансфера соответствует паре отеля и рейса. Существующие тесты проверяют адаптеры проекта и тестовую подмену; они не проверяют произвольный подключённый API автоматически. Пустой ответ провайдера — «нет предложений», синтетикой он не заменяется.
 
 **Как подключить систему бронирования.** Покупка — порт `BookingProvider` в том же разделе «Порты». Методы: `quote` (цены корзины сейчас), `book` (бронь, ключ идемпотентности — `session_id`) и `cancel`. Присвойте объект своего класса переменной `BOOKING` в `backend/src/api/cart.py`. Сейчас там `SimulatedBooking`: цены не меняются, ваучер помечен `simulated=True` и в UI подписан «имитированы». Статусы брони: `created`, `confirmed`, `cancelled`. Отказ — исключение `BookingRefused(причина)`: агент отвечает 409 с причиной и сохраняет корзину. Другая цена в `quote` — 409 «Итог корзины…», и следующее подтверждение оформляет бронь по новой цене. Повтор оплаты возвращает ту же бронь: это правило ядра. Отмены в интерфейсе пока нет: есть метод порта и правило «после отмены — новая бронь». Проверка — `backend/tests/test_booking_port.py`.
 
