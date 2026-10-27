@@ -1391,6 +1391,33 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
     return ""
 
 
+# #311: «дешевле, чем в Турции?», «это дешевле, чем в среднем?» ask for a comparison. They name no
+# new place and no «недорого» wish; the plan stays. A request («хочу дешевле, чем сейчас») is an edit.
+PRICE_VERSUS_RE = re.compile(r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?")
+VERSUS_ORDER_RE = re.compile(r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*)\b")
+
+
+def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
+    """The reply to a price comparison question, from the plan only (TRAP-4); "" if it is none.
+    The plan has the price of its own trip only: the price of the other place and the market
+    average are not in the data, and we say so."""
+    if not PRICE_VERSUS_RE.search(low) or CHOICE_RE.search(low) or VERSUS_ORDER_RE.search(low):
+        return ""
+    spec = old.plan.spec
+    total = old.cart.total_rub or sum(
+        o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
+    )
+    others = [d for d in found.get("destinations", []) if d not in spec.destinations]
+    place = f"в направлении «{', '.join(others)}»" if others else "в среднем по рынку"
+    mine = ", ".join(spec.destinations) or "текущее направление"
+    now = f"Сейчас в плане: {mine}, итого {_rub(total)} (синтетика). " if total else ""
+    ask = f"«давай в {others[0]}»" if others else "«подешевле»"
+    return (
+        f"Это вопрос: план не меняю. {now}Цен {place} для сравнения в данных нет — "
+        f"цифр не выдумываю. Чтобы собрать такой план, напишите {ask}. {HINTS[old.stage]}"
+    )
+
+
 def _question_answer(
     old: ChatReply, low: str = "", message: str = "", found: dict | None = None
 ) -> str:
@@ -1754,6 +1781,13 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         and not rules_found  # an edit in the same message is a rebuild, as before
         and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
         and (reply := _per_head_reply(old, low))
+    ):
+        return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
+    if (
+        prev
+        and old.stage in PLAN3
+        and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
+        and (reply := _price_versus_reply(old, low, rules_found))
     ):
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
