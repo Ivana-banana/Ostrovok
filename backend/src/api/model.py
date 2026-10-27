@@ -347,18 +347,26 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     # refusing makes it one (#198).
     parts = re.split(r",|\s(?:но|и|а)\s", clause, maxsplit=1)
     near, after = parts[0], parts[1] if len(parts) > 1 else ""
-    stop = r"нельзя|отпадает|отпадают|исключен|невозможн"
+    strong = r"нельзя|отпадает|отпадают|исключен|невозможн"  # a refusal anywhere near the month
+    weak = r"отменя|неудобн"  # a refusal only as the whole part (#215)
     verbs = (
-        r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|над|нуж|вариант|устраива|катит"
+        r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|надо\b|нуж|вариант|устраива|катит"
         r"|рассматр|будет|удобн"
     )
     # «не поедем» ends the part: «не поедем на самолёте» only drops a way to travel
-    moves = r"поед|полет|лет|ед[еи]м"
+    moves = r"(?:по)?(?:ед|езж|лет(?!ом\b|о\b|н))\w*"  # not «летом», «лето», «летний»
     end = r"(?=\s*(?:,|;|$))"
-    gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{stop})"
+    # «январь нет», «январь — нет», «январь мимо», «в январе никак»: a bare no ends the part (#215)
+    bare = rf"(?:нет|никак|мимо){end}"
+    # The weak words follow the month directly or after a filler: «январь или никак» is a move
+    filler = r"(?:(?:—|–|-|точно|уже|вообще|совсем|тоже|нам)\s+)*"
+    gone = rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\b|{strong})|{filler}(?:{weak}|{bare}))"
+    # After a comma «не» + a verb and the strong words may follow up to two words («увы, не
+    # получится», «увы, нельзя»). A «нет» or «неудобно» deeper in the part belongs to a
+    # neighbour: «детей нет», «в декабре никак».
     refusing = (
-        rf"\s*(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
-        rf"|не\s+(?:{moves})\w*{end}|не{end}|{stop})"
+        rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
+        rf"|не\s+{moves}{end}|не{end}|{strong})|(?:{weak})\w*{end}|{bare})"
     )
     if negated or re.match(gone, near) or re.match(refusing, after):
         return "stay", month

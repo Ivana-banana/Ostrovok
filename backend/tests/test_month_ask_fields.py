@@ -302,3 +302,17 @@ def test_the_model_may_not_shift_into_the_refused_month(store, model):
     s = r.plan.spec
     assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
     assert "Сдвиг не применён" in r.reply and r.stage == "compare"
+
+
+def test_a_bare_no_with_a_model_keeps_the_dates(store, model):
+    first = named(store)
+    model.patch = {
+        "month": 1,
+        "date_from": "2027-01-03",
+        "date_to": "2027-01-08",
+        "wishes": ["тихо"],
+    }
+    r = say(store, "январь мимо, нам бы потише", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+    assert "тихо" in s.wishes and "Они остаются" in r.reply and r.stage == "compare"
