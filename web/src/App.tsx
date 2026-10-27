@@ -130,6 +130,7 @@ export function App() {
   const [thinking, setThinking] = useState(false);
   const [typing, setTyping] = useState<number | null>(null); // index of the message being typed
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
+  const [healthNoAi, setHealthNoAi] = useState(false); // /health says no model: known before the first reply
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   // Every chat load gets a number: an answer of an older load is dropped.
@@ -198,6 +199,14 @@ export function App() {
       if (no === loadNo.current) setRestoring(false);
     }
   }
+
+  // The mode badge must not wait for the first reply.
+  useEffect(() => {
+    fetch("/api/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h) => setHealthNoAi(h?.llm === false))
+      .catch(() => {});
+  }, []);
 
   // Reload restores the last open chat.
   useEffect(() => {
@@ -474,7 +483,7 @@ export function App() {
           {chats.length > 0 && !groups.length && <p className="side-empty">Не нашёл чатов по запросу.</p>}
         </nav>
         <div className="foot">
-          {noAi && (
+          {(reply ? noAi : healthNoAi) && (
             <span className="badge-noai">
               <i />
               Без ИИ — упрощённый режим

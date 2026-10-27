@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.cart import cart_route, checkout_route
 from api.contracts import Cart, CartAction, ChatReply, ChatRequest, CheckoutRequest, Voucher
+from api.guards import llm_available
 from api.model import chat
 from api.store import SessionStore, db_path
 
@@ -25,8 +26,9 @@ Store = Annotated[SessionStore, Depends(get_store)]
 
 @app.get("/health")
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, object]:
+    # llm: false — агент отвечает по правилам (TRAP-1); фронт показывает «Без ИИ» до первого ответа.
+    return {"status": "ok", "llm": llm_available()}
 
 
 @app.post("/api/chat")
