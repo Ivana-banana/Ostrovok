@@ -5,6 +5,7 @@ Without a model (TRAP-1). A wrong guest count is a wrong price and a wrong booki
 
 import pytest
 
+from api import llm
 from api.contracts import ChatRequest
 from api.extract import extract
 from api.model import chat
@@ -30,6 +31,11 @@ def say(store, text, sid=None):
         "едем без детей",
         "Сочи в ноябре, без маленьких детей",
         "Сочи в ноябре, без ребёнка",
+        "Сочи в ноябре, без мужа и детей",
+        "Сочи в ноябре, без жены и детей",
+        "Сочи в ноябре, без двоих детей",
+        "Сочи в ноябре, без своих детей",
+        "Сочи в ноябре, без наших детей",
     ],
 )
 def test_no_kids_extracts_zero_children(text):
@@ -72,3 +78,39 @@ def test_with_kids_still_adds_children():
 def test_a_question_with_no_kids_changes_nothing():
     found, _ = extract("а без детей можно?", asking=True)
     assert "children_ages" not in found
+
+
+@pytest.mark.parametrize(
+    ("text", "ages"),
+    [
+        ("Сочи в ноябре, дети без бабушки", [7, 7]),
+        ("Сочи в ноябре, без пересадок с детьми", [7, 7]),
+        ("Сочи в ноябре, без мужа, с ребёнком 4 года", [4]),
+        ("Сочи в ноябре, без доплат ребёнок 5 лет", [5]),
+    ],
+)
+def test_other_words_after_bez_keep_the_children(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
+
+
+@pytest.mark.parametrize("stage", ["compare", "assemble"])
+@pytest.mark.parametrize(
+    "text", ["а без детей можно?", "можно без детей?", "беру. а без детей можно?"]
+)
+@pytest.mark.parametrize("model", [False, True])
+def test_question_with_no_kids_at_a_built_plan_changes_nothing(
+    monkeypatch, store, stage, text, model
+):
+    r = say(store, FIRST)
+    if stage == "assemble":
+        r = say(store, "беру", r.session_id)
+    if model:
+        monkeypatch.setattr(
+            llm,
+            "extract_spec",
+            lambda m, s, until=None, today=None: {"children_ages": [7, 7]},
+        )
+    r2 = say(store, text, r.session_id)
+    assert "Состав не меняю" in r2.reply
+    assert r2.plan.spec == r.plan.spec and r2.cart == r.cart and r2.llm is False
