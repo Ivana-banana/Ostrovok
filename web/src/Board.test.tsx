@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { Board } from "./Board";
+import { Board, Destinations, destinationsInChat } from "./Board";
 import type { ChatReply } from "./contracts";
 import { changeValue, localTime } from "./format";
 
@@ -12,8 +12,12 @@ const hotelBought = structuredClone(base);
 hotelBought.cart.items = [...base.cart.items, ...base.plan.offers.filter((o) => o.offer_id === "h1")];
 
 function render(r: ChatReply): Document {
+  // Before a destination is picked its cards live in the chat (App): render them as there.
   const html = renderToStaticMarkup(
-    <Board reply={r} busy={false} removed={[]} onSend={noop} onCart={noop} onCheckout={noop} />,
+    <>
+      {destinationsInChat(r.stage) && <Destinations plan={r.plan} stage={r.stage} busy={false} onSend={noop} />}
+      <Board reply={r} busy={false} removed={[]} onSend={noop} onCart={noop} onCheckout={noop} />
+    </>,
   );
   return new DOMParser().parseFromString(html, "text/html");
 }
@@ -173,6 +177,14 @@ suite("доска поездки", () => {
     const doc = render(r);
     expect(doc.querySelector("[aria-label='Ваучер']")?.textContent).toContain(want);
     expect(doc.querySelector("[aria-label='Корзина']")?.textContent).toContain(want);
+  });
+
+  it("ваучер настоящей брони: статус вместо пометки об имитации (#376)", () => {
+    const r = structuredClone(base);
+    r.voucher = { ...r.voucher!, simulated: false, status: "created" };
+    const v = render(r).querySelector("[aria-label='Ваучер']")?.textContent ?? "";
+    expect(v).not.toContain("имитирован");
+    expect(v).toContain("Статус брони: создана, ждёт подтверждения");
   });
 
   it("корзина: предупреждение о бюджете до подтверждения", () => {

@@ -17,7 +17,7 @@ same path runs on rules (TRAP-1).
 
 import re
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -87,7 +87,7 @@ from api.extract import (
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
-from api.inspire import ROAD_LINE, suggest_destinations
+from api.inspire import ROAD_LINE, suggest_destinations, unchecked_wishes
 from api.offers import find_offers, resolve_place, road_nights
 from api.optimizer import (
     _hotel_why,
@@ -102,6 +102,7 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
+from api.timeline import VERBS
 
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
@@ -1360,6 +1361,37 @@ def _question_fact(old: ChatReply, low: str) -> str:
     return ""
 
 
+# #369: «сколько это на 1 человека?», «покажи цену на человека»: a price per head from the plan
+# total; the party stays. «Есть номер на 2 человека?» asks about a room, not about the party.
+PER_HEAD_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
+PER_HEAD_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж\w*\s+цен")
+ROOM_FOR_RE = re.compile(r"\bномер\w*\s+на\s+(?:\d{1,2}|двоих|троих|четверых)\b")
+
+
+def _per_head_reply(old: ChatReply, low: str) -> str:
+    """The reply to a price-per-head question, from the plan only (TRAP-4); "" if it is none."""
+    spec = old.plan.spec
+    people = spec.adults + len(spec.children_ages)
+    if PER_HEAD_RE.search(low) and PER_HEAD_CUE_RE.search(low):
+        total = old.cart.total_rub or sum(
+            o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
+        )
+        if not total:
+            return f"Состав не меняю: {people} чел. Итог пока не посчитан, цену на человека назвать не могу."
+        return (
+            f"Состав не меняю: {people} чел. Итого {_rub(total)} (синтетика), "
+            f"{'в среднем ' if spec.children_ages else ''}на человека около "
+            f"{_rub(round(total / people))} (синтетика)"
+            + (", дети по детскому тарифу." if spec.children_ages else ".")
+        )
+    if ROOM_FOR_RE.search(low) and "?" in low:
+        return (
+            f"Состав не меняю: в плане {people} чел. Чтобы пересчитать на другой состав, "
+            "напишите, кто едет: например, «нас двое»."
+        )
+    return ""
+
+
 def _question_answer(
     old: ChatReply, low: str = "", message: str = "", found: dict | None = None
 ) -> str:
@@ -1386,7 +1418,7 @@ def _question_answer(
     )
     if old.plan.timeline:  # times come from the timeline tool, never from the model
         cart += "\nПлан поездки:\n" + "\n".join(
-            f"{e.at:%d.%m %H:%M} — {e.title}" for e in old.plan.timeline
+            f"{_at(e.at)} — {e.title}" for e in old.plan.timeline
         )
     edit = "Чтобы изменить поездку, напишите, что поменять: например, «хотим с бассейном»."
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
@@ -1425,6 +1457,12 @@ def _text_clarify(questions: list[Question]) -> str:
     return "Чтобы подобрать поездку, уточню: " + " ".join(q.text for q in questions)
 
 
+def _unchecked_lines(spec: TripSpec) -> list[str]:
+    """#361: a wish with no data is named in the reply, not dropped."""
+    unchecked = unchecked_wishes(spec)
+    return [f"Не проверяю по данным: {', '.join(unchecked)}."] if unchecked else []
+
+
 def _text_inspire(plan: Plan) -> str:
     spec = plan.spec
     guests = spec.adults + len(spec.children_ages)
@@ -1445,6 +1483,7 @@ def _text_inspire(plan: Plan) -> str:
         if d.violates:
             line += f" Нарушает требования: {'; '.join(d.violates)}."
         lines.append(line)
+    lines += _unchecked_lines(spec)
     return "\n".join(lines + _tail(spec, "Напишите номер или название направления."))
 
 
@@ -1496,7 +1535,12 @@ def _text_compare(plan: Plan) -> str:
         lines.append("Транспорт:")
     for i, o in enumerate(legs, 1):
         no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
-        lines.append(f"Рейс {i}. {o.title} — {_rub(o.price_rub)}{no_pet}")
+        # C14 (#364, TRAP-5): local times with their zones, the verbs of the mode and the
+        # duration; the start time leaves the title so it is not shown twice.
+        start, end = (v.lower() for v in VERBS[o.mode])
+        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
+        when = f"{start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)}"
+        lines.append(f"Рейс {i}. {title} — {_rub(o.price_rub)}{no_pet} · {when}")
     chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
     lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:
@@ -1504,6 +1548,7 @@ def _text_compare(plan: Plan) -> str:
         lines += [f"Риск: {r}." for r in e.risks]
     for c in plan.changes:
         lines.append(f"Изменено {c.what}: {c.before} → {c.after}.")
+    lines += _unchecked_lines(spec)
     return "\n".join(
         lines
         + _tail(
@@ -1514,10 +1559,25 @@ def _text_compare(plan: Plan) -> str:
     )
 
 
+def _zone(dt: datetime) -> str:
+    """«UTC+10», «UTC+5:30», «UTC-3»: the offset of a local time from the tools (TRAP-5)."""
+    off = dt.utcoffset() or timedelta()
+    minutes = int(off.total_seconds() // 60)
+    sign, minutes = ("+" if minutes >= 0 else "-"), abs(minutes)
+    h, m = divmod(minutes, 60)
+    return f"UTC{sign}{h}" + (f":{m:02d}" if m else "")
+
+
+def _at(dt: datetime) -> str:
+    """A local time of a leg or an event with its zone (C14, #364)."""
+    return f"{dt:%d.%m %H:%M} ({_zone(dt)})"
+
+
 def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
-    lines += [f"{e.at:%d.%m %H:%M} — {e.title}" for e in plan.timeline]
-    lines += [f"Внимание: {i.text}." for i in plan.issues]
+    lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
+    lines += [f"Внимание: {i.text.rstrip('.')}." for i in plan.issues]
+    lines += _unchecked_lines(plan.spec)
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
 
@@ -1708,6 +1768,14 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return old.model_copy(
             update={"reply": _question_answer(old, low), "questions": [], "llm": False}
         )
+    if (
+        prev
+        and old.stage in PLAN3
+        and not rules_found  # an edit in the same message is a rebuild, as before
+        and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
+        and (reply := _per_head_reply(old, low))
+    ):
+        return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
         return drop_transfers(old)
     # #186, #216: «какая погода в декабре?» at a December plan names no new field: still a
