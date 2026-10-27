@@ -188,15 +188,15 @@ def _pool(spec: TripSpec, hub: dict, exclude: list[str]) -> list[dict]:
         out = near or out
     if spec.modes == ["car"]:
         out = [p for p in out if catalog.km_between(hub, p) <= CAR_KM] or out
-    if spec.modes and "flight" not in spec.modes and spec.modes != ["car"]:
-        # #277: a banned flight is no soft wish: no fallback to the places only a plane reaches;
-        # a chosen car keeps the soft CAR_KM above
-        out = [p for p in out if _reachable(spec, hub, p)]
     if "природа" in spec.wishes:  # quiet and forest: no big city (a city with the nature tag stays)
         out = [p for p in out if "nature" in p["tags"] or p["pop"] < CITY_POP]
-    return (
-        out if _themed(spec) else [p for p in out if "city" in p["tags"] and p["pop"] >= CITY_POP]
-    )
+    if not _themed(spec):
+        out = [p for p in out if "city" in p["tags"] and p["pop"] >= CITY_POP]
+    if spec.modes and "flight" not in spec.modes and spec.modes != ["car"]:
+        # #277: a banned flight is no soft wish: the places only a plane reaches go out while
+        # others stay; nothing reachable: all stay, each card then says «сюда не добраться»
+        out = [p for p in out if _reachable(spec, hub, p)] or out
+    return out
 
 
 def _level(violates: list[str]) -> int:

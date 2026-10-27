@@ -215,3 +215,16 @@ def test_c17_chosen_car_keeps_the_soft_car_pool():
     spec = TripSpec(modes=["car"], origin="Москва", wishes=["море"], month=7)
     names = {d.name for d in inspire.suggest_destinations(spec, 4)}
     assert {"Кобулети", "Варна"} & names
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Поездом из Хабаровска куда-нибудь в июле вдвоём, тысяч 80",
+        "Поездом из Калининграда в горы на лыжах в феврале вдвоём, тысяч 100",
+    ],
+)
+def test_c17_nothing_reachable_by_train_still_gives_flagged_cards(store, text):
+    """Arbiter of #277: an empty filtered pool gave no cards under «Подходящие направления»."""
+    dests = inspired(store, text)
+    assert any(v.endswith(inspire.NO_WAY) for d in dests for v in d.violates)
