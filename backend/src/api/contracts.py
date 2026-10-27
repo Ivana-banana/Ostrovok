@@ -207,6 +207,13 @@ class Cart(BaseModel):
     total_rub: int = 0
 
 
+class Guest(BaseModel):
+    """Lead guest typed at checkout (#367). Simulated: kept in the session only, not sent out."""
+
+    name: str = Field(min_length=1, max_length=100)
+    contact: str = Field("", max_length=100)  # phone or e-mail; "" when not given
+
+
 class Voucher(BaseModel):
     booking_id: str
     items: list[Offer]
@@ -215,6 +222,7 @@ class Voucher(BaseModel):
     created_at: AwareDatetime
     status: BookingStatus = "confirmed"
     simulated: bool = True  # True: booking and payment are simulated; the voucher says so
+    guest: Guest | None = None  # None: no name given (chat «подтверждаю», old clients)
 
 
 class ChatRequest(BaseModel):
@@ -242,6 +250,7 @@ class CartAction(BaseModel):
 class CheckoutRequest(BaseModel):
     session_id: str
     confirm_total_rub: int  # total the user saw when confirming
+    guest: Guest | None = None  # copied to Voucher.guest
 
 
 # --- Порты (ADR-0002, D-023) ---------------------------------------------------------------
@@ -258,6 +267,8 @@ class CheckoutRequest(BaseModel):
 # «подтверждаю»), api/checks.py (eval); tests/test_booking_port.py (conformance, a foreign
 # adapter). Voucher.status and Voucher.simulated: web/src/contracts.ts, web/src/api.ts,
 # web/src/Board.tsx, Board.test.tsx, App.tsx, App.test.tsx, web/e2e/demo.spec.ts.
+# Guest (CheckoutRequest.guest, Voucher.guest; #367): api/cart.py, api/main.py, web/src/api.ts,
+# web/src/App.tsx, web/src/Board.tsx and their tests.
 
 
 class Place(TypedDict, total=False):
