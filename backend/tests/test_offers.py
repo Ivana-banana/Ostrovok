@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from api import offers
+from api import catalog, offers
 from api.contracts import ChatRequest, TripSpec
-from api.fixtures import rank
+from api.fixtures import rank, travel_hours
 from api.guards import label_synthetic
 from api.model import chat
 from api.offers import find_offers, offers_for_place, resolve_place, transfer_id
@@ -163,8 +163,8 @@ def test_tariffs_are_the_same_in_every_process():
     hotels = kinds(find_offers(s, "Сочи"), "hotel")
     first = [(h.offer_id, h.price_rub) for h in hotels[:2]]
     assert first == [
-        ("h-aer-s0-ROn-20261211-3n-2a", 10_700),
-        ("h-aer-s0-BBn-20261211-3n-2a", 14_500),
+        ("h-aer-s0-ROn-20261211-3n-2a", 4_700),  # Сочи level 2200 from 101hotels (#119)
+        ("h-aer-s0-BBn-20261211-3n-2a", 6_400),
     ]
     assert hotels == kinds(find_offers(s, "Сочи"), "hotel")
 
@@ -242,6 +242,17 @@ def test_trap_5_times_are_local_and_transfers_dock():
         assert all(t.arrive_at == leg.depart_at - timedelta(hours=2) for t in of(leg))
 
 
+@pytest.mark.parametrize("name, iata", [("Домбай", "MRV"), ("Сочи", "AER")])
+def test_flight_and_transfer_titles_show_the_arrival_airport_code(name, iata):
+    items = find_offers(spec(), name)
+    there = [o for o in kinds(items, "transport") if o.mode == "flight" and o.destination == name]
+    # Домбай is 201 km from MRV: no airport of its own, the flight goes through MRV (#123)
+    label = f"→ {name} через {iata}," if name == "Домбай" else f"→ {name} ({iata}),"
+    assert there and all(label in o.title for o in there)
+    ports = [t.title for t in kinds(items, "transfer") if "аэропорт" in t.title]
+    assert ports and all(f"аэропорт {iata}" in t for t in ports)
+
+
 def test_s6_kazan_has_morning_train_and_flight_and_a_rich_comparison():
     """S6: night train arrives 07:10, flight 10:30; ≥ 3 hotels with ≥ 5 features."""
     items = kazan_weekend()
@@ -274,7 +285,7 @@ def test_trap_6_offers_need_no_network(monkeypatch):
     def no_network(*args, **kwargs):
         raise OSError("network is down")
 
-    offers.places.cache_clear()
+    catalog.snapshot.cache_clear()
     offers.osm_hotels.cache_clear()
     monkeypatch.setattr(socket.socket, "connect", no_network)
     assert kinds(find_offers(spec(), "Казань"), "hotel")
@@ -364,3 +375,23 @@ def test_near_dates_do_not_double_a_non_refundable_tariff(days):
             assert (re.search(r"-(RO|BB|HB|AI)r-", t.offer_id) is not None) == (
                 t.cancellation.refundable
             )
+
+
+def test_travel_hours_is_the_fastest_leg_there_and_zero_at_home():
+    """No date in the spec: the 15th of the month is the probe; the origin itself is 0 hours."""
+    s = TripSpec(month=11, origin="Москва")
+    msk, kzn = catalog.resolve("Москва"), catalog.resolve("Казань")
+    assert 0 < travel_hours(s, msk, kzn) < 3 and travel_hours(s, msk, msk) == 0
+
+
+@pytest.mark.parametrize("share, refundable", [(0.0, False), (1.0, True)])
+def test_free_cancel_share_of_the_place_sets_the_refundable_hotels(share, refundable):
+    """#119: a place with the 101hotels share sells free cancellation in that share of its
+    3+ star hotels; 1-2 star hotels never sell it."""
+    place = {"name": "Тест", "lat": 55.0, "lon": 37.0, "tz": "Europe/Moscow",
+             "free_cancel_share": share}  # fmt: skip
+    by_title = hotel_tariffs(offers_for_place(spec(), place))
+    sold = {
+        any(t.cancellation.refundable for t in ts) for ts in by_title.values() if ts[0].stars >= 3
+    }
+    assert sold == {refundable}

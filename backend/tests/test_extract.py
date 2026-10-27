@@ -1,11 +1,14 @@
 """Rule extractor and clarification policy (T3, #7): one case per rule, phrases from eval/cases.json."""
 
+import itertools
+import re
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
 from api.contracts import ChatRequest
-from api.extract import extract
+from api.extract import extract, is_chip_message
 from api.model import chat, step
 from api.store import SessionStore
 
@@ -21,8 +24,54 @@ def test_s3a_exact_request_parses_every_field():
     found, notes = extract(S3A)
     assert found["destinations"] == ["Сочи"] and md(found["date_from"]) == (11, 20)
     assert found["nights"] == 3 and found["adults"] == 2
-    assert found["budget_rub"] == 40_000 and found["meal"] == "BB"
-    assert notes == ["бюджет: 40 000 ₽ на всю поездку (сказано про отель)"]
+    assert found["hotel_budget_rub"] == 40_000 and found["meal"] == "BB"
+    assert "budget_rub" not in found  # S3-A: «отель до 40 тысяч» is not a trip budget (#41)
+    assert notes == ["бюджет отеля: 40 000 ₽ за все ночи"]
+
+
+@pytest.mark.parametrize(
+    "text,hotel,trip",
+    [
+        ("отель до 40 тысяч", 40_000, None),
+        ("на отель 40к", 40_000, None),
+        ("40к на отель", 40_000, None),
+        ("отель не дороже 40 000 руб", 40_000, None),
+        ("гостиница до 40 тыс", 40_000, None),
+        ("до 100 тысяч на всех", None, 100_000),
+        ("бюджет 80 тыс", None, 80_000),
+        ("отель 4 звезды, до 100к", None, 100_000),  # a comma ends the hotel clause
+        ("отель и перелёт до 100к", None, 100_000),
+        ("отель + перелёт до 100к", None, 100_000),
+        ("перелёт и отель до 100 тысяч", None, 100_000),  # the hotel is one item of the trip
+        ("авиа + отель до 30 тысяч", None, 30_000),
+        ("билеты и отель до 50к", None, 50_000),
+        ("с перелётом и отелем до 90 тыс", None, 90_000),
+        ("поездка с отелем до 100к", None, 100_000),
+        ("отель 4 звезды до 100к", 100_000, None),  # no comma: the sum is about the hotel
+        ("отель с завтраком до 40к", 40_000, None),
+        ("отель до 40 тысяч, всего до 100 тысяч", 40_000, 100_000),
+        ("всего до 100 тысяч, из них отель до 40к", 40_000, 100_000),
+        ("на отель 40к и всего 150 000 руб", 40_000, 150_000),
+    ],
+)
+def test_hotel_and_trip_budgets_are_told_apart(text, hotel, trip):
+    found, notes = extract(text)
+    assert found.get("hotel_budget_rub") == hotel and found.get("budget_rub") == trip
+    assert any(n.startswith("бюджет отеля:") for n in notes) == (hotel is not None)
+    assert not any("на всю поездку" in n for n in notes)
+
+
+def test_hotel_price_per_night_is_multiplied_by_the_nights_when_they_are_named():
+    found, notes = extract("5 ночей, отель до 10к за ночь")
+    assert found["hotel_budget_rub"] == 50_000 and "budget_rub" not in found
+    assert notes == ["бюджет отеля: 10 000 ₽ за ночь, 50 000 ₽ за 5 ноч."]
+
+
+def test_hotel_price_per_night_without_nights_makes_no_total():
+    """The nights are unknown here: no invented total, only the assumption (model resolves it)."""
+    found, notes = extract("отель до 8000 руб в сутки")
+    assert "hotel_budget_rub" not in found and "budget_rub" not in found
+    assert notes == ["бюджет отеля: 8 000 ₽ за ночь"]
 
 
 def test_s6_day_range_gives_dates_and_nights():
@@ -164,7 +213,23 @@ def test_s3a_chat_asks_nothing_and_compares(tmp_path):
     r = chat(ChatRequest(message=S3A), SessionStore(tmp_path / "s.db"))
     assert r.stage == "compare" and r.questions == []
     assert not any(a.startswith(("даты:", "длительность:")) for a in r.plan.spec.assumptions)
-    assert "сказано про отель" in r.reply
+    spec = r.plan.spec
+    assert spec.hotel_budget_rub == 40_000 and spec.budget_rub is None
+    assert "бюджет отеля: 40 000 ₽ за все ночи" in spec.assumptions
+    assert "бюджет отеля: 40 000 ₽ за все ночи" in r.reply  # the user sees the assumption
+    assert "на всю поездку" not in r.reply
+
+
+def test_s3a_plan_has_a_hotel_within_40000_and_reaches_the_booking(tmp_path):
+    """S3-A: the hotel is picked within its own budget, the trip total is not limited by it."""
+    store = SessionStore(tmp_path / "s.db")
+    r = chat(ChatRequest(message=S3A), store)
+    hotels = [o for o in r.plan.offers if o.kind == "hotel" and o.offer_id in r.plan.selected]
+    assert len(hotels) == 1 and hotels[0].price_rub <= 40_000 and hotels[0].meal != "RO"
+    assert not any("бюджет" in x for e in r.plan.explanations for x in e.risks)
+    for text in ("беру", "да", "подтверждаю"):
+        r = chat(ChatRequest(session_id=r.session_id, message=text), store)
+    assert r.stage == "booked" and r.voucher is not None
 
 
 def test_march_is_not_may():
@@ -345,6 +410,28 @@ def test_trap3_male_is_still_found_by_its_name(text):
     assert extract(text)[0]["destinations"] == ["Мале"]
 
 
+@pytest.mark.parametrize(
+    "text, dests",
+    [
+        ("Дела такие: хочу на море в ноябре", []),
+        ("Себе хочу тёплое море", []),
+        ("Губы обветрились, хочу на море", []),
+        ("Бару нашли, теперь отель", []),
+        ("Кашу не любим, хотим в Италию", ["Италия"]),
+    ],
+)
+def test_trap3_case_form_of_a_short_name_at_the_start_is_no_place(text, dests):
+    """#102: «Дела» is a word; a short name at the start counts only in its exact form."""
+    assert extract(text)[0].get("destinations", []) == dests
+
+
+@pytest.mark.parametrize(
+    "text, city", [("Дели в ноябре", "Дели"), ("хочу в Себу", "Себу"), ("Бар, 3 ночи", "Бар")]
+)
+def test_trap3_short_name_is_found_by_its_name_or_after_a_preposition(text, city):
+    assert extract(text)[0]["destinations"] == [city]
+
+
 def test_trap3_small_hotel_after_a_plan_keeps_the_city():
     first = step(None, "s", "Сочи на неделю в декабре")
     r = step(first, "s", "Хочу в малом отеле")
@@ -433,7 +520,7 @@ def test_trap3_vladimir_as_a_city_still_works(text):
     assert extract(text)[0]["destinations"] == ["Владимир"]
 
 
-@pytest.mark.parametrize("text", ["Ухта, 3 ночи", "Выборг, 3 ночи"])
+@pytest.mark.parametrize("text", ["Ухта, 3 ночи", "Тихвин, 3 ночи"])
 def test_trap3_unknown_city_in_a_plan_gets_an_honest_note(text):
     found, notes = extract(text, has_destination=True)
     assert "destinations" not in found
@@ -473,6 +560,309 @@ def test_trap3_city_note_goes_away_when_a_city_is_stated_later():
     r = step(second, "s", "Лучше Казань")
     assert r.plan.spec.destinations == ["Казань"]
     assert not any("каталоге" in a for a in r.plan.spec.assumptions)
+
+
+def _format_ts() -> str:
+    return (Path(__file__).parents[2] / "web/src/format.ts").read_text(encoding="utf-8")
+
+
+def _chip_names() -> dict[str, str]:
+    """Priority names as the web chips say them: read from web/src/format.ts, no copy here."""
+    body = _format_ts().split("export const PRIORITIES", 1)[1].split("};", 1)[0]
+    return dict(re.findall(r'(\w+):\s*"([^"]+)"', body))
+
+
+def _chip_prefix() -> str:
+    """The start of the phrase priorityMessage builds, read from web/src/format.ts."""
+    body = _format_ts().split("export function priorityMessage", 1)[1]
+    return re.search(r"return `([^$`]+)\$\{", body).group(1)
+
+
+def test_s9_chip_phrase_of_every_order_gives_only_priorities():
+    names, prefix = _chip_names(), _chip_prefix()
+    assert len(names) == 6 and prefix.startswith("Мои приоритеты")
+    for size in range(1, len(names) + 1):
+        for order in itertools.permutations(names, size):
+            phrase = f"{prefix}{', '.join(names[p] for p in order)}."
+            for has_destination in (False, True):
+                found, _ = extract(phrase, has_destination)
+                assert found == {"priorities": list(order)}, phrase
+            assert is_chip_message(phrase), phrase
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Для меня главное рейтинг, и чтобы можно было с животными",
+        "Главное — бесплатная отмена и чтобы был бассейн",
+        "Важнее цена, и с питанием",
+        "Мои приоритеты по важности: отмена, цена, и ещё хочу бассейн.",
+    ],
+)
+def test_s9_free_text_is_not_the_chip_phrase(text):
+    assert not is_chip_message(text)
+
+
+# --- #82: a two-word city first in the phrase (TRAP-3) ---
+
+
+@pytest.mark.parametrize(
+    "text, city",
+    [
+        ("Великий Новгород в мае", "Великий Новгород"),
+        ("Минеральные Воды на 3 дня", "Минеральные Воды"),
+        ("Нижний Новгород на выходные", "Нижний Новгород"),
+        ("Санкт-Петербург в июле", "Санкт-Петербург"),
+        ("санкт-петербург в июле", "Санкт-Петербург"),
+        ("Петербург в июле", "Санкт-Петербург"),
+        ("хочу в великий новгород в мае", "Великий Новгород"),
+        ("из минеральных вод в казань", "Казань"),
+        ("Великий Новгород, 3 ночи", "Великий Новгород"),
+        ("Хочу в Великом Новгороде на 3 дня", "Великий Новгород"),
+        ("Поездка в Минеральные Воды", "Минеральные Воды"),
+        ("Отдых в Сочи", "Сочи"),
+    ],
+)
+def test_trap3_two_word_city_in_any_place_of_the_phrase(text, city):
+    assert extract(text)[0]["destinations"] == [city]
+
+
+def test_trap3_two_word_city_as_origin_and_as_destination():
+    found, _ = extract("Из Москвы в Великий Новгород")
+    assert found["origin"] == "Москва" and found["destinations"] == ["Великий Новгород"]
+    found, _ = extract("Из Великого Новгорода в Сочи")
+    assert found["origin"] == "Великий Новгород" and found["destinations"] == ["Сочи"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Хочу на море в мае",
+        "Великий отпуск в мае",
+        "Минеральная вода на 3 дня",
+        "Хочу санаторий с минеральными водами в мае",
+        "великий новгород, 3 ночи",  # lower case, no preposition: dropped on purpose
+    ],
+)
+def test_trap3_ordinary_capitalised_first_words_are_no_city(text):
+    assert "destinations" not in extract(text)[0]
+
+
+def test_trap3_mineral_waters_in_a_sanatorium_wish_stay_a_wish():
+    found, _ = extract("Санаторий в Кисловодске, лечение минеральными водами")
+    assert found["destinations"] == ["Кисловодск"]
+    assert extract("из минеральных вод в казань")[0]["origin"] == "Минеральные Воды"
+
+
+@pytest.fixture
+def tuesday(monkeypatch):
+    """Fix «today» for the extractor: Tuesday 2026-10-27."""
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 27)
+
+    monkeypatch.setattr("api.extract.date", FixedDate)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("в Минск на поезде в пятницу", date(2026, 10, 30)),
+        ("в Минск на поезде во вторник", date(2026, 11, 3)),
+        ("в Казань в понедельник, двое", date(2026, 11, 2)),
+        ("в Казань через неделю, двое", date(2026, 11, 3)),
+        ("в Казань в эти выходные, двое", date(2026, 10, 30)),
+    ],
+)
+def test_relative_date_is_the_nearest_from_today(tuesday, text, expected):
+    found, _ = extract(text)
+    assert found["date_from"] == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["отдых в средней полосе в ноябре, двое", "Казань по субботам, двое", "Казань в среде, двое"],
+)
+def test_weekday_lookalikes_are_not_dates(tuesday, text):
+    found, _ = extract(text)
+    assert "date_from" not in found
+    if "ноябре" in text:
+        assert found["month"] == 11
+
+
+def test_weekday_respects_the_named_month(tuesday):
+    found, _ = extract("в Сочи в ноябре в пятницу, двое")
+    assert found["date_from"] == date(2026, 11, 6) and found["month"] == 11
+
+
+def test_hotel_budget_survives_a_follow_up_with_a_pet(tmp_path):
+    """#41: «отель до 40 тысяч» stays on the hotel after the pet changes the pick."""
+    store = SessionStore(tmp_path / "s.db")
+    r = chat(ChatRequest(message="Отель до 40 тысяч, Сочи на неделю"), store)
+    r = chat(ChatRequest(session_id=r.session_id, message="с собакой"), store)
+    hotels = [o for o in r.plan.offers if o.kind == "hotel" and o.offer_id in r.plan.selected]
+    assert r.plan.spec.hotel_budget_rub == 40_000 and r.plan.spec.budget_rub is None
+    assert len(hotels) == 1 and hotels[0].price_rub <= 40_000 and hotels[0].pets_allowed
+
+
+def test_flight_and_hotel_sum_is_the_trip_budget_and_a_dearer_plan_is_flagged(tmp_path):
+    """#41: «перелёт и отель до 100 тысяч» limits the trip; a dearer booking carries the risk."""
+    store = SessionStore(tmp_path / "s.db")
+    r = chat(ChatRequest(message="Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч"), store)
+    if r.stage == "clarify":  # #302: a far trip with a whole budget asks the origin first
+        r = chat(ChatRequest(session_id=r.session_id, message="Из Москвы"), store)
+    spec = r.plan.spec
+    assert spec.budget_rub == 100_000 and spec.hotel_budget_rub is None
+    total = sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
+    assert total > 100_000
+    risks = [x for e in r.plan.explanations for x in e.risks]
+    assert any("не укладывается в бюджет" in x for x in risks)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "отель с перелётом до 60 тысяч",
+        "отель с билетами до 60 тысяч",
+        "отель с авиа до 60 тысяч",
+        "отель с трансфером до 60 тысяч",
+        "60 тысяч на отель и перелёт",
+        "тур с отелем до 60 тысяч",
+        "перелёт и отель до 60 тысяч",
+        "перелёт + отель до 60 тысяч",
+        "самолёт и отель до 60 тысяч",
+        "самолет + отель до 60 тысяч",
+        "такси и отель до 60 тысяч",
+        "экскурсии и отель до 60 тысяч",  # a word no list knows: «и отель» is enough
+        "виза плюс отель до 60 тысяч",
+        "ж/д и отель до 60 тысяч",
+    ],
+)
+def test_hotel_with_another_expense_item_is_the_trip_budget(text):
+    """#41: «отель» and another expense item in one fragment: the sum is for the whole trip."""
+    found, notes = extract(text)
+    assert found.get("budget_rub") == 60_000 and "hotel_budget_rub" not in found
+    assert not any(n.startswith("бюджет отеля:") for n in notes)
+
+
+@pytest.mark.parametrize(
+    "text,hotel",
+    [
+        ("отель до 40 тысяч", 40_000),
+        ("40 тысяч на отель", 40_000),
+        ("отель до 40 тысяч, перелёт любой", 40_000),
+        ("5 ночей, отель до 5000 за ночь", 25_000),
+    ],
+)
+def test_hotel_alone_in_its_fragment_is_the_hotel_budget(text, hotel):
+    found, _ = extract(text)
+    assert found.get("hotel_budget_rub") == hotel and "budget_rub" not in found
+
+
+def test_hotel_price_per_night_without_nights_is_kept_in_the_assumption():
+    found, notes = extract("отель до 5000 за ночь")
+    assert "hotel_budget_rub" not in found and "budget_rub" not in found
+    assert notes == ["бюджет отеля: 5 000 ₽ за ночь"]
+
+
+def test_hotel_with_flight_sum_is_the_trip_budget_and_a_dearer_cart_is_flagged(tmp_path):
+    """#41: «отель с перелётом до 60 тысяч» limits the trip; a dearer cart shows the risk."""
+    store = SessionStore(tmp_path / "s.db")
+    r = chat(ChatRequest(message="Бали на 12 ночей вдвоём, отель с перелётом до 60 тысяч"), store)
+    if r.stage == "clarify":  # #302: a far trip with a whole budget asks the origin first
+        r = chat(ChatRequest(session_id=r.session_id, message="Из Москвы"), store)
+    spec = r.plan.spec
+    assert spec.budget_rub == 60_000 and spec.hotel_budget_rub is None
+    total = sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
+    assert total > 60_000
+    risks = [x for e in r.plan.explanations for x in e.risks]
+    assert any("не укладывается в бюджет" in x for x in risks)
+
+
+@pytest.mark.parametrize("text", ["отель до 1500 м от моря", "отель до 2027 года"])
+def test_hotel_with_a_bare_number_that_is_not_money_has_no_budget(text):
+    found, notes = extract(text)
+    assert "hotel_budget_rub" not in found and "budget_rub" not in found and notes == []
+
+
+# #275: adults are counted from the family words, not guessed as 2.
+@pytest.mark.parametrize(
+    "text, adults, kids",
+    [
+        ("Едем я, муж, двое детей 6 и 9 лет и бабушка с дедушкой, в Анапу на 7 ночей", 4, [6, 9]),
+        ("Едем с ребёнком 5 лет, с дедушкой и бабушкой в Сочи", 3, [5]),
+        ("Мы с мужем, моими родителями и сыном 5 лет летим в Сочи", 4, [5]),
+        ("Поедем я, мама, папа и сестра с дочкой 3 года в Казань", 4, [3]),
+        ("Едем я, жена, друг и подруга в Сочи на 5 ночей", 4, None),
+        ("Едем с мужем и ребёнком 4 года в Сочи", 2, [4]),
+    ],
+)
+def test_adults_are_counted_from_family_words(text, adults, kids):
+    found, _ = extract(text)
+    assert found["adults"] == adults
+    assert found.get("children_ages") == kids
+
+
+# --- #274: colloquial names and typos in a message (TRAP-3) ---
+
+
+def test_trap_3_colloquial_origin_and_typo_destination():
+    found, _ = extract("из Ебурга в Кисловоцк на неделю в мае")
+    assert found["origin"] == "Екатеринбург"
+    assert found["destinations"] == ["Кисловодск"]
+
+
+@pytest.mark.parametrize(
+    "text", ["в Минводы в июне", "хочу в Мин Воды в июне", "в Минеральные Воды в июне",
+             "из Москвы в Минводы на неделю"],
+)  # fmt: skip
+def test_trap_3_min_vody_is_one_place(text):
+    found, _ = extract(text)
+    assert found["destinations"] == ["Минеральные Воды"]
+
+
+def test_trap_3_no_place_in_ordinary_sentences():
+    for text in ("Хорошо бы недорого, с ребенком на 5 дней", "Привет! Хотим отдохнуть в мае"):
+        found, _ = extract(text)
+        assert not found.get("destinations"), text
+
+
+@pytest.mark.parametrize("name", ["Коломбо", "Чиангмай", "Чианграй"])
+def test_trap_3_exact_catalogue_name_is_not_respelled(name):
+    found, _ = extract(f"хочу в {name} в мае")
+    assert found["destinations"] == [name]
+
+
+C15 = "Из Ебурга в Кисловоцк через Минводы, с мамой 70 лет в санаторий на 10 ночей в мае"
+
+
+def test_trap_3_transit_point_is_no_destination():
+    found, _ = extract(C15)
+    assert found["origin"] == "Екатеринбург"
+    assert found["destinations"] == ["Кисловодск"]
+    found, _ = extract("Хочу в Сочи с пересадкой в Москве на неделю")
+    assert found["destinations"] == ["Сочи"]
+
+
+def test_trap_3_c15_full_turn_has_no_missing_catalogue_reply(tmp_path):
+    r = chat(ChatRequest(session_id=None, message=C15), SessionStore(tmp_path / "s.db"))
+    assert "нет в каталоге" not in r.reply.lower(), r.reply
+
+
+@pytest.mark.parametrize(
+    ("text", "dests"),
+    [("из Москвы в Казань, потом через Нижний в Сочи", ["Казань", "Нижний Новгород", "Сочи"]),
+     ("хочу проехать через Карелию и Мурманск", ["Карелия", "Мурманск"]),
+     ("из Москвы через Казань в Екатеринбург, по 3 ночи в каждом", ["Казань", "Екатеринбург"]),
+     ("маршрут через Ярославль, Кострому и Плёс в июле", ["Ярославль"]),
+     ("из Москвы в Санкт-Петербург через Великий Новгород на 5 дней",
+      ["Санкт-Петербург", "Великий Новгород"])],
+)  # fmt: skip
+def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
+    found, _ = extract(text)
+    assert found["destinations"] == dests
 
 
 # --- #73: replanning verbs and common nouns are not a first-word city (TRAP-3) ---

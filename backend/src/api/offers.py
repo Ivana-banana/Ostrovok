@@ -1,21 +1,23 @@
 """Offer providers (T5, #9): hotels with 2-4 tariffs, transport, transfers and add-ons.
 
-- Places: places.json (centre, IANA zone, price level, distance to airport and station).
-  offers_for_place works for any coordinates (TRAP-2); TODO(#8): the geocoder resolves
-  names outside the snapshot, until then find_offers returns [] for them.
+- Places: the catalogue snapshot (api/catalog.py: centre, IANA zone, price level, distance
+  to airport and station). offers_for_place works for any coordinates (TRAP-2); a name
+  outside the snapshot goes to the online geocoder, [] when it finds nothing.
 - Hotels: osm_hotels.json (OpenStreetMap snapshot) when it has the city, else synthetic
   hotels around the centre. Every tariff (price, meal, cancellation) is synthetic.
 - Tariffs: every hotel sells 2-4 tariffs (meal RO/BB or BB/HB/AI x free cancellation or not),
   each its own HotelOffer with its own id, transfers and add-ons. They do not read
   spec.meal or spec.refundable; the optimizer picks the tariff.
-- Transport: flight, train or car from the great-circle distance, fixed local time slots.
+- Transport: flight, train or car from the great-circle distance, fixed local time slots;
+  a car drives at most MAX_DRIVE a day and stops for the night on a longer road (#276).
 - Transfers: hub -> hotel after each arrival, hotel -> hub before each return, per hotel.
 - Add-ons: early check-in, late check-out and the night before, per hotel.
 
 Deterministic: the same place, dates and guests give the same offers (sha256 seed, no
-random module). No network at runtime: both snapshots are files (TRAP-6). Every offer is
-synthetic=True (TRAP-7); prices and times come only from here (TRAP-4).
-All coefficients below are team estimates without a source.
+random module). Network only for a name outside the catalogue, with a fallback (TRAP-6).
+Every offer is synthetic=True (TRAP-7); prices and times come only from here (TRAP-4).
+All coefficients below are team estimates without a source; level and free_cancel_share of a
+place with 101hotels facts come from scripts/calibrate_prices.py (catalog.json _source, #119).
 """
 
 import hashlib
@@ -27,18 +29,22 @@ from functools import cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from api import catalog
 from api.contracts import (
     Cancellation,
     ExtraOffer,
     HotelOffer,
+    HotelProvider,
     Meal,
     Mode,
     Offer,
+    Place,
     TransferOffer,
+    TransferProvider,
     TransportOffer,
+    TransportProvider,
     TripSpec,
 )
-from api.guards import normalize_toponym
 
 HERE = Path(__file__).parent
 DEFAULT_LEVEL = 5500  # night in a 3-star room for two, roubles, when a place has no level
@@ -55,9 +61,16 @@ SEA_NAMES = ["Морской бриз", "Лазурный берег", "Ривь
 NO_DIRECT = {"Италия", "Франция", "Испания", "Чехия", "Австрия", "Венгрия", "Германия",
              "Греция", "Кипр"}  # fmt: skip
 OUT_FLIGHTS = [(time(10, 30), 1.0), (time(17, 40), 0.9)]  # arrival, local to the place
+# A car (#276, #321): at most MAX_DRIVE at the wheel a day, then a night on the road. Every
+# driving day starts at the same clock time: there at CAR_OUT, so that the car comes on the
+# check-in day; back at CAR_BACK, the hotel check-out (HotelOffer.check_out). MAX_DRIVE and
+# ROAD_NIGHT_RUB (a room, one room per car) are team estimates without a source (D-026). For
+# reference: Regulation (EC) 561/2006 lets a professional driver drive 9-10 h a day; a private
+# driver has no limit (research/domain.md).
+MAX_DRIVE = timedelta(hours=12)
+CAR_OUT, CAR_BACK = time(8, 0), time(12, 0)
+ROAD_NIGHT_RUB = 3500
 BACK_FLIGHTS = [(time(15, 20), 1.0), (time(21, 5), 0.9)]  # departure, local to the place
-ENDINGS = ("ий", "ый", "ой", "ая", "ое", "ие", "ые", "ь", "й", "а", "я", "о", "е", "и", "у",
-           "ю", "ы")  # fmt: skip
 SYNTH_NOTE = (
     "Синтетический отель для демо: такого объекта может не быть. "
     "Цена, питание, отмена, рейтинг и удобства — синтетика."
@@ -92,45 +105,18 @@ def _shift(at: datetime, delta: timedelta) -> datetime:
 
 
 @cache
-def places() -> list[dict]:
-    return json.loads((HERE / "places.json").read_text(encoding="utf-8"))["places"]
-
-
-@cache
 def osm_hotels() -> dict[str, list[dict]]:
     """Overpass elements (tourism=hotel) by place name."""
     return json.loads((HERE / "osm_hotels.json").read_text(encoding="utf-8"))["places"]
 
 
-def _norm(name: str) -> str:
-    return re.sub(r"[\s\-]+", " ", name.strip().lower().replace("ё", "е"))
-
-
-def _stem(word: str) -> str:
-    end = next((e for e in ENDINGS if word.endswith(e) and len(word) - len(e) >= 2), "")
-    return word[: len(word) - len(end)]
-
-
-def _same_words(query: list[str], key: list[str]) -> bool:
-    """Same words up to a Russian case ending: «нижнем новгороде» = «нижний новгород»."""
-    return len(query) == len(key) and all(
-        q.startswith(_stem(k)) and len(q) - len(_stem(k)) <= 2
-        for q, k in zip(query, key, strict=True)
-    )
+places = catalog.places  # extract.py reads the city names from here
+_norm = catalog.norm  # checks.py compares city names with it
 
 
 def resolve_place(name: str) -> dict | None:
-    """Snapshot place for a name as the user wrote it (TRAP-3), or None.
-
-    TODO(#8): names outside the snapshot go to the geocoder.
-    """
-    q = _norm(normalize_toponym(name))
-    keys = [(p, _norm(k)) for p in places() for k in (p["name"], *p["aliases"])]
-    exact = [p for p, k in keys if k == q]
-    if exact:
-        return exact[0]
-    near = sorted(((len(k), p["name"], p) for p, k in keys if _same_words(q.split(), k.split())))
-    return near[-1][2] if near else None
+    """Catalogue place for a name as the user wrote it (TRAP-3), else the online geocoder, or None."""
+    return catalog.resolve(name) or catalog.lookup_online(name)
 
 
 def _complete(p: dict) -> dict:
@@ -162,13 +148,56 @@ def _room_factor(spec: TripSpec) -> float:
     return adults + sum(0 if a < 2 else 0.25 if a < 12 else 0.45 for a in spec.children_ages)
 
 
+# Child fares by mode: (age below, share of a full fare, takes a seat). An age from the last
+# bound up pays the full fare. A car is paid per car elsewhere.
+CHILD_FARES: dict[Mode, list[tuple[int, float, bool]]] = {
+    "train": [(5, 0.0, False), (10, 0.5, True)],
+    "flight": [(2, 0.1, False), (12, 0.75, True)],
+}
+
+
+def _child_fare(mode: Mode, age: int) -> tuple[float, bool, bool]:
+    """Share of a full fare, a seat, a child fare (#323): one rule for the price and the label."""
+    for below, share, seat in CHILD_FARES.get(mode, []):
+        if age < below:
+            return share, seat, seat
+    return 1.0, True, False
+
+
 def _fares(spec: TripSpec, mode: Mode) -> float:
-    """Full fares for these guests: children pay less, a car is paid per car elsewhere."""
-    if mode == "train":
-        kids = sum(0 if a < 5 else 0.5 if a < 10 else 1 for a in spec.children_ages)
-    else:
-        kids = sum(0.1 if a < 2 else 0.75 if a < 12 else 1 for a in spec.children_ages)
-    return spec.adults + kids
+    """Full fares for these guests: children pay less (CHILD_FARES)."""
+    return spec.adults + sum(_child_fare(mode, a)[0] for a in spec.children_ages)
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} {one}"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} {few}"
+    return f"{n} {many}"
+
+
+def _seats_label(spec: TripSpec, mode: Mode) -> str:
+    """«6 мест (2 детских тарифа)» for a train or a plane: the seats and the child fares the
+    price counts (_fares, TRAP-4). Empty for a car: it is paid per car."""
+    if mode not in CHILD_FARES:
+        return ""
+    rules = [_child_fare(mode, a) for a in spec.children_ages]
+    seats = spec.adults + sum(seat for _, seat, _ in rules)
+    child = sum(kid for _, _, kid in rules)
+    free = sum(not seat for _, seat, _ in rules)
+    notes = []
+    if child:
+        notes.append(_plural(child, "детский тариф", "детских тарифа", "детских тарифов"))
+    below, share, _ = CHILD_FARES[mode][0]  # the youngest go without a seat
+    if free and mode == "train":
+        notes.append(_plural(free, "ребёнок", "ребёнка", "детей") + f" до {below} лет без места")
+    elif free:
+        notes.append(_plural(free, "младенец", "младенца", "младенцев") + " без места")
+    if free and share:  # #334: not free, the label names the share of the price
+        notes[-1] += f", {round(share * 100, 1):g} % тарифа"
+    label = _plural(seats, "место", "места", "мест")
+    return f"{label} ({', '.join(notes)})" if notes else label
 
 
 def _dates(spec: TripSpec) -> tuple[date, date]:
@@ -291,7 +320,10 @@ def _hotel(
     # A tariff (price and offer_id) does not depend on the clock. The free-cancellation rate
     # exists only until its deadline: after it the hotel sells the non-refundable rate alone,
     # so no two tariffs of a hotel share (meal, refundable).
-    refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 0.2
+    # Free cancellation only from 3 stars (team estimate), in the share of 3+ star hotels with it
+    # on the 101hotels city page (#119), else in 80% (team estimate).
+    share = place.get("free_cancel_share", 0.8)
+    refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 1 - share
     free_until = None
     if refundable_rate:
         days = (7, 3, 1)[int(_rand(place["name"], key, "deadline") * 3)]
@@ -361,6 +393,21 @@ def _flight_hours(km: float) -> float:
     return 0.6 + min(km, 3000) / 720 + max(km - 3000, 0) / 870
 
 
+FAR_AIRPORT_KM = 60  # a place farther from its airport has none of its own (#123)
+
+
+def _via_airport(mode: Mode, a: dict, b: dict) -> str:
+    """The IATA code of the airport a flight to or from a place without an airport of its own
+    goes through: the nearest one of the data. Empty when the data has no airport for the place."""
+    if mode != "flight":
+        return ""
+    for p in (b, a):
+        port = p.get("airport")
+        if port and port["km"] > FAR_AIRPORT_KM:
+            return port["iata"]
+    return ""
+
+
 def _leg(
     spec: TripSpec,
     mode: Mode,
@@ -375,9 +422,18 @@ def _leg(
     depart = depart.astimezone(ZoneInfo(a["tz"]))
     arrive = _shift(depart, _minutes(hours)).astimezone(ZoneInfo(b["tz"]))
     what = {"flight": "Перелёт", "train": "Поезд", "car": "На своей машине"}[mode]
-    title = f"{what} {a['name']} → {b['name']}, {depart:%d.%m %H:%M}"
+    port = b["airport"]["iata"] if mode == "flight" and b.get("airport") else ""
+    via = _via_airport(mode, a, b)  # a flight only: a train or a car has no airport
+    # The airport of arrival (#247); a place far from its airport is reached through it (#123).
+    if via and via == port:
+        tail = f" через {via}"
+    else:
+        tail = (f" ({port})" if port else "") + (f" через {via}" if via else "")
+    title = f"{what} {a['name']} → {b['name']}{tail}, {depart:%d.%m %H:%M}"
     if changes:
         title += f", пересадок: {changes}"
+    if seats := _seats_label(spec, mode):
+        title += f", {seats}"
     if mode == "car":
         title += " (бензин и платные дороги, оценка)"
     return TransportOffer(
@@ -392,6 +448,49 @@ def _leg(
         price_rub=_rub(price),
         pets_allowed=mode != "flight",
     )
+
+
+def _car(
+    spec: TripSpec, a: dict, b: dict, depart: datetime, hours: float, stops: int, price: float
+) -> TransportOffer:
+    """A car a -> b in 1 + stops driving days of equal length, each one from the clock time
+    of `depart`, with a night on the road between them (#276, TRAP-5)."""
+    drive = _minutes(hours)
+    if not stops:
+        return _leg(spec, "car", a, b, depart, hours, price)
+    day = drive / (stops + 1)
+    leg = _leg(spec, "car", a, b, depart, hours, price)
+    arrive = _shift(depart, timedelta(days=stops) + day).astimezone(ZoneInfo(b["tz"]))
+    title = leg.title.replace(
+        " (бензин и платные дороги, оценка)",
+        f", ночёвок в пути: {stops}, за рулём ≈{_span_h(day)} в день "
+        "(бензин, платные дороги и ночёвки в пути, оценка)",
+    )
+    return leg.model_copy(update={"arrive_at": arrive, "title": title})
+
+
+ROAD_NIGHTS_RE = re.compile(r"ночёвок в пути: (\d+)")  # written by _car into the title
+
+
+def road_nights(leg: TransportOffer) -> int:
+    """Nights on the road of a car leg, from its title (_car); 0 for any other leg."""
+    m = ROAD_NIGHTS_RE.search(leg.title) if leg.mode == "car" else None
+    return int(m.group(1)) if m else 0
+
+
+def drive_time(leg: TransportOffer) -> timedelta:
+    """Time at the wheel of a car leg without its nights on the road; elapsed time otherwise.
+
+    _car drives 1 + nights equal days, each from the clock time of the start, so the last day
+    is the elapsed time without the full days."""
+    elapsed = leg.arrive_at.astimezone(UTC) - leg.depart_at.astimezone(UTC)
+    nights = road_nights(leg)
+    return (elapsed - timedelta(days=nights)) * (nights + 1)
+
+
+def _span_h(delta: timedelta) -> str:
+    hours, minutes = divmod(int(delta.total_seconds() // 60), 60)
+    return f"{hours} ч {minutes:02d} мин" if minutes else f"{hours} ч"
 
 
 def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[TransportOffer]:
@@ -441,9 +540,14 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
     if road <= 2500 and ("car" in spec.modes or not legs):
         hours = road / 80 * 1.1
         cars = math.ceil((spec.adults + len(spec.children_ages)) / 5)
+        stops = math.ceil(_minutes(hours) / MAX_DRIVE) - 1  # nights on the road
         price = road * (8 / 100 * 62 + 1.0) * cars  # 8 l/100 km at 62 ₽ + tolls
-        legs.append(_leg(spec, "car", a, b, datetime.combine(there, time(8, 0), ta), hours, price))
-        legs.append(_leg(spec, "car", b, a, datetime.combine(back, time(10, 0), tb), hours, price))
+        price += stops * ROAD_NIGHT_RUB * cars
+        # The car leaves `stops` days before the check-in and comes on the check-in day.
+        out = datetime.combine(there - timedelta(days=stops), CAR_OUT, ta)
+        ret = datetime.combine(back, CAR_BACK, tb)
+        legs.append(_car(spec, a, b, out, hours, stops, price))
+        legs.append(_car(spec, b, a, ret, hours, stops, price))
     wanted = [leg for leg in legs if leg.mode in spec.modes] or legs
     # There first, then back: the cart lists items in the order of the offers.
     return sorted(wanted, key=lambda leg: leg.origin != a["name"])
@@ -467,6 +571,8 @@ def transfer_offers(
         flight = leg.mode == "flight"
         hub_km = place["airport_km"] if flight else place["station_km"]
         hub = "аэропорт" if flight else "вокзал"
+        if flight and place.get("airport"):
+            hub += " " + place["airport"]["iata"]
         for h in hotels:
             road = round(hub_km + 0.6 * (h.distance_center_km or 0), 1)
             ride = _minutes((10 + road / 35 * 60) / 60)
@@ -493,6 +599,46 @@ def transfer_offers(
     return out
 
 
+# Adapters behind the ports (api/contracts.py, «Порты»; ADR-0002). Each search reads the
+# module variables below; a business swaps a source with one assignment (README).
+
+
+class OsmOrSynthetic:
+    """Hotels from the OSM snapshot when it has at least 3 for the place, else synthetic."""
+
+    def hotels(
+        self, spec: TripSpec, place: Place, now: datetime
+    ) -> list[tuple[HotelOffer, list[ExtraOffer]]]:
+        osm = _osm_bases(place)
+        bases = osm if len(osm) >= 3 else _synthetic_bases(place)
+        return [pair for b in bases for pair in _hotel(spec, place, b, now)]
+
+
+class SyntheticTransport:
+    """Flight, train or car from the great-circle distance (transport_offers)."""
+
+    def legs(self, spec: TripSpec, origin: Place, place: Place) -> list[TransportOffer]:
+        return transport_offers(spec, origin, place)
+
+
+class SyntheticTransfers:
+    """Hub <-> hotel rides after each arrival and before each return (transfer_offers)."""
+
+    def transfers(
+        self,
+        spec: TripSpec,
+        place: Place,
+        hotels: list[HotelOffer],
+        legs: list[TransportOffer],
+    ) -> list[TransferOffer]:
+        return transfer_offers(spec, place, hotels, legs)
+
+
+HOTELS: HotelProvider = OsmOrSynthetic()
+TRANSPORT: TransportProvider = SyntheticTransport()
+TRANSFERS: TransferProvider = SyntheticTransfers()
+
+
 def offers_for_place(
     spec: TripSpec, place: dict, origin: dict | None = None, now: datetime | None = None
 ) -> list[Offer]:
@@ -504,12 +650,10 @@ def offers_for_place(
         return []
     place = _complete(place)
     now = now or datetime.now(UTC)  # only the cancellation state depends on it
-    osm = _osm_bases(place)
-    bases = osm if len(osm) >= 3 else _synthetic_bases(place)
-    pairs = [pair for b in bases for pair in _hotel(spec, place, b, now)]
+    pairs = HOTELS.hotels(spec, place, now)
     hotels = [h for h, _ in pairs]
-    legs = transport_offers(spec, _complete(origin), place) if origin else []
-    transfers = transfer_offers(spec, place, hotels, legs)
+    legs = TRANSPORT.legs(spec, _complete(origin), place) if origin else []
+    transfers = TRANSFERS.transfers(spec, place, hotels, legs)
     return [*hotels, *legs, *transfers, *(x for _, extras in pairs for x in extras)]
 
 
