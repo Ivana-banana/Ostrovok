@@ -10,6 +10,7 @@ metric(split) -> {"name", "system", "baseline", "details"} или None.
 """
 
 import functools
+import itertools
 import json
 import math
 import os
@@ -42,8 +43,8 @@ from api.contracts import (
 from api.fixtures import WARM_WATER_C
 from api.main import app, get_store
 from api.model import NOT_IN_CATALOG
-from api.offers import _norm, osm_hotels, resolve_place, transfer_id
-from api.optimizer import optimize
+from api.offers import _norm, find_offers, osm_hotels, resolve_place, transfer_id
+from api.optimizer import enumerate_trips, optimize, pets_ok
 from api.store import SessionStore
 from api.timeline import build_timeline
 
@@ -288,7 +289,7 @@ def _s1_items(r: ChatReply, asked: int, messages: int) -> dict[str, bool]:
 
 @rules_mode
 def check_S1(case: dict) -> tuple[bool, str]:
-    """All 4 pass items; climate is an estimate until T12 (#20), the check sees fields only."""
+    """All 4 pass items, checked on plan fields; the climate is per month from catalog.json."""
     with _api() as (client, _):
         run = _walk(
             client,
@@ -307,11 +308,7 @@ def check_S1(case: dict) -> tuple[bool, str]:
     note = (
         f"вопросов {run.asked}, допущений {len(r.plan.spec.assumptions)}, "
         f"направлений {len(r.plan.destinations)}; "
-        + (
-            f"не выполнены п.{', '.join(failed)}"
-            if failed
-            else "п.1–4 выполнены (климат — оценка до T12)"
-        )
+        + (f"не выполнены п.{', '.join(failed)}" if failed else "п.1–4 выполнены")
     )
     return not failed, note
 
@@ -917,7 +914,11 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
         else:
             out.append(("тёплое море", UNKNOWN, "море есть, температуры в этом месяце нет"))
     if expect.get("ski"):
-        out.append(("лыжи", UNKNOWN, "проверка лыж по catalog.json не сделана (#111)"))
+        place = resolve_place(first.city)
+        if place is None:
+            out.append(("лыжи", UNKNOWN, "города нет в catalog.json и у геокодера"))
+        else:
+            put("лыжи", "ski" in place["tags"], f"{first.city}: теги {', '.join(place['tags'])}")
     if expect.get("cheap_without_sum"):
         out.append(("«недорого»", UNKNOWN, "сумма не названа, порога нет"))
     return out
@@ -1454,3 +1455,71 @@ def check_S9(case: dict) -> tuple[bool, str]:
     return _result(
         f"первый вариант: {hotel.title if hotel else '—'}, разница с дешёвым {_rub(gap)}", items
     )
+
+
+# ---------------------------------------------------------------- S10
+
+# The two requests of the case: the catalog.json tag each one asks for and whether the dog goes.
+# An oracle that does not read the wishes or the pets the product extracted.
+S10_REF = (("mountains", True), ("ski", False))  # (tag, with a dog), per request of the case
+
+
+def _tags(name: str) -> list[str]:
+    place = resolve_place(name)
+    return place["tags"] if place else []
+
+
+def _s10_items(r: ChatReply, tag: str, dog: bool) -> dict[str, str | None]:
+    """Pass items of one S10 request, on the inspiration cards of the reply."""
+    dests = r.plan.destinations
+    top = list(itertools.takewhile(lambda d: not d.violates, dests))
+    first_break = next((i for i, d in enumerate(dests) if d.violates), len(dests))
+    below = [d.name for d in dests[first_break:] if not d.violates]
+    off_theme = [d.name for d in dests if tag not in _tags(d.name) and not d.violates]
+    spec = r.plan.spec.model_copy(update={"pets": True})
+
+    def dog_goes(name: str) -> bool:  # strict: no trips is no place for the dog
+        return any(pets_ok(t) for t in enumerate_trips(find_offers(spec, name)))
+
+    no_pets = [d.name for d in top if dog and not dog_goes(d.name)]
+    return {
+        "1": _need(
+            r.stage == "inspire" and 2 <= len(dests) <= 4,
+            f"стадия {r.stage}, карточек {len(dests)}",
+        ),
+        "2": _need(
+            len(top) >= 2 and all(tag in _tags(d.name) for d in top),
+            f"сверху без нарушений {[d.name for d in top]}, тег {tag} есть не у "
+            f"{[d.name for d in top if tag not in _tags(d.name)]}",
+        ),
+        "3": _need(
+            not below and not off_theme,
+            f"ниже карточки с нарушением стоят подходящие: {below}; "
+            f"карточки без темы и без пометки: {off_theme}",
+        ),
+        "4": _need(not no_pets, f"наверху места, куда с питомцем не собрать: {no_pets}"),
+    }
+
+
+@rules_mode
+def check_S10(case: dict) -> tuple[bool, str]:
+    """Inspiration for «в горы» and «горнолыжка»: 2–4 cards, the theme of the request on top."""
+    queries = _quotes(case)
+    items: dict[str, str | None] = {}
+    facts = []
+    with _api() as (client, _):
+        for text, (tag, dog) in zip(queries, S10_REF, strict=True):
+            run = _walk(
+                client, "S10", text[:24], text, stop=("inspire", "compare", "select", "booked"),
+                attempt=False,
+            )  # fmt: skip
+            if not run.replies or run.codes[-1] != 200:
+                return False, f"«{text}»: ответ {run.codes[-1] if run.codes else 'нет'}"
+            got = _s10_items(run.last, tag, dog)
+            facts.append(f"«{text}»: {', '.join(d.name for d in run.last.plan.destinations)}")
+            for k, why in got.items():
+                if why and not items.get(k):
+                    items[k] = f"«{text}»: {why}"
+                else:
+                    items.setdefault(k, None)
+    return _result("; ".join(facts), items)
