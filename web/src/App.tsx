@@ -1,10 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getSession } from "./api";
-import { Board } from "./Board";
+import { Board, Destinations, destinationsInChat } from "./Board";
+import { PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
+import { AgentText, StagePills, Thinking } from "./Chat";
 import type { ChatReply, Offer } from "./contracts";
 import { SOURCES, cartLine, describe } from "./format";
-import { THEMES, type Theme, applyTheme, initialTheme, saveTheme } from "./theme";
-import { type ChatEntry, loadChats, removeChat, renameChat, saveChats, touchChat } from "./history";
+import {
+  type ChatEntry,
+  filterChats,
+  groupChats,
+  loadChats,
+  removeChat,
+  renameChat,
+  saveChats,
+  touchChat,
+} from "./history";
+import { Mascot } from "./Mascot";
 
 type Msg = { role: "user" | "agent"; text: string };
 type Ui = { messages: Msg[]; removed: Offer[] };
@@ -115,7 +126,11 @@ export function App() {
   const [drawer, setDrawer] = useState(false);
   const [planOpen, setPlanOpen] = useState(wideScreen);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
-  const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [query, setQuery] = useState("");
+  const [thinking, setThinking] = useState(false);
+  const [typing, setTyping] = useState<number | null>(null); // index of the message being typed
+  const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
+  const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   // Every chat load gets a number: an answer of an older load is dropped.
   const loadNo = useRef(0);
@@ -161,6 +176,8 @@ export function App() {
         : [{ role: "agent" as const, text: describe(r) }];
       writeSid(id);
       setReply(r);
+      setNoAi(!r.llm);
+      setTyping(null);
       setUi({ ...saved, messages });
       const first = saved.messages.find((m) => m.role === "user")?.text ?? "";
       editChats((list) => (list.some((c) => c.session_id === id) ? list : touchChat(list, id, first)));
@@ -180,7 +197,13 @@ export function App() {
     };
   }, []);
 
-  useEffect(() => applyTheme(theme), [theme]);
+  // The input grows with the text up to 160 px; an example or a sent message resizes it too.
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [text]);
 
   useEffect(() => {
     end.current?.scrollIntoView?.({ block: "end" });
@@ -194,10 +217,13 @@ export function App() {
     setNote(null);
     const withUser = { ...ui, messages: [...ui.messages, { role: "user" as const, text: m }] };
     setUi(withUser);
+    setThinking(true);
     try {
       const r = await chat({ session_id: sid, message: m });
       writeSid(r.session_id);
       setReply(r);
+      setNoAi(!r.llm);
+      if (motionOk()) setTyping(withUser.messages.length);
       update(
         { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r) }] },
         r.session_id,
@@ -208,6 +234,7 @@ export function App() {
     } catch (e) {
       setError(userError(e));
     } finally {
+      setThinking(false);
       setBusy(false);
     }
   }
@@ -287,7 +314,9 @@ export function App() {
     setNote(null);
     setText("");
     setRestoring(false);
+    setTyping(null);
     setDrawer(false);
+    box.current?.focus();
   }
 
   function openChat(id: string) {
@@ -315,120 +344,132 @@ export function App() {
 
   const lastAgent = ui.messages.map((m) => m.role).lastIndexOf("agent");
   const cls = ["app", planOpen && "plan-open", drawer && "drawer-open"].filter(Boolean).join(" ");
+  const synthetic = !reply || !reply.plan.offers.length || reply.plan.offers.some((o) => o.synthetic);
+  const groups = groupChats(filterChats(chats, query));
+  const scroll = () => end.current?.scrollIntoView?.({ block: "end" });
 
   return (
     <div
       className={cls}
       onKeyDown={(e) => {
-        if (e.key === "Escape" && drawer) setDrawer(false);
+        if (e.key !== "Escape") return;
+        if (drawer) setDrawer(false);
+        else if (planOpen && !wideScreen()) setPlanOpen(false);
       }}
     >
-      <aside id="chats" className="sidebar" aria-label="Чаты">
-        <div className="sidebar-head">
-          <span className="brand">О!дин запрос</span>
+      <aside id="chats" className="side" aria-label="Чаты">
+        <div className="brand">
+          <Mascot size={38} />
+          <div>
+            <b>{PRODUCT_NAME}</b>
+            <small>{PRODUCT_LINE}</small>
+          </div>
           <button
             type="button"
             className="icon drawer-close"
             aria-label="Закрыть список чатов"
             onClick={() => setDrawer(false)}
           >
-            ×
+            ✕
           </button>
         </div>
-        <button type="button" className="new-chat" onClick={newChat} disabled={busy}>
-          + Новый чат
+        <button type="button" className="newchat" onClick={newChat} disabled={busy}>
+          ＋ Новый чат
         </button>
-        <nav aria-label="Прошлые чаты">
-          {chats.length ? (
-            <ul className="chat-list">
-              {chats.map((c) => {
-                const on = c.session_id === sid;
-                return (
-                  <li key={c.session_id} className={on ? "active" : undefined}>
-                    {renaming?.id === c.session_id ? (
-                      <form
-                        className="rename"
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          finishRename(true);
-                        }}
-                      >
-                        <input
-                          aria-label="Название чата"
-                          autoFocus
-                          value={renaming.title}
-                          onChange={(e) => setRenaming({ id: c.session_id, title: e.target.value })}
-                          onBlur={() => finishRename(true)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Escape") {
-                              e.stopPropagation();
-                              finishRename(false);
-                            }
+        {chats.length > 0 && (
+          <input
+            type="search"
+            className="search"
+            aria-label="Поиск по чатам"
+            placeholder="Поиск по чатам"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        )}
+        <nav className="grow" aria-label="Прошлые чаты">
+          {groups.map((g) => (
+            <div key={g.label}>
+              <div className="group">{g.label}</div>
+              <ul className="chat-list">
+                {g.items.map((c) => {
+                  const on = c.session_id === sid;
+                  return (
+                    <li key={c.session_id} className={on ? "on" : undefined}>
+                      {renaming?.id === c.session_id ? (
+                        <form
+                          className="rename"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            finishRename(true);
                           }}
-                        />
-                      </form>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="chat-open"
-                          title={c.title}
-                          aria-current={on ? "page" : undefined}
-                          disabled={busy && !on}
-                          onClick={() => openChat(c.session_id)}
                         >
-                          {c.title}
-                        </button>
-                        <button
-                          type="button"
-                          className="icon"
-                          aria-label={`Переименовать чат «${c.title}»`}
-                          onClick={() => setRenaming({ id: c.session_id, title: c.title })}
-                        >
-                          ✎
-                        </button>
-                        <button
-                          type="button"
-                          className="icon"
-                          aria-label={`Удалить чат «${c.title}»`}
-                          disabled={busy && on}
-                          onClick={() => deleteChat(c.session_id)}
-                        >
-                          ×
-                        </button>
-                      </>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="muted sidebar-empty">Здесь появятся ваши поездки.</p>
-          )}
+                          <input
+                            aria-label="Название чата"
+                            autoFocus
+                            value={renaming.title}
+                            onChange={(e) => setRenaming({ id: c.session_id, title: e.target.value })}
+                            onBlur={() => finishRename(true)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Escape") {
+                                e.stopPropagation();
+                                finishRename(false);
+                              }
+                            }}
+                          />
+                        </form>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="chat-open"
+                            title={c.title}
+                            aria-current={on ? "page" : undefined}
+                            disabled={busy && !on}
+                            onClick={() => openChat(c.session_id)}
+                          >
+                            {c.title}
+                          </button>
+                          <button
+                            type="button"
+                            className="icon"
+                            aria-label={`Переименовать чат «${c.title}»`}
+                            onClick={() => setRenaming({ id: c.session_id, title: c.title })}
+                          >
+                            ✎
+                          </button>
+                          <button
+                            type="button"
+                            className="icon"
+                            aria-label={`Удалить чат «${c.title}»`}
+                            disabled={busy && on}
+                            onClick={() => deleteChat(c.session_id)}
+                          >
+                            ✕
+                          </button>
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+          {!chats.length && <p className="side-empty">Здесь появятся ваши поездки.</p>}
+          {chats.length > 0 && !groups.length && <p className="side-empty">Не нашёл чатов по запросу.</p>}
         </nav>
-        <div className="sidebar-foot">
-          <fieldset className="theme-switch">
-            <legend>Тема</legend>
-            {(Object.keys(THEMES) as Theme[]).map((t) => (
-              <button
-                key={t}
-                type="button"
-                aria-pressed={theme === t}
-                onClick={() => {
-                  setTheme(t);
-                  saveTheme(t);
-                }}
-              >
-                {THEMES[t]}
-              </button>
-            ))}
-          </fieldset>
-          <p className="muted">Список чатов хранится только в этом браузере.</p>
+        <div className="foot">
+          {noAi && (
+            <span className="badge-noai">
+              <i />
+              Без ИИ — упрощённый режим
+            </span>
+          )}
+          <span>Список чатов хранится только в этом браузере.</span>
         </div>
       </aside>
       {drawer && <div className="backdrop" aria-hidden="true" onClick={() => setDrawer(false)} />}
-      <section className="chat" aria-label="Чат">
-        <header className="chat-head">
+      <section className="main" aria-label="Чат">
+        <header className="top">
           <button
             type="button"
             className="icon burger"
@@ -439,18 +480,19 @@ export function App() {
           >
             ☰
           </button>
-          <h1 title={current?.title}>{current?.title ?? "О!дин запрос"}</h1>
+          <h1 title={current?.title}>{current?.title ?? "Новая поездка"}</h1>
+          <StagePills stage={reply?.stage ?? null} />
           <button
             type="button"
-            className="plan-toggle"
+            className="iconbtn plan-toggle"
             aria-controls="plan"
             aria-expanded={planOpen}
             onClick={() => setPlanOpen(!planOpen)}
           >
-            {planOpen ? "Скрыть план" : "План поездки"}
+            ◧ План
           </button>
         </header>
-        <div className="messages" role="log" aria-live="polite">
+        <div className="feed" role="log" aria-live="polite">
           <div className="thread">
             {note && (
               <p className="notice" role="note">
@@ -458,11 +500,21 @@ export function App() {
               </p>
             )}
             {!ui.messages.length && !restoring && (
-              <div className="hint">
-                <p>Опишите поездку одним сообщением. Агент подберёт варианты и соберёт корзину.</p>
-                <div className="suggestions">
+              <div className="hello">
+                <Mascot size={56} />
+                <h2>Куда поедем?</h2>
+                <p>Опишите поездку одним сообщением. Я подберу варианты, проверю стыковки и соберу корзину.</p>
+                <div className="chips">
                   {EXAMPLES.map((ex) => (
-                    <button key={ex} type="button" className="example" onClick={() => setText(ex)}>
+                    <button
+                      key={ex}
+                      type="button"
+                      className="chip example"
+                      onClick={() => {
+                        setText(ex);
+                        box.current?.focus();
+                      }}
+                    >
                       {ex}
                     </button>
                   ))}
@@ -470,31 +522,50 @@ export function App() {
               </div>
             )}
             {restoring && <p className="muted">Восстанавливаю поездку…</p>}
-            {ui.messages.map((m, i) => (
-              <div
-                key={i}
-                className={`msg ${m.role}`}
-                role={i === lastAgent ? "status" : undefined}
-              >
-                {m.text}
-              </div>
-            ))}
-            {reply && reply.questions.length > 0 && (
-              <div className="questions">
-                {reply.questions.map((q) => (
-                  <div key={q.text}>
-                    <p>{q.text}</p>
-                    <div className="suggestions">
-                      {q.options.map((o) => (
-                        <button key={o} type="button" disabled={busy} onClick={() => send(o)}>
-                          {o}
-                        </button>
-                      ))}
-                    </div>
+            {ui.messages.map((m, i) =>
+              m.role === "user" ? (
+                <div key={i} className="msg user">
+                  <div className="b">{m.text}</div>
+                </div>
+              ) : (
+                <div key={i} className="msg agent" role={i === lastAgent ? "status" : undefined}>
+                  <Mascot size={30} />
+                  <div className="b">
+                    <AgentText
+                      text={m.text}
+                      synthetic={synthetic}
+                      typing={typing === i}
+                      onTick={scroll}
+                      onDone={() => setTyping(null)}
+                    />
                   </div>
-                ))}
+                </div>
+              ),
+            )}
+            {reply && typing === null && !thinking && (
+              <div className="attach">
+                {destinationsInChat(reply.stage) && reply.plan.destinations.length > 0 && (
+                  <Destinations plan={reply.plan} stage={reply.stage} busy={busy} onSend={send} />
+                )}
+                {reply.questions.length > 0 && (
+                  <div className="questions">
+                    {reply.questions.map((q) => (
+                      <div key={q.text}>
+                        <p>{q.text}</p>
+                        <div className="chips">
+                          {q.options.map((o) => (
+                            <button key={o} type="button" className="chip" disabled={busy} onClick={() => send(o)}>
+                              {o}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
+            {thinking && <Thinking />}
             {error && (
               <p className="error" role="alert">
                 {error}
@@ -503,6 +574,11 @@ export function App() {
             <div ref={end} />
           </div>
         </div>
+        {reply && !planOpen && (
+          <button type="button" className="plan-sheet-open" aria-controls="plan" onClick={() => setPlanOpen(true)}>
+            План поездки
+          </button>
+        )}
         <form
           className="composer"
           onSubmit={(e) => {
@@ -510,30 +586,42 @@ export function App() {
             void send(text);
           }}
         >
-          <input
-            aria-label="Запрос"
-            placeholder="Например: море в ноябре, двое взрослых, до 100 тысяч"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          />
-          <button type="submit" disabled={busy || restoring || !text.trim()}>
-            {busy ? "Думаю…" : "Отправить"}
-          </button>
+          <div className="box">
+            <textarea
+              ref={box}
+              rows={1}
+              aria-label="Запрос"
+              placeholder="Опишите поездку одним сообщением…"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void send(text);
+                }
+              }}
+            />
+            <button
+              type="submit"
+              className="send"
+              aria-label="Отправить"
+              title="Отправить"
+              disabled={busy || restoring || !text.trim()}
+            >
+              ↑
+            </button>
+          </div>
+          <p className="composer-hint">Цены и рейсы — синтетика. Оплата имитирована.</p>
         </form>
       </section>
-      <aside id="plan" className="trip" aria-label="Доска поездки">
-        <header className="trip-head">
-          <h2>План поездки</h2>
-          <button
-            type="button"
-            className="icon"
-            aria-label="Свернуть план"
-            onClick={() => setPlanOpen(false)}
-          >
-            ×
+      <aside id="plan" className="plan" aria-label="Доска поездки">
+        <header className="hd">
+          <b>План поездки</b>
+          <button type="button" className="iconbtn" aria-label="Свернуть план" onClick={() => setPlanOpen(false)}>
+            ✕
           </button>
         </header>
-        <div className="trip-body">
+        <div className="bd">
           {reply ? (
             <Board
               reply={reply}

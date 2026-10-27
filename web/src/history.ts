@@ -59,3 +59,24 @@ export function renameChat(list: ChatEntry[], id: string, title: string): ChatEn
 export function removeChat(list: ChatEntry[], id: string): ChatEntry[] {
   return list.filter((e) => e.session_id !== id);
 }
+
+// Search over the titles; empty query keeps the whole list.
+export function filterChats(list: ChatEntry[], query: string): ChatEntry[] {
+  const q = query.trim().toLocaleLowerCase("ru");
+  return q ? list.filter((e) => e.title.toLocaleLowerCase("ru").includes(q)) : list;
+}
+
+// Sidebar groups by the local calendar day of updated_at; empty groups are dropped.
+export function groupChats(list: ChatEntry[], now = Date.now()): { label: string; items: ChatEntry[] }[] {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const start = today.getTime();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const groups = [
+    { label: "Сегодня", items: list.filter((e) => e.updated_at >= start) },
+    { label: "Вчера", items: list.filter((e) => e.updated_at < start && e.updated_at >= yesterday.getTime()) },
+    { label: "Ранее", items: list.filter((e) => e.updated_at < yesterday.getTime()) },
+  ];
+  return groups.filter((g) => g.items.length);
+}

@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe as suite, expect, it, vi } from "vitest";
-import { HISTORY_KEY, chatTitle, loadChats, removeChat, renameChat, saveChats, touchChat } from "./history";
-import { THEME_KEY, initialTheme } from "./theme";
+import {
+  HISTORY_KEY,
+  chatTitle,
+  filterChats,
+  groupChats,
+  loadChats,
+  removeChat,
+  renameChat,
+  saveChats,
+  touchChat,
+} from "./history";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
@@ -48,21 +57,28 @@ suite("список чатов", () => {
     expect(loadChats()).toEqual([]);
     expect(() => saveChats(touchChat([], "a", "A"))).not.toThrow();
   });
-});
 
-suite("тема", () => {
-  it("по умолчанию «banana»; ?theme=lime выбирает и запоминает лайм", () => {
-    expect(initialTheme("")).toBe("banana");
-    expect(initialTheme("?theme=lime")).toBe("lime");
-    expect(localStorage.getItem(THEME_KEY)).toBe("lime");
-    expect(initialTheme("")).toBe("lime");
-    expect(initialTheme("?theme=pink")).toBe("lime");
+  it("поиск по названию без учёта регистра; пустой запрос — весь список", () => {
+    const list = [touchChat([], "a", "Казань на выходные", 1)[0], touchChat([], "b", "Сочи с детьми", 2)[0]];
+    expect(filterChats(list, "  казань ").map((c) => c.session_id)).toEqual(["a"]);
+    expect(filterChats(list, "")).toEqual(list);
+    expect(filterChats(list, "Байкал")).toEqual([]);
   });
 
-  it("хранилище бросает ошибку — тема из адреса или по умолчанию", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(boom);
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(boom);
-    expect(initialTheme("?theme=lime")).toBe("lime");
-    expect(initialTheme("")).toBe("banana");
+  it("группы «Сегодня», «Вчера», «Ранее» по дню updated_at; пустые группы не показаны", () => {
+    const now = new Date(2026, 9, 27, 15, 0).getTime();
+    const at = (d: number, h: number) => new Date(2026, 9, d, h, 0).getTime();
+    const list = [
+      { session_id: "t", title: "T", updated_at: at(27, 0) },
+      { session_id: "y", title: "Y", updated_at: at(26, 23) },
+      { session_id: "y0", title: "Y0", updated_at: at(26, 0) },
+      { session_id: "o", title: "O", updated_at: at(25, 23) },
+    ];
+    expect(groupChats(list, now).map((g) => [g.label, g.items.map((c) => c.session_id)])).toEqual([
+      ["Сегодня", ["t"]],
+      ["Вчера", ["y", "y0"]],
+      ["Ранее", ["o"]],
+    ]);
+    expect(groupChats([list[3]], now).map((g) => g.label)).toEqual(["Ранее"]);
   });
 });

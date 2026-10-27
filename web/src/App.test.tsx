@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe as suite, expect, it, vi } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
 import { App, SESSION_KEY } from "./App";
+import { VERBS } from "./brand";
 import { HISTORY_KEY } from "./history";
 import type { ChatReply } from "./contracts";
 
@@ -63,7 +64,9 @@ async function mount() {
 }
 
 function button(text: string): HTMLButtonElement {
-  const b = [...box.querySelectorAll("button")].find((x) => x.textContent?.startsWith(text));
+  const b = [...box.querySelectorAll("button")].find(
+    (x) => x.textContent?.startsWith(text) || x.getAttribute("aria-label") === text,
+  );
   if (!b) throw new Error(`нет кнопки «${text}»`);
   return b;
 }
@@ -258,7 +261,7 @@ suite("приложение", () => {
       expect(box.querySelector("[role='alert']")).toBeNull();
       expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
       expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
-      await click("+ Новый чат");
+      await click("＋ Новый чат");
       expect(box.textContent).toContain("Здесь появится доска поездки");
     } finally {
       vi.restoreAllMocks();
@@ -330,8 +333,8 @@ suite("список чатов слева", () => {
   }
 
   async function say(text: string) {
-    const input = box.querySelector("input[aria-label='Запрос']") as HTMLInputElement;
-    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    const input = box.querySelector("textarea[aria-label='Запрос']") as HTMLTextAreaElement;
+    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
     await act(async () => {
       set.call(input, text);
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -353,7 +356,7 @@ suite("список чатов слева", () => {
     twoSessions();
     await mount();
     await say("Казань на выходные");
-    await click("+ Новый чат");
+    await click("＋ Новый чат");
     expect(userMsgs()).toEqual([]);
     expect(box.textContent).toContain("Здесь появится доска поездки");
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
@@ -366,7 +369,7 @@ suite("список чатов слева", () => {
     await open("Казань на выходные");
     expect(userMsgs()).toEqual(["Казань на выходные"]);
     expect(localStorage.getItem(SESSION_KEY)).toBe("c1");
-    expect(box.querySelector(".chat-list li.active")?.textContent).toContain("Казань на выходные");
+    expect(box.querySelector(".chat-list li.on")?.textContent).toContain("Казань на выходные");
     await say("а подешевле");
     expect(calls.at(-1)?.body).toMatchObject({ session_id: "c1", message: "а подешевле" });
     await open("Сочи с детьми");
@@ -430,7 +433,7 @@ suite("список чатов слева", () => {
     try {
       await mount();
       await say("Казань на выходные");
-      await click("+ Новый чат");
+      await click("＋ Новый чат");
       await say("Сочи с детьми");
       expect(titles()).toEqual(["Сочи с детьми", "Казань на выходные"]);
       await open("Казань на выходные");
@@ -440,5 +443,88 @@ suite("список чатов слева", () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+
+  it("поиск по чатам оставляет только подходящие названия", async () => {
+    const now = Date.now();
+    localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify([
+        { session_id: "a", title: "Казань на выходные", updated_at: now },
+        { session_id: "b", title: "Сочи с детьми", updated_at: now - 1 },
+      ]),
+    );
+    await mount();
+    const search = box.querySelector("input[aria-label='Поиск по чатам']") as HTMLInputElement;
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      set.call(search, "сочи");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(titles()).toEqual(["Сочи с детьми"]);
+    expect(box.querySelector(".group")?.textContent).toBe("Сегодня");
+  });
+});
+
+suite("чат как в мессенджере", () => {
+  it("пока агент отвечает — маскот и глагол из списка, после ответа индикатора нет", async () => {
+    let answer: (v: Response) => void = () => {};
+    vi.stubGlobal("fetch", () => new Promise<Response>((r) => (answer = r)));
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const think = box.querySelector("[aria-label='Агент думает']");
+    expect(VERBS).toContain(think?.querySelector(".verb")?.textContent);
+    await act(async () => answer(json(200, checkoutStage)));
+    await flush();
+    expect(box.querySelector("[aria-label='Агент думает']")).toBeNull();
+    expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
+  });
+
+  it("TRAP-1: ответ без модели — пометка «Без ИИ» в списке чатов", async () => {
+    routes["POST /api/chat"] = () => ({ status: 200, body: { ...checkoutStage, llm: false } });
+    await mount();
+    expect(box.querySelector(".badge-noai")).toBeNull();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    expect(box.querySelector("aside[aria-label='Чаты'] .badge-noai")?.textContent).toContain("Без ИИ");
+  });
+
+  it("этап вдохновения: карточки направлений в чате с метками из данных, выбор — сообщением", async () => {
+    const r = { ...structuredClone(checkoutStage), stage: "inspire" as const };
+    const [d] = r.plan.destinations;
+    r.plan.destinations = [d, { ...d, name: "Сочи", est_total_rub: d.est_total_rub + 1000, travel_hours: d.travel_hours + 1 }];
+    r.plan.spec.budget_rub = d.est_total_rub + 500;
+    routes["POST /api/chat"] = (b) =>
+      (b as { message: string }).message.startsWith("первый")
+        ? { status: 200, body: checkoutStage }
+        : { status: 200, body: r };
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const cards = [...box.querySelectorAll(".feed [aria-label='Направления'] .dest")];
+    expect(cards).toHaveLength(2);
+    expect(box.querySelector(".plan [aria-label='Направления']")).toBeNull();
+    expect(cards[0].querySelector(".tag.best")?.textContent).toBe("лучшая цена");
+    expect(cards[1].querySelector(".tag.warn")?.textContent).toBe("дороже бюджета");
+    expect(cards[0].querySelector(".tag.warn")).toBeNull();
+    for (const c of cards) expect(c.querySelector(".price .synth")?.textContent).toBe("синтетика");
+    await act(async () => (cards[0].querySelector("button") as HTMLButtonElement).click());
+    await flush();
+    expect(calls.at(-1)?.body).toMatchObject({ message: `первый: ${d.name}` });
+  });
+
+  it("строки «Допущения» и «Не проверяю» ответа — приглушённой строкой", async () => {
+    const reply = "Нашёл варианты.\nДопущения: даты не названы.\nНе проверяю по данным: детская анимация.";
+    routes["POST /api/chat"] = () => ({ status: 200, body: { ...checkoutStage, reply } });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const lines = [...box.querySelectorAll("[role='status'] p")].map((p) => [p.className, p.textContent]);
+    expect(lines).toEqual([
+      ["", "Нашёл варианты."],
+      ["aside", "Допущения: даты не названы."],
+      ["aside", "Не проверяю по данным: детская анимация."],
+    ]);
   });
 });
