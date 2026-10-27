@@ -711,6 +711,8 @@ def test_flight_and_hotel_sum_is_the_trip_budget_and_a_dearer_plan_is_flagged(tm
     """#41: «перелёт и отель до 100 тысяч» limits the trip; a dearer booking carries the risk."""
     store = SessionStore(tmp_path / "s.db")
     r = chat(ChatRequest(message="Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч"), store)
+    if r.stage == "clarify":  # #302: a far trip with a whole budget asks the origin first
+        r = chat(ChatRequest(session_id=r.session_id, message="Из Москвы"), store)
     spec = r.plan.spec
     assert spec.budget_rub == 100_000 and spec.hotel_budget_rub is None
     total = sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
@@ -769,6 +771,8 @@ def test_hotel_with_flight_sum_is_the_trip_budget_and_a_dearer_cart_is_flagged(t
     """#41: «отель с перелётом до 60 тысяч» limits the trip; a dearer cart shows the risk."""
     store = SessionStore(tmp_path / "s.db")
     r = chat(ChatRequest(message="Бали на 12 ночей вдвоём, отель с перелётом до 60 тысяч"), store)
+    if r.stage == "clarify":  # #302: a far trip with a whole budget asks the origin first
+        r = chat(ChatRequest(session_id=r.session_id, message="Из Москвы"), store)
     spec = r.plan.spec
     assert spec.budget_rub == 60_000 and spec.hotel_budget_rub is None
     total = sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
