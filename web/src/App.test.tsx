@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe as suite, expect, it, vi } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
 import { App, SESSION_KEY } from "./App";
+import { HISTORY_KEY } from "./history";
 import type { ChatReply } from "./contracts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -257,7 +258,7 @@ suite("приложение", () => {
       expect(box.querySelector("[role='alert']")).toBeNull();
       expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
       expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
-      await click("Новая поездка");
+      await click("+ Новый чат");
       expect(box.textContent).toContain("Здесь появится доска поездки");
     } finally {
       vi.restoreAllMocks();
@@ -309,5 +310,135 @@ suite("приложение", () => {
     const foot = (box.querySelector("footer[aria-label='Источники данных']")?.textContent ?? "").replace(/\s+/g, " ");
     for (const w of ["Цены, рейсы, тарифы, трансферы и рейтинги — синтетика", "отели вне снимка OSM", "Климат и время в пути — оценки команды", "Оплата имитируется"])
       expect(foot).toContain(w);
+  });
+});
+
+suite("список чатов слева", () => {
+  // Each new chat gets its own session id; a known id returns the same session.
+  function twoSessions() {
+    let n = 0;
+    const sessions: Record<string, ChatReply> = {};
+    routes["POST /api/chat"] = (b) => {
+      const { session_id } = b as { session_id: string | null };
+      const id = session_id ?? `c${++n}`;
+      sessions[id] = { ...structuredClone(checkoutStage), session_id: id };
+      return { status: 200, body: sessions[id] };
+    };
+    for (const id of ["c1", "c2"])
+      routes[`GET /api/session/${id}`] = () =>
+        sessions[id] ? { status: 200, body: sessions[id] } : { status: 404 };
+  }
+
+  async function say(text: string) {
+    const input = box.querySelector("input[aria-label='Запрос']") as HTMLInputElement;
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      set.call(input, text);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("Отправить");
+  }
+
+  const titles = () => [...box.querySelectorAll(".chat-list .chat-open")].map((b) => b.textContent);
+  const userMsgs = () => [...box.querySelectorAll(".msg.user")].map((m) => m.textContent);
+
+  async function open(title: string) {
+    const b = [...box.querySelectorAll(".chat-list .chat-open")].find((x) => x.textContent === title);
+    if (!b) throw new Error(`нет чата «${title}»`);
+    await act(async () => (b as HTMLButtonElement).click());
+    await flush();
+  }
+
+  it("два чата: переключение возвращает сообщения каждого, «Новый чат» пустой", async () => {
+    twoSessions();
+    await mount();
+    await say("Казань на выходные");
+    await click("+ Новый чат");
+    expect(userMsgs()).toEqual([]);
+    expect(box.textContent).toContain("Здесь появится доска поездки");
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull();
+    await say("Сочи с детьми");
+    expect(calls.filter((c) => c.key === "POST /api/chat").map((c) => c.body)).toEqual([
+      { session_id: null, message: "Казань на выходные" },
+      { session_id: null, message: "Сочи с детьми" },
+    ]);
+    expect(titles()).toEqual(["Сочи с детьми", "Казань на выходные"]);
+    await open("Казань на выходные");
+    expect(userMsgs()).toEqual(["Казань на выходные"]);
+    expect(localStorage.getItem(SESSION_KEY)).toBe("c1");
+    expect(box.querySelector(".chat-list li.active")?.textContent).toContain("Казань на выходные");
+    await say("а подешевле");
+    expect(calls.at(-1)?.body).toMatchObject({ session_id: "c1", message: "а подешевле" });
+    await open("Сочи с детьми");
+    expect(userMsgs()).toEqual(["Сочи с детьми"]);
+    expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
+  });
+
+  it("перезагрузка: список чатов на месте", async () => {
+    twoSessions();
+    await mount();
+    await say("Казань на выходные");
+    act(() => root.unmount());
+    root = createRoot(box);
+    await mount();
+    expect(titles()).toEqual(["Казань на выходные"]);
+    expect(userMsgs()).toEqual(["Казань на выходные"]);
+  });
+
+  it("чат, которого нет на сервере, убирается из списка с заметкой", async () => {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify([{ session_id: "gone", title: "Старая поездка", updated_at: 1 }]));
+    await mount();
+    await open("Старая поездка");
+    expect(titles()).toEqual([]);
+    expect(JSON.parse(localStorage.getItem(HISTORY_KEY)!)).toEqual([]);
+    expect(box.querySelector("[role='note']")?.textContent).toContain("«Старая поездка» больше не хранится");
+    expect(box.querySelector("[role='alert']")).toBeNull();
+  });
+
+  it("переименование и удаление чата — только в браузере", async () => {
+    twoSessions();
+    await mount();
+    await say("Казань на выходные");
+    await act(async () => button("✎").click());
+    const input = box.querySelector("input[aria-label='Название чата']") as HTMLInputElement;
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      set.call(input, "Татарстан");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => input.form!.requestSubmit());
+    expect(titles()).toEqual(["Татарстан"]);
+    expect(JSON.parse(localStorage.getItem(HISTORY_KEY)!)[0].title).toBe("Татарстан");
+    const n = calls.length;
+    await act(async () => (box.querySelector("button[aria-label='Удалить чат «Татарстан»']") as HTMLButtonElement).click());
+    await flush();
+    expect(titles()).toEqual([]);
+    expect(userMsgs()).toEqual([]);
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull();
+    expect(localStorage.getItem("trip.ui.c1")).toBeNull();
+    expect(calls.length).toBe(n); // no server call
+  });
+
+  it("хранилище бросает ошибку — список чатов живёт в памяти, переключение работает", async () => {
+    const boom = () => {
+      throw new DOMException("blocked", "SecurityError");
+    };
+    twoSessions();
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(boom);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(boom);
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(boom);
+    try {
+      await mount();
+      await say("Казань на выходные");
+      await click("+ Новый чат");
+      await say("Сочи с детьми");
+      expect(titles()).toEqual(["Сочи с детьми", "Казань на выходные"]);
+      await open("Казань на выходные");
+      expect(box.querySelector("[role='alert']")).toBeNull();
+      expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
+      expect(calls.at(-1)?.key).toBe("GET /api/session/c1");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

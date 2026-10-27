@@ -307,19 +307,21 @@ function Hotels({ plan, stage, busy, onSend }: {
     <section aria-label="Сравнение отелей">
       <h2>Сравнение отелей</h2>
       <div className="scroll">
-        <table>
+        <table className="grid-table">
           <thead>
             <tr>
               <th>Отель</th>
-              <th>Цена за всё</th>
-              <th>Звёзды</th>
-              <th>Рейтинг</th>
+              <th className="num">Цена за всё</th>
+              <th className="num">Звёзды</th>
+              <th className="num">Рейтинг</th>
               <th>Питание</th>
               <th>Отмена</th>
-              <th>До центра</th>
+              <th className="num">До центра</th>
               <th>Заезд / выезд</th>
               <th>Питомцы</th>
-              <th />
+              <th className="act">
+                <span className="sr-only">Действие</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -328,29 +330,31 @@ function Hotels({ plan, stage, busy, onSend }: {
               const word = ordinal(i);
               return (
                 <tr key={h.offer_id} className={chosen ? "chosen" : undefined}>
-                  <td>
+                  <td className="name">
                     {h.title}
                     {chosen && <span className="tag">выбран</span>}
                   </td>
-                  <td>
+                  <td className="num cost" data-label="Цена за всё">
                     <Price value={h.price_rub} synthetic={h.synthetic} />
                   </td>
-                  <td>{h.stars !== null ? `${h.stars}★` : "—"}</td>
-                  <td>{h.rating ?? "—"}</td>
-                  <td>{MEALS[h.meal]}</td>
-                  <td>
+                  <td className="num" data-label="Звёзды">{h.stars !== null ? `${h.stars}★` : "—"}</td>
+                  <td className="num" data-label="Рейтинг">{h.rating ?? "—"}</td>
+                  <td data-label="Питание">{MEALS[h.meal]}</td>
+                  <td data-label="Отмена">
                     {h.cancellation.refundable
                       ? h.cancellation.free_until
                         ? `бесплатно до ${localTime(h.cancellation.free_until)}`
                         : "бесплатная"
                       : "невозвратный"}
                   </td>
-                  <td>{h.distance_center_km !== null ? `${h.distance_center_km} км` : "—"}</td>
-                  <td>
+                  <td className="num" data-label="До центра">
+                    {h.distance_center_km !== null ? `${h.distance_center_km} км` : "—"}
+                  </td>
+                  <td data-label="Заезд / выезд">
                     {clock(h.check_in)} / {clock(h.check_out)}
                   </td>
-                  <td>{h.pets_allowed ? "можно" : "нет отметки"}</td>
-                  <td>
+                  <td data-label="Питомцы">{h.pets_allowed ? "можно" : "нет отметки"}</td>
+                  <td className="act">
                     {stage === "compare" && word && !chosen && (
                       <button
                         type="button"
@@ -385,18 +389,20 @@ function Transport({ plan, stage, busy, onSend }: {
     <section aria-label="Сравнение транспорта">
       <h2>Сравнение транспорта</h2>
       <div className="scroll">
-        <table>
+        <table className="grid-table">
           <thead>
             <tr>
-              <th>№</th>
+              <th className="num">№</th>
               <th>Рейс</th>
               <th>Тип</th>
               <th>Отправление</th>
               <th>Прибытие</th>
-              <th>В пути</th>
-              <th>Пересадки</th>
-              <th>Цена</th>
-              <th />
+              <th className="num">В пути</th>
+              <th className="num">Пересадки</th>
+              <th className="num">Цена</th>
+              <th className="act">
+                <span className="sr-only">Действие</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -404,24 +410,24 @@ function Transport({ plan, stage, busy, onSend }: {
               const chosen = plan.selected.includes(t.offer_id);
               return (
                 <tr key={t.offer_id} className={chosen ? "chosen" : undefined}>
-                  <td>{i + 1}</td>
-                  <td>
+                  <td className="num no" data-label="№">{i + 1}</td>
+                  <td className="name">
                     {t.title}
                     {chosen && <span className="tag">выбран</span>}
                   </td>
-                  <td>{MODES[t.mode]}</td>
-                  <td>
+                  <td data-label="Тип">{MODES[t.mode]}</td>
+                  <td data-label="Отправление">
                     {localTime(t.depart_at)} <small>{t.origin}</small>
                   </td>
-                  <td>
+                  <td data-label="Прибытие">
                     {localTime(t.arrive_at)} <small>{t.destination}</small>
                   </td>
-                  <td>{duration(t.depart_at, t.arrive_at)}</td>
-                  <td>{t.changes || "нет"}</td>
-                  <td>
+                  <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
+                  <td className="num" data-label="Пересадки">{t.changes || "нет"}</td>
+                  <td className="num cost" data-label="Цена">
                     <Price value={t.price_rub} synthetic={t.synthetic} />
                   </td>
-                  <td>
+                  <td className="act">
                     {(stage === "compare" || stage === "assemble") && !chosen && (
                       <button
                         type="button"
