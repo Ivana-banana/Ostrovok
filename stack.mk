@@ -2,8 +2,11 @@
 # Демо-путь живёт с первого коммита: API на заглушке + страница + e2e сценария демо.
 # Контракт целей — Makefile шаблона.
 STACK := web-fullstack
-UV := cd backend && uv run --frozen
+NICE := nice -n 15
+UV := cd backend && $(NICE) uv run --frozen
 PORT ?= 8080
+# Воркеры тестов: не все ядра, чтобы человек мог работать параллельно (#242).
+TEST_JOBS ?= 4
 
 .PHONY: stack-setup stack-lint stack-check stack-demo stack-eval stack-eval-final stack-e2e
 
@@ -17,8 +20,8 @@ stack-lint:
 	cd web && npm run -s typecheck && npm run -s build
 
 stack-check: stack-lint
-	$(UV) pytest -n auto
-	cd web && npm run -s test
+	$(UV) pytest -n $(TEST_JOBS)
+	cd web && $(NICE) npx vitest run --maxWorkers=$(TEST_JOBS)
 
 stack-demo:
 	cd web && npm run -s build
