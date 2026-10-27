@@ -87,6 +87,16 @@ def test_a_question_with_no_kids_changes_nothing():
         ("Сочи в ноябре, без пересадок с детьми", [7, 7]),
         ("Сочи в ноябре, без мужа, с ребёнком 4 года", [4]),
         ("Сочи в ноябре, без доплат ребёнок 5 лет", [5]),
+        ("Сочи без пересадок двое детей 5 и 8 лет", [5, 8]),
+        ("Сочи без трансфера двое детей 3 и 6 лет", [3, 6]),
+        ("Сочи без ночных перелетов двое детей 2 и 5 лет", [2, 5]),
+        ("Сочи без доплат двоих детей 4 и 7 лет", [4, 7]),
+        ("Сочи без пересадок трое детей", [7, 7, 7]),
+        ("Сочи без бассейна детей не повезём", [7, 7]),
+        ("Сочи без очередей сына 8 лет и дочь 5 лет", [8, 5]),
+        ("Сочи без моря дочери скучно, ей 9", [7]),
+        ("Турция без визы ребенка 6 лет возьмём", [6]),
+        ("Сочи без мужа и двоих детей 4 и 7 лет", [4, 7]),
     ],
 )
 def test_other_words_after_bez_keep_the_children(text, ages):
@@ -114,3 +124,8 @@ def test_question_with_no_kids_at_a_built_plan_changes_nothing(
     r2 = say(store, text, r.session_id)
     assert "Состав не меняю" in r2.reply
     assert r2.plan.spec == r.plan.spec and r2.cart == r.cart and r2.llm is False
+
+
+def test_children_named_after_a_bez_phrase_stay_in_the_plan(store):
+    r = say(store, f"{FIRST}, без ночных перелетов двое детей 2 и 5 лет")
+    assert r.plan.spec.children_ages == [2, 5]

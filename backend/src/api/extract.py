@@ -149,11 +149,11 @@ CHILD_RE = re.compile(
     rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*)"
 )
 # #195: «без детей», «без маленьких детей», «без мужа и детей», «без двоих детей» say there
-# are no children. Up to 2 words stand between «без» and the child; none is a preposition
-# («без пересадок с детьми» has children). Only a genitive form can be refused.
-NO_CHILD_BEFORE = re.compile(
-    r"\bбез\s+(?:(?!(?:с|со|для|на|в|во|к|по|из|за)\s)[^\s,.;:!?]+\s+){0,2}$"
-)
+# are no children. Between «без» and the child stand only «X и» or one word in -их/-ых
+# («без пересадок двое детей 5 и 8 лет» has children). Only a genitive form can be refused.
+NO_CHILD_BEFORE = re.compile(r"\bбез\s+(?:\w+\s+и\s+|\w+[иы]х\s+)?$")
+# A number word or a number right after the child noun: the children are named.
+NO_CHILD_AFTER = re.compile(r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)")
 NO_CHILD_FORM = ("детей", "ребенка", "сына", "дочери", "малыша")
 # #112: the party. A number word names a person only in a few forms; «одна ночь», «один из
 # вариантов», «один и тот же отель» are not a party. A solo word needs a stop, a preposition
@@ -1233,7 +1233,11 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     ages: list[int] = []
     no_kids = False
     for m in CHILD_RE.finditer(t):
-        if m.group(0).endswith(NO_CHILD_FORM) and NO_CHILD_BEFORE.search(t[: m.start()]):
+        if (
+            m.group(0).endswith(NO_CHILD_FORM)
+            and NO_CHILD_BEFORE.search(t[: m.start()])
+            and not NO_CHILD_AFTER.match(t, m.end())
+        ):
             no_kids = True  # «без детей»: nobody is added (#195)
             continue
         a = AGES_RE.match(t, m.end())
