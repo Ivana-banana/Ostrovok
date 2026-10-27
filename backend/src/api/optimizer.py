@@ -93,7 +93,8 @@ class Trip:
     back: TransportOffer | None
     transfers: list[TransferOffer]
     rules: list[str] = field(default_factory=list)  # broken requirements except the budget
-    over: int = 0  # budget overrun, roubles
+    over: int = 0  # overrun of the trip budget and of the hotel budget together, roubles
+    hotel_over: int = 0  # the part of `over` that is the hotel above the hotel budget
     score: float = 0.0
 
     @property
@@ -284,7 +285,10 @@ def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
     """
     for t in trips:
         t.rules = broken_rules(spec, t)
-        t.over = max(0, t.total - spec.budget_rub) if spec.budget_rub is not None else 0
+        trip_over = max(0, t.total - spec.budget_rub) if spec.budget_rub is not None else 0
+        hotel = spec.hotel_budget_rub
+        t.hotel_over = max(0, t.hotel.price_rub - hotel) if hotel is not None else 0
+        t.over = trip_over + t.hotel_over
     candidates = [t for t in trips if pets_ok(t)] if spec.pets else []
     candidates = candidates or trips
     fewest = min(len(t.rules) for t in candidates)
@@ -382,6 +386,8 @@ def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
     if t.transfers:
         parts.append(f"трансферы {_rub(t.transfer_rub)}")
     why = f"{', '.join(facts)}; поездка целиком {_rub(t.total)} ({' + '.join(parts)})"
+    if spec.hotel_budget_rub is not None and not t.hotel_over:
+        why += f"; отель в бюджете отеля {_rub(spec.hotel_budget_rub)}"
     order = list(dict.fromkeys(spec.priorities))
     if order:
         why += "; ваш порядок важности: " + " → ".join(PRIORITY_TEXT[p] for p in order)
@@ -503,14 +509,21 @@ def _risks(spec: TripSpec, t: Trip, fits: bool, trips: list[Trip]) -> list[str]:
     if not fits:
         out.append("ни один вариант не подходит под все условия — выбран ближайший")
     out += t.rules
-    if t.over and spec.budget_rub is not None:
+    if t.hotel_over and spec.hotel_budget_rub is not None:
+        out.append(
+            f"отель не укладывается в бюджет отеля {_rub(spec.hotel_budget_rub)}: "
+            f"{_rub(t.hotel.price_rub)}, на {_rub(t.hotel_over)} больше"
+        )
+    trip_over = t.over - t.hotel_over
+    if trip_over and spec.budget_rub is not None:
         line = (
             f"не укладывается в бюджет {_rub(spec.budget_rub)}: поездка целиком "
-            f"{_rub(t.total)}, на {_rub(t.over)} больше"
+            f"{_rub(t.total)}, на {_rub(trip_over)} больше"
         )
         if t.hotel.price_rub <= spec.budget_rub < t.total:
             line += f"; отель {_rub(t.hotel.price_rub)} укладывается, сверху дорога и трансферы"
         out.append(line)
+    if t.over:
         cheap = [x for x in trips if x.over == 0]
         if cheap:
             c = min(cheap, key=lambda x: (len(x.rules), x.key))

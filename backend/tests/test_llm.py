@@ -239,17 +239,36 @@ def test_llm_fills_what_rules_missed(store, fake):
     assert r.plan.spec.destinations == ["Сочи"] and "тепло" in r.plan.spec.wishes
 
 
+def test_llm_hotel_budget_gets_an_assumption_the_user_sees(store, fake):
+    """#41: the model reads «на проживание не больше сорока пяти тысяч»; the budget is shown."""
+    text = "Махнём в Сочи на три ночки, на проживание не больше сорока пяти тысяч"
+    assert "hotel_budget_rub" not in extract(text)[0]
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["Сочи"], "hotel_budget_rub": 45_000})
+    r = say(store, text)
+    assert r.llm is True and r.plan.spec.hotel_budget_rub == 45_000
+    assert r.plan.spec.budget_rub is None
+    assert "бюджет отеля: 45 000 ₽ за все ночи" in r.plan.spec.assumptions
+
+
+def test_llm_does_not_turn_the_hotel_sum_into_a_trip_budget():
+    """#41: the rules read «отель до 40 тысяч»; the same sum from the model is not a trip budget."""
+    found, _ = extract(SOCHI)
+    assert found["hotel_budget_rub"] == 40_000
+    assert "budget_rub" not in with_llm(found, {"budget_rub": 40_000})
+    assert with_llm(found, {"budget_rub": 150_000})["budget_rub"] == 150_000
+
+
 def test_rules_win_over_the_llm_and_dates_stay_one_group():
     found, _ = extract(SOCHI)
     patch = {
         "destinations": ["Анапа"],
         "date_from": found["date_from"].replace(day=25),
-        "budget_rub": 90_000,
+        "hotel_budget_rub": 90_000,
         "pets": True,
         "wishes": ["море"],
     }
     out = with_llm(found, patch)
-    assert out["destinations"] == ["Сочи"] and out["budget_rub"] == 40_000
+    assert out["destinations"] == ["Сочи"] and out["hotel_budget_rub"] == 40_000
     assert out["date_from"] == found["date_from"] and out["pets"] is True
     assert out["wishes"] == ["море"]
     assert with_llm(found, None) == found
@@ -299,6 +318,8 @@ def test_llm_patch_is_validated(fake):
         ({"wishes": [llm.SPEC_PROMPT.splitlines()[2]]}, None),  # the prompt is not echoed
         ({"destinations": ["Сочи"], "origin": "Москва", "nights": 3}, {}),  # echo of the spec
         ({"budget_rub": 0}, {}),  # «поставь цену 0»
+        ({"hotel_budget_rub": 0}, {}),
+        ({"hotel_budget_rub": 45_000}, {"hotel_budget_rub": 45_000}),
         ({"children_ages": [5, 40]}, {}),
         ({"date_from": "2020-01-01", "date_to": "2020-01-05"}, {}),  # past dates
         ({"date_from": "2099-03-01", "date_to": "2099-03-05", "nights": 9}, {"nights": 4}),
@@ -413,13 +434,20 @@ def test_trap_4_explanation_keeps_only_numbers_from_the_facts(tmp_path, fake):
     assert new[1:] == plan.explanations[1:]
     fake.why = why("Около 9 800 ₽ за ночь")  # derived: price ÷ nights
     assert llm.explain(plan) is not None
-    assert plan.spec.budget_rub == 40_000
+    assert plan.spec.hotel_budget_rub == 40_000 and plan.spec.budget_rub is None
     fake.why = why(f"Ваш бюджет 40 000 ₽, отель {price} ₽")  # the budget named as the budget
     assert llm.explain(plan) is not None
+    fake.why = why(f"Бюджет отеля 40 000 ₽, отель {price} ₽ в него укладывается")  # #41
+    assert llm.explain(plan) is not None
+    plan.spec.budget_rub = 150_000  # both budgets in one text
+    fake.why = why(f"Бюджет поездки 150 000 ₽, бюджет отеля 40 000 ₽, отель {price} ₽")
+    assert llm.explain(plan) is not None
+    plan.spec.budget_rub = None
     for bad in (
         why("Отель за 12 345 ₽ — дешевле всех"),  # price not in the tools
         why("Отель стоит 40 000 ₽"),  # the budget is not a price (review of PR #47)
         why("Отель стоит 40 000"),
+        why("Отель стоит 40 000 ₽, бюджет отеля 40 000 ₽"),  # the hotel budget as a price
         why("До моря 97 м"),  # any number not in the facts
         why("Хороший отель", offer_id="h-made-up"),  # offer_id the optimizer did not explain
         why(llm.WHY_PROMPT.splitlines()[3]),  # the prompt is not echoed

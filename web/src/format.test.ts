@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 import type { ChatReply } from "./contracts";
-import { describe, movePriority, priorityMessage } from "./format";
+import { describe, fieldLabel, movePriority, priorityMessage } from "./format";
 
 const reply = (llm: boolean): ChatReply => ({
   session_id: "s",
@@ -63,5 +63,12 @@ suite("приоритеты", () => {
     expect(movePriority(["price", "meal", "rating"], 1, 1)).toEqual(["price", "rating", "meal"]);
     expect(movePriority(["price", "meal"], 0, -1)).toBeNull();
     expect(movePriority(["price", "meal"], 1, 1)).toBeNull();
+  });
+});
+
+suite("подписи полей", () => {
+  it("#41: бюджет отеля и бюджет поездки — разные подписи", () => {
+    expect(fieldLabel("hotel_budget_rub")).toBe("бюджет отеля");
+    expect(fieldLabel("budget_rub")).toBe("бюджет");
   });
 });

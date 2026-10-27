@@ -46,8 +46,10 @@ from api.dag import (
 from api.extract import (
     DATE_KEYS,
     DEFAULT_NIGHTS,
+    HOTEL_NOTE,
     MAX_NIGHTS,
     MONTH_NAMES,
+    PER_NIGHT_NOTE_RE,
     excluded_places,
     extract,
     is_chip_message,
@@ -171,6 +173,7 @@ LABELS = {
     "nights": "длительность",
     "origin": "откуда",
     "budget_rub": "бюджет",
+    "hotel_budget_rub": HOTEL_NOTE,
     "children_ages": "возраст ребёнка",
     "adults": "взрослых",
     "max_travel_hours": "время в пути",
@@ -221,6 +224,21 @@ def _label(assumption: str) -> str:
     return assumption.split(":", 1)[0]
 
 
+def resolve_hotel_budget(data: dict) -> None:
+    """The hotel budget stated per night is a total of the nights the plan has now (#41).
+
+    TripSpec holds the total only, so the price of a night lives in the assumption
+    «бюджет отеля: 10 000 ₽ за ночь…». A new `nights` then moves the total with it.
+    """
+    for i, a in enumerate(data["assumptions"]):
+        if (m := PER_NIGHT_NOTE_RE.match(a)) and data["nights"]:
+            night, n = int(m.group(1).replace(" ", "")), data["nights"]
+            data["hotel_budget_rub"] = night * n
+            data["assumptions"][i] = (
+                f"{HOTEL_NOTE}: {_rub(night)} за ночь, {_rub(night * n)} за {n} ноч."
+            )
+
+
 def _noted(spec: TripSpec, label: str) -> bool:
     return any(_label(a) == label for a in spec.assumptions)
 
@@ -229,6 +247,9 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     """Stated fields override the spec; their old assumptions are dropped."""
     data = spec.model_dump()
     stated = {LABELS[k] for k in found if k in LABELS}
+    if any(_label(n) == HOTEL_NOTE for n in notes):  # a price per night: no total until nights
+        stated.add(HOTEL_NOTE)
+        data["hotel_budget_rub"] = found.get("hotel_budget_rub")
     if "destinations" in found:
         stated |= {ROUTE, CANDIDATES}  # a new choice of the city ends the route note
     if stated & {"когда", "даты", "длительность"}:
@@ -247,6 +268,7 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     data["assumptions"] = kept + [n for n in notes if n not in kept]
     for k, v in found.items():
         data[k] = data[k] + [w for w in v if w not in data[k]] if k == "wishes" else v
+    resolve_hotel_budget(data)
     return TripSpec.model_validate(data)
 
 
@@ -290,7 +312,7 @@ def blocking_questions(spec: TripSpec) -> list[Question]:
         m = date.today().month
         options = [MONTH_NAMES[(m + i) % 12] for i in range(3)] + ["пока не знаю"]
         out.append(Question(text="Когда хотите поехать?", options=options))
-    if spec.budget_rub is None:
+    if spec.budget_rub is None and spec.hotel_budget_rub is None:
         options = ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽", "не важно"]
         out.append(Question(text="Какой бюджет на всю поездку?", options=options))
     return out
@@ -323,7 +345,10 @@ def assume(spec: TripSpec) -> TripSpec:
     if not data["origin"]:
         data["origin"] = DEFAULT_ORIGIN
         note("откуда", "Москва (город вылета не назван)")
-    if data["budget_rub"] is None:
+    if data["hotel_budget_rub"] is not None:  # the rules wrote their note; the LLM did not
+        note(HOTEL_NOTE, f"{_rub(data['hotel_budget_rub'])} за все ночи")
+    resolve_hotel_budget(data)
+    if data["budget_rub"] is None and data["hotel_budget_rub"] is None:
         cheap = "недорого" in data["wishes"]
         note("бюджет", "не задан — сначала дешёвые" if cheap else "не задан — разные цены")
     return TripSpec.model_validate(data)

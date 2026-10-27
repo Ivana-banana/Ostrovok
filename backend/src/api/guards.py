@@ -73,6 +73,7 @@ def rule_extract(text: str) -> dict:
     return {
         "month": found.get("month"),
         "budget_rub": found.get("budget_rub"),
+        "hotel_budget_rub": found.get("hotel_budget_rub"),
         "cheap": "недорого" in wishes,
         "kids": bool(found.get("children_ages")),
         "pets": found.get("pets", False),
