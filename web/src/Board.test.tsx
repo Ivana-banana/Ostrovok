@@ -179,6 +179,21 @@ suite("доска поездки", () => {
     expect(doc.querySelector("[aria-label='Корзина']")?.textContent).toContain(want);
   });
 
+  it("#367: ваучер показывает гостя отдельной строкой или честную пометку", () => {
+    const r = structuredClone(base);
+    r.voucher = { ...r.voucher!, guest: { name: "Иван Петров", contact: "ivan@example.com" } };
+    const line = render(r).querySelector("[aria-label='Ваучер'] .guest-line")?.textContent;
+    expect(line).toBe("Гость: Иван Петров, ivan@example.com");
+    r.voucher = { ...r.voucher!, guest: { name: "Иван Петров", contact: "" } };
+    expect(render(r).querySelector(".guest-line")?.textContent).toBe("Гость: Иван Петров");
+    r.voucher = { ...r.voucher!, guest: null };
+    expect(render(r).querySelector(".guest-line")?.textContent).toBe(
+      "Гость: имя не введено (имитация)",
+    );
+    r.voucher = { ...r.voucher!, simulated: false };
+    expect(render(r).querySelector(".guest-line")?.textContent).toBe("Гость: имя не введено");
+  });
+
   it("ваучер настоящей брони: статус вместо пометки об имитации (#376)", () => {
     const r = structuredClone(base);
     r.voucher = { ...r.voucher!, simulated: false, status: "created" };

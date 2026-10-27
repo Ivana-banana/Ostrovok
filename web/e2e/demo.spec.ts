@@ -241,3 +241,108 @@ test("два чата: переключение возвращает сообщ�
   await expect(chats.locator(".chat-open")).toHaveCount(2);
   await expect(page.locator(".msg.user")).toHaveText([FAMILY]);
 });
+
+// #368: на телефоне карточка транспорта — время и город в одной строке, без пустой полосы
+// кнопки и без строки «Пересадки: нет». Длинный город (TRAP-2) переносится внутри карточки.
+const LONG_CITY = "Из Санкт-Петербурга в Минеральные Воды, 2 взрослых, 3 ночи с 10 декабря";
+
+async function transportLayout(transport: Locator) {
+  const box = await transport.locator(".scroll").evaluate((e) => ({
+    scroll: e.scrollWidth,
+    client: e.clientWidth,
+    right: e.getBoundingClientRect().right,
+  }));
+  const rows = await transport.locator("tbody tr").evaluateAll((trs) =>
+    trs.map((tr) => {
+      const cells = [...tr.querySelectorAll("td")];
+      const ends = cells.filter((td) => td.querySelector("small"));
+      const place = ends.map((td) => {
+        const when = td.querySelector(".when")!.getBoundingClientRect();
+        const city = td.querySelector("small")!.getClientRects()[0];
+        return Math.abs(when.top - city.top);
+      });
+      const cityRight = Math.max(...ends.flatMap((td) => [...td.querySelector("small")!.getClientRects()].map((r) => r.right)));
+      const empty = cells.filter((td) => !td.textContent?.trim()).map((td) => td.getBoundingClientRect().height);
+      const noChange = cells.filter((td) => td.textContent?.trim() === "нет").map((td) => td.getBoundingClientRect().height);
+      return { place, cityRight, empty, noChange };
+    }),
+  );
+  expect(rows.length).toBeGreaterThan(0);
+  expect(box.scroll, "у таблицы транспорта нет прокрутки вбок").toBeLessThanOrEqual(box.client);
+  for (const [i, r] of rows.entries()) {
+    expect(r.place, `строка ${i + 1}: отправление и прибытие`).toHaveLength(2);
+    for (const d of r.place) expect(d, `строка ${i + 1}: город начинается в строке времени`).toBeLessThan(4);
+    expect(r.cityRight, `строка ${i + 1}: город не обрезан краем карточки`).toBeLessThanOrEqual(box.right);
+    for (const h of r.empty) expect(h, `строка ${i + 1}: пустая ячейка занимает место`).toBe(0);
+    for (const h of r.noChange) expect(h, `строка ${i + 1}: «Пересадки: нет» видно`).toBe(0);
+  }
+  return rows;
+}
+
+test("ширина телефона: транспорт — время с городом в одной строке, без пустых ячеек", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("Запрос").fill(REQUEST);
+  await page.getByRole("button", { name: "Отправить" }).click();
+  await page.getByRole("button", { name: "План поездки" }).click();
+  const transport = page.getByRole("region", { name: "Сравнение транспорта" });
+  await expect(transport).toBeVisible();
+  // Pick a hotel: the picked rows lose the «Выбрать» button, their cell is empty.
+  await page.getByRole("region", { name: "Сравнение отелей" }).getByRole("button", { name: /^Выбрать/ }).first().click();
+  await expect(page.getByRole("region", { name: "Таймлайн" })).toBeVisible();
+  await expect(transport.locator("tr.chosen")).not.toHaveCount(0); // the plan picked the legs
+  const rows = await transportLayout(transport);
+  expect(rows.some((r) => r.empty.length > 0), "есть строка без кнопки").toBe(true);
+  expect(await noPageScroll(page)).toBe(false);
+});
+
+for (const width of [390, 360]) {
+  test(`ширина ${width} px: длинный город в транспорте переносится, прокрутки вбок нет (TRAP-2)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/");
+    await page.getByLabel("Запрос").fill(LONG_CITY);
+    await page.getByRole("button", { name: "Отправить" }).click();
+    await page.getByRole("button", { name: "План поездки" }).click();
+    const transport = page.getByRole("region", { name: "Сравнение транспорта" });
+    await expect(transport).toContainText("Минеральные Воды");
+    await transportLayout(transport);
+    expect(await noPageScroll(page)).toBe(false);
+  });
+}
+
+test.describe("с анимацией", () => {
+  test.use({ reducedMotion: "no-preference" });
+
+  test("ответ печатается, затем видны подсказки, клик по подсказке уходит агенту", async ({ page }) => {
+    await page.goto("/");
+    // Record that the reply was typed: the typing node lives ≤ 1.5 s, polling could miss it.
+    await page.evaluate(() => {
+      const w = window as unknown as { typed: boolean; busy: boolean };
+      w.typed = false;
+      w.busy = false;
+      new MutationObserver(() => {
+        if (document.querySelector(".msg.agent .typing")) w.typed = true;
+        if (document.querySelector(".msg.agent[aria-busy='true']")) w.busy = true;
+      }).observe(document.body, { subtree: true, childList: true, attributes: true });
+    });
+    await page.getByLabel("Запрос").fill("Хочу на море");
+    await page.getByRole("button", { name: "Отправить" }).click();
+    const status = page.getByRole("status");
+    await expect(status).not.toBeEmpty();
+    // Typing ends in ≤ 1.5 s: the message is not busy, the hints appear under it.
+    await expect(status).not.toHaveAttribute("aria-busy", "true", { timeout: 5000 });
+    const seen = await page.evaluate(() => {
+      const w = window as unknown as { typed: boolean; busy: boolean };
+      return { typed: w.typed, busy: w.busy };
+    });
+    expect(seen.typed, "ответ печатался по словам").toBe(true);
+    expect(seen.busy, "сообщение было aria-busy во время печати").toBe(true);
+    const hint = page.locator(".attach").getByRole("button").first();
+    await expect(hint).toBeVisible();
+    const label = (await hint.getAttribute("aria-label")) ?? (await hint.textContent()) ?? "";
+    await hint.click();
+    await expect(page.locator(".msg.user")).toHaveCount(2);
+    await expect(page.getByRole("status")).not.toBeEmpty();
+    expect(label.length).toBeGreaterThan(0);
+  });
+});
