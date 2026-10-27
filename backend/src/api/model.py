@@ -815,6 +815,8 @@ BUDGET_STEP = 15  # percent off the current total per «подешевле»
 def asks_cheaper(low: str) -> bool:
     """«Можно ли подешевле?» is a request; «дешевле ли …?», «дешевле, чем …?» and a refusal are not."""
     clean = REQUEST_LI_RE.sub("можно", low)
+    if re.search(rf"\b(?:{CHEAPER_WORD})\s+не\s+(?:бывает|будет|бывало)\b", clean):
+        return False  # «дешевле не бывает?» is a remark or a question
     return bool(CHEAPER_RE.search(clean) and not CHEAPER_ASK_RE.search(clean))
 
 
@@ -848,7 +850,9 @@ def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
     if cheapest >= total and not found:
         return
     found["budget_rub"] = max(target, cheapest)
-    notes.append(f"бюджет: {_rub(found['budget_rub'])} (ниже итога {_rub(total)})")
+    new = found["budget_rub"]
+    how = "ниже итога" if new < total else "итог был"
+    notes.append(f"бюджет: {_rub(new)} ({how} {_rub(total)})")
 
 
 def cheaper_line(old: Plan, new: Plan, edited: bool = False) -> str:

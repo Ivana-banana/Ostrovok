@@ -96,6 +96,9 @@ def test_c310_other_edit_in_the_message_counts_in_the_minimum(store):
     assert second.plan.spec.budget_rub is not None
     assert second.plan.spec.budget_rub >= total_of(second)
     assert "Дешевле в предложениях нет" not in second.reply
+    notes = " ".join(second.plan.spec.assumptions)
+    if second.plan.spec.budget_rub >= total_of(first):
+        assert "ниже итога" not in notes  # the note never claims «below» for a higher budget
 
 
 @pytest.mark.parametrize(
@@ -139,8 +142,13 @@ def test_c310_hand_picked_hotel_never_makes_a_false_minimum(store):
     from api.model import _ranked_total
 
     floor = _ranked_total(r.plan)
-    if total_of(r) > floor:
-        assert f"{floor:,}".replace(",", " ") in r.reply
-        assert "минимум" not in r.reply.split("\n")[0]
-    else:
-        assert total_of(r) == floor
+    assert total_of(r) == floor
+    assert "ваш выбор:" in r.reply and "дороже бюджета" in r.reply
+    assert "минимум под ваши условия" in r.reply
+
+
+def test_c310_not_a_cheaper_request_questions():
+    from api.model import asks_cheaper
+
+    assert not asks_cheaper("дешевле не бывает?")
+    assert not asks_cheaper("дешевле, чем в среднем?")
