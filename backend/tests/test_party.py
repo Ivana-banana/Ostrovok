@@ -629,3 +629,25 @@ def test_341_head_count(text, adults, ages):
 def test_341_numbers_that_are_no_head_count(text):
     found, _ = extract(text)
     assert "adults" not in found
+
+
+@pytest.mark.parametrize(
+    "text, adults, ages",
+    [
+        ("Сочи, 2 человека и ребёнок 5 лет, на 5 ночей с 1 июля", 2, [5]),
+        ("Сочи с ребёнком 5 лет, номер на 2 человек", None, [5]),
+        ("Номер на 2 человека, едем с мужем и ребёнком 5 лет в Сочи", 2, [5]),
+        ("Сочи, 4 человека с детьми", 2, [7, 7]),
+        ("Сочи, 3 человека + ребёнок 4 года", 3, [4]),
+    ],
+)
+def test_341_children_are_inside_the_count_only_when_the_text_says_so(text, adults, ages):
+    found, notes = extract(text)
+    assert found.get("adults") == adults and found["children_ages"] == ages
+    if text.endswith("с детьми"):
+        assert "взрослых: 2 (из «4 человека», дети в счёте)" in notes
+
+
+def test_341_six_guests_note():
+    found, notes = extract("Нужен номер на 6 гостей в Сочи")
+    assert found["adults"] == 6 and "взрослых: 6 (по «6 гостей»)" in notes
