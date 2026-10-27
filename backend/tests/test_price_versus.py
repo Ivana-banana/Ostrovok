@@ -61,8 +61,31 @@ def test_price_versus_answer_is_honest(store):
     assert "по рынку" in average.reply
 
 
-@pytest.mark.parametrize("request_", ["хочу дешевле, чем сейчас", "сделай дешевле, чем в Турции"])
-def test_price_versus_request_is_still_an_edit(store, request_):
+BUDGET = ["можно уложиться дешевле, чем в 50 тысяч?", "а дешевле, чем 30 тысяч на человека?"]
+
+
+@pytest.mark.parametrize("question", BUDGET)
+def test_price_versus_budget_is_still_an_edit(store, question):
+    before = at(store, "compare")
+    after = say(store, question, before.session_id)
+    assert after.plan.spec.budget_rub is not None
+    assert after.plan.spec.budget_rub != before.plan.spec.budget_rub
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        "хочу дешевле, чем сейчас",
+        "хочу дешевле, чем сейчас?",
+        "сделай дешевле, чем в Турции",
+        "а есть отель дешевле, чем этот?",
+        "а можно дешевле, чем сейчас?",
+        "а поезд дешевле, чем самолёт?",
+    ],
+)
+def test_price_versus_request_is_not_the_answer(store, request_):
     before = at(store, "compare")
     after = say(store, request_, before.session_id)
-    assert not after.reply.startswith("Это вопрос")
+    assert "по рынку" not in after.reply
+    assert "цифр не выдумываю" not in after.reply
+    assert "недорого" in after.plan.spec.wishes  # the old rules read it as a wish

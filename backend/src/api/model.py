@@ -1394,7 +1394,10 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
 # #311: «дешевле, чем в Турции?», «это дешевле, чем в среднем?» ask for a comparison. They name no
 # new place and no «недорого» wish; the plan stays. A request («хочу дешевле, чем сейчас») is an edit.
 PRICE_VERSUS_RE = re.compile(r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?")
-VERSUS_ORDER_RE = re.compile(r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*)\b")
+VERSUS_ORDER_RE = re.compile(
+    r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
+)
+MARKET_RE = re.compile(r"\bв\s+среднем\b|рынк|\bобычно\b")  # «дешевле, чем в среднем?»
 
 
 def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
@@ -1404,17 +1407,19 @@ def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
     if not PRICE_VERSUS_RE.search(low) or CHOICE_RE.search(low) or VERSUS_ORDER_RE.search(low):
         return ""
     spec = old.plan.spec
+    others = [d for d in found.get("destinations", []) if d not in spec.destinations]
+    if not (others or MARKET_RE.search(low)):
+        return ""  # «а поезд дешевле, чем самолёт?»: not this question, the old rules read it
     total = old.cart.total_rub or sum(
         o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
     )
-    others = [d for d in found.get("destinations", []) if d not in spec.destinations]
     place = f"в направлении «{', '.join(others)}»" if others else "в среднем по рынку"
     mine = ", ".join(spec.destinations) or "текущее направление"
     now = f"Сейчас в плане: {mine}, итого {_rub(total)} (синтетика). " if total else ""
-    ask = f"«давай в {others[0]}»" if others else "«подешевле»"
+    ask = f"«{others[0]}»" if others else "«подешевле»"
     return (
         f"Это вопрос: план не меняю. {now}Цен {place} для сравнения в данных нет — "
-        f"цифр не выдумываю. Чтобы собрать такой план, напишите {ask}. {HINTS[old.stage]}"
+        f"цифр не выдумываю. Чтобы собрать такой план, напишите: {ask}. {HINTS[old.stage]}"
     )
 
 
@@ -1786,6 +1791,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if (
         prev
         and old.stage in PLAN3
+        and set(rules_found) <= {"destinations", "wishes"}  # «дешевле, чем 50 тысяч?» is a budget
         and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
         and (reply := _price_versus_reply(old, low, rules_found))
     ):
