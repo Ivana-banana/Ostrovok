@@ -46,8 +46,22 @@
 |---|---|
 | Brave вместо Chromium (headless и с окном) | то же самое: Яндекс — капча, Tripadvisor — 403 DataDome. Playwright управляет браузером через CDP, защита видит это, а не отпечаток canvas. Рандомизация отпечатка в Brave защищает от трекеров, но не прячет автоматизацию |
 | `curl_cffi` без входа через браузер | Booking — 202 (AWS WAF). Agoda: страница города без JS не содержит отелей; запрос `room-grid` без cookies и заголовков страницы не проверял |
+| `nodriver` + Brave, headless | то же, что Playwright: Skyscanner — капча, Expedia — «Bot or Not?», Hotels.com — обрыв соединения, Tripadvisor — пустая страница |
 | Hotellook / Travelpayouts API | мёртв, везде 404 |
 | Google Hotels | цены в HTML есть, но страница уходит в `/travel/search`, который закрыт robots.txt |
+
+## Что прошло защиту: `nodriver` с видимым окном
+
+`nodriver` управляет Brave без WebDriver и без следов Playwright. С видимым окном (`headless=False`, нужен экран; на сервере без экрана не сработает) он прошёл то, что закрыто headless-браузерами:
+
+| Сайт | headless (Playwright, nodriver) | `nodriver` с окном |
+|---|---|---|
+| skyscanner.net/hotels | капча | страница открылась |
+| expedia.com (страница города) | 429 «Bot or Not?» | страница открылась |
+| hotels.com | обрыв HTTP/2 | страница открылась |
+| tripadvisor.ru | 403 / пустая | пустая страница |
+
+Проверено только открытие страницы. Цены на даты на этих сайтах не собраны: путь с датами закрыт robots.txt (см. ниже). Запуск: `uv run --no-project --with nodriver python <скрипт>`, `uc.start(browser_executable_path="/usr/bin/brave", headless=False, sandbox=False)`.
 
 ## Закрытые источники
 
@@ -55,6 +69,7 @@
 
 **1. Закрыто robots.txt (техника пускает, правило нет).** tvil.ru (200, защиты нет, но `Disallow: *?*`), hotel.tutu.ru (`/offers*`, `/*?*`), страницы с датами на Kayak, Expedia и Hotels.com, Яндекс Путешествия (`/api/`, `/*/search*`), Bronevik (`search.php?`), OneTwoTrip (`*/_hotels/api`), level.travel (`/search/`), sutochno.ru (`/search`, `/api/*`), Trip.com (`/restapi/soa2/*`).
 Сборщик такие пути не запрашивает. Снять запрет может только решение человека.
+Заметка: robots.txt Expedia, Hotels.com и Skyscanner закрывает конкретные имена параметров дат (`chkin`, `checkin`), а страницы с другими именами (`startDate`, `q-check-in`) матчер пропускает. Обход через другое имя параметра — это уход от смысла правила. Не делаем без решения человека.
 
 **2. Закрыто защитой (robots.txt пускает, техника нет).** Skyscanner `/hotels` (капча), Expedia (429 «Bot or Not?»), Hotels.com (рвёт HTTP/2), Tripadvisor (DataDome 403), Яндекс Путешествия (SmartCaptcha), Bronevik (Qrator + SmartCaptcha), Ozon Travel (антибот, `Disallow: /`).
 
@@ -62,8 +77,8 @@
 
 Порядок: дешёвое и бесплатное раньше платного.
 
-1. **Видимый браузер и человек** (способ 5). Человек решает капчу один раз, `curl_cffi` забирает cookies. Для Skyscanner `/hotels` (robots разрешает) и Expedia.
-2. **Браузер без следов CDP.** `patchright` (Playwright без утечки `Runtime.enable`), `nodriver` (Chrome без WebDriver) или `camoufox` (Firefox с подменой отпечатка). Независимых замеров по Akamai и DataDome нет: в обзорах 20–40% успеха, с резидентным IP до 70–85%. Пробуем на Skyscanner, Expedia, Tripadvisor.
+1. **`nodriver` с окном** — уже прошёл Skyscanner, Expedia и Hotels.com (таблица выше). Дальше: взять cookies из такого входа и вести сбор через `curl_cffi`, как у Booking. Мешает только robots.txt на пути с датами.
+2. **Остальные браузеры без следов CDP.** `patchright` (Playwright без утечки `Runtime.enable`) и `camoufox` (Firefox с подменой отпечатка) для Tripadvisor (DataDome) и Яндекса. Независимых замеров по Akamai и DataDome нет: в обзорах 20–40% успеха, с резидентным IP до 70–85%.
 3. **Мобильный API.** Приложения Booking, Agoda, Ostrovok ходят в JSON-API с отдельными ключами. Трафик снимаем через `mitmproxy` на эмуляторе. Долго. Не проверено, слабее ли защита мобильного API.
 4. **Партнёрские выгрузки.** Agoda Demand API, Booking Demand API, Expedia Rapid API, Travelpayouts. Нужны регистрация и ключ: делает человек (#265).
 5. **Платное** (способ 6): резидентный прокси и сервис капчи. Только с «да» человека. Честный вывод обзоров: IP важен не меньше библиотеки, чистый отпечаток с датацентрового IP всё равно блокируют.
