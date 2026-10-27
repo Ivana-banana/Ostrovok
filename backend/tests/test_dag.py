@@ -478,7 +478,8 @@ def _hotel(r):
 
 def test_replan_keeps_the_hotel_the_user_picked(store, picked):
     title = _hotel(picked).title
-    r = say(store, "а бюджет 30 000 руб", picked.session_id)
+    # above the picked set (34 100 ₽ at the 101hotels Sochi level, #119): the pick still fits
+    r = say(store, "а бюджет 40 000 руб", picked.session_id)
     assert _hotel(r).title == title and r.plan.explanations[0].why == dag.MANUAL_WHY
     r = say(store, "а 4 ночи", r.session_id)  # new offers: the same hotel for new dates
     assert _hotel(r).title == title and _hotel(r).date_out == r.plan.spec.date_to

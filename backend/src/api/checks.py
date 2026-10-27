@@ -1523,3 +1523,63 @@ def check_S10(case: dict) -> tuple[bool, str]:
                 else:
                     items.setdefault(k, None)
     return _result("; ".join(facts), items)
+
+
+# ---------------------------------------------------------------- S11
+
+S11_SECOND = "Казань"  # the city of the case that the plan does not cover
+
+
+def _s11_items(run: Run) -> dict[str, str | None]:
+    """Pass items of S11: the second city is named, offered, and stays in the booking papers."""
+    first = next((r for r in run.replies if r.stage == "compare"), None)
+    checkout = next((r for r in run.replies if r.stage == "checkout"), None)
+    voucher = run.last.voucher if run.replies else None
+
+    def named(lines: list[str]) -> bool:
+        return any(S11_SECOND in line for line in lines)
+
+    # A plan with a hotel in the second city needs no notice: nothing is lost.
+    covered = voucher is not None and any(
+        x.kind == "hotel" and S11_SECOND in x.title for x in voucher.items
+    )
+    cart_notice = checkout is not None and named(checkout.plan.spec.assumptions)
+    voucher_notice = voucher is not None and named(voucher.spec.assumptions)
+    return {
+        "1": _need(
+            first is not None and S11_SECOND in first.reply,
+            f"стадия compare {'есть' if first else _stuck(run)}, "
+            f"{S11_SECOND} в ответе: {bool(first and S11_SECOND in first.reply)}",
+        ),
+        "2": _need(
+            first is not None and any(S11_SECOND in o for q in first.questions for o in q.options),
+            f"кнопки с {S11_SECOND} нет",
+        ),
+        "3": _need(voucher is not None, f"до ваучера не дошли: {_stuck(run)}"),
+        "5": _need(
+            first is not None
+            and (
+                any(a.startswith("маршрут:") for a in first.plan.spec.assumptions)
+                or "В плане только" in first.reply
+            ),
+            "ответ не говорит, что в плане только первый город (нет строки «маршрут:»)",
+        ),
+        "4": _need(
+            covered or (cart_notice and voucher_notice),
+            f"бронь одного города без пометки о втором: корзина {cart_notice}, "
+            f"ваучер {voucher_notice}, отель в {S11_SECOND}: {covered}",
+        ),
+    }
+
+
+@rules_mode
+def check_S11(case: dict) -> tuple[bool, str]:
+    """The route «Питер, потом Казань»: the second city is said aloud, not lost before the booking."""
+    (text,) = _quotes(case)
+    with _api() as (client, _):
+        run = _walk(client, "S11", "маршрут", text, stop=("booked",), attempt=False)
+    if not run.replies or run.codes[-1] != 200:
+        return False, f"«{text}»: ответ {run.codes[-1] if run.codes else 'нет'}"
+    first = next((r for r in run.replies if r.stage == "compare"), run.replies[0])
+    facts = f"«{text}»: города {', '.join(first.plan.spec.destinations)}, ваучер {run.booked}"
+    return _result(facts, _s11_items(run))

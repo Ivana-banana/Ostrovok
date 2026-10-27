@@ -2,7 +2,8 @@
 
 catalog.json is built by scripts/build_catalog.py; sources, licences and the date are in its
 _source. Free text resolves to a place: case, ё/е, a leading preposition, Russian case endings,
-ru/en aliases (TRAP-3), a country name (its main place), then a close spelling.
+ru/en aliases (TRAP-3), a country name (its main place), then a close spelling (same first letter up to
+LEAD_CLASSES, or a vowel more or less at the start).
 A name outside the snapshot goes to lookup_online: the Open-Meteo geocoder and one year of
 climate with a short timeout. Any error there gives None, never an exception (TRAP-2, TRAP-6).
 """
@@ -51,6 +52,10 @@ ENDINGS = ("ий", "ый", "ой", "ая", "ое", "ие", "ые", "ь", "й", "
 CASES = {"", "а", "я", "у", "ю", "е", "и", "ы", "ой", "ей", "ом", "ем", "ою", "ею", "ью", "ам", "ям",
          "ах", "ях", "ов", "ев", "ий", "ый", "ая", "ое", "ие", "ые", "ую", "ого", "его", "ому",
          "ему", "ых", "их"}  # fmt: skip
+# First letters that people mix up are one class (#267): «Эссентуки», «Йркутск», «Jerevan», «Hania».
+LEAD_CLASSES = ("еэё", "ий", "ckh", "jyi")
+LEAD = {ch: cls[0] for cls in LEAD_CLASSES for ch in cls}
+VOWELS = set("аеёиоуыэюяaeiou")
 PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _deadline: ContextVar[float | None] = ContextVar("geocode_deadline", default=None)
@@ -85,6 +90,22 @@ def norm(text: str) -> str:
 def _stem(word: str) -> str:
     end = next((e for e in ENDINGS if word.endswith(e) and len(word) - len(e) >= 2), "")
     return word[: len(word) - len(end)]
+
+
+def _lead(text: str) -> str:
+    return LEAD.get(text[0], text[0]) + text[1:]
+
+
+def _lead_close(q: str, k: str) -> bool:
+    """A close spelling keeps the first letter (up to LEAD_CLASSES) or has a vowel more or less
+    at the start: «Опорту» = «Порту», «Ерусалим» = «Иерусалим». «Гагра» is not «Агра», «Анья» is
+    not «Ханья»: a consonant at the start makes another place (#267)."""
+    a, b = _lead(q), _lead(k)
+    if a[0] == b[0]:
+        return True
+    if a[0] in VOWELS and len(a) > 2 and a[1:3] == b[:2]:
+        return True
+    return b[0] in VOWELS and len(b) > 2 and b[1:3] == a[:2]
 
 
 def _same_words(query: list[str], key: list[str]) -> bool:
@@ -142,7 +163,11 @@ def resolve(text: str) -> dict | None:
         return None
     stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
     close = difflib.get_close_matches(_stems(q), stems, n=1, cutoff=FUZZY)
-    return stems[close[0]] if close else None
+    # Only the best match counts: if it fails _lead_close, the answer is None, not the second
+    # best. «Гагра» is not «Агра»; «Емал» is close to «Чемал», so it is not «Мале» (#267).
+    if close and _lead_close(_stems(q), close[0]):
+        return stems[close[0]]
+    return None
 
 
 def month_climate(place: dict, month: int) -> tuple[float | None, float | None]:

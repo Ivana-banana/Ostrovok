@@ -1,5 +1,6 @@
 """LLM client (T11, #15): the HTTP layer is a fake urlopen, no network in tests."""
 
+import io
 import json
 import sqlite3
 import urllib.error
@@ -42,8 +43,9 @@ def answer(obj) -> Resp:
     return Resp({"choices": [{"message": {"content": content}}]})
 
 
-def http_error(code: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError("http://llm.test/v1/chat/completions", code, "x", {}, None)
+def http_error(code: int, message: str = "") -> urllib.error.HTTPError:
+    body = io.BytesIO(json.dumps({"error": {"message": message}}).encode()) if message else None
+    return urllib.error.HTTPError("http://llm.test/v1/chat/completions", code, "x", {}, body)
 
 
 class FakeLLM:
@@ -81,7 +83,7 @@ def no_network(monkeypatch):
         raise AssertionError("network in tests")
 
     monkeypatch.setattr(llm.urllib.request, "urlopen", deny)
-    for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_TIMEOUT_S"):
+    for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_TIMEOUT_S", "GIGACHAT_AUTH_KEY"):
         monkeypatch.delenv(k, raising=False)
     llm.reset()
     yield
@@ -152,20 +154,24 @@ def test_trap_1_invalid_key_reaches_booking_and_pauses_the_llm(store, fake):
 
 
 def test_schema_rejected_falls_back_to_json_object(store, fake):
+    """OpenAI json_schema, then the flat GigaChat json_schema, then json_object (#117)."""
+
     def spec(p):
         if p["response_format"]["type"] == "json_schema":
-            return http_error(400)
+            return http_error(400, "response_format json_schema is not supported")
         return answer({**NULLS, "wishes": ["тепло"]})
 
     fake.spec = spec
     r = say(store, SOCHI)
-    kinds = [c["response_format"]["type"] for c in fake.calls]
-    assert kinds[:2] == ["json_schema", "json_object"] and r.llm is True
-    assert "тепло" in r.plan.spec.wishes
-    schema = fake.calls[0]["response_format"]["json_schema"]
+    formats = [c["response_format"] for c in fake.calls]
+    assert [f["type"] for f in formats[:3]] == ["json_schema", "json_schema", "json_object"]
+    assert r.llm is True and "тепло" in r.plan.spec.wishes
+    schema = formats[0]["json_schema"]
     assert schema["strict"] is True and set(schema["schema"]["required"]) == set(llm.SPEC_FIELDS)
+    assert formats[1] == {"type": "json_schema", "schema": llm.SPEC_SCHEMA}
     say(store, "а можно поближе к морю?", r.session_id)
-    assert fake.calls[-1]["response_format"]["type"] == "json_object"  # remembered
+    spec_calls = [c for c in fake.calls if c["messages"][0]["content"] == llm.SPEC_PROMPT]
+    assert spec_calls[-1]["response_format"]["type"] == "json_object"  # remembered
 
 
 def test_llm_flag_only_when_the_model_changed_the_reply(store, fake):
@@ -338,6 +344,33 @@ def test_llm_patch_is_validated(fake):
     fake.spec = lambda p: answer({**NULLS, "date_from": "2020-01-01", "date_to": "2020-01-05"})
     got = llm.extract_spec("текст", spec)
     assert got["date_from"] == date(2020, 1, 1) and got["date_to"] == date(2020, 1, 5)
+
+
+S1_TEXT = (
+    "Хочу куда-нибудь к тёплому морю в ноябре, недорого, с ребёнком 5 лет, "
+    "без долгих перелётов. Летим из Москвы."
+)
+
+
+def test_kind_of_place_is_no_destination(store, fake):
+    """#117: GigaChat put «тёплое море» into destinations; the turn stopped on «нет в каталоге».
+
+    A place name is a proper name. «тёплое море», «рядом с Москвой» are wishes: rules read them.
+    """
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["тёплое море"], "origin": "Москва"})
+    r = say(store, S1_TEXT)
+    assert r.stage == "inspire" and not r.plan.spec.destinations
+    assert "синтетика" in r.reply
+
+
+def test_only_proper_names_stay_in_destinations(fake):
+    fake.spec = lambda p: answer(
+        {**NULLS, "destinations": ["Сочи", "рядом с Москвой", "море"], "origin": "дом"}
+    )
+    got = llm.extract_spec("текст", TripSpec())
+    assert got["destinations"] == ["Сочи"] and "origin" not in got
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["горы"], "nights": 3})
+    assert llm.extract_spec("текст", TripSpec()) == {"nights": 3}
 
 
 def test_user_text_is_data_and_source_texts_are_not_sent(store, fake):
