@@ -163,8 +163,8 @@ def test_tariffs_are_the_same_in_every_process():
     hotels = kinds(find_offers(s, "Сочи"), "hotel")
     first = [(h.offer_id, h.price_rub) for h in hotels[:2]]
     assert first == [
-        ("h-aer-s0-ROn-20261211-3n-2a", 10_700),
-        ("h-aer-s0-BBn-20261211-3n-2a", 14_500),
+        ("h-aer-s0-ROn-20261211-3n-2a", 6_400),  # Сочи level 3000 from 101hotels (#119)
+        ("h-aer-s0-BBn-20261211-3n-2a", 8_700),
     ]
     assert hotels == kinds(find_offers(s, "Сочи"), "hotel")
 
@@ -382,3 +382,16 @@ def test_travel_hours_is_the_fastest_leg_there_and_zero_at_home():
     s = TripSpec(month=11, origin="Москва")
     msk, kzn = catalog.resolve("Москва"), catalog.resolve("Казань")
     assert 0 < travel_hours(s, msk, kzn) < 3 and travel_hours(s, msk, msk) == 0
+
+
+@pytest.mark.parametrize("share, refundable", [(0.0, False), (1.0, True)])
+def test_free_cancel_share_of_the_place_sets_the_refundable_hotels(share, refundable):
+    """#119: a place with the 101hotels share sells free cancellation in that share of its
+    3+ star hotels; 1-2 star hotels never sell it."""
+    place = {"name": "Тест", "lat": 55.0, "lon": 37.0, "tz": "Europe/Moscow",
+             "free_cancel_share": share}  # fmt: skip
+    by_title = hotel_tariffs(offers_for_place(spec(), place))
+    sold = {
+        any(t.cancellation.refundable for t in ts) for ts in by_title.values() if ts[0].stars >= 3
+    }
+    assert sold == {refundable}

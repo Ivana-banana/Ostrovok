@@ -11,8 +11,8 @@ data/prices/cache/, facts go to data/prices/<source>/ (data/ is outside git, D-0
 Politeness: an honest UA with a link to the repository; robots.txt (Google semantics, from rlt
 src/sources/robots.py) is read for our UA and checked before every request; a robots.txt that is
 not 200/404 stops the run. One request per host at a time with PAUSE_S between them. A refusal
-(403, 429, captcha page, a redirect, a 200 page without the expected facts) stops the whole run:
-the host is not retried and the page is not cached.
+(403, 429, captcha page, a redirect, a 200 page without the expected facts, a network error)
+stops the whole run: the host is not retried and the page is not cached.
 Provenance: every page gets a line in data/prices/manifest.jsonl (url, time, sha1, facts).
 Standard library only.
 """
@@ -20,6 +20,7 @@ Standard library only.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import re
 import statistics
@@ -106,6 +107,8 @@ def _get(host: str, path: str) -> tuple[int, str, str]:
             return r.status, r.geturl(), r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.geturl(), ""
+    except (OSError, http.client.HTTPException) as e:  # URLError, timeout, reset, short read
+        raise Refused(f"{host}{path}: ошибка сети ({e!r}) — останавливаюсь") from e
     finally:
         _last[host] = time.monotonic()
 
@@ -202,6 +205,23 @@ _TR = dict(
         ],
     )
 )
+
+
+# 101hotels slugs that translit misses (404 in the mass run 2026-10-27). Each one is taken from a
+# link «/main/cities/<slug>» with the city name on a cached 101hotels page, not guessed.
+SLUG_101 = {
+    "Великий Устюг": "velikii_ustyug",
+    "Витязево": "vitiazevo",
+    "Выборг": "viborg",
+    "Геленджик": "gelendjik",
+    "Горно-Алтайск": "gorno_altaisk",
+    "Домбай": "dombai",
+    "Ейск": "yeisk",
+    "Красная Поляна": "krasnaya_polyana",
+    "Листвянка": "leestvyanka",
+    "Минеральные Воды": "mineralnye_vody",
+    "Новороссийск": "novorossiisk",
+}
 
 
 def translit(name: str) -> str:
@@ -312,9 +332,9 @@ def _save(source: str, key: str, facts: object) -> None:
 
 def hotels(cities: list[str]) -> None:
     for arg in cities:
-        # 101hotels slugs are irregular (gelendjik, hanty-mansiysk): «Город=slug» overrides translit
+        # 101hotels slugs are irregular (gelendjik): «Город=slug», then SLUG_101, then translit
         city, _, slug = arg.partition("=")
-        path = f"/main/cities/{slug or translit(city)}"
+        path = f"/main/cities/{slug or SLUG_101.get(city) or translit(city)}"
         found = fetch("101hotels.com", path, parse_101hotels)
         if found is None:
             print(f"{city}: 404 — пропуск")
