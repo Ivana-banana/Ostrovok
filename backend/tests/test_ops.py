@@ -21,10 +21,10 @@ class Broken:
         raise ConnectionError("https://hotels.example/api?key=SECRET-KEY refused")
 
     def legs(self, spec, origin, place):
-        raise TimeoutError("transport timed out")
+        raise TimeoutError("transport timed out")  # an OSError, like ConnectionError
 
     def transfers(self, spec, place, hotels, legs):
-        raise RuntimeError("transfers down")
+        raise ConnectionResetError("transfers down")
 
 
 @pytest.fixture(autouse=True)
@@ -71,12 +71,34 @@ def test_provider_failure_is_logged_and_marked_in_the_reply(monkeypatch, records
         r for r in records if r.levelno == logging.ERROR and "provider failure" in r.getMessage()
     ]
     assert failed
-    assert all(r.session == sid and r.exc_info for r in failed)
+    assert all(r.session == sid for r in failed)
+    assert len(failed) == 1  # one record per source per turn, not one per candidate
+    assert f"provider failure: {var.lower()} (" in failed[0].getMessage()
+    assert not any(r.exc_info for r in records if r.levelno >= logging.INFO)
+    assert "SECRET-KEY" not in " ".join(r.getMessage() for r in records)
     assert f"Источник «{label}» не ответил" in body["reply"]
     marks = [i for i in body["plan"]["issues"] if label in i["text"]]
     assert marks
     assert marks[0]["severity"] == "warn"
     assert "SECRET-KEY" not in r.text  # the exception text stays in the log, not in the reply
+
+
+def test_a_bug_in_an_adapter_is_not_hidden(monkeypatch):
+    """KeyError is our bug, not a provider failure: it propagates."""
+
+    class Buggy(Broken):
+        def hotels(self, spec, place, now):
+            raise KeyError("airport")
+
+    monkeypatch.setattr(offers, "HOTELS", Buggy())
+    with pytest.raises(KeyError):
+        TestClient(app).post("/api/chat", json={"message": CHAT})
+
+
+def test_log_level_falls_back_to_info():
+    assert ops._level("debug") == logging.DEBUG
+    assert ops._level("") == logging.INFO
+    assert ops._level("loud") == logging.INFO
 
 
 def test_working_providers_leave_no_mark(records):

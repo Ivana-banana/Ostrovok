@@ -6,11 +6,14 @@
 - Provider failures: a port call that raises (hotels, transport, transfers; api/contracts.py,
   «Порты») is logged with the traceback and gives an empty result plus a mark. The chat turn
   collects the marks and puts them into plan.issues (severity warn) and into the reply text, so
-  an empty list never looks like «nothing found».
+  an empty list never looks like «nothing found». Only network, file and parse errors count
+  (PROVIDER_ERRORS); a bug of our code (KeyError, TypeError) is not hidden.
 - /health: the data mode (синтетика, снапшот, реальный) from the active adapters and the LLM
   mode (правила or the model name). No key, no address, no token.
 """
 
+import http.client
+import json
 import logging
 import os
 from collections.abc import Callable
@@ -51,23 +54,32 @@ def collecting():
         _failures.reset(token)
 
 
-def guarded[T](source: str, call: Callable[[], T], empty: T) -> T:
-    """call() or, when it raises, `empty` with a log record and a mark (not a silent []).
+# What a provider failure is: network and file errors, a broken answer. Anything else (KeyError,
+# TypeError, ...) is a bug of our code and must stay loud, not become «источник не ответил».
+PROVIDER_ERRORS = (OSError, http.client.HTTPException, json.JSONDecodeError)
 
-    source: a key of SOURCES. The mark names the kind of the failure, never the message of the
-    exception: it may hold an address or a key of the provider.
+
+def guarded[T](source: str, call: Callable[[], T], empty: T) -> T:
+    """call() or, when it fails with a PROVIDER_ERRORS error, `empty` with a log record and a mark.
+
+    source: a key of SOURCES. One ERROR record and one mark per source per chat turn (a turn
+    calls the ports for many candidates). The record and the mark name the source and the type
+    of the exception, never its message: it may hold an address or a key of the provider. The
+    traceback goes to a DEBUG record only.
     """
     try:
         return call()
-    except Exception as e:
-        log.exception("provider failure: %s", source)
-        mark = (
-            f"Источник «{SOURCES.get(source, source)}» не ответил ({type(e).__name__}): "
-            "предложений этого вида нет, план неполный"
-        )
+    except PROVIDER_ERRORS as e:
+        label = SOURCES.get(source, source)
+        prefix = f"Источник «{label}» не ответил"
         marks = _failures.get()
-        if marks is not None and mark not in marks:
-            marks.append(mark)
+        if marks is None or not any(m.startswith(prefix) for m in marks):
+            log.error("provider failure: %s (%s)", source, type(e).__name__)
+            if marks is not None:
+                marks.append(
+                    f"{prefix} ({type(e).__name__}): предложений этого вида нет, план неполный"
+                )
+        log.debug("provider failure traceback: %s", source, exc_info=True)
         return empty
 
 
@@ -98,13 +110,19 @@ class _SessionFactory:
         return record
 
 
+def _level(name: str) -> int:
+    """LOG_LEVEL as a number; an empty or unknown name is INFO (no crash at import)."""
+    level = logging.getLevelNamesMapping().get(name.strip().upper())
+    return level if isinstance(level, int) else logging.INFO
+
+
 def setup_logging() -> None:
     """Root logger to stderr with the session id; LOG_LEVEL (default INFO). Safe to call twice."""
     if isinstance(logging.getLogRecordFactory(), _SessionFactory):
         return
     logging.setLogRecordFactory(_SessionFactory(logging.getLogRecordFactory()))
     logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        level=_level(os.environ.get("LOG_LEVEL", "")),
         format="%(asctime)s %(levelname)s %(name)s session=%(session)s %(message)s",
     )
 

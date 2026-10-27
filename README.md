@@ -34,8 +34,10 @@ docker compose up --build
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"ok"}
+# {"status":"ok","data_mode":"синтетика","hotels":"синтетика","transport":"синтетика","transfers":"синтетика","catalog":"снапшот","llm_mode":"правила","llm_paused":false}
 ```
+
+`data_mode` — режим данных (синтетика, снапшот или реальный): наименьший из режимов источников отелей, транспорта и трансферов. `llm_mode` — «правила» без ключа или имя модели. Ключи и адрес модели в ответ не попадают.
 
 ### Запуск без Docker (для разработки)
 
@@ -75,7 +77,7 @@ make demo     # собирает web и поднимает http://localhost:8080
 | Маршрут | Что делает |
 |---|---|
 | `/` | UI: чат и доска поездки |
-| `/health`, `/api/health` | `200`, `{"status":"ok"}` |
+| `/health`, `/api/health` | `200`, `{"status":"ok", data_mode, llm_mode, ...}`: режим данных и режим LLM |
 | `POST /api/chat` | сообщение `{session_id?, message}` → ответ: этап, текст, вопросы, план, корзина, ваучер, флаг `llm` |
 | `GET /api/session/{id}` | восстановить сессию |
 | `POST /api/cart` | `{session_id, action: add|remove, offer_id}` |
