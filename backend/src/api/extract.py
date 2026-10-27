@@ -1500,6 +1500,38 @@ ADULT_KIN_RE = re.compile(
 )
 
 
+# #341: «с друзьями, 4 человека», «4 чел.», «на 4 персоны», «4 гостя»: a head count. Not a limit
+# of a room («4 человека в номере максимум», «до 4 человек») and not a score («4 человека из 5»).
+HEADS_RE = re.compile(
+    rf"\b{NUM}\s*(?:человек\w*|чел\b\.?|персон\w*|гост(?:я|ей|ь|ям))(?!\w)"
+    r"(?!\s*(?:из\s+\d|в\s+номер\w*|в\s+комнат\w*|максимум|макс\b|в\s+день|в\s+час))"
+)
+HEADS_NOT_BEFORE = re.compile(r"(?:\bдо|\bиз|макс\w*|не\s+более|вмещ\w*|рейтинг\w*|оценк\w*)\s+$")
+
+
+# Children are inside the head count only when the text says so (#341).
+HEADS_INSIDE_RE = re.compile(
+    rf"\s*[,(]?\s*(?:из\s+них|включая|в\s+том\s+числе)|\s*:"
+    rf"|\s+с\s+(?:{NUM}\s+)?(?:реб[её]н|дет|малыш)"
+)
+HEADS_PLUS_RE = re.compile(r"\s*(?:и|\+|плюс)\s+")
+
+
+def _people_count(t: str, kids: int) -> tuple[int, str] | None:
+    """Adults from a head count and a note; None when the children make it unclear."""
+    for m in HEADS_RE.finditer(t):
+        n = _num(m.group(1))
+        if HEADS_NOT_BEFORE.search(t[: m.start()]) or not 1 <= n <= 20:
+            continue
+        tail = t[m.end() :]
+        if not kids or HEADS_PLUS_RE.match(tail):
+            return n, f"взрослых: {n} (по «{m.group(0)}»)"
+        if HEADS_INSIDE_RE.match(tail):
+            adults = max(n - kids, 1)
+            return adults, f"взрослых: {adults} (из «{m.group(0)}», дети в счёте)"
+    return None
+
+
 def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None:
     """Adults, children with ages; «нас четверо» counts children out.
 
@@ -1575,6 +1607,9 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     elif m := re.search(rf"\bнас\s+(?:будет\s+)?{NUM}\b|\b({'|'.join(TOGETHER)})\b", t):
         total = _num(m.group(1)) if m.group(1) else TOGETHER[m.group(2)]
         found["adults"] = max(total - len(ages), 1)
+    elif not asking and not _family_adults(t) and (head := _people_count(t, len(ages))):
+        found["adults"] = head[0]
+        notes.append(head[1])
     elif (m := FRIENDS_RE.search(t)) and _num(m.group(1)) >= 1:
         found["adults"], note = _friends(t, m)
         notes.append(note)
