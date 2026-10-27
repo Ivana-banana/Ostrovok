@@ -750,7 +750,12 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     )
     pick = old.stage in ("inspire", "compare") and idx is not None
     service = prev is not None and (consent or pick)
-    found, notes = extract(message, bool(old.plan.spec.destinations))
+    found, notes = extract(
+        message,
+        bool(old.plan.spec.destinations),
+        old.plan.spec.nights or DEFAULT_NIGHTS,
+        old.plan.spec.adults,
+    )
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
     other = (
