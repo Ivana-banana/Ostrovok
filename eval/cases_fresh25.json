@@ -1,0 +1,438 @@
+{
+ "_note": "25 незнакомых запросов (#264). Написал критик без доступа к коду; ожидания — только факты из текста. Не для подгонки правил. Дата отсчёта: 2026-10-27. Оценка — Claude-судья, замеры в комментариях #264 и #258.",
+ "queries": [
+  {
+   "id": "F01",
+   "text": "хочу куда-нибудь где можно вообще ничего не делать и чтобы никто не трогал",
+   "expect": {
+    "destination": "open",
+    "origin": null,
+    "dates_or_month": null,
+    "nights": null,
+    "adults": null,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F02",
+   "text": "Нижний Новгород, 7–10 января, двое взрослых и подросток 14 лет. Из Москвы на Ласточке, гостиница не дороже 5 тыс за ночь.",
+   "expect": {
+    "destination": "Нижний Новгород",
+    "origin": "Москва",
+    "dates_or_month": "2027-01-07 — 2027-01-10",
+    "nights": 3,
+    "adults": 2,
+    "children_ages": [
+     14
+    ],
+    "budget_rub": null,
+    "hard_constraints": [
+     "поезд, без перелёта",
+     "отель ≤ 5000 ₽ за ночь (не бюджет всей поездки)"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F03",
+   "text": "го в екб на ближайшие выхи, нас трое пацанов, из питера, тыщ 45 на всех",
+   "expect": {
+    "destination": "Екатеринбург",
+    "origin": "Санкт-Петербург",
+    "dates_or_month": "ближайшие выходные 2026-10-31 — 2026-11-01",
+    "nights": null,
+    "adults": 3,
+    "children_ages": null,
+    "budget_rub": 45000,
+    "hard_constraints": [],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F04",
+   "text": "хачу в мурманс северное сияние посмотреть в декабре на неделю с мамой ей 68",
+   "expect": {
+    "destination": "Мурманск",
+    "origin": null,
+    "dates_or_month": "декабрь 2026",
+    "nights": 7,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F05",
+   "text": "Едем я, муж, двое детей (3 и 11) и бабушка на море в Анапу в июле, на 10 ночей. Бабушка на коляске. Из Воронежа на поезде.",
+   "expect": {
+    "destination": "Анапа",
+    "origin": "Воронеж",
+    "dates_or_month": "июль 2027",
+    "nights": 10,
+    "adults": 3,
+    "children_ages": [
+     3,
+     11
+    ],
+    "budget_rub": null,
+    "hard_constraints": [
+     "инвалидная коляска",
+     "поезд"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F06",
+   "text": "Нас двое и корги. Хотим домик у озера в Карелии на 4 ночи в ноябре, едем из Москвы на своей машине.",
+   "expect": {
+    "destination": "Карелия",
+    "origin": "Москва",
+    "dates_or_month": "ноябрь 2026",
+    "nights": 4,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [
+     "с собакой",
+     "своя машина, билеты не нужны"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F07",
+   "text": "Прилетаю в Минск 14 ноября в 23:40, нужен отель на 2 ночи, где точно заселят ночью. Еду одна, я веганка.",
+   "expect": {
+    "destination": "Минск",
+    "origin": null,
+    "dates_or_month": "2026-11-14 — 2026-11-16, прилёт 23:40",
+    "nights": 2,
+    "adults": 1,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [
+     "поздний заезд",
+     "веганское питание"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F08",
+   "text": "У нас медовый месяц, полтора ляма на всё, хотим в Японию на сакуру, две недели, из Москвы",
+   "expect": {
+    "destination": "Япония",
+    "origin": "Москва",
+    "dates_or_month": "конец марта — апрель 2027",
+    "nights": 14,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": 1500000,
+    "hard_constraints": [],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F09",
+   "text": "Дагестан на майские, 90к на двоих вместе с билетами, вылет из Казани",
+   "expect": {
+    "destination": "Дагестан",
+    "origin": "Казань",
+    "dates_or_month": "майские 2027",
+    "nights": null,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": 90000,
+    "hard_constraints": [
+     "бюджет включает перелёт"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F10",
+   "text": "Через две недели у меня отпуск 7 дней, думаю про Баку. Лечу из Екб один.",
+   "expect": {
+    "destination": "Баку",
+    "origin": "Екатеринбург",
+    "dates_or_month": "около 2026-11-10, 7 дней",
+    "nights": null,
+    "adults": 1,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F11",
+   "text": "Куда-нибудь на море в январе, только не Турция и не Египет, надоели. Вдвоём, до 200 тысяч, из Москвы.",
+   "expect": {
+    "destination": "open",
+    "origin": "Москва",
+    "dates_or_month": "январь 2027",
+    "nights": null,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": 200000,
+    "hard_constraints": [
+     "не Турция",
+     "не Египет",
+     "тёплое море"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F12",
+   "text": "Хотим Рим и Флоренцию за одну поездку: 4 ночи в Риме, потом 3 во Флоренции, между ними поезд. Начало марта, нас двое.",
+   "expect": {
+    "destination": "Рим + Флоренция",
+    "origin": null,
+    "dates_or_month": "начало марта 2027",
+    "nights": 7,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [
+     "Рим 4 ночи, затем Флоренция 3 ночи",
+     "поезд между городами"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F13",
+   "text": "Думали в Пятигорск на 5 ночей в декабре, хотя нет, давай лучше Домбай — муж хочет на лыжах. Нас двое, из Ростова.",
+   "expect": {
+    "destination": "Домбай",
+    "origin": "Ростов-на-Дону",
+    "dates_or_month": "декабрь 2026",
+    "nights": 5,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [
+     "горные лыжи"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F14",
+   "text": "Забронируй мне гостиницу на эту пятницу, две ночи",
+   "expect": {
+    "destination": null,
+    "origin": null,
+    "dates_or_month": "2026-10-30 — 2026-11-01",
+    "nights": 2,
+    "adults": 1,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [],
+    "must_ask": true
+   }
+  },
+  {
+   "id": "F15",
+   "text": "Байкал, лёд, нерпы. Я и жена, 10 дней в марте, тысяч 200 на всё.",
+   "expect": {
+    "destination": "Байкал",
+    "origin": null,
+    "dates_or_month": "март 2027",
+    "nights": null,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": 200000,
+    "hard_constraints": [
+     "бюджет включает дорогу"
+    ],
+    "must_ask": true
+   }
+  },
+  {
+   "id": "F16",
+   "text": "Колмар на Рождество, 3 ночи, двое взрослых",
+   "expect": {
+    "destination": "Кольмар (Франция)",
+    "origin": null,
+    "dates_or_month": "около 24–25 декабря 2026",
+    "nights": 3,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F17",
+   "text": "Кириллов и Ферапонтово, хочу фрески Дионисия посмотреть. На 2 ночи в мае, едем из Вологды на своей машине, нас трое взрослых.",
+   "expect": {
+    "destination": "Кириллов",
+    "origin": "Вологда",
+    "dates_or_month": "май 2027",
+    "nights": 2,
+    "adults": 3,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [
+     "своя машина"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F18",
+   "text": "Великий Устюг к Деду Морозу со 2 по 6 января, мы с женой и дети 4 и 7 лет, из Москвы, бюджет 180 т.р.",
+   "expect": {
+    "destination": "Великий Устюг",
+    "origin": "Москва",
+    "dates_or_month": "2027-01-02 — 2027-01-06",
+    "nights": 4,
+    "adults": 2,
+    "children_ages": [
+     4,
+     7
+    ],
+    "budget_rub": 180000,
+    "hard_constraints": [],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F19",
+   "text": "нужен hotel в Dubai near Marina, 5 nights from Dec 10, 2 adults, all inclusive не надо, бюджет $3000",
+   "expect": {
+    "destination": "Дубай (Marina)",
+    "origin": null,
+    "dates_or_month": "2026-12-10 — 2026-12-15",
+    "nights": 5,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [
+     "район Marina",
+     "без all inclusive",
+     "бюджет 3000 USD (не рубли)"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F20",
+   "text": "Сапсан приходит в Питер в 00:35, заселиться надо сразу, а не ждать до двух дня. Еду один, 3 ночи, выезжаю из Москвы вечером 20 ноября.",
+   "expect": {
+    "destination": "Санкт-Петербург",
+    "origin": "Москва",
+    "dates_or_month": "выезд 2026-11-20 вечером, прибытие 2026-11-21 00:35",
+    "nights": 3,
+    "adults": 1,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [
+     "поезд",
+     "заселение сразу после 00:35"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F21",
+   "text": "Мы с подругой и наши дети: у меня близнецы по 2 года, у неё сын 10. Хотим в Евпаторию в июне на 2 недели, из Москвы на поезде.",
+   "expect": {
+    "destination": "Евпатория",
+    "origin": "Москва",
+    "dates_or_month": "июнь 2027",
+    "nights": 14,
+    "adults": 2,
+    "children_ages": [
+     2,
+     2,
+     10
+    ],
+    "budget_rub": null,
+    "hard_constraints": [
+     "поезд"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F22",
+   "text": "У меня аэрофобия, самолёт ни за что. Хотим из Перми в Калининград дней на 5 в начале декабря, вдвоём.",
+   "expect": {
+    "destination": "Калининград",
+    "origin": "Пермь",
+    "dates_or_month": "начало декабря 2026",
+    "nights": null,
+    "adults": 2,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [
+     "без перелёта"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F23",
+   "text": "Хочется спокойно отдохнуть в Подмосковье с годовалым сыном, муж с нами. Выходные 7–8 ноября, до 30 тысяч. Обязательно детская кроватка в номере.",
+   "expect": {
+    "destination": "Подмосковье",
+    "origin": null,
+    "dates_or_month": "2026-11-07 — 2026-11-08",
+    "nights": null,
+    "adults": 2,
+    "children_ages": [
+     1
+    ],
+    "budget_rub": 30000,
+    "hard_constraints": [
+     "детская кроватка"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F24",
+   "text": "Командировка в Тюмень пн–чт следующей недели, нужен отель у Технопарка, завтрак с 7 утра, закрывающие документы на юрлицо.",
+   "expect": {
+    "destination": "Тюмень",
+    "origin": null,
+    "dates_or_month": "2026-11-02 — 2026-11-05",
+    "nights": 3,
+    "adults": null,
+    "children_ages": null,
+    "budget_rub": null,
+    "hard_constraints": [
+     "рядом с Технопарком",
+     "завтрак с 07:00",
+     "документы для юрлица"
+    ],
+    "must_ask": false
+   }
+  },
+  {
+   "id": "F25",
+   "text": "Хотим с детьми в Таиланд на Новый год, бюджет 400 тысяч, летим из Москвы",
+   "expect": {
+    "destination": "Таиланд",
+    "origin": "Москва",
+    "dates_or_month": "конец декабря 2026 — начало января 2027",
+    "nights": null,
+    "adults": null,
+    "children_ages": null,
+    "budget_rub": 400000,
+    "hard_constraints": [],
+    "must_ask": true
+   }
+  }
+ ]
+}
