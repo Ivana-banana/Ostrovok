@@ -51,6 +51,11 @@ MONTHS = {
     "июл": 7, "авг": 8, "сен": 9, "окт": 10, "ноя": 11, "дек": 12,
 }  # fmt: skip
 
+
+class Disallowed(Refused):
+    """robots.txt closes this one path: skip it, the run goes on."""
+
+
 _state = {"last": -1e9, "requests": 0, "fails": 0, "budget": 40}
 _robots: dict[str, str] = {}
 _session = None
@@ -73,7 +78,7 @@ def get(host: str, path: str, *, method="GET", headers=None, data=None):
         _robots[host] = ""  # robots.txt itself is not checked against robots.txt
         _robots[host] = get(host, "/robots.txt").text
     if path != "/robots.txt" and not allowed(_robots[host], path):
-        raise Refused(f"robots.txt запрещает {host}{path}")
+        raise Disallowed(f"robots.txt запрещает {host}{path}")
     wait = PAUSE_S - (time.monotonic() - _state["last"])
     if wait > 0:
         time.sleep(wait)
@@ -353,7 +358,11 @@ def run_agoda(args, d_in: date, d_out: date, nights: int) -> list[dict]:
     rows: list[dict] = []
     (OUT / "agoda").mkdir(parents=True, exist_ok=True)
     for slug in slugs:
-        page = get(host, f"{slug.split('?')[0]}?{query}", headers=LANG)
+        try:
+            page = get(host, f"{slug.split('?')[0]}?{query}", headers=LANG)
+        except Disallowed as e:
+            print(f"  пропуск: {e}")
+            continue
         pid = re.search(r"hotel_id=(\d+)", page.text)
         if page.status_code != 200 or not pid:
             print(f"  {slug[:40]}: нет id (HTTP {page.status_code})")
