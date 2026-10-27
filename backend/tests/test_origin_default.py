@@ -63,3 +63,14 @@ def test_second_turn_keeps_one_origin_line(store):
     r = say(store, "Москва или Сочи", r.session_id)
     lines = [a for a in r.plan.spec.assumptions if a.startswith("откуда:")]
     assert len(lines) == 1 and TOLD in lines[0]
+
+
+def test_model_origin_beats_the_default_origin(monkeypatch, store):
+    def stub(message, spec, until=None, today=None):
+        return {"origin": "Самара"}
+
+    monkeypatch.setattr(llm, "extract_spec", stub)
+    r = say(store, "Москва или Питер, живём на Волге")
+    assert r.plan.spec.origin == "Самара"
+    assert "Москва" not in r.plan.spec.destinations
+    assert not any(TOLD in a for a in r.plan.spec.assumptions)
