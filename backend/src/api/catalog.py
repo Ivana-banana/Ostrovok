@@ -7,7 +7,6 @@ A name outside the snapshot goes to lookup_online: the Open-Meteo geocoder and o
 climate with a short timeout. Any error there gives None, never an exception (TRAP-2, TRAP-6).
 """
 
-import contextlib
 import difflib
 import json
 import math
@@ -230,8 +229,8 @@ def _monthly(days: list[str], values: list, how=statistics.fmean) -> list[float 
     return [round(how(by_month[m]), 1) if m in by_month else None for m in range(1, 13)]
 
 
-def _airport(here: dict, fetch: Callable[[str, dict], dict]) -> tuple[dict, float]:
-    """Airport of a place outside the snapshot and the straight km to it.
+def _airport(here: dict, fetch: Callable[[str, dict], dict]) -> tuple[dict, float, bool]:
+    """Airport of a place outside the snapshot, the straight km to it, and "OSRM failed".
 
     The straight-line nearest airport is replaced by the nearest by road (one OSRM table request
     to the ROAD_CANDIDATES nearest) only for a gain of ROAD_GAIN or ROAD_GAIN_KM, as in the
@@ -242,22 +241,29 @@ def _airport(here: dict, fetch: Callable[[str, dict], dict]) -> tuple[dict, floa
     by_km = sorted(((km_between(here, a), a) for a in ports), key=lambda x: x[0])
     near = [x for x in by_km if x[0] <= ROAD_SPAN * by_km[0][0] + ROAD_PLUS_KM][:ROAD_CANDIDATES]
     line, port = near[0]
-    km, road = round(line), False
+    km, road, failed = round(line), False, False
     if len(near) > 1:
-        # TRAP-6: no network or a strange answer keeps the straight line
-        with contextlib.suppress(Exception):
+        try:
             points = ";".join(f"{p['lon']},{p['lat']}" for p in (here, *(a for _, a in near)))
             body = fetch(OSRM + points, {"sources": 0, "annotations": "distance"})
             metres = body["distances"][0][1:]
-            if body["code"] == "Ok" and len(metres) == len(near):
-                ok = [(round(m / 1000), k, a) for (k, a), m in zip(near, metres, strict=True) if m]
-                if ok:
-                    best, bline, bport = min(ok, key=lambda x: x[0])
-                    first = metres[0] and round(metres[0] / 1000)
-                    if first and first - best < min(ROAD_GAIN_KM, ROAD_GAIN * first):
-                        best, bline, bport = first, line, port  # the gain is too small to switch
-                    km, line, port, road = best, bline, bport, True
-    return {"iata": port["iata"], "km": km, "tz": port["tz"], "road": road}, line
+            if body["code"] != "Ok" or len(metres) != len(near):
+                raise ValueError(body["code"])
+        except (OSError, KeyError, IndexError, TypeError, ValueError):  # TRAP-6: straight line
+            failed = True
+        else:
+            ok = [
+                (round(m / 1000), k, a)
+                for (k, a), m in zip(near, metres, strict=True)
+                if m is not None
+            ]
+            if ok:
+                km, line, port = min(ok, key=lambda x: x[0])
+                first = None if metres[0] is None else round(metres[0] / 1000)
+                if first is not None and first - km < min(ROAD_GAIN_KM, ROAD_GAIN * first):
+                    km, line, port = first, near[0][0], near[0][1]  # the gain is too small
+                road = True
+    return {"iata": port["iata"], "km": km, "tz": port["tz"], "road": road}, line, failed
 
 
 def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
@@ -280,7 +286,7 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     if km_between(here, {"lat": s["latitude"], "lon": s["longitude"]}) <= SEA_KM:
         sea = _monthly(s["daily"]["time"], s["daily"]["sea_surface_temperature_mean"])
         sea = sea if any(x is not None for x in sea) else None
-    airport, line = _airport(here, fetch)
+    airport, line, flaky = _airport(here, fetch)
     country = g.get("country", "")
     levels = [p["level"] for p in places() if p["country"] == country]
     place = {
@@ -290,7 +296,7 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
         "tags": ["sea"] * (sea is not None) + ["swim"] * swims(sea), "aliases": [norm(name)] if norm(name) != norm(g["name"]) else [],
         "airport": airport, "airport_km": airport["km"] if line <= AIRPORT_KM else None,
         "climate": {"air": air, "rain": rain, "sea": sea}, "source": "online",
-    }  # fmt: skip
+    } | ({"_flaky": True} if flaky else {})  # fmt: skip
     if levels:
         place["level"] = int(statistics.median(levels))
     return place
@@ -321,8 +327,9 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
     except Exception:  # noqa: BLE001  TRAP-6: no network, a timeout or a strange answer
         _failed[key] = time.monotonic()
         return None  # not in _online: after FAILED_S the geocoder is asked again
+    flaky = place is not None and place.pop("_flaky", False)  # OSRM failed: not frozen on disk
     _online[key] = place
-    if place is not None:
+    if place is not None and not flaky:
         try:
             ONLINE_CACHE.parent.mkdir(parents=True, exist_ok=True)
             ONLINE_CACHE.write_text(json.dumps({**disk, key: place}, ensure_ascii=False), "utf-8")

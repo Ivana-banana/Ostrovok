@@ -248,6 +248,7 @@ def test_trap_6_online_airport_straight_line_without_network_is_marked(geo):
     assert ap["iata"] == near[0]["iata"] and ap["road"] is False
     assert ap["km"] == round(catalog.km_between(place, near[0]))
     assert place["airport_km"] == ap["km"]
+    assert not catalog.ONLINE_CACHE.exists()  # one OSRM flake is not frozen on disk
 
 
 def test_trap_2_online_airport_by_road_when_osrm_answers(geo):
@@ -255,6 +256,38 @@ def test_trap_2_online_airport_by_road_when_osrm_answers(geo):
     fetch, near = _bled_with_roads(geo, [90, 40])
     ap = catalog.lookup_online("Блед", fetch)["airport"]
     assert ap["iata"] == near[1]["iata"] and ap["km"] == 40 and ap["road"] is True
+    assert catalog.ONLINE_CACHE.exists()  # a road answer is cached with the place
+
+
+@pytest.mark.parametrize("roads", [[100, 84], [200, 178]])
+def test_trap_2_online_road_gain_is_a_share_or_km_not_both(geo, roads):
+    """TRAP-2: only one threshold holds: 16 km = 16 % (< 20 km), 22 km = 11 % (< 15 %): switch.
+
+    `max` of the two thresholds would keep the nearest in both cases (#246, as in the snapshot).
+    """
+    first, second = roads
+    gain = first - second
+    assert (gain >= 0.15 * first) != (gain >= 20)  # exactly one condition holds
+    assert gain < max(20, 0.15 * first)  # a `max` rule would not switch
+    fetch, near = _bled_with_roads(geo, roads)
+    ap = catalog.lookup_online("Блед", fetch)["airport"]
+    assert ap["iata"] == near[1]["iata"] and ap["km"] == second and ap["road"] is True
+
+
+def test_trap_6_online_airport_one_candidate_does_not_ask_osrm(geo, monkeypatch):
+    """TRAP-6: a single candidate airport: no OSRM request, the straight line."""
+    monkeypatch.setattr(catalog, "ROAD_CANDIDATES", 1)
+    fetch, near = _bled_with_roads(geo, [90])  # the fake asserts the URL has 2 points if asked
+    asked = []
+
+    def spy(url: str, params: dict) -> dict:
+        asked.append(url)
+        return fetch(url, params)
+
+    ap = catalog.lookup_online("Блед", spy)["airport"]
+    assert ap["iata"] == near[0]["iata"] and ap["road"] is False
+    assert not any(u.startswith(catalog.OSRM) for u in asked)
+    assert catalog.ONLINE_CACHE.exists()  # nothing flaked: the place is cached
 
 
 def test_trap_2_online_airport_keeps_the_nearest_for_a_small_road_gain(geo):
