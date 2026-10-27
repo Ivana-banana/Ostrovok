@@ -10,15 +10,39 @@ from datetime import timedelta
 
 from api import catalog
 from api.contracts import HotelOffer, Plan, TransportOffer
-from api.extract import MONTH
+from api.extract import MONTH, NOT_PLACES
 from api.fixtures import CATALOG, IN_MONTH
-from api.offers import places, resolve_place
+from api.offers import FAR_AIRPORT_KM, places, resolve_place
 from api.optimizer import hotel_rows
 
 WEATHER_RE = re.compile(
     r"погод|климат|температур|градус|дожд|осадк|снег|ливн|холодн|тепл|жарк|купа|вода\s+в\s+мор"
 )
 RAIN_RE = re.compile(r"дожд|осадк|снег|ливн")
+# «какой ближайший аэропорт?», «аэропорт далеко?»: the airport is asked about. «Сколько стоит
+# трансфер из аэропорта?» and «рейс в аэропорт задержат?» ask about the plan, not the place (#123).
+AIRPORT_RE = re.compile(r"аэропорт|аэродром")
+AIRPORT_ASK_RE = re.compile(
+    r"\b(?:какой|какие|какого|где|далеко|далек\w*|ближайш\w*|расстояни\w*|есть\s+ли|свой|"
+    r"свое[гм]\w*|км|километр\w*)\b"
+)
+AIRPORT_PLAN_RE = re.compile(
+    r"трансфер|такси|задерж|опозда|багаж|парковк|стоянк|встреч|добра|доехать"
+)
+# A wish or an order to go there: the city is then an edit of the plan, not the subject of a question.
+GO_THERE_RE = re.compile(
+    r"\b(?:поех\w*|поед\w*|лет[иеу]м\w*|едем|отправ\w*|переезж\w*|измен\w*|вместо|"
+    r"перенес\w*|поменя\w*|махн\w*)\b|\bа\s+если\s+(?:во?|на)\b"
+)
+# «Из какого аэропорта вылет?» asks about the airport of the origin, not of the place of the plan.
+DEPARTURE_RE = re.compile(r"\bвылет\w*|\bоткуда\b|\bотправлени\w*")
+# «в Анталии», «у Тихвина», «к Выборгу»: a capitalized name after a preposition. Extract reads
+# only some of these forms; a name it misses must not turn into the climate of the plan city.
+PLACE_AFTER_RE = re.compile(
+    r"(?:^|[\s,(])(?:во?|на|у|ко?|от|около|возле|близ|для)\s+"
+    r"([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*(?:\s+[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)?)"
+)
+NOT_A_PLACE_RE = re.compile(r"(?:рожд|пасх|масленич|крещ|троиц)")
 VISA_RE = re.compile(r"\bвиз[аыуеой]{0,2}\b|\bвизов\w*|загранпаспорт\w*|правил\w*\s+въезд")
 # «почему не Бульвар?», «чем Гранд хуже?», «а не Парк?»: a hotel of the plan is named.
 VERSUS_RE = re.compile(
@@ -325,44 +349,196 @@ def _places(plan: Plan) -> list[str]:
     return cities
 
 
-def without_plan_fields(found: dict, plan: Plan) -> dict:
+def is_airport_question(low: str) -> bool:
+    return bool(
+        AIRPORT_RE.search(low) and AIRPORT_ASK_RE.search(low) and not AIRPORT_PLAN_RE.search(low)
+    )
+
+
+def _place(name: str) -> dict | None:
+    """The place of a name as typed. A genitive or dative the geocoder does not know («у Тихвина»,
+    «к Тихвину») is asked once more without its last vowel."""
+    place = resolve_place(name)
+    if place is None and len(name) > 4 and name[-1] in "ауюы":
+        place = resolve_place(name[:-1])
+    return place
+
+
+def _name_key(name: str) -> str:
+    place = _place(name)
+    return place["name"] if place else catalog.norm(name)[:5]
+
+
+def _named_places(plan: Plan, message: str, found: dict) -> list[str]:
+    """The places a message names: those extract read (its destinations; an «от Тихвина» that is
+    no new origin reads as a departure from Тихвин) and the capitalized names after a
+    preposition that it missed. A name keeps its form: the catalogue and the geocoder decide."""
+    typed, heads = [], set()  # the names after a preposition; the first words of all of them
+    for m in PLACE_AFTER_RE.finditer(message):
+        words = m.group(1).split()
+        first = words[0].lower().replace("ё", "е")
+        heads.add(words[0])
+        if (
+            first in NOT_PLACES  # «Новый год», «Майские»
+            or re.fullmatch(MONTH, first)  # «а в Мае тепло?»
+            or NOT_A_PLACE_RE.match(first)
+            or (first.startswith("нов") and re.match(r"\s+год", message[m.end(1) :]))
+        ):
+            continue  # «в Новом году» is a time; «Новороссийск», «Новом Афоне» are places
+        # «Нижнем Новгороде» is one name; «Анталии Бульвар» is a name and a word: the first fits.
+        # Two words that the data knows neither as a whole nor the first are one name («Новом Афоне»).
+        joined = " ".join(words)
+        whole = len(words) == 1 or _place(joined) or not _place(words[0])
+        typed.append(joined if whole else words[0])
+    # Extract keeps the first word of «Новом Афоне» and of «в Новом году»: the text decides.
+    names = [n for n in found.get("destinations") or [] if n not in heads]
+    origin = found.get("origin")
+    if origin and origin != plan.spec.origin and origin not in heads:
+        names.append(origin)
+    names += typed
+    seen, out = set(), []
+    for n in names:
+        if (key := _name_key(n)) not in seen:
+            seen.add(key)
+            out.append(n)
+    return out
+
+
+def is_city_question(plan: Plan, low: str, message: str, found: dict) -> bool:
+    """«Какая погода в Анталии?» at a plan in Сочи: a question about a named city (#123).
+    «Хочу в Анталию, там тепло?» and «поехали в Анталию» order, so they stay an edit."""
+    return bool(
+        (WEATHER_RE.search(low) or is_airport_question(low))
+        and not (CHOICE_WORDS_RE.search(low) or GO_THERE_RE.search(low))
+        and not (DEPARTURE_RE.search(low) and is_airport_question(low))
+        and _named_places(plan, message, found)
+    )
+
+
+def without_plan_fields(found: dict, plan: Plan, low: str = "", message: str = "") -> dict:
     """The fields of a question minus the month and the places the plan already has:
-    «какая погода в декабре?» at a December plan in Сочи names no new field."""
+    «какая погода в декабре?» at a December plan names no new field. The places and the month
+    of a question about a named city are the subject of the question, not a new field (#123)."""
     month, places = _month(plan), set(plan.spec.destinations)
     if plan.spec.origin:
         places.add(plan.spec.origin)  # «почему не Москва?»: the city of departure is no new place
+    about_city = bool(low) and is_city_question(plan, low, message, found)
     return {
         k: v
         for k, v in found.items()
         if not (k == "month" and v == month)
         and not (k == "destinations" and v and set(v) <= places)
+        and not (about_city and k in ("destinations", "origin", "month"))
     }
 
 
-def weather_fact(plan: Plan, low: str = "") -> str:
-    """The climate of the trip month from the catalogue (catalog.json, or the geocoder place)."""
-    month = _month(plan)
+def _rain(place: dict, month: int) -> str:
+    rain = place["climate"]["rain"][month - 1]
+    return f", осадки {rain:g} мм за месяц" if rain is not None else ", осадков в данных нет"
+
+
+def weather_fact(plan: Plan, low: str = "", cities: list[str] | None = None, month=None) -> str:
+    """The climate of the trip month from the catalogue (catalog.json, or the geocoder place).
+    `cities`: the places the question names; the places of the plan when it names none."""
+    month = month or _month(plan)
     when = IN_MONTH[month - 1] if month else ""
     lines = []
-    for city in _places(plan):
-        place = resolve_place(city)
+    for city in cities or _places(plan):
+        place = _place(city)
         if place is None:
             lines.append(f"Климата для {city} в данных нет — {NO_DATA}.")
             continue
+        city = place["name"]
         air, water = catalog.month_climate(place, month) if month else (None, None)
         if air is None:
             lines.append(f"Климата {city} {when or 'вашего месяца'} в данных нет — {NO_DATA}.")
             continue
         fact = f"днём {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
-        rain = place["climate"]["rain"][month - 1]
         if RAIN_RE.search(low):
-            fact += (
-                f", осадки {rain:g} мм за месяц" if rain is not None else ", осадков в данных нет"
-            )
+            fact += _rain(place, month)
         lines.append(f"{city} {when}: {fact} — оценка по каталогу, не прогноз.")
     if not lines:
         return f"Направление не выбрано — климата {NO_DATA}."
     return "\n".join(lines) + "\nПрогноза погоды в данных нет."
+
+
+def _how(port: dict) -> str:
+    """How the airport km were measured: «по дороге» when the snapshot has the road length
+    (`road`), else «по прямой». The data decides, the word is never guessed (TRAP-4)."""
+    return "по дороге" if port.get("road") else "по прямой"
+
+
+def destination_line(plan: Plan) -> str:
+    """One line of the first answer for the main place: the climate of the month and the nearest
+    airport, from the catalogue or the geocoder place. A part without data is left out, never
+    guessed (TRAP-4); no data at all gives an empty line."""
+    month = _month(plan)
+    place = _place(plan.spec.destinations[0]) if plan.spec.destinations else None
+    if place is None:
+        return ""
+    parts = []
+    air, _ = catalog.month_climate(place, month) if month else (None, None)
+    if air is not None:
+        rain = place["climate"]["rain"][month - 1]
+        parts.append(
+            f"{IN_MONTH[month - 1]} днём ≈ {air:g} °C"
+            + (f", {rain:g} мм" if rain is not None else "")
+        )
+    if port := place.get("airport"):
+        parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км {_how(port)}")
+    if not parts:
+        return ""
+    return "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
+
+
+def airport_fact(plan: Plan, cities: list[str] | None = None) -> str:
+    """The nearest airport of each place: IATA code and km from the catalogue. A place that is
+    far from it has no airport of its own; a flight of the plan to it goes through that airport."""
+    lines = []
+    for city in cities or _places(plan):
+        place = _place(city)
+        port = place.get("airport") if place else None
+        if not port:
+            lines.append(f"Аэропорта для {city} в данных нет — {NO_DATA}.")
+            continue
+        name, iata, km = place["name"], port["iata"], port["km"]
+        if km <= FAR_AIRPORT_KM:
+            lines.append(f"{name}: ближайший аэропорт {iata}, {km} км от города ({_how(port)}).")
+            continue
+        line = f"{name}: своего аэропорта нет, ближайший {iata}, {km} км {_how(port)}."
+        routes = dict.fromkeys(
+            f"{o.origin} → {o.destination}"
+            for o in plan.offers
+            if isinstance(o, TransportOffer) and o.mode == "flight" and o.destination == name
+        )
+        if routes:
+            line += f" Перелёт в плане ({', '.join(routes)}) — через {iata}: дальше по земле."
+        lines.append(line)
+    if not lines:
+        return f"Направление не выбрано — аэропорта {NO_DATA}."
+    return "\n".join(lines)
+
+
+def city_fact(plan: Plan, low: str, message: str = "", found: dict | None = None) -> str:
+    """Climate and airport of the named places (of the plan places when none is named)."""
+    cities = _named_places(plan, message, found or {})
+    month = (found or {}).get("month") if cities else None
+    facts = []
+    if WEATHER_RE.search(low):
+        facts.append(weather_fact(plan, low, cities, month))
+    if is_airport_question(low):
+        if DEPARTURE_RE.search(
+            low
+        ):  # «из какого аэропорта вылет?»: the origin, never the plan city
+            origin = plan.spec.origin
+            facts.append(
+                airport_fact(plan, [origin])
+                if origin
+                else f"Город вылета не назван — аэропорта вылета {NO_DATA}."
+            )
+        else:
+            facts.append(airport_fact(plan, cities))
+    return "\n".join(facts)
 
 
 def visa_fact() -> str:
@@ -372,11 +548,12 @@ def visa_fact() -> str:
     )
 
 
-def plan_fact(plan: Plan, low: str, message: str = "") -> str:
+def plan_fact(plan: Plan, low: str, message: str = "", found: dict | None = None) -> str:
     """The fact a question about the plan asks for, or "" when it asks for none of these.
 
     `low` is the message in lower case without «ё»; `message` is the same with its case, for
-    the name of a hotel that is not in the data. A named hotel goes first: «почему не
+    the name of a hotel that is not in the data. `found` is what extract read from the message:
+    the places a question about a city names (#123). A named hotel goes first: «почему не
     Бульвар, там же море ближе?» asks about the hotel, not the weather."""
     tail = why_not_tail(low)
     hotel_tail = not (tail and NOT_A_NAME_RE.search(tail))  # «почему не 4 звезды?» names none
@@ -390,6 +567,4 @@ def plan_fact(plan: Plan, low: str, message: str = "") -> str:
         return fact
     if VISA_RE.search(low):
         return visa_fact()
-    if WEATHER_RE.search(low):
-        return weather_fact(plan, low)
-    return ""
+    return city_fact(plan, low, message, found)
