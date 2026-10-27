@@ -16,6 +16,7 @@ same path runs on rules (TRAP-1).
 """
 
 import re
+from calendar import monthrange
 from datetime import date, timedelta
 from uuid import uuid4
 
@@ -267,6 +268,16 @@ def _noted(spec: TripSpec, label: str) -> bool:
     return any(_label(a) == label for a in spec.assumptions)
 
 
+def in_month(day: date, month: int) -> date:
+    """The same day of the next such month, not in the past; the last day if the month is short."""
+    today = date.today()
+    for year in (today.year, today.year + 1):
+        moved = date(year, month, min(day.day, monthrange(year, month)[1]))
+        if moved >= today:
+            return moved
+    return moved
+
+
 def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     """Stated fields override the spec; their old assumptions are dropped."""
     data = spec.model_dump()
@@ -286,6 +297,10 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
         if "даты" not in stated and assumed:  # the dates were guessed, not said; a shift is said
             data["date_from"] = None
             stated.add("даты")
+        elif "даты" not in stated and data["date_from"] and found.get("month"):
+            # Named dates move to the new month, day and length kept (#190).
+            if data["date_from"].month != found["month"]:
+                data["date_from"] = in_month(data["date_from"], found["month"])
     if any(is_too_long_note(n) for n in notes):
         stated.add("длительность")  # a length not taken: its note replaces the old one (#160)
     kept = [a for a in data["assumptions"] if _label(a) not in stated]

@@ -1,0 +1,124 @@
+"""#190: a new month after named dates moves the dates: the month and the dates never disagree.
+
+Rules only, no model (TRAP-1). Today is fixed: Tuesday 2026-10-27.
+"""
+
+from datetime import date
+
+import pytest
+
+from api.contracts import ChatRequest
+from api.model import chat
+from api.store import SessionStore
+
+
+@pytest.fixture(autouse=True)
+def today(monkeypatch):
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 27)
+
+    for module in ("extract", "dag", "model"):
+        monkeypatch.setattr(f"api.{module}.date", FixedDate)
+
+
+@pytest.fixture
+def store(tmp_path):
+    return SessionStore(tmp_path / "sessions.db")
+
+
+def say(store, text, sid=None):
+    return chat(ChatRequest(session_id=sid, message=text), store)
+
+
+def named(store, dates="с 3 по 8 декабря"):
+    r = say(store, f"Сочи из Москвы {dates}, двое взрослых")
+    assert r.stage == "compare"
+    return r
+
+
+def agree(r):
+    s = r.plan.spec
+    assert s.month == s.date_from.month
+    assert s.nights == (s.date_to - s.date_from).days
+
+
+def test_next_month_after_named_dates_moves_them_keeping_day_and_length(store):
+    first = named(store)
+    r = say(store, "лучше в январе", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.nights, s.month) == (
+        date(2027, 1, 3),
+        date(2027, 1, 8),
+        5,
+        1,
+    )
+    agree(r)
+    change = next(c for c in r.plan.changes if c.what == "даты")
+    assert "03.12" in change.before and "03.01" in change.after
+    assert "Было → стало" in r.reply and "03.01.2027–08.01.2027" in r.reply
+    assert "→ 03.12" not in r.reply and "03.12–08.12" not in r.reply.split("\n", 2)[2]
+    assert not any(a.startswith("даты:") for a in s.assumptions)  # the dates stay named
+
+
+def test_the_cart_dates_follow_the_new_month(store):
+    first = named(store)
+    r = say(store, "лучше в январе", first.session_id)
+    r = say(store, "беру", r.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 3)
+    assert all("03.12" not in i.title for i in r.cart.items)
+
+
+def test_summer_after_named_dates(store):
+    first = named(store)
+    r = say(store, "давай летом", first.session_id)
+    s = r.plan.spec
+    assert s.month == 6 and s.date_from == date(2027, 6, 3) and s.nights == 5
+    agree(r)
+
+
+def test_the_move_survives_the_next_message(store):
+    first = named(store)
+    r = say(store, "лучше в январе", first.session_id)
+    r = say(store, "на 4 ночи", r.session_id)
+    assert r.plan.spec.date_from == date(2027, 1, 3) and r.plan.spec.nights == 4
+
+
+def test_the_end_of_the_month_is_clamped(store):
+    first = named(store, "с 29 по 31 января")
+    r = say(store, "лучше в феврале", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.nights) == (date(2027, 2, 28), date(2027, 3, 2), 2)
+    agree(r)
+
+
+def test_the_past_check_in_goes_to_next_year(store):
+    first = named(store, "с 3 по 8 декабря")
+    r = say(store, "лучше в октябре", first.session_id)  # 03.10.2026 is past
+    assert r.plan.spec.date_from == date(2027, 10, 3)
+
+
+def test_the_explicit_date_wins_over_the_month_move(store):
+    first = named(store)
+    r = say(store, "лучше в январе, с 10 по 15 января", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to) == (date(2027, 1, 10), date(2027, 1, 15))
+
+
+def test_the_same_month_changes_nothing(store):
+    first = named(store)
+    r = say(store, "лучше в декабре", first.session_id)
+    assert (r.plan.spec.date_from, r.plan.spec.date_to) == (date(2026, 12, 3), date(2026, 12, 8))
+
+
+def test_guessed_dates_move_as_before(store):
+    first = say(store, "Сочи из Москвы в ноябре, двое взрослых")
+    guess = first.plan.spec.date_from
+    assert any("точных дат не было" in a for a in first.plan.spec.assumptions)
+    r = say(store, "лучше в январе", first.session_id)
+    s = r.plan.spec
+    assert s.month == 1 and s.date_from.month == 1 != guess.month
+    assert any("точных дат не было" in a for a in s.assumptions)  # still a guess
+    assert s.date_from.weekday() == 5  # the guess picks a Saturday
+    agree(r)
