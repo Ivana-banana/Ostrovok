@@ -96,16 +96,48 @@ def _drop_orphan_transfers(items: list[Offer]) -> list[Offer]:
     return [o for o in items if o.kind != "transfer" or o.offer_id in valid]
 
 
+def refused(plan: Plan) -> set[str]:
+    """Slots ("out", "back") whose transfer the user refused (#200): the selected hotel and leg
+    have a transfer offer, and it is not selected. The plan selects the transfer of every pair
+    (pick_hotel); only the user takes it out («без трансфера», the cart). The refusal so lives
+    in `plan.selected`; the contract has no field for it. Same rule as api/timeline.py."""
+    by_id = {o.offer_id: o for o in plan.offers}
+    chosen = [by_id[i] for i in plan.selected if i in by_id]
+    hotels = [o for o in chosen if o.kind == "hotel"]
+    legs = [o for o in chosen if o.kind == "transport"]
+    return {
+        _slot(x, plan.spec)
+        for h in hotels
+        for x in legs
+        if transfer_id(h.offer_id, x.offer_id) in by_id
+        and transfer_id(h.offer_id, x.offer_id) not in plan.selected
+    }
+
+
+def keep_refusal(plan: Plan, selected: list[str]) -> list[str]:
+    """`selected` without the transfers of the slots the user refused in `plan` (#200)."""
+    slots = refused(plan)
+    by_id = {o.offer_id: o for o in plan.offers}
+    legs = [by_id[i] for i in selected if i in by_id and by_id[i].kind == "transport"]
+    hotels = [i for i in selected if i in by_id and by_id[i].kind == "hotel"]
+    drop = {
+        transfer_id(h, x.offer_id) for h in hotels for x in legs if _slot(x, plan.spec) in slots
+    }
+    return [i for i in selected if i not in drop]
+
+
 def _with_transfers(plan: Plan, items: list[Offer], added: Offer) -> list[Offer]:
     """A transfer links one hotel and one leg: a new hotel or leg replaces the transfers of the
     old one with its own, so the cart and the timeline (TRAP-5) describe the same trip.
 
     A hotel or leg the user returns (still in `plan.selected`) brings back only the transfers
     that are still selected: the ones dropped with it. A transfer the user removed on its own
-    left the selection and stays out; the user can add it back."""
+    left the selection and stays out; the user can add it back. A new hotel or leg brings no
+    transfer of a slot the user refused (#200)."""
     if added.kind not in ("hotel", "transport"):
         return items
     by_id = {o.offer_id: o for o in plan.offers}
+    no = refused(plan)
     items = _drop_orphan_transfers(items)
     hotels = [o for o in items if o.kind == "hotel"]
     legs = [o for o in items if o.kind == "transport"]
@@ -117,7 +149,7 @@ def _with_transfers(plan: Plan, items: list[Offer], added: Offer) -> list[Offer]
         if (
             t is not None
             and t.offer_id not in have
-            and (not returned or t.offer_id in plan.selected)
+            and (t.offer_id in plan.selected if returned else _slot(x, plan.spec) not in no)
         ):
             items.append(t)
     order = {o.offer_id: i for i, o in enumerate(plan.offers)}

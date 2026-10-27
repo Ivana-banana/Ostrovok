@@ -22,7 +22,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import llm
-from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, sync_plan
+from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
 from api.contracts import (
     Cart,
     ChatReply,
@@ -688,7 +688,9 @@ def switch_transport(plan: Plan, text: str) -> tuple[Plan | None, str]:
     kept = [i for i in plan.selected if not isinstance(by_id.get(i), TransportOffer)]
     out = plan.model_copy(
         update={
-            "selected": pick_hotel([*kept, *chosen], plan.offers, hotel.offer_id),
+            "selected": keep_refusal(
+                plan, pick_hotel([*kept, *chosen], plan.offers, hotel.offer_id)
+            ),
             "changes": [],
         }
     )
@@ -989,8 +991,6 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
     else:
         plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
         plan.timeline, plan.issues = build_timeline(plan)
-    # The checker derives a transfer from the hotel and the leg; the user does not take it.
-    plan.timeline = [e for e in plan.timeline if e.offer_id not in ids]
     rows = "; ".join(f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in gone)
     head = f"Убираю трансфер из плана: {rows}."
     if old.stage == "assemble":
