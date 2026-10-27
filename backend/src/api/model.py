@@ -42,6 +42,7 @@ from api.dag import (
     period,
     replan,
     shift_dates,
+    shift_matches,
 )
 from api.extract import (
     DATE_KEYS,
@@ -81,10 +82,6 @@ CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
 NEGATION_RE = re.compile(r"\b(нет|не)\b")
-# A shift by months or a year: SHIFT_RE moves days and weeks only (#173).
-MONTH_SHIFT_RE = re.compile(
-    r"\bна\s+(?:(?:\d+|пар[уы]|полтора)\s+)?(?:месяц\w*|пол\s?года|год\w*)\s+(?:позже|раньше|вперед|назад)\b"
-)
 BOOK_RE = re.compile(r"\bподтверждаю\b")
 # S4: orders to set a price, to book without the confirmation or to show the prompt are
 # refused. Only orders: «цена 0 ₽ за ребёнка?» or «отель без подтверждения по телефону» pass.
@@ -864,10 +861,11 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     )
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
-    # «давай на месяц позже» moves the dates, the plan has no such shift: no consent either (#173)
-    month_shift = bool(MONTH_SHIFT_RE.search(low))
-    yes = _confirmed(t) and not asks_length and not month_shift
-    service = prev is not None and (pick or (consent and not asks_length))
+    # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
+    # «беру, на месяц вперёд спасибо» is a consent: shift_matches skips a remark after a booking.
+    shifts = bool(shift_matches(t.replace("ё", "е"), prev is not None))
+    yes = _confirmed(t) and not asks_length and not shifts
+    service = prev is not None and (pick or (consent and not asks_length and not shifts))
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
     other = (
@@ -886,8 +884,12 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if service or other or not use_llm or is_chip_message(message)  # chips: S9, #76
         else llm.extract_spec(message, old.plan.spec, deadline)
     )
-    if SHIFT_RE.search(t.replace("ё", "е")):
-        found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
+    if shifts:
+        if (
+            found.pop("nights", None) is not None
+        ):  # «на неделю позже» moves the dates, the length stays
+            # the length note of that reading goes with it; a length refused stays named (#160)
+            notes[:] = [n for n in notes if _label(n) != "длительность" or is_too_long_note(n)]
         if llm_found:
             # The rules read the shift (which end, how far); the model must not add other dates.
             for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
@@ -992,19 +994,20 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
 
     dated = bool(old.plan.spec.date_from and old.plan.spec.date_to)
     te = t.replace("ё", "е")
-    date_edit = DATE_EDIT_RE.search(te) or month_shift
+    date_edit = DATE_EDIT_RE.search(te)
     if not found and prev and dated and not SHIFT_RE.search(te) and date_edit:
         # The message asks to move the dates but says how far or which way in no known words (S2).
         s = old.plan.spec
         text = (
             f"Не понял, что изменить в датах. Сейчас {period(s)}. "
-            "Напишите, например: «на два дня позже», «обратно на день раньше» "
+            "Напишите, например: «на два дня позже», «на месяц позже», «обратно на день раньше» "
             "или «с 20 ноября на 5 ночей»."
         )
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     if "date_from" not in found:
         try:
-            spec = shift_dates(spec, message)  # «на два дня позже» moves the current dates (S2)
+            # «на два дня позже» moves the current dates (S2)
+            spec = shift_dates(spec, message, prev is not None)
         except ValueError as e:
             text = (
                 f"{e} Из этого сообщения ничего не применено. "

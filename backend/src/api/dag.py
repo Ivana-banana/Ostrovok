@@ -16,6 +16,7 @@ Plan.changes are "before -> after" lines from spec fields and tool data, not the
 """
 
 import re
+from calendar import monthrange
 from datetime import date, timedelta
 
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
@@ -86,12 +87,51 @@ PRIORITIES = {
 }
 
 
-# «на два дня позже», «на пару недель раньше», «на сутки позже»: a shift of the current dates,
-# not a duration. model.step drops the nights the extractor reads from «неделю» when it matches.
+# «на два дня позже», «на пару недель раньше», «на месяц позже», «на полгода раньше», «на год
+# вперёд»: a shift of the current dates, not a duration. model.step drops the nights the
+# extractor reads from «неделю» when it matches. Months and years move on the calendar (#176).
+LONG_UNIT = r"месяц\w*|пол\s?года|год(?:а|у|ик\w*)?(?!\w)"
 SHIFT_RE = re.compile(
-    rf"\bна\s+(?:(?P<n>{NUM}|пар[уы])\s+)?(?P<unit>дн\w*|день|сут\w*|недел\w*|ноч\w*)"
-    r"\s+(?P<way>позже|раньше)"
+    rf"\bна\s+(?:(?P<n>{NUM}|пар[уы])\s+)?(?P<unit>дн\w*|день|сут\w*|недел\w*|ноч\w*|{LONG_UNIT})"
+    r"\s+(?P<way>позже|раньше|вперед|назад)"
 )
+# «оплачу на месяц позже» (the user pays later) and «беру, на месяц вперёд спасибо» (a thanks
+# after the phrase) are a consent with a remark, not a request to move the plan (#176). Any word
+# that turns the sentence («оплачу, только сдвинь на месяц позже») or a stop makes a request.
+PAYS_RE = re.compile(r"\b(?:оплач\w*)\b")
+THANKS_RE = re.compile(r"\s*(?:большое\s+|вам\s+)?спасибо\b")
+TURN_RE = re.compile(
+    r"\b(?:но|только|если|а|лучше|хочу|хотим|можно|нет|не|давай\w*"
+    r"|сдвин\w*|перенес\w*|перенос\w*|передвин\w*|отлож\w*|подвин\w*)\b|[.!?;]"
+)
+
+
+def _is_long(m: re.Match) -> bool:
+    return bool(re.fullmatch(LONG_UNIT, m.group("unit")))
+
+
+def shift_matches(t: str, planned: bool = True) -> list[re.Match]:
+    """The shift phrases of the text t (lower case, «е» for «ё») that ask to move the dates.
+
+    planned: the session has a plan. Without one «на полгода вперёд» is part of the first
+    request, not a move of dates the user never saw. «Вперёд» and «назад» are no shift of
+    the guessed dates either: «на неделю вперёд» is a length there. «Позже» and «раньше» move
+    days and weeks as before.
+    """
+    found = list(SHIFT_RE.finditer(t))
+    if not planned:
+        found = [m for m in found if not _is_long(m) and m.group("way") in ("позже", "раньше")]
+    return [m for m in found if not (_is_long(m) and _remark(t, m))]
+
+
+def _remark(t: str, m: re.Match) -> bool:
+    """True when the phrase m is a remark of a consent: after «оплачу» or before «спасибо»."""
+    if THANKS_RE.match(t[m.end() :]):
+        return True
+    verbs = list(PAYS_RE.finditer(t[: m.start()]))
+    return bool(verbs) and not TURN_RE.search(t[verbs[-1].end() : m.start()])
+
+
 # A word that says which end of the trip moves; no word -> both ends move. Departure verbs
 # («улетим», «уедем», «выезд из Москвы», «отъезд») mean leaving home, so they are no cue.
 END_CUE = r"\b(?:обратн|верну|верне[мт]|верни|домой|выезд\s+из\s+отел|выселя|выселен|выписа|возврат|возвращ)"
@@ -105,11 +145,14 @@ _DATE_WORD = (
 )
 _WEAK_DATE_WORD = r"(?:дат\w*|заезд\w*|заселени\w*|возвращени\w*|возврат\w*)"
 _UNIT = r"(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
+# «на полтора месяца позже»: an amount SHIFT_RE does not read
+_LONG_ODD = rf"\bна\s+\w+\s+(?:{LONG_UNIT})\s+(?:позже|раньше|вперед|назад)"
 _EDIT_START = START_CUE.replace("|вылет", "")  # a bare «вылет позже» may be a time
 DATE_EDIT_RE = re.compile(
     rf"\b{_MOVE}\b[^.!?]*?\b(?:{_DATE_WORD}|на\s+\w+\s+{_UNIT})"
     rf"|\b{_WEAK_MOVE}\b[^.!?]*?\b(?:{_WEAK_DATE_WORD}|на\s+\w+\s+{_UNIT})"
     rf"|\bна\s+\w+\s+{_UNIT}\s+(?:позже|раньше)"
+    rf"|{_LONG_ODD}"
     # «вылет позже 10 утра», «хочу вылет позже, утром тяжело» is a time of day, not a date
     rf"|(?:{_EDIT_START}|{END_CUE})\w*[^.!?,;]*\b(?:позже|раньше)\b(?!\s+(?:\d|чем|в\s+\d))"
 )
@@ -117,8 +160,25 @@ MANUAL_WHY = "вы выбрали этот отель сами"
 # What the user sees about a shift; the kinds are the ends that moved.
 SHIFT_NOTE = {"both": "сдвинуты", "start": "заезд", "end": "возврат"}
 SHIFT_NOTE_RE = re.compile(
-    r"^даты: (сдвинуты|заезд|возврат) на (\d+) дн\. (позже|раньше) по вашей просьбе$"
+    r"^даты: (сдвинуты|заезд|возврат) на (\d+) (дн\.|мес\.|год|года|лет) (позже|раньше)"
+    r" по вашей просьбе$"
 )
+
+
+def _amount_text(unit: str, n: int) -> str:
+    """«3 дн.», «1 мес.», «1 год», «2 года», «5 лет»: months in whole years read as years."""
+    if unit == "дн.":
+        return f"{n} дн."
+    if n % 12:
+        return f"{n} мес."
+    y = n // 12
+    return f"{y} " + (
+        "год"
+        if y % 10 == 1 and y % 100 != 11
+        else "года"
+        if y % 10 in (2, 3, 4) and y % 100 not in (12, 13, 14)
+        else "лет"
+    )
 
 
 def is_shift_note(assumption: str) -> bool:
@@ -151,40 +211,68 @@ def _amount(word: str | None) -> int:
     return int(word) if word.isdigit() else 2 if word.startswith("пар") else NUMS.get(word, 1)
 
 
-def shift_dates(spec: TripSpec, text: str) -> TripSpec:
-    """The spec with its dates moved by «на N дней позже/раньше»; unchanged without the phrase.
+def add_months(d: date, n: int) -> date:
+    """The same day of the month n months on; the last day of the month if it has no such day."""
+    year, month = divmod(d.month - 1 + n, 12)
+    return date(d.year + year, month + 1, min(d.day, monthrange(d.year + year, month + 1)[1]))
+
+
+def _months(m: re.Match) -> int:
+    """The calendar months of a long phrase: 1 for «месяц», 6 for «полгода», 12 for «год»."""
+    unit, n = m.group("unit"), _amount(m.group("n"))
+    return 6 if unit.startswith("пол") else n * 12 if unit.startswith("год") else n
+
+
+def shift_dates(spec: TripSpec, text: str, planned: bool = True) -> TripSpec:
+    """The spec with its dates moved by «на N дней/месяцев позже/раньше»; unchanged without it.
 
     The extractor sees one message, not the spec, so the shift is applied here (S2). A cue word
     («обратно», «заселиться») moves one end only and changes the nights. The old «даты:»
-    assumptions go; a note «сдвинуты на N дн. … по вашей просьбе» (totals per end) replaces them.
+    assumptions go; a note «сдвинуты на N дн./мес./год … по вашей просьбе» (totals per end) replaces them.
     Raises ValueError when less than one night would be left.
     """
     t = text.lower().replace("ё", "е")
-    found = list(SHIFT_RE.finditer(t))
+    found = shift_matches(t, planned)
     if not found or not (spec.date_from and spec.date_to):
         return spec
     start, end = spec.date_from, spec.date_to
-    total = {"both": 0, "start": 0, "end": 0}
+    total = {k: {"дн.": 0, "мес.": 0} for k in ("both", "start", "end")}  # days, months
     for a in spec.assumptions:  # the shifts of earlier turns count too
         if old := SHIFT_NOTE_RE.match(a):
             kind = next(k for k, w in SHIFT_NOTE.items() if w == old.group(1))
-            total[kind] += int(old.group(2)) * (1 if old.group(3) == "позже" else -1)
+            unit = "дн." if old.group(3) == "дн." else "мес."
+            n = int(old.group(2)) * (12 if old.group(3) in ("год", "года", "лет") else 1)
+            total[kind][unit] += n * (1 if old.group(4) == "позже" else -1)
     for i, m in enumerate(found):
-        days = _amount(m.group("n")) * (7 if m.group("unit").startswith("нед") else 1)
-        days *= 1 if m.group("way") == "позже" else -1
+        sign = 1 if m.group("way") in ("позже", "вперед") else -1
         lo = found[i - 1].end() if i else 0
         hi = found[i + 1].start() if i + 1 < len(found) else len(t)
         kind = _which_end(t, m, lo, hi, spec.destinations)
-        total[kind] += days
-        start += timedelta(days=days) if kind != "end" else timedelta(0)
-        end += timedelta(days=days) if kind != "start" else timedelta(0)
+        old_start, old_end = start, end
+        if _is_long(m):
+            total[kind]["мес."] += sign * _months(m)
+            if kind == "end":
+                end = add_months(end, sign * _months(m))
+            else:  # both ends: the nights stay, the end follows the start
+                start = add_months(start, sign * _months(m))
+                end = start + (old_end - old_start) if kind == "both" else end
+        else:
+            days = _amount(m.group("n")) * (7 if m.group("unit").startswith("нед") else 1)
+            total[kind]["дн."] += sign * days
+            start += timedelta(days=sign * days) if kind != "end" else timedelta(0)
+            end += timedelta(days=sign * days) if kind != "start" else timedelta(0)
     if (end - start).days < 1:
         raise ValueError("В поездке останется меньше одной ночи.")
+    if start < date.today() and start < spec.date_from:
+        # The year of a shift is known: a check-in in the past is refused, the plan stays (#176)
+        raise ValueError(f"Заезд пришёлся бы на {start:%d.%m.%Y}: эта дата уже прошла.")
     kept = [a for a in spec.assumptions if not a.startswith("даты:")]  # dates are stated now
-    for kind, days in total.items():
-        if days:
-            way = "позже" if days > 0 else "раньше"
-            kept.append(f"даты: {SHIFT_NOTE[kind]} на {abs(days)} дн. {way} по вашей просьбе")
+    for kind, units in total.items():
+        for unit, n in units.items():
+            if n:
+                way = "позже" if n > 0 else "раньше"
+                amount = _amount_text(unit, abs(n))
+                kept.append(f"даты: {SHIFT_NOTE[kind]} на {amount} {way} по вашей просьбе")
     return spec.model_copy(
         update={
             "date_from": start,
