@@ -165,6 +165,14 @@ suite("доска поездки", () => {
     expect(v).toContain("имитирован");
   });
 
+  it("ваучер настоящей брони: статус вместо пометки об имитации (#376)", () => {
+    const r = structuredClone(base);
+    r.voucher = { ...r.voucher!, simulated: false, status: "created" };
+    const v = render(r).querySelector("[aria-label='Ваучер']")?.textContent ?? "";
+    expect(v).not.toContain("имитирован");
+    expect(v).toContain("Статус брони: создана, ждёт подтверждения");
+  });
+
   it("корзина: предупреждение о бюджете до подтверждения", () => {
     const r = structuredClone(base);
     r.stage = "checkout";
