@@ -174,7 +174,7 @@ ROUTE = "маршрут"
 CANDIDATES = "варианты"
 ROUTE_RE = re.compile(
     r"\b(?:потом|затем|далее|оттуда|следом|а\s+после|после\s+(?:этого|того|чего))\b"
-    r"|\s[—–]\s|→|->"
+    r"|\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
 )
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
@@ -734,15 +734,38 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
         found["destinations"] = [old.plan.destinations[idx].name]
     # The departure city is no destination (#139): «Москва — Питер — Казань» starts in Москва.
-    named_here = found.get("destinations", [])
-    start = found.get("origin") or old.plan.spec.origin or DEFAULT_ORIGIN
-    if len(named_here) > 1 and start in named_here:
-        found["destinations"] = [d for d in named_here if d != start]
-    spec = merge(old.plan.spec, found, notes)
+    # It runs after the model too (#141): the model may return the departure city as a stay.
+    start_default = not found.get("origin") and (
+        not old.plan.spec.origin or any(_label(a) == "откуда" for a in old.plan.spec.assumptions)
+    )
+
+    told: list[str] = []
+
+    def without_origin(f: dict) -> dict:
+        named_here = f.get("destinations", [])
+        start = f.get("origin") or old.plan.spec.origin or DEFAULT_ORIGIN
+        if len(named_here) > 1 and start in named_here:
+            f = {**f, "destinations": [d for d in named_here if d != start]}
+            if start == DEFAULT_ORIGIN and start_default:
+                told[:] = [f"откуда: {start} — город вылета по умолчанию, напишите «из …»"]
+        return f
+
+    def merged(f: dict) -> TripSpec:
+        base, extra = old.plan.spec, []
+        if told and not f.get("origin"):  # the model named a departure city: no default to tell
+            # One «откуда» line: the new one replaces the old.
+            kept = [a for a in base.assumptions if _label(a) != "откуда"]
+            base, extra = base.model_copy(update={"assumptions": kept}), told
+        return merge(base, f, [*notes, *extra])
+
+    found = without_origin(found)
+    spec = merged(found)
     used = False  # the LLM output changed this reply
     if llm_found:
-        with_model = with_llm(found, llm_found, [*refused_before(old.plan.spec), *new_refused])
-        spec_model = merge(old.plan.spec, with_model, notes)
+        with_model = without_origin(
+            with_llm(found, llm_found, [*refused_before(old.plan.spec), *new_refused])
+        )
+        spec_model = merged(with_model)
         if spec_model != spec:
             found, spec, used = with_model, spec_model, True
     swapped = [d for d in old.plan.spec.destinations if d not in spec.destinations]
