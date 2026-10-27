@@ -39,6 +39,7 @@ from api.dag import (
     describe,
     dirty_nodes,
     is_shift_note,
+    period,
     replan,
     shift_dates,
 )
@@ -49,6 +50,7 @@ from api.extract import (
     extract,
     is_chip_message,
     is_excluded,
+    is_past_note,
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date
@@ -228,7 +230,11 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
         stated |= {ROUTE, CANDIDATES}  # a new choice of the city ends the route note
     if stated & {"когда", "даты", "длительность"}:
         data["date_to"] = None  # derived from date_from + nights again
-        assumed = [a for a in data["assumptions"] if _label(a) == "даты" and not is_shift_note(a)]
+        assumed = [
+            a
+            for a in data["assumptions"]
+            if _label(a) == "даты" and not is_shift_note(a) and not is_past_note(a)
+        ]  # a named day moved to next year (#159) is said, not guessed
         if "даты" not in stated and assumed:  # the dates were guessed, not said; a shift is said
             data["date_from"] = None
             stated.add("даты")
@@ -586,7 +592,7 @@ def _text_compare(plan: Plan) -> str:
     kids = f" + дети {', '.join(map(str, spec.children_ages))} лет" if spec.children_ages else ""
     lines = [
         (
-            f"{spec.destinations[0]}, {spec.date_from:%d.%m}–{spec.date_to:%d.%m}, "
+            f"{spec.destinations[0]}, {period(spec)}, "
             f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
         ),
         *([line] if (line := missing_mode(plan)) else []),
@@ -874,7 +880,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # The message asks to move the dates but says how far or which way in no known words (S2).
         s = old.plan.spec
         text = (
-            f"Не понял, что изменить в датах. Сейчас {s.date_from:%d.%m}–{s.date_to:%d.%m}. "
+            f"Не понял, что изменить в датах. Сейчас {period(s)}. "
             "Напишите, например: «на два дня позже», «обратно на день раньше» "
             "или «с 20 ноября на 5 ночей»."
         )
@@ -885,7 +891,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         except ValueError as e:
             text = (
                 f"{e} Из этого сообщения ничего не применено. "
-                f"Сейчас {spec.date_from:%d.%m}–{spec.date_to:%d.%m}. {HINTS.get(old.stage, '')}"
+                f"Сейчас {period(spec)}. {HINTS.get(old.stage, '')}"
             )
             return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
