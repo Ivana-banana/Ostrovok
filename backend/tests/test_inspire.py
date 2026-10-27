@@ -228,3 +228,63 @@ def test_c17_nothing_reachable_by_train_still_gives_flagged_cards(store, text):
     """Arbiter of #277: an empty filtered pool gave no cards under «Подходящие направления»."""
     dests = inspired(store, text)
     assert any(v.endswith(inspire.NO_WAY) for d in dests for v in d.violates)
+
+
+def test_warm_in_november_flags_cold_places_and_ranks_them_last(store):
+    """#342: «куда-нибудь тепло в ноябре недорого» gave Сочи 15.7 °C and Мостар 15.5 °C."""
+    dests = inspired(store, "куда-нибудь тепло в ноябре недорого")
+    for d in dests:
+        assert d.air_c >= inspire.WARM_ASKED_C or any(
+            v.startswith(inspire.NOT_WARM) for v in d.violates
+        ), d
+    assert any(d.air_c >= inspire.WARM_ASKED_C and not d.violates for d in dests)
+    cold = [i for i, d in enumerate(dests) if d.air_c < inspire.WARM_ASKED_C]
+    assert all(
+        i > max(j for j, d in enumerate(dests) if d.air_c >= inspire.WARM_ASKED_C) for i in cold
+    )
+
+
+def test_where_warm_in_january_has_no_cold_place_unflagged(store):
+    dests = inspired(store, "где тепло в январе")
+    assert all(d.air_c >= inspire.WARM_ASKED_C or d.violates for d in dests)
+
+
+def test_warm_over_budget_shows_warm_places_before_cold_ones():
+    """No warm place fits the budget: the warm ones stay, flagged «дороже бюджета», above the cold."""
+    spec = TripSpec(
+        origin="Москва",
+        date_from=future_date(11, 7),
+        date_to=future_date(11, 14),
+        wishes=["тепло"],
+        budget_rub=5000,
+    )
+    dests = inspire.suggest_destinations(spec, 4)
+    assert all(d.air_c >= inspire.WARM_ASKED_C for d in dests)
+    assert all(any("дороже бюджета" in v for v in d.violates) for d in dests)
+
+
+def test_warm_sea_wish_has_no_air_threshold():
+    """«тёплое море» is the sea wish; its water is checked, not the air (as on main)."""
+    assert "тепло" not in extract("тёплое море в ноябре")[0]["wishes"]
+    assert "тепло" in extract("хочу погреться в ноябре")[0]["wishes"]
+
+
+def test_cold_warm_cards_go_from_the_warmest(store):
+    """#342 review: «поездом, где тепло, в ноябре» gave Дмитров 1.9 °C instead of Сочи 15.7 °C."""
+    spec = TripSpec(modes=["train"], origin="Москва", month=11, wishes=["тепло"])
+    dests = inspire.suggest_destinations(spec, 4)
+    assert dests[0].air_c == max(d.air_c for d in dests)
+    assert [d.air_c for d in dests if d.violates] == sorted(
+        (d.air_c for d in dests if d.violates), reverse=True
+    )
+
+
+def test_warm_with_a_pet_pulls_further_candidates_when_all_first_are_dead_ends(store):
+    """#342 review: «тепло в ноябре с собакой» gave four cards «с питомцем не собрать»."""
+    dests = inspired(store, "тепло в ноябре с собакой из Москвы")
+    assert any(inspire.NO_PETS not in d.violates for d in dests)
+
+
+@pytest.mark.parametrize("text", ["хочу погреться в бане в ноябре", "погреться у камина"])
+def test_warm_up_in_a_sauna_or_by_a_fire_is_no_warm_wish(text):
+    assert "тепло" not in extract(text)[0].get("wishes", [])
