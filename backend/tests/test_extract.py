@@ -863,3 +863,40 @@ def test_trap_3_c15_full_turn_has_no_missing_catalogue_reply(tmp_path):
 def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
     found, _ = extract(text)
     assert found["destinations"] == dests
+
+
+# #293: a range by weekdays («со среды по пятницу») is a date range, not an assumption.
+@pytest.mark.parametrize(
+    ("text", "start", "end"),
+    [
+        ("Казань со среды по пятницу", date(2026, 10, 28), date(2026, 10, 30)),
+        ("Казань с пятницы по воскресенье", date(2026, 10, 30), date(2026, 11, 1)),
+        ("Казань с понедельника до среды", date(2026, 11, 2), date(2026, 11, 4)),
+        ("Казань с пятницы по понедельник", date(2026, 10, 30), date(2026, 11, 2)),
+        ("Казань с четверга по субботу, двое", date(2026, 10, 29), date(2026, 10, 31)),
+    ],
+)
+def test_weekday_range_gives_the_nearest_dates(tuesday, text, start, end):
+    found, notes = extract(text)
+    assert found["date_from"] == start and found["date_to"] == end
+    assert found["nights"] == (end - start).days and found["month"] == start.month
+    assert all("даты" not in n or "допущение" not in n for n in notes)
+
+
+def test_weekday_range_from_today_weekday_starts_next_week(tuesday):
+    found, _ = extract("Казань со вторника по четверг")
+    assert (found["date_from"], found["date_to"]) == (date(2026, 11, 3), date(2026, 11, 5))
+
+
+def test_weekday_range_turn_has_no_date_assumption(tuesday, tmp_path):
+    r = chat(
+        ChatRequest(session_id=None, message="Казань со среды по пятницу"),
+        SessionStore(tmp_path / "s.db"),
+    )
+    spec = r.plan.spec
+    assert (spec.date_from, spec.date_to, spec.nights) == (
+        date(2026, 10, 28),
+        date(2026, 10, 30),
+        2,
+    )
+    assert not [a for a in spec.assumptions if "дат" in a.lower()], spec.assumptions

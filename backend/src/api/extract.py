@@ -1111,6 +1111,11 @@ def _english_places(t: str, found: dict) -> None:
 
 
 WEEKDAYS = ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
+WEEKDAY_STEMS = ("понедельник", "вторник", "сред", "четверг", "пятниц", "суббот", "воскресень")
+# #293: «со среды по пятницу», «с пятницы до воскресенья» — a range by weekday names.
+WEEKDAY_RANGE = re.compile(
+    rf"\bсо?\s+({'|'.join(WEEKDAY_STEMS)})\w*\s+(?:по|до)\s+({'|'.join(WEEKDAY_STEMS)})\w*\b"
+)
 
 
 PAST_MARK = "уже прошло"  # in the note about a named day moved to next year
@@ -1187,6 +1192,11 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
             found["date_from"] = today + timedelta(
                 days=n * (7 if m.group(2).startswith("нед") else 1)
             )
+        elif m := WEEKDAY_RANGE.search(t):
+            wd1, wd2 = (WEEKDAY_STEMS.index(g) for g in m.groups())
+            start = today + timedelta(days=(wd1 - today.weekday()) % 7 or 7)
+            end = start + timedelta(days=(wd2 - wd1) % 7 or 7)  # the next such day after the start
+            found["date_from"], found["date_to"], found["nights"] = start, end, (end - start).days
         elif m := re.search(
             rf"\b(?:в|во|на)\s+(?:(?:эт[уо]т?|ближайш\w+)\s+)?({'|'.join(WEEKDAYS)})\b", t
         ):
