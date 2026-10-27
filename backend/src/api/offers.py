@@ -494,13 +494,55 @@ def _span_h(delta: timedelta) -> str:
 
 
 # Rail (#343): the route is RAIL_DETOUR x the straight line. A day train goes DAY_TRAIN_KMH on
-# average with its stops, an overnight one 70 km/h; a high-speed pair has its time from
-# HIGH_SPEED_H. Calibrated on 4 pairs within ±20 % (research/domain.md, D-028): «Сапсан» Москва
-# -> Санкт-Петербург 3:30-4:15 (source); Москва -> Казань ~12 h, Санкт-Петербург -> Петрозаводск
-# ~5.5 h, Москва -> Сочи ~24 h (team estimates). Prices do not depend on the speed.
+# average with its stops, an overnight one 70 km/h. A high-speed corridor (FAST_LINES) has its
+# own time between its ends; a place within FAST_END_KM of an end adds a local leg at
+# DAY_TRAIN_KMH. Corridor times (research/domain.md): «Сапсан» Москва - Санкт-Петербург
+# 3:30-4:15; Москва - Нижний Новгород 3:55; Москва - Владимир 1:46. Calibrated on the pairs of
+# tests/test_rail_time.py within ±20 %; the rest are team estimates (D-028). Prices do not
+# depend on the speed.
+# A day train comes by DAY_ARRIVE_BY (no arrival at night, TRAP-5). Back it leaves at DAY_BACK,
+# earlier when it would come later, never before DAY_BACK_FROM (check-out at 12:00 and the way
+# to the station); a longer ride back goes by the overnight train only.
 RAIL_DETOUR = 1.2
 DAY_TRAIN_KMH = 75
-HIGH_SPEED_H = {frozenset(("Москва", "Санкт-Петербург")): 4.0}
+FAST_LINES = {
+    frozenset(("Москва", "Санкт-Петербург")): 4.0,
+    frozenset(("Москва", "Нижний Новгород")): 3.9,
+    frozenset(("Москва", "Владимир")): 1.8,
+}
+FAST_END_KM = 60
+DAY_OUT, DAY_BACK, DAY_BACK_FROM, DAY_ARRIVE_BY = (
+    time(7, 40),
+    time(16, 20),
+    time(13, 0),
+    time(23, 0),
+)
+
+
+def _ends(p: dict) -> list[tuple[str, float]]:
+    """Corridor ends near a place, with the local leg to each, hours."""
+    names = {n for line in FAST_LINES for n in line}
+    out = [(p["name"], 0.0)] if p["name"] in names else []
+    for n in names - {p["name"]}:
+        end = catalog.resolve(n)
+        km = km_between(p, end) if end else FAST_END_KM + 1
+        if km <= FAST_END_KM:
+            out.append((n, km * RAIL_DETOUR / DAY_TRAIN_KMH))
+    return out
+
+
+def _day_train_hours(a: dict, b: dict, route: float) -> float | None:
+    """Hours of the day train a -> b: a corridor with its local legs when it is faster, else
+    route / DAY_TRAIN_KMH up to 800 km of route; None when no day train goes."""
+    slow = max(0.5, route / DAY_TRAIN_KMH) if route <= 800 else None
+    fast = [
+        line + x + y
+        for ea, x in _ends(a)
+        for eb, y in _ends(b)
+        if (line := FAST_LINES.get(frozenset((ea, eb))))
+    ]
+    best = min([*fast, *([slow] if slow else [])], default=None)
+    return round(best, 2) if best else None
 
 
 def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[TransportOffer]:
@@ -532,21 +574,33 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
             legs.append(_leg(spec, "flight", b, a, depart, hours, price, changes))
     route = km * RAIL_DETOUR
     if a["station_km"] is not None and b["station_km"] is not None and route <= 3000:
-        trains = []
-        if route <= 800:  # day train; a high-speed line has its own time (#343)
-            fast = HIGH_SPEED_H.get(frozenset((a["name"], b["name"])))
-            hours, base = fast or max(0.5, route / DAY_TRAIN_KMH), 700 + 3.4 * route
-            trains.append((hours, base, datetime.combine(there, time(7, 40), ta), time(16, 20)))
+        # (hours, fare base, start there, start back or None, fare slot back)
+        trains: list[tuple[float, float, datetime, datetime | None, time]] = []
+        day = _day_train_hours(a, b, route)
+        if day is not None:  # a day train comes by DAY_ARRIVE_BY both ways (#343, TRAP-5)
+            out = datetime.combine(there, DAY_OUT, ta)
+            by = datetime.combine(back, DAY_ARRIVE_BY, ta)
+            latest = _shift(by, -_minutes(day)).astimezone(tb)
+            latest = latest.replace(minute=latest.minute - latest.minute % 5)
+            ret = min(datetime.combine(back, DAY_BACK, tb), latest)
+            if ret < datetime.combine(back, DAY_BACK_FROM, tb):
+                ret = None
+            if _shift(out, _minutes(day)).astimezone(tb) <= datetime.combine(
+                there, DAY_ARRIVE_BY, tb
+            ):
+                trains.append((day, 700 + 3.4 * route, out, ret, DAY_BACK))
         if route >= 600:  # overnight train: arrives in the morning
             hours, base = route / 70, 1100 + 3.0 * route
             out = _shift(datetime.combine(there, time(7, 10), tb), -_minutes(hours))
-            trains.append((hours, base, out, time(21, 40)))
-        for hours, base, out, back_at in trains:
-            ret = datetime.combine(back, back_at, tb)
+            trains.append(
+                (hours, base, out, datetime.combine(back, time(21, 40), tb), time(21, 40))
+            )
+        for hours, base, out, ret, slot in trains:
             legs.append(
                 _leg(spec, "train", a, b, out, hours, fare("train", base, there, out.time()))
             )
-            legs.append(_leg(spec, "train", b, a, ret, hours, fare("train", base, back, back_at)))
+            if ret is not None:  # the fare noise keys on the slot: the price does not move
+                legs.append(_leg(spec, "train", b, a, ret, hours, fare("train", base, back, slot)))
     road = km * 1.3
     if road <= 2500 and ("car" in spec.modes or not legs):
         hours = road / 80 * 1.1
