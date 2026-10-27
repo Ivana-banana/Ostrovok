@@ -296,6 +296,11 @@ MODES = [
     ("car", r"\bна\s+(?:сво\w+\s+)?(?:машин|авто)"),
     ("flight", r"\b(?:самол[её]т|летим|лететь|полетим|рейс)"),
 ]
+# «без самолётов», «не хочу лететь»: the flight is banned (the spec keeps the other modes)
+NO_FLIGHT = re.compile(
+    r"\b(?:без|не)\s+(?:на\s+)?(?!долг|длинн)(?:перелет\w*|самолет\w*|авиа\w*)"
+    r"|\bне\s+(?:хочу\s+|будем\s+|надо\s+)?(?:лететь|летим|полетим|летать)\b"
+)
 # #114: «где тепло», «тёплые края», «жарко». «Тёплое море» is the sea wish (its water is checked),
 # «не тепло», «не люблю жару» and «тёплая куртка» are no wish for the warm.
 WARM = (
@@ -314,6 +319,11 @@ WISHES = [
     ("недорого", r"недорог|деш[её]в|бюджетн|эконом|\bcheap"),
     ("горы", r"\bгор(?:ы|ах|ам|ами|у)\b|\bгорн|\bmountains?\b"),
     ("лыжи", r"лыж|сноуборд|\bski"),
+    # #277: quiet and green words are the nature tag of the catalogue (api/inspire.py)
+    (
+        "природа",
+        r"\bлес(?:а|у|ом|е|ах|ов)?\b|\bлесн|тишин|\bтих(?:ое|ий|ом|ую)\s+(?:мест|отдых)|природ|\bозер",
+    ),
     ("тепло", WARM),
     ("санаторий", r"санатор"),
     ("тяжело ходить", r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил"),
@@ -1578,6 +1588,8 @@ def extract(
     modes = [
         m for m, p in MODES if any(not negated.search(t[: x.start()]) for x in re.finditer(p, t))
     ]
+    if not modes and NO_FLIGHT.search(t):  # #277: «без самолётов» bans one mode, the rest stay
+        modes = ["train", "car"]
     if modes:
         found["modes"] = modes
     wishes = [

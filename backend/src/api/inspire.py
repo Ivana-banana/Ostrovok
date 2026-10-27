@@ -1,7 +1,7 @@
 """Inspiration (T12, #20): 2–4 destinations from catalog.json for a spec without a destination.
 
 The wishes pick the places by catalogue fields only: «море» — sea, «лыжи» — tag ski, «горы» —
-tag mountains, «санаторий» — tag spa; with no theme the pool is the big cities (tag city and
+tag mountains, «санаторий» — tag spa, «лес», «тишина» — tag nature (no big city); with no theme the pool is the big cities (tag city and
 CITY_POP). «Европа» and «юг» narrow the pool by country and by latitude. The climate of the
 month marks the places that break the request («тепло», warm sea). Only CANDIDATES places get
 the price and travel time of api/offers.py, never the whole catalogue. A card that breaks the
@@ -47,6 +47,7 @@ TAGS = {
     "лыжи": ("ski", "горнолыжный курорт", "не горнолыжный курорт"),
     "горы": ("mountains", "горы", "не в горах"),
     "санаторий": ("spa", "лечебный курорт", "не лечебный курорт"),
+    "природа": ("nature", "природа, тишина", "не природа"),
 }
 MODES = {"flight": "самолётом", "train": "поездом", "car": "на машине"}
 # No trip at all, not a worse one: such a card goes below the cards that only break a wish.
@@ -158,6 +159,13 @@ def card(spec: TripSpec, hub: dict, place: dict, note: str = "") -> Destination:
     )
 
 
+def _reachable(hub: dict, place: dict) -> bool:
+    """A way without a plane, as api/offers.py builds it: a train between two stations or a road."""
+    km = catalog.km_between(hub, place)
+    train = hub["station_km"] is not None and place["station_km"] is not None and km * 1.2 <= 3000
+    return train or km * 1.3 <= 2500
+
+
 def _pool(spec: TripSpec, hub: dict, exclude: list[str]) -> list[dict]:
     """Places of the theme, without the refused ones and the departure city."""
     origin = catalog.resolve(spec.origin) if spec.origin else None
@@ -174,6 +182,11 @@ def _pool(spec: TripSpec, hub: dict, exclude: list[str]) -> list[dict]:
         out = near or out
     if spec.modes == ["car"]:
         out = [p for p in out if catalog.km_between(hub, p) <= CAR_KM] or out
+    if spec.modes and "flight" not in spec.modes:
+        # #277: a banned flight is no soft wish: no fallback to the places only a plane reaches
+        out = [p for p in out if _reachable(hub, p)]
+    if "природа" in spec.wishes:  # quiet and forest: no big city (a city with the nature tag stays)
+        out = [p for p in out if "nature" in p["tags"] or p["pop"] < CITY_POP]
     return (
         out if _themed(spec) else [p for p in out if "city" in p["tags"] and p["pop"] >= CITY_POP]
     )

@@ -131,3 +131,32 @@ def test_no_trip_goes_below_a_cold_sea_and_a_cold_sea_below_no_sea():
     first = inspire.suggest_destinations(spec)[0]
     assert inspire.NO_PETS not in first.violates and inspire.NO_SEA not in first.violates
     assert not any(v.endswith(inspire.NO_WAY) for v in first.violates), first.violates
+
+
+C17 = "Устал, хочу тишины и леса, без самолётов, на неделю в ноябре вдвоём"
+
+
+def test_c17_quiet_forest_no_planes_gives_nature_without_flights(store):
+    """C17: «тишины и леса, без самолётов» gave Воронеж, Нижний, Минск and Бухарест (plane)."""
+    first = chat(ChatRequest(session_id=None, message=C17), store)
+    assert "flight" not in first.plan.spec.modes
+    assert first.plan.spec.modes, "«без самолётов» must be written to the spec"
+    r = chat(ChatRequest(session_id=first.session_id, message="тысяч 60"), store)
+    assert r.stage == "inspire", r.reply
+    assert "flight" not in r.plan.spec.modes and r.plan.spec.modes
+    dests = r.plan.destinations
+    assert 2 <= len(dests) <= 4
+    assert sum("nature" in tags(d.name) for d in dests) >= 2
+    for d in dests:
+        place = catalog.resolve(d.name)
+        assert "nature" in place["tags"] or place["pop"] < inspire.CITY_POP, d.name
+        assert d.name != "Бухарест"
+        assert not any(v.endswith(inspire.NO_WAY) for v in d.violates), d.violates
+
+
+def test_no_flight_pool_too_small_says_so():
+    """A banned mode is not dropped silently: few reachable places → fewer cards, never a plane."""
+    spec = TripSpec(modes=["train", "car"], wishes=["природа"], month=11, origin="Москва")
+    dests = inspire.suggest_destinations(spec, 4)
+    assert dests
+    assert all(not any(v.endswith(inspire.NO_WAY) for v in d.violates) for d in dests)
