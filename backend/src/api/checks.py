@@ -1036,7 +1036,7 @@ def unseen_metric(_case: dict | None = None) -> dict:
         f"часть ограничений не проверить по данным: {unknown}; "
         f"вне catalog.json и osm_hotels.json: бронь в названном городе "
         f"{sum(r['kept'] for r in named)} из {len(named)}; "
-        f"пул eval/{UNSEEN_FILE.name}, на нём агента не настраивали)"
+        f"пул eval/{UNSEEN_FILE.name}: агента на нём подгоняли дважды («Гори», #121), это не оценка на новых запросах)"
     )
     return {"line": line, "notes": notes, "booked": reached, "clean": clean, "n": n}
 
