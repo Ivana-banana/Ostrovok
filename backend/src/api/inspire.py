@@ -26,7 +26,10 @@ SHOWN_PER_COUNTRY = 2
 CITY_POP = 1_000_000  # with no theme: the big cities (GeoNames population), nearest first
 PER_COUNTRY = 3  # candidates of one country: the 21 places of Турция leave room for Египет
 # #114: estimate without a source: in the cold half of the year a place is warm from this air.
-WARM_AIR_C = 15.0
+WARM_AIR_C = 15.0  # «на юг» in the cold half of the year
+WARM_ASKED_C = (
+    22.0  # #342: «тепло», «погреться»: team estimate (D-027), no source for the beach air
+)
 # Estimates without a source, for the prefilter and the minus lines only.
 ROAD_KM = 1745  # a drive up to 24 h: api/offers.py drives road / 80 h × 1.1, road = 1.3 × the line
 RAIL_KM = 3000  # api/offers.py builds a train up to 3000 km of route, route = 1.2 × the line
@@ -62,6 +65,7 @@ NO_SEA = "моря нет"
 NO_SWIM = "море не для купания"  # #224: the sea is near, but its water is warm for 1–2 months only
 NOT_EUROPE = "не в Европе"
 NOT_SOUTH = "не южнее, чем"
+NOT_WARM = "не тепло"
 # Not the asked kind of place: below a place of the theme with cold water or a long road.
 OFF_THEME = {NO_SEA, NO_SWIM, NOT_EUROPE, *(miss for _, _, miss in TAGS.values())}
 WHY = {tag: why for tag, why, _ in TAGS.values()}
@@ -94,9 +98,11 @@ def _rule_breaks(spec: TripSpec, place: dict, hub: dict, month: int | None) -> l
             out.append(f"море холодное для купания: вода {water:g} °C")
         elif "swim" not in place["tags"]:
             out.append(NO_SWIM)
-    warm_asked = "тепло" in spec.wishes or "юг" in spec.wishes  # #235: «на юг» in winter = warm
-    if warm_asked and month in COLD_MONTHS and air is not None and air < WARM_AIR_C:
-        out.append(f"не тёплое направление: днём {air:g} °C")
+    warm_wish = "тепло" in spec.wishes
+    limit = WARM_ASKED_C if warm_wish else WARM_AIR_C  # #235: «на юг» in winter = warm
+    asked = warm_wish or "юг" in spec.wishes
+    if asked and month in COLD_MONTHS and air is not None and air < limit:
+        out.append(f"{NOT_WARM}: днём {air:g} °C")
     return out
 
 
@@ -253,7 +259,7 @@ def _level(violates: list[str]) -> int:
     3 no trip at all."""
     if any(v == NO_PETS or v.endswith(NO_WAY) for v in violates):
         return 3
-    if any(v in OFF_THEME or v.startswith(NOT_SOUTH) for v in violates):
+    if any(v in OFF_THEME or v.startswith((NOT_SOUTH, NOT_WARM)) for v in violates):
         return 2
     return int(bool(violates))
 
