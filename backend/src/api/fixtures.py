@@ -44,6 +44,10 @@ CATALOG: dict[str, dict] = {row[0]: dict(zip(_KEYS, row[1:], strict=True)) for r
 # Estimate, not from a source: below this the sea counts as cold for swimming.
 # It sits between catalogue values on purpose (Antalya 22, Sochi 16).
 WARM_WATER_C = 21.5
+# #114, #157: the months where the November climate stands in for the real one (warmer places stay warmer).
+COLD_MONTHS = (10, 11, 12, 1, 2, 3, 4)
+IN_MONTH = ("в январе", "в феврале", "в марте", "в апреле", "в мае", "в июне", "в июле",
+            "в августе", "в сентябре", "в октябре", "в ноябре", "в декабре")  # fmt: skip
 
 
 def future_date(month: int, day: int, today: date | None = None) -> date:
@@ -88,6 +92,13 @@ def suggest_destinations(
             violates.append(f"перелёт {c['hours']:g} ч — дольше {spec.max_travel_hours:g} ч")
         if sea and water is not None and water < WARM_WATER_C:
             violates.append(f"море холодное для купания: вода {water:g} °C")
+        if sea and spec.month != 11:  # #157: no data is not «passes»; model.py says so once
+            nov_water = c["nov"][1]
+            if spec.month in COLD_MONTHS and nov_water is not None and nov_water < WARM_WATER_C:
+                note = f"море холодное для купания: вода {nov_water:g} °C в ноябре"
+                if spec.month != 10:  # October is usually warmer than November: no claim
+                    note += f", {IN_MONTH[spec.month - 1]} не теплее"
+                violates.append(note)
         out.append(
             Destination(
                 name=name,
