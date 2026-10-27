@@ -356,8 +356,9 @@ class BookingProvider(Protocol):
     A refusal raises BookingRefused.
 
     The `session_id` argument of `book` is the idempotency key of one booking attempt, not
-    the bare session id: the session id for the first attempt, `<session_id>:<n>` for the
-    attempt n after a cancel (cart.attempt_key). A real provider stores it as its order key
+    the bare session id: `<session_id>:<hash>` for the first attempt, `<session_id>:<hash>:<n>`
+    for the attempt n after a cancel; the hash covers the items, prices, dates and party
+    (cart.attempt_key). A real provider stores it as its order key
     (for example `partner_order_id` of ETG) and returns the same booking for the same key.
     While the booking is not "cancelled", the core keeps it and does not call `book` again;
     after `cancel` the session gets a new key and a new booking_id. The core calls `quote`
