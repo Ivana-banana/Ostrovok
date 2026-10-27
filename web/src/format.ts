@@ -1,19 +1,9 @@
-import type { Cart, ChatReply, Meal, Mode, Priority, Stage } from "./contracts";
+import type { Cart, ChatReply, Meal, Mode, Priority } from "./contracts";
 
 // One reply line for the user; the no-model mode is labelled honestly (TRAP-1).
 export function describe(r: ChatReply): string {
   return r.llm ? r.reply : `${r.reply} — упрощённый режим без ИИ`;
 }
-
-export const STAGES: { id: Stage; label: string }[] = [
-  { id: "clarify", label: "Уточнение" },
-  { id: "inspire", label: "Направления" },
-  { id: "select", label: "Выбор" },
-  { id: "compare", label: "Сравнение" },
-  { id: "assemble", label: "План" },
-  { id: "checkout", label: "Корзина" },
-  { id: "booked", label: "Бронь" },
-];
 
 export const MEALS: Record<Meal, string> = {
   RO: "без питания",

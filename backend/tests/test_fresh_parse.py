@@ -9,7 +9,8 @@ from datetime import date, timedelta
 
 import pytest
 
-from api.contracts import ChatRequest
+from api import model
+from api.contracts import ChatRequest, TripSpec
 from api.extract import extract
 from api.model import chat
 from api.store import SessionStore
@@ -189,6 +190,43 @@ def test_named_origin_far_trip_asks_nothing(store):
     """F08 class: the origin is named, the far trip goes on."""
     r = say(store, "Токио на 7 ночей в апреле, двое, бюджет 600 тысяч, из Москвы")
     assert r.stage == "compare" and r.questions == []
+
+
+@pytest.mark.parametrize("place", ["Сочи", "Анапа", "Геленджик", "Минводы"])
+def test_neighbour_hub_does_not_ask_the_origin(store, place):
+    """#380: Ростов-на-Дону is 318–427 км from these places. Its cheap road measured the
+    distance to the place, not the origin: the plan comes at once, Москва is an assumption."""
+    r = say(store, f"{place} в июле вдвоём, 100 тысяч на всё")
+    assert r.stage == "compare" and r.questions == []
+    assert ORIGIN_NOTE in r.plan.spec.assumptions
+
+
+@pytest.mark.parametrize(("best", "asks"), [(15_000, True), (15_001, False)])
+def test_origin_gap_threshold_side(monkeypatch, best, asks):
+    """#380: a gap of exactly ROAD_GAP (15.0 %) asks; the text never shows a share below it."""
+    sums = {"Москва": 30_000, "Новосибирск": best}  # home 30 % of the budget: under ROAD_SHARE
+    monkeypatch.setattr(model, "_round_trip", lambda probe, origin: sums.get(origin))
+    spec = TripSpec(destinations=["Сочи"], month=7, adults=2, budget_rub=100_000)
+    questions = model.far_origin_question(spec)
+    assert bool(questions) is asks
+    if asks:
+        assert "это 15 % бюджета" in questions[0].text
+
+
+@pytest.mark.parametrize(("home", "asks"), [(50_000, True), (49_999, False)])
+def test_origin_road_share_threshold_side(monkeypatch, home, asks):
+    """#380: a road from Москва of exactly ROAD_SHARE (50.0 %) of the budget asks."""
+    monkeypatch.setattr(model, "_round_trip", lambda probe, origin: {"Москва": home}.get(origin))
+    spec = TripSpec(destinations=["Сочи"], month=7, adults=2, budget_rub=100_000)
+    questions = model.far_origin_question(spec)
+    assert bool(questions) is asks
+    if asks:
+        assert "Дорога из Москвы — 50 % бюджета" in questions[0].text
+
+
+def test_origin_share_is_rounded_down():
+    """#380: the share is rounded down. 15.2 % reads «15 %»; 14.99 % does not read «15 %»."""
+    assert model._share(15_200, 100_000) == "15 %" and model._share(14_990, 100_000) == "14 %"
 
 
 # ---------------------------------------------------------------- the city of a hotel request

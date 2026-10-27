@@ -37,7 +37,7 @@ from api.contracts import (
     TransportOffer,
     TripSpec,
 )
-from api.offers import transfer_id
+from api.offers import OWN_BACK, OWN_THERE, transfer_id
 
 CRITERIA: tuple[Priority, ...] = (
     "price",
@@ -212,6 +212,9 @@ def enumerate_trips(offers: list[Offer]) -> list[Trip]:
                     for x in (a, b)
                     if x and x.mode != "car" and _tid(h, x) in transfers
                 ]
+                # Own tickets (C5, #408): the transfers of the own legs, offers.own_legs.
+                own = [OWN_THERE] * (a is None) + [OWN_BACK] * (b is None)
+                ts += [transfers[i] for x in own if (i := transfer_id(h.offer_id, x)) in transfers]
                 trips.append(Trip(h, a, b, ts))
     return trips
 
@@ -514,7 +517,7 @@ def _risks(spec: TripSpec, t: Trip, fits: bool, trips: list[Trip]) -> list[str]:
     if not fits:
         out.append("ни один вариант не подходит под все условия — выбран ближайший")
     out += t.rules
-    if not t.legs:
+    if not t.legs and not spec.own_transport:  # own tickets (#408): the user knows the way
         out.append("как добраться — нет данных")
     if t.hotel_over and spec.hotel_budget_rub is not None:
         out.append(
@@ -636,6 +639,7 @@ def pick_hotel(selected: list[str], offers: list[Offer], hotel_id: str) -> list[
     chosen = [by_id[i] for i in selected if i in by_id]
     legs = [o for o in chosen if isinstance(o, TransportOffer)]
     transfers = [_tid(hotel, x) for x in legs if x.mode != "car" and _tid(hotel, x) in by_id]
+    transfers += [i for x in (OWN_THERE, OWN_BACK) if (i := transfer_id(hotel_id, x)) in by_id]
     extras = [
         o.offer_id for o in chosen if isinstance(o, ExtraOffer) and o.for_offer_id == hotel_id
     ]
