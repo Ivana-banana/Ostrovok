@@ -96,13 +96,19 @@ export function AgentText({ text, synthetic, typing, onTick, onDone }: {
     // A screen reader gets the whole text at once, not the pieces of the typing.
     return (
       <>
-        <span className="sr-only">{text}</span>
+        <div className="sr-only">
+          <Lines text={text} synthetic={synthetic} />
+        </div>
         <p className="typing caret" aria-hidden="true">
           {words.slice(0, shown).join("")}
         </p>
       </>
     );
   }
+  return <Lines text={text} synthetic={synthetic} />;
+}
+
+function Lines({ text, synthetic }: { text: string; synthetic: boolean }) {
   return (
     <>
       {text

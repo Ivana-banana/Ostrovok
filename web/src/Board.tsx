@@ -425,10 +425,10 @@ function Transport({ plan, stage, busy, onSend }: {
                   </td>
                   <td>{MODES[t.mode]}</td>
                   <td data-label="Отправление">
-                    {localTime(t.depart_at)} <small>{t.origin}</small>
+                    <span className="when">{localTime(t.depart_at)}</span> <small>{t.origin}</small>
                   </td>
                   <td data-label="Прибытие">
-                    {localTime(t.arrive_at)} <small>{t.destination}</small>
+                    <span className="when">{localTime(t.arrive_at)}</span> <small>{t.destination}</small>
                   </td>
                   <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
                   <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>

@@ -1071,6 +1071,7 @@ tr .tag {
 
   .grid-table td[data-label]::before {
     content: attr(data-label) " ";
+    white-space: nowrap; /* «В пути» stays one label */
   }
 
   .grid-table td.name {
@@ -1085,9 +1086,16 @@ tr .tag {
     display: none; /* «Пересадки: нет» is the usual case: only a real change is shown */
   }
 
-  /* Transport: «10.12 18:50 Москва → 11.12 07:10 Казань», time and city never split. */
+  /* Transport: «10.12 18:50 Москва → 11.12 07:10 Казань». Each end is one box: the time never
+     breaks, a long city (Минеральные Воды) wraps inside the box, not past the card edge. */
   .grid-table td[data-label="Отправление"],
   .grid-table td[data-label="Прибытие"] {
+    display: inline-block;
+    max-width: 100%;
+    margin-right: 4px;
+  }
+
+  .grid-table .when {
     white-space: nowrap;
   }
 
