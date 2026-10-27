@@ -689,6 +689,13 @@ def _nominative(word: str) -> str:
 WEEKDAYS = ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
 
 
+PAST_MARK = "уже прошло"  # in the note about a named day moved to next year
+
+
+def is_past_note(assumption: str) -> bool:
+    return PAST_MARK in assumption
+
+
 def _dates(t: str, found: dict, notes: list[str]) -> None:
     """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day."""
     d = r"(\d{1,2})(?:-?го)?"
@@ -735,11 +742,14 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
         return
     said = (two or one or m).group(0)
     found["month"] = _month(m1)
+    today = date.today()
     try:
-        start = future_date(_month(m1), int(d1))
+        start = future_date(_month(m1), int(d1), today)
     except ValueError:
         notes.append(f"даты: «{d1} {m1}» нет в календаре, даты подобраны")
         return
+    if start.year > today.year:  # the named day passed this year: it is not silent (#159)
+        notes.append(f"даты: {start:%d.%m} {PAST_MARK} — взят {start.year} год")
     found["date_from"] = start
     if d2 is None:
         return
