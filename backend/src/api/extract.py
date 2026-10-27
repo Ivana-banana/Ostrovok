@@ -187,7 +187,9 @@ BUDGET_RES = [  # (pattern, multiplier); «к» counts only right after the numb
     (r"\b(\d{1,3}(?:\s\d{3})+|\d{4,7})\s*(?:₽|руб|р\b)", 1),
     (r"\bбюджет\w*\s*(?:до\s+|около\s+)?(\d{4,7})\b", 1),
 ]
-BARE_HOTEL_RE = r"\bдо\s+(\d{4,7})\b"  # «отель до 5000 за ночь»: no unit after the number
+BARE_HOTEL_RE = (  # «отель до 5000 за ночь»: no unit after the number, but a night after it
+    r"\bдо\s+(\d{4,7})\b(?=\s*(?:за|в|/)\s*(?:ноч|сут))"
+)
 # #158: a budget in another currency is never read as rubles: (label, symbol, words).
 CURRENCIES = [
     ("евро", "€", r"евро|eur"),
@@ -980,9 +982,10 @@ FRAGMENT_END_RE = re.compile(
 )
 # Another expense item in the fragment: the sum is for the trip, not for the hotel (#41).
 EXPENSE_RE = re.compile(
-    r"\b(?:перел|авиа|билет|рейс|транспорт|трансфер|поезд|тур\b|тура\b|туре\b|туром\b"
+    r"\b(?:перел|авиа|билет|рейс|транспорт|трансфер|поезд|самол|пол[её]т|такси|автобус|тур\b|тура\b|туре\b|туром\b"
     r"|итого|общ|вместе)\w*|\bдорог(?:а|и|у|е|ой|ою)\b"
 )
+AND_HOTEL_RE = re.compile(r"(?:\bи|\+|плюс)\s*(?:отел|гостиниц|проживани)")
 TOTAL_BEFORE_RE = re.compile(r"\b(?:всего|итого|общ\w+|вместе)\s+(?:\S+\s+){0,2}$")
 # «бюджет отеля: 10 000 ₽ за ночь…»: the price of a night, kept in the assumption (see model)
 PER_NIGHT_NOTE_RE = re.compile(rf"^{HOTEL_NOTE}: (\d[\d ]*) ₽ за ночь")
@@ -1036,6 +1039,8 @@ def _fragment(t: str, start: int, end: int) -> tuple[str, str]:
 def _hotel_sum(t: str, m: re.Match) -> bool:
     """The sum is the hotel budget: «отель» is in its fragment and no other expense item is."""
     before, after = _fragment(t, m.start(), m.end())
+    if AND_HOTEL_RE.search(before):  # «X и отель до N»: X is an expense item, known or not
+        return False
     if EXPENSE_RE.search(before) or EXPENSE_RE.search(after) or TOTAL_BEFORE_RE.search(before):
         return False
     return bool(HOTEL_BEFORE_RE.search(before) or HOTEL_AFTER_RE.match(after))

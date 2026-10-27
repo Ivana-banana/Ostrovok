@@ -708,6 +708,12 @@ def test_flight_and_hotel_sum_is_the_trip_budget_and_a_dearer_plan_is_flagged(tm
         "тур с отелем до 60 тысяч",
         "перелёт и отель до 60 тысяч",
         "перелёт + отель до 60 тысяч",
+        "самолёт и отель до 60 тысяч",
+        "самолет + отель до 60 тысяч",
+        "такси и отель до 60 тысяч",
+        "экскурсии и отель до 60 тысяч",  # a word no list knows: «и отель» is enough
+        "виза плюс отель до 60 тысяч",
+        "ж/д и отель до 60 тысяч",
     ],
 )
 def test_hotel_with_another_expense_item_is_the_trip_budget(text):
@@ -747,3 +753,9 @@ def test_hotel_with_flight_sum_is_the_trip_budget_and_a_dearer_cart_is_flagged(t
     assert total > 60_000
     risks = [x for e in r.plan.explanations for x in e.risks]
     assert any("не укладывается в бюджет" in x for x in risks)
+
+
+@pytest.mark.parametrize("text", ["отель до 1500 м от моря", "отель до 2027 года"])
+def test_hotel_with_a_bare_number_that_is_not_money_has_no_budget(text):
+    found, notes = extract(text)
+    assert "hotel_budget_rub" not in found and "budget_rub" not in found and notes == []
