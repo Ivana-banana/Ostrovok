@@ -377,7 +377,9 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     end = r"(?=\s*(?:,|;|$))"
     # «январь нет», «январь — нет», «январь мимо», «в январе никак»: a bare no ends the part (#215)
     bare = rf"(?:нет|никак|мимо){end}"
-    gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{strong}|{weak}|{bare})"
+    # The weak words follow the month directly or after a filler: «январь или никак» is a move
+    filler = r"(?:(?:—|–|-|точно|уже|вообще|совсем|тоже|нам)\s+)*"
+    gone = rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\b|{strong})|{filler}(?:{weak}|{bare}))"
     # After a comma «не» + a verb and the strong words may follow up to two words («увы, не
     # получится», «увы, нельзя»). A «нет» or «неудобно» deeper in the part belongs to a
     # neighbour: «детей нет», «в декабре никак».
