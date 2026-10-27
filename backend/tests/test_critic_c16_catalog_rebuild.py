@@ -17,6 +17,12 @@ from api.store import SessionStore
 C16 = "Мальдивы на неделю вдвоём в декабре, бюджет 50 тысяч на всё"
 
 
+@pytest.mark.parametrize("text", ["Россияне хотят на море", "Кубик льда в напитки, отель у моря"])
+def test_TRAP_3_country_prefix_in_an_ordinary_word_is_not_a_destination(text):
+    found, _ = extract(text)
+    assert not found.get("destinations")
+
+
 @pytest.mark.parametrize("text", [C16, C16.lower(), "  " + C16])
 def test_C16_TRAP_3_country_at_message_start_is_a_destination(text):
     found, _ = extract(text)

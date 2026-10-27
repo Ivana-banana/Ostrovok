@@ -1019,11 +1019,13 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         t = t[: m.start()] + " " * (end - m.start()) + t[end:]  # the origin is not a destination
     hits = [(m.start(), name, m.end()) for name, rx in PLACE_RES for m in rx.finditer(t)]
     hits += [(m.start(), name, m.end()) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
-    # A bare country at the start is explicit too: «Мальдивы на неделю» (#386, C16).
+    # Exact names and aliases only: «Мальдивы на неделю», but never «Кубик льда» (#386).
     start = len(t) - len(t.lstrip())
-    for country, rx in COUNTRY_RES:
-        if (m := rx.match(t, start)) and not any(s == start for s, _, _ in hits):
-            hits.append((m.start(), country, m.end()))
+    for country, aliases in catalog.snapshot()["countries"].items():
+        for alias in (country.lower().replace("ё", "е"), *aliases):
+            m = re.match(re.escape(alias) + r"(?![\w-])", t[start:])
+            if m and not any(s == start for s, _, _ in hits):
+                hits.append((start, country, start + m.end()))
     spans = []
     for m in re.finditer(r"(?:^|[\s,(])(?:[вВ]о?|[нН]а)\s+(?=[А-ЯЁ])", text):
         free = t[m.end()] != " " and not _place_at(text, t, m.end())  # " ": the origin span
