@@ -202,8 +202,15 @@ MODES = [
 # #114: «где тепло», «тёплые края», «жарко». «Тёплое море» is the sea wish (its water is checked),
 # «не тепло», «не люблю жару» and «тёплая куртка» are no wish for the warm.
 WARM = (
-    r"\b(?:тепл(?!\w*\s+(?:мор|одежд|куртк|вещ|одет|носк|шапк|плед))\w*"
+    r"\b(?:тепл(?!оход|\w*\s+(?:мор|одежд|куртк|вещ|одет|носк|шапк|плед))\w*"
     r"|жарк\w*|жар[аеуы]\b|\bwarm\b|\bhot\b)"
+)
+# The warm is refused or only asked about: «не люблю жару», «жару не люблю», «жарко не надо»,
+# «будет ли тепло?».
+WARM_REFUSED_BEFORE = re.compile(r"\b(?:не|без|ли)\s+(?:\w+\s+)?$")
+WARM_REFUSED_AFTER = re.compile(
+    r"\s*(?:[,—–-]\s*)?(?:\w+\s+)?не\s+(?:люблю|любим|надо|нужн\w*|хочу|хотим|хочется|выношу"
+    r"|переношу|перевариваю|подходит|нравится|нравятся|годится)"
 )
 WISHES = [
     ("море", r"\bмор[еяю]\b|\bморск|пляж|купат|\bsea\b|\bbeach"),
@@ -243,6 +250,10 @@ def is_chip_message(text: str) -> bool:
 
 def _month(word: str) -> int:
     return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»
+
+
+def _warm_refused(t: str, m: re.Match) -> bool:
+    return bool(WARM_REFUSED_BEFORE.search(t[: m.start()]) or WARM_REFUSED_AFTER.match(t, m.end()))
 
 
 def _num(word: str) -> int:
@@ -444,6 +455,27 @@ def _adds_place(t: str, spans: list[tuple[int, int]], i: int, refused: list[bool
     )
 
 
+def _wanted_pair(t: str, spans: list[tuple[int, int]], i: int) -> bool:
+    """#151: «Не хочу в Египет, Турция или Кипр»: a nominative after the comma names the wish.
+
+    «в Египет» has the case of «в»; «Турция» (not «Турцию») cannot be in the refused list.
+    The places of the «или» group after the comma are checked; «а/я» is the nominative sign."""
+    if not re.fullmatch(r"\s*,\s*", t[spans[i - 1][1] : spans[i][0]]):
+        return False
+    if not re.search(r"\b(?:в|во|на)\s+$", t[: spans[i - 1][0]]):
+        return False  # «кроме Египта, Кипра или Турции»: «Кипра» is no nominative
+    group = [i]
+    while group[-1] + 1 < len(spans) and re.fullmatch(
+        r"\s+(?:или|либо)\s+", t[spans[group[-1]][1] : spans[group[-1] + 1][0]]
+    ):
+        group.append(group[-1] + 1)
+    stop = SENTENCE_END.search(t, spans[group[-1]][1])
+    rest = t[spans[group[-1]][1] : stop.start() if stop else len(t)]
+    if len(group) < 2 or re.search(r"\b(?:тоже|также|нет|не)\b", rest):
+        return False  # «Турция, Кипр», «Турция или Кипр тоже»: the refused list goes on
+    return any(re.match(r"[\w-]*[ая]\b", t[spans[j][0] :]) for j in group)
+
+
 def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
     """Which of the place mentions (start, end; sorted) a negation refuses.
 
@@ -470,6 +502,7 @@ def _negated(t: str, spans: list[tuple[int, int]]) -> list[bool]:
     neg = [False] * n
     for i in range(n):
         in_list = i > 0 and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : spans[i][0]]))
+        in_list = in_list and not _wanted_pair(t, spans, i)
         neg[i] = (
             strong[i]
             or (exc[i] and not _adds_place(t, spans, i, strong))
@@ -510,6 +543,99 @@ def _other_city(place: dict, excluded: list[str]) -> str | None:
     )
 
 
+# #142: two names joined by «или»/«либо», each may stand after «в»: «Египет или Турция».
+OR_PAIR = re.compile(
+    r"([А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)*)\s+(?:или|либо)\s+(?:(?:в|во|на)\s+)?([А-ЯЁа-яё]+(?:-[А-ЯЁа-яё]+)*)"
+)
+
+
+# #151: nouns of a request that are no place, also with a capital: «Экскурсии или Казань»,
+# «Сочи или Дети». The capital of the first word of a sentence tells nothing.
+NOT_PAIR_PLACE = re.compile(
+    r"(?:экскурс|музе|прогулк|шопинг|театр|ресторан|развлеч|отдых|поход|рыбалк|дайвинг|серфинг"
+    r"|аквапарк|зоопарк|достопримеч|концерт|фестивал|природ|взросл|реб[её]н|дет[иейяь]|малыш"
+    r"|сын|доч|внук|семь)"
+)
+NAME_WORD = r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*"
+# The first words of two-word names outside the catalogue (lower, «е» for «ё»): «Новый Афон».
+# A list, not adjective endings: «Летний Ханой» is no name.
+NAME_LEADS = {
+    "новый", "новая", "новое", "старый", "старая", "роза", "красная", "красный", "красное",
+    "большой", "большая", "малый", "малая", "верхний", "великий", "белый", "белая", "черный",
+    "золотой", "горный", "южный", "северный", "санта", "сан", "нью", "лас", "лос", "абу", "форт",
+}  # fmt: skip
+
+
+def _ordinary(word: str, low: str) -> bool:
+    """A word that is no name of a place outside the catalogue."""
+    ordinary = [low in NOT_PLACES, len(low) < 3, not word[0].isupper(), low in NUMS]
+    ordinary += [bool(re.match(MONTH, low)), bool(NOT_CITY_START.match(low))]
+    ordinary += [bool(NOT_PAIR_PLACE.match(low)), any(re.search(p, low) for _, p in WISHES)]
+    return any(ordinary)
+
+
+def _pair_name(word: str, low: str) -> str | None:
+    """The place a word of a pair names: a known city, a country, or a capitalized unknown name."""
+    if known := _known(word):
+        return known
+    if country := next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None):
+        return country
+    return None if _ordinary(word, low) or NOT_CITY_END.search(low) else _nominative(word)
+
+
+def _two_word_name(text: str, t: str, s: int, e: int, side: int) -> tuple[int, str, int] | None:
+    """«Роза Хутор или Сочи», «Сочи или Новый Афон»: two capitalized words are one name.
+
+    The first word may be an adjective («Новый»), the second one is checked as a pair word."""
+    if side == 0:
+        m = re.search(rf"(?:^|[\s,(])({NAME_WORD}) $", text[:s])
+    else:
+        m = re.compile(rf" ({NAME_WORD})\b").match(text, e)
+    if not m or not text[s].isupper():
+        return None
+    (a, b), (hs, he) = ((m.start(1), m.end(1)), (s, e)) if side == 0 else ((s, e), m.span(1))
+    first, head = text[a:b], t[hs:he]
+    if t[a:b] not in NAME_LEADS or any(rx.fullmatch(head) for _, rx in COUNTRY_RES):
+        return None  # «Отпуск Ханой», «Ханой Пожалуйста», «Ханой Вьетнам»
+    if (name := _pair_name(text[hs:he], head)) is None:
+        return None
+    return a, f"{first} {name}", he
+
+
+def _or_pairs(text: str, t: str, hits: list) -> set[int]:
+    """Add the names of «X или Y» that the other rules miss; one side must be a place for sure.
+
+    «Египет или Турция»: Египет is a place of the catalogue, Турция has no stem of its own.
+    «Ханой или Сочи»: Ханой is outside the catalogue and has no preposition. «Привет или
+    Здравствуйте» names no place. Returns the starts of the pair words (see _places)."""
+    sides = set()
+    for m in OR_PAIR.finditer(text):
+        words = [(m.start(i), m.end(i), m.group(i)) for i in (1, 2)]
+        if any(t[s] == " " for s, _, _ in words):
+            continue  # a word of the origin span: «из Казани или Самары» is no pair of places
+
+        def taken(s: int) -> bool:
+            return any(hs <= s < he for hs, _, he in hits)  # inside «Нижний Новгород» too
+
+        sure = [
+            taken(s) or _known(w) or any(rx.fullmatch(t[s:e]) for _, rx in COUNTRY_RES)
+            for s, e, w in words
+        ]
+        if not any(sure):
+            continue
+        for side, (s, e, w) in enumerate(words):
+            sides.add(s)
+            if taken(s):
+                continue
+            two = _two_word_name(text, t, s, e, side)
+            if two and not taken(two[0]) and not taken(two[2] - 1):
+                sides.add(two[0])
+                hits.append(two)
+            elif name := _pair_name(w, t[s:e]):
+                hits.append((s, name, e))
+    return sides
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -540,6 +666,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n, m.end(1)))
+    pair_sides = _or_pairs(text, t, hits)
     if switch := _switch_city(text):
         hits.append((*switch, _word_end(t, switch[0])))
     # A real place in the text («Музеи в Петербурге») or in the plan makes the guess unneeded.
@@ -562,7 +689,11 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     for s, name, _ in sorted(hits):
         if s in refused_at or name == found.get("origin"):
             continue
+        if s in pair_sides and name in COUNTRIES and (city := resolve_place(name)):
+            name = city["name"]  # «Египет или Турция»: the city of the catalogue for the country
         place = resolve_place(name)
+        if s in pair_sides and place and place["country"] in refused:
+            continue  # «Турция или Египет, в Египте уже были»: no Хургада (#151)
         if place and mentions[s][2] in COUNTRIES and place["name"] in refused:
             # The country is named, its city is refused: another city of the country.
             alt = _other_city(place, refused)
@@ -624,6 +755,9 @@ def _english_places(t: str, found: dict) -> None:
             del found["destinations"]
 
 
+WEEKDAYS = ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
+
+
 def _dates(t: str, found: dict, notes: list[str]) -> None:
     """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day."""
     d = r"(\d{1,2})(?:-?го)?"
@@ -656,6 +790,14 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
             found["date_from"] = today + timedelta(
                 days=n * (7 if m.group(2).startswith("нед") else 1)
             )
+        elif m := re.search(rf"\b(?:в|во|на)\s+({'|'.join(WEEKDAYS)})\b", t):
+            wd, month = WEEKDAYS.index(m.group(1)), found.get("month")
+            if month and month != (today + timedelta(days=1)).month:
+                base = future_date(month, 1)  # first such weekday of the named month
+                found["date_from"] = base + timedelta(days=(wd - base.weekday()) % 7)
+            else:
+                found["date_from"] = today + timedelta(days=(wd - today.weekday()) % 7 or 7)
+            notes.append(f"даты: {found['date_from']:%d.%m} («{m.group(0)}», ближайший)")
         elif re.search(r"\bследующ\w*\s+недел", t):
             found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
             notes.append(f"даты: с понедельника {found['date_from']:%d.%m} («на следующей неделе»)")
@@ -692,7 +834,8 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
         return
     starts = rf"\bчерез\s+(?:{NUM}\s*)?(?:дн\w*|день|недел\w*)|\bследующ\w*\s+недел\w*"
     # «Сдвинь на 3 дня», «Продли на 2 дня»: an edit of the current trip, not a new length (#36)
-    starts += rf"|\b{EDIT_VERB}\w*(?:\s+\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
+    # «Сократить расходы на 3 дня» names a cost, not the trip: the object word is no edit
+    starts += rf"|\b{EDIT_VERB}\w*(?:\s+(?!расход|бюджет|затрат|цен)\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(rf"\b{NUM}\s*ноч\w*", t):
         n = _num(m.group(1))
@@ -704,13 +847,21 @@ def _nights(t: str, found: dict, notes: list[str]) -> None:
         n = _num(m.group(1))
         found["nights"] = max(n - 1, 1)
         notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
-    elif m := re.search(rf"\b(?:дн(?:я|ей)|день)\s+(\d{{1,2}})\b{NOT_LENGTH_AFTER}", t):
-        found["nights"] = max(int(m.group(1)) - 1, 1)  # «дней 10» (#114)
+    elif m := re.search(rf"\b{NUM}\s*сут\w*", t):
+        found["nights"] = _num(m.group(1))
         notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
-    elif m := re.search(rf"\b{NUM}\s*сут\w*(?!\s*(?:позже|раньше|спустя))", t):
-        found["nights"] = _num(m.group(1))  # a day and a night: «5 суток» is 5 nights
+    elif m := re.search(r"\bна\s+сутки\b", t):
+        found["nights"] = 1
+        notes.append(f"длительность: 1 ноч. («{m.group(0)}»)")
+    elif m := re.search(r"\bна\s+пар[уы]\s+(?:дн\w*|день|суток)", t):
+        found["nights"] = 2
+        notes.append(f"длительность: 2 ноч. («{m.group(0)}»)")
     elif m := re.search(rf"\b(?:{NUM}\s+)?недел", t):
         found["nights"] = 7 * (_num(m.group(1)) if m.group(1) else 1)
+    elif m := re.search(rf"\bдн(?:я|ей)\s+(\d{{1,2}})\b{NOT_LENGTH_AFTER}", t):
+        # «дней 10» (#114): after every named length; «день 3» is a day of a programme
+        found["nights"] = max(int(m.group(1)) - 1, 1)
+        notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
     elif m := re.search(rf"(?<!\bin )\b{NUM_EN}[\s-]*nights?\b", t):
         found["nights"] = _num_en(m.group(1))
     elif m := re.search(rf"(?<!\bin )\b{NUM_EN}[\s-]*days?\b", t):
@@ -792,7 +943,13 @@ def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:
     _nights(t, found, notes)
     _people(t, found, notes)
     _budget(t, found, notes)
-    if re.search(r"собак|кошк|\bкот\b|\bпес\b|питом", t):
+    if re.search(
+        r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"
+        r"|\bпс(?:а|у|ом|е|ы|ов|ам|ами|ах)\b"
+        r"|\bщен(?:ок|ка|ку|ком|ке|ки|ков|кам|ками|ках)\b|\bщенят(?:а|ам|ами|ах)?\b"
+        r"|\bкот[её]н(?:ок|ка|ку|ком|ке)\b|\bкотят(?:а|ам|ами|ах)?\b",
+        t,
+    ):
         found["pets"] = True
     if meal := next((v for p, v in MEALS if re.search(p, t)), None):
         found["meal"] = meal
@@ -805,7 +962,7 @@ def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:
     wishes = [
         w
         for w, p in WISHES
-        if any(w != "тепло" or not negated.search(t[: x.start()]) for x in re.finditer(p, t))
+        if any(w != "тепло" or not _warm_refused(t, x) for x in re.finditer(p, t))
     ]
     hours = r"\s*(?:ч\b|час\w*)\s+(?:в\s+пути|лет\w*|перел\w*|езд\w*|дорог\w*)"
     if m := re.search(rf"\b(?:до|не\s+(?:больше|дольше|более))\s+(\d{{1,2}}){hours}", t):

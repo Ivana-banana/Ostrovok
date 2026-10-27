@@ -41,6 +41,7 @@ from api.contracts import (
 )
 from api.fixtures import WARM_WATER_C
 from api.main import app, get_store
+from api.model import NOT_IN_CATALOG
 from api.offers import _norm, osm_hotels, resolve_place, transfer_id
 from api.optimizer import optimize
 from api.store import SessionStore
@@ -161,13 +162,30 @@ def _walk(
         sid = r.session_id
         if run.first_rec_ms is None and r.stage in ("inspire", "compare"):
             run.first_rec_ms = (time.perf_counter() - started) * 1000
-        if r.stage in stop:
+        dead_end = _is_pets_dead_end(r)
+        if r.stage in stop and not dead_end:
             break
-        if r.stage == "clarify":
+        if dead_end:  # nothing takes the pet there (#131): the user takes the offered city
+            text = r.questions[0].options[0]
+        elif r.stage == "clarify":
             text = " ".join(q.options[0] for q in r.questions if q.options) or "пока не знаю"
         else:
             text = ANSWERS[r.stage]
     return run
+
+
+def _is_pets_dead_end(r: ChatReply) -> bool:
+    """A pets dead end (#131): no hotel is chosen for the user, other cities are offered.
+
+    «Not in the catalogue» (#136) offers cities too, but it is no pet dead end."""
+    return bool(
+        r.plan.spec.pets
+        and r.stage in ("select", "compare")
+        and r.questions
+        and r.questions[0].options
+        and NOT_IN_CATALOG not in r.reply
+        and not any(x.kind == "hotel" for x in _chosen(r.plan))
+    )
 
 
 def _say(client: TestClient, run: Run, text: str) -> ChatReply | None:

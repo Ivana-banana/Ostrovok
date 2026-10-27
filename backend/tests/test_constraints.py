@@ -177,3 +177,51 @@ def test_trap3_english_month_and_length(text, month, nights):
 def test_english_words_do_not_make_dates():
     found, _ = extract("It may be nice, we will see this week")
     assert "month" not in found and "nights" not in found
+
+
+# --- review of #138 -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "nights"),
+    [
+        ("Куда поехать в ноябре на неделю, дня 3 на море", 7),  # a named length wins
+        ("Сочи, день 3 экскурсия", None),  # the day of a programme, not a length
+        ("Сочи, день 3", None),
+        ("Калининград на сутки", 1),  # main's rules stay (#132)
+        ("Калининград на пару дней", 2),
+        ("Сочи на 5 суток", 5),
+    ],
+)
+def test_length_rules_do_not_clash(text, nights):
+    assert extract(text)[0].get("nights") == nights
+
+
+def test_expense_cut_is_read_as_main_reads_it():
+    assert extract("Сочи, сократить расходы на 3 дня")[0]["nights"] == 2  # test_duration_words
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Куда поехать в декабре? Жару не люблю",  # TRAP-2: the refusal stands after the word
+        "Хочу куда-нибудь в декабре, жарко не надо",
+        "Тепло не нужно, хочу в горы",
+        "Куда поехать в декабре? Не люблю жару",
+        "Будет ли тепло в Сочи в ноябре?",
+        "Круиз на теплоходе по Волге в июне",
+    ],
+)
+def test_warm_refusal_or_question_is_no_wish(text):
+    assert "тепло" not in extract(text)[0].get("wishes", [])
+
+
+def test_warm_refusal_does_not_pick_warm_places(store):
+    r = say(store, "Куда поехать в декабре? Жару не люблю")
+    assert "тепло" not in r.plan.spec.wishes
+    assert "климату ноября" not in r.reply
+
+
+def test_warm_reply_says_the_estimate_is_by_november(store):
+    r = say(store, "Куда-нибудь где тепло в январе, до 6 часов лёту, из Екатеринбурга")
+    assert "климату ноября" in r.reply
