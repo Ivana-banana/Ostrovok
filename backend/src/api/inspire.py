@@ -13,7 +13,7 @@ from collections import Counter
 from api import catalog
 from api.contracts import Destination, TripSpec
 from api.fixtures import COLD_MONTHS, WARM_WATER_C, travel_hours, trip_cost
-from api.offers import find_offers
+from api.offers import FAR_AIRPORT_KM, find_offers
 from api.optimizer import pets_possible
 
 # Places priced per call: find_offers runs for each, so the cost grows with this number.
@@ -30,7 +30,6 @@ CAR_KM = 1900  # api/offers.py drives up to 2500 km of road, road = 1.3 × the s
 SOUTH_DEG = 5.0  # «на юг»: this many degrees of latitude south of the departure hub
 RAINY_MM = 150
 HOT_C = 33.0
-FAR_AIRPORT_KM = 60
 LONG_ROAD_H = 4.0
 HIGH_M = 1000  # the height is named in the reason from here (as the mountains tag of catalog.json)
 # «в Европу» from Russia: the European countries of catalog.json; Russia, Belarus and Turkey
@@ -54,10 +53,11 @@ MODES = {"flight": "самолётом", "train": "поездом", "car": "на
 NO_WAY = "сюда не добраться"
 NO_PETS = "с питомцем поездку не собрать: транспорт или отель не берут животных"
 NO_SEA = "моря нет"
+NO_SWIM = "море не для купания"  # #224: the sea is near, but its water is warm for 1–2 months only
 NOT_EUROPE = "не в Европе"
 NOT_SOUTH = "не южнее, чем"
 # Not the asked kind of place: below a place of the theme with cold water or a long road.
-OFF_THEME = {NO_SEA, NOT_EUROPE, *(miss for _, _, miss in TAGS.values())}
+OFF_THEME = {NO_SEA, NO_SWIM, NOT_EUROPE, *(miss for _, _, miss in TAGS.values())}
 WHY = {tag: why for tag, why, _ in TAGS.values()}
 THEMES = (*TAGS, "море", "Европа", "юг")  # wishes that pick places by catalogue facts
 
@@ -86,6 +86,8 @@ def _rule_breaks(spec: TripSpec, place: dict, hub: dict, month: int | None) -> l
             out.append(NO_SEA)
         elif water is not None and water < WARM_WATER_C:
             out.append(f"море холодное для купания: вода {water:g} °C")
+        elif "swim" not in place["tags"]:
+            out.append(NO_SWIM)
     warm_asked = "тепло" in spec.wishes or "юг" in spec.wishes  # #235: «на юг» in winter = warm
     if warm_asked and month in COLD_MONTHS and air is not None and air < WARM_AIR_C:
         out.append(f"не тёплое направление: днём {air:g} °C")
@@ -100,7 +102,8 @@ def _why(spec: TripSpec, place: dict, water: float | None) -> str:
     high = (place["elev"] or 0) >= HIGH_M
     parts = [f"горы, {place['elev']} м" if t == "mountains" and high else WHY[t] for t in tags]
     if place["sea"]:
-        sea = "море для купания" if (water or 0) >= WARM_WATER_C else "у моря"
+        swim = "swim" in place["tags"] and (water or 0) >= WARM_WATER_C
+        sea = "море для купания" if swim else "у моря"
         parts.insert(0 if "море" in spec.wishes else len(parts), sea)
     return ", ".join(parts) or ("природа" if "nature" in place["tags"] else "город")
 

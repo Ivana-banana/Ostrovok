@@ -335,14 +335,14 @@ FAR_AIRPORT_KM = 60  # a place farther from its airport has none of its own (#12
 
 
 def _via_airport(mode: Mode, a: dict, b: dict) -> str:
-    """« через LED» for a flight to or from a place without an airport of its own; the airport
-    is the nearest one of the data. Empty when the data has no airport for the place."""
+    """The IATA code of the airport a flight to or from a place without an airport of its own
+    goes through: the nearest one of the data. Empty when the data has no airport for the place."""
     if mode != "flight":
         return ""
-    for p in (a, b):
+    for p in (b, a):
         port = p.get("airport")
         if port and port["km"] > FAR_AIRPORT_KM:
-            return f" через {port['iata']}"
+            return port["iata"]
     return ""
 
 
@@ -360,7 +360,15 @@ def _leg(
     depart = depart.astimezone(ZoneInfo(a["tz"]))
     arrive = _shift(depart, _minutes(hours)).astimezone(ZoneInfo(b["tz"]))
     what = {"flight": "Перелёт", "train": "Поезд", "car": "На своей машине"}[mode]
-    title = f"{what} {a['name']} → {b['name']}{_via_airport(mode, a, b)}, {depart:%d.%m %H:%M}"
+    port = b["airport"]["iata"] if mode == "flight" and b.get("airport") else ""
+    via = _via_airport(mode, a, b)
+    # The airport of arrival (#247); a place far from its airport is reached through it (#123).
+    tail = (
+        f" через {via}"
+        if via == port
+        else (f" ({port})" if port else "") + (f" через {via}" if via else "")
+    )
+    title = f"{what} {a['name']} → {b['name']}{tail}, {depart:%d.%m %H:%M}"
     if changes:
         title += f", пересадок: {changes}"
     if mode == "car":
@@ -452,6 +460,8 @@ def transfer_offers(
         flight = leg.mode == "flight"
         hub_km = place["airport_km"] if flight else place["station_km"]
         hub = "аэропорт" if flight else "вокзал"
+        if flight and place.get("airport"):
+            hub += " " + place["airport"]["iata"]
         for h in hotels:
             road = round(hub_km + 0.6 * (h.distance_center_km or 0), 1)
             ride = _minutes((10 + road / 35 * 60) / 60)

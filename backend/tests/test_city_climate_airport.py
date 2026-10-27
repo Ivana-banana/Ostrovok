@@ -45,7 +45,7 @@ def climate_line(name, month, word, rain=False):
     """The line the catalogue gives for a place and a month: the numbers are not typed here."""
     place = catalog.resolve(name)
     air, water = catalog.month_climate(place, month)
-    fact = f"воздух {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
+    fact = f"днём {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
     if rain:
         fact += f", осадки {place['climate']['rain'][month - 1]:g} мм за месяц"
     return f"{name} {word}: {fact} — оценка по каталогу, не прогноз."
@@ -86,6 +86,66 @@ def test_weather_of_another_city_and_month_keeps_the_dates(store):
     r2 = say(store, "какая погода в Анталии в январе?", r.session_id)
     assert climate_line("Анталия", 1, "в январе") in r2.reply, r2.reply
     assert r2.plan == r.plan and r2.stage == "compare"
+
+
+def test_blocker_departure_airport_is_the_airport_of_the_origin(store):
+    """«Из какого аэропорта вылет?» at a Сочи plan: the airport of Москва, never AER."""
+    r = at(store, "assemble")
+    port = catalog.resolve("Москва")["airport"]
+    for q in (
+        "из какого аэропорта вылет?",
+        "какой аэропорт вылета?",
+        "с какого аэропорта вылетаем?",
+    ):
+        r2 = say(store, q, r.session_id)
+        assert f"Москва: ближайший аэропорт {port['iata']}, {port['km']} км" in r2.reply, r2.reply
+        assert "AER" not in r2.reply and "Сочи:" not in r2.reply, r2.reply
+        assert r2.plan == r.plan and r2.cart == r.cart and r2.stage == "assemble"
+
+
+def test_departure_city_in_the_question_is_still_an_edit(store):
+    r = at(store, "compare")
+    r2 = say(store, "вылет из Казани, какой аэропорт?", r.session_id)
+    assert r2.plan.spec.origin == "Казань", r2.reply
+
+
+@pytest.mark.parametrize(
+    ("question", "name"),
+    [
+        ("какой аэропорт у Новороссийска?", "Новороссийск"),
+        ("какая погода в Новороссийске?", "Новороссийск"),
+        ("погода в Новом Афоне?", "Новом Афоне"),
+    ],
+)
+def test_blocker_city_named_new_is_a_city(store, question, name):
+    """A name that starts with «Нов» is a city, not «Новый год»: never the answer for Сочи."""
+    r = at(store, "compare")
+    r2 = say(store, question, r.session_id)
+    assert name in r2.reply, r2.reply
+    assert "AER" not in r2.reply and "Сочи в декабре" not in r2.reply, r2.reply
+    assert r2.plan == r.plan
+
+
+@pytest.mark.parametrize("text", ["какая погода на Новый год?", "какая погода в Новом году?"])
+def test_new_year_is_no_city(text):
+    """Only «Новый год» is a time: no place is named (the re-plan of the holiday is as before)."""
+    plan = Plan(spec=TripSpec(destinations=["Сочи"], month=12))
+    assert answers._named_places(plan, text, {}) == []
+
+
+@pytest.mark.parametrize("question", ["а в Мае тепло?", "а в Июле там жарко?", "а в Марте как?"])
+def test_a_capitalized_month_is_no_city(store, question):
+    r = at(store, "compare")
+    r2 = say(store, question, r.session_id)
+    assert "Климата для" not in r2.reply, r2.reply
+
+
+@pytest.mark.parametrize(
+    "text", ["махнём в Анталию, там тепло?", "а если в Анталию, какая погода?"]
+)
+def test_a_wish_to_go_still_changes_the_destination(store, text):
+    r = at(store, "compare")
+    assert say(store, text, r.session_id).plan.spec.destinations == ["Анталия"]
 
 
 def test_weather_of_the_plan_city_is_as_before(store):
@@ -191,7 +251,7 @@ def test_trap_6_geocoder_city_airport_and_climate(store, monkeypatch):
     port = resolve_place("Тихвин")["airport"]
     assert port["iata"] == "LED" and 150 < port["km"] < 200
     assert f"Тихвин: своего аэропорта нет, ближайший LED, {port['km']} км." in r2.reply, r2.reply
-    assert "Тихвин в декабре: воздух 11 °C" in r2.reply and "не прогноз" in r2.reply
+    assert "Тихвин в декабре: днём 11 °C" in r2.reply and "не прогноз" in r2.reply
     assert r2.plan == r.plan and r2.stage == "compare"
 
 
@@ -217,7 +277,7 @@ def test_trap_6_named_city_first_answer_has_climate_and_airport(store, monkeypat
     assert "оценка по каталогу, не прогноз" in r.reply
     assert flights(r) and all(" через LED," in t for t in flights(r)), flights(r)
     assert "Перелёт Москва → Тихвин через LED, " in r.reply
-    assert "Перелёт Тихвин → Москва через LED, " in r.reply
+    assert "Перелёт Тихвин → Москва (VKO) через LED, " in r.reply
 
 
 def test_trap_4_catalogue_city_first_answer_has_climate_and_airport(store):
@@ -225,7 +285,7 @@ def test_trap_4_catalogue_city_first_answer_has_climate_and_airport(store):
     place = catalog.resolve("Выборг")
     air, _ = catalog.month_climate(place, 12)
     rain = place["climate"]["rain"][11]
-    assert f"в декабре ≈ {air:g} °C, {rain:g} мм; ближайший аэропорт LED, 131 км" in r.reply
+    assert f"в декабре днём ≈ {air:g} °C, {rain:g} мм; ближайший аэропорт LED, 131 км" in r.reply
     assert "Перелёт Москва → Выборг через LED, " in r.reply
 
 
@@ -233,9 +293,11 @@ def test_city_with_its_own_airport_has_no_via_label(store):
     """Сочи: AER is 25 km away, the flight is «Москва → Сочи», nothing is added."""
     r = first_answer(store, SOCHI)
     rain = catalog.resolve("Сочи")["climate"]["rain"][11]
-    assert f"в декабре ≈ 11.6 °C, {rain:g} мм; ближайший аэропорт AER, 25 км" in r.reply, r.reply
+    assert f"в декабре днём ≈ 11.6 °C, {rain:g} мм; ближайший аэропорт AER, 25 км" in r.reply, (
+        r.reply
+    )
     assert flights(r) and not any("через" in t for t in flights(r)), flights(r)
-    assert "Перелёт Москва → Сочи, " in r.reply
+    assert "Перелёт Москва → Сочи (AER), " in r.reply
 
 
 def test_trap_4_no_airport_data_no_line(monkeypatch):
@@ -244,7 +306,7 @@ def test_trap_4_no_airport_data_no_line(monkeypatch):
     place = dict(catalog.resolve("Сочи"))
     monkeypatch.setattr(answers, "resolve_place", lambda name: {**place, "airport": None})
     assert answers.destination_line(plan) == (
-        f"Климат: в декабре ≈ 11.6 °C, {place['climate']['rain'][11]:g} мм "
+        f"Климат: в декабре днём ≈ 11.6 °C, {place['climate']['rain'][11]:g} мм "
         "(оценка по каталогу, не прогноз)."
     )
     monkeypatch.setattr(

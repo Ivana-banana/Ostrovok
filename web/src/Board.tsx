@@ -241,7 +241,7 @@ function Destinations({ plan, stage, busy, onSend }: {
               </p>
               <p className="muted">
                 в пути {hours(d.travel_hours)}
-                {d.air_c !== null && `, воздух ${d.air_c} °C`}
+                {d.air_c !== null && `, днём ${d.air_c} °C`}
                 {d.water_c !== null && `, вода ${d.water_c} °C`}
                 {(d.air_c !== null || d.water_c !== null) && " (оценка)"}
               </p>

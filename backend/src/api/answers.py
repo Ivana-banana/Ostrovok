@@ -32,15 +32,17 @@ AIRPORT_PLAN_RE = re.compile(
 # A wish or an order to go there: the city is then an edit of the plan, not the subject of a question.
 GO_THERE_RE = re.compile(
     r"\b(?:поех\w*|поед\w*|лет[иеу]м\w*|едем|отправ\w*|переезж\w*|измен\w*|вместо|"
-    r"перенес\w*|поменя\w*)\b"
+    r"перенес\w*|поменя\w*|махн\w*)\b|\bа\s+если\s+(?:во?|на)\b"
 )
+# «Из какого аэропорта вылет?» asks about the airport of the origin, not of the place of the plan.
+DEPARTURE_RE = re.compile(r"\bвылет\w*|\bоткуда\b|\bотправлени\w*")
 # «в Анталии», «у Тихвина», «к Выборгу»: a capitalized name after a preposition. Extract reads
 # only some of these forms; a name it misses must not turn into the climate of the plan city.
 PLACE_AFTER_RE = re.compile(
     r"(?:^|[\s,(])(?:во?|на|у|ко?|от|около|возле|близ|для)\s+"
     r"([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*(?:\s+[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)?)"
 )
-NOT_A_PLACE_RE = re.compile(r"(?:нов|рожд|пасх|масленич|крещ|троиц|марта|январ|феврал)")
+NOT_A_PLACE_RE = re.compile(r"(?:рожд|пасх|масленич|крещ|троиц)")
 VISA_RE = re.compile(r"\bвиз[аыуеой]{0,2}\b|\bвизов\w*|загранпаспорт\w*|правил\w*\s+въезд")
 # «почему не Бульвар?», «чем Гранд хуже?», «а не Парк?»: a hotel of the plan is named.
 VERSUS_RE = re.compile(
@@ -362,19 +364,29 @@ def _named_places(plan: Plan, message: str, found: dict) -> list[str]:
     """The places a message names: those extract read (its destinations; an «от Тихвина» that is
     no new origin reads as a departure from Тихвин) and the capitalized names after a
     preposition that it missed. A name keeps its form: the catalogue and the geocoder decide."""
-    names = list(found.get("destinations") or [])
-    origin = found.get("origin")
-    if origin and origin != plan.spec.origin:
-        names.append(origin)
+    typed, heads = [], set()  # the names after a preposition; the first words of all of them
     for m in PLACE_AFTER_RE.finditer(message):
         words = m.group(1).split()
-        if words[0].lower().replace("ё", "е") in NOT_PLACES or NOT_A_PLACE_RE.match(
-            words[0].lower()
+        first = words[0].lower().replace("ё", "е")
+        heads.add(words[0])
+        if (
+            first in NOT_PLACES  # «Новый год», «Майские»
+            or re.fullmatch(MONTH, first)  # «а в Мае тепло?»
+            or NOT_A_PLACE_RE.match(first)
+            or (first.startswith("нов") and re.match(r"\s+год", message[m.end(1) :]))
         ):
-            continue
-        # «Нижнем Новгороде» is one name, «Анталии Бульвар» is a name and a word: the first fits
-        one = [" ".join(words)] if len(words) == 1 or resolve_place(" ".join(words)) else words[:1]
-        names += one
+            continue  # «в Новом году» is a time; «Новороссийск», «Новом Афоне» are places
+        # «Нижнем Новгороде» is one name; «Анталии Бульвар» is a name and a word: the first fits.
+        # Two words that the data knows neither as a whole nor the first are one name («Новом Афоне»).
+        joined = " ".join(words)
+        whole = len(words) == 1 or resolve_place(joined) or not resolve_place(words[0])
+        typed.append(joined if whole else words[0])
+    # Extract keeps the first word of «Новом Афоне» and of «в Новом году»: the text decides.
+    names = [n for n in found.get("destinations") or [] if n not in heads]
+    origin = found.get("origin")
+    if origin and origin != plan.spec.origin and origin not in heads:
+        names.append(origin)
+    names += typed
     seen, out = set(), []
     for n in names:
         if (key := _name_key(n)) not in seen:
@@ -389,6 +401,7 @@ def is_city_question(plan: Plan, low: str, message: str, found: dict) -> bool:
     return bool(
         (WEATHER_RE.search(low) or is_airport_question(low))
         and not (CHOICE_WORDS_RE.search(low) or GO_THERE_RE.search(low))
+        and not (DEPARTURE_RE.search(low) and is_airport_question(low))
         and _named_places(plan, message, found)
     )
 
@@ -431,7 +444,7 @@ def weather_fact(plan: Plan, low: str = "", cities: list[str] | None = None, mon
         if air is None:
             lines.append(f"Климата {city} {when or 'вашего месяца'} в данных нет — {NO_DATA}.")
             continue
-        fact = f"воздух {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
+        fact = f"днём {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
         if RAIN_RE.search(low):
             fact += _rain(place, month)
         lines.append(f"{city} {when}: {fact} — оценка по каталогу, не прогноз.")
@@ -453,7 +466,8 @@ def destination_line(plan: Plan) -> str:
     if air is not None:
         rain = place["climate"]["rain"][month - 1]
         parts.append(
-            f"{IN_MONTH[month - 1]} ≈ {air:g} °C" + (f", {rain:g} мм" if rain is not None else "")
+            f"{IN_MONTH[month - 1]} днём ≈ {air:g} °C"
+            + (f", {rain:g} мм" if rain is not None else "")
         )
     if port := place.get("airport"):
         parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км")
@@ -498,7 +512,17 @@ def city_fact(plan: Plan, low: str, message: str = "", found: dict | None = None
     if WEATHER_RE.search(low):
         facts.append(weather_fact(plan, low, cities, month))
     if is_airport_question(low):
-        facts.append(airport_fact(plan, cities))
+        if DEPARTURE_RE.search(
+            low
+        ):  # «из какого аэропорта вылет?»: the origin, never the plan city
+            origin = plan.spec.origin
+            facts.append(
+                airport_fact(plan, [origin])
+                if origin
+                else f"Город вылета не назван — аэропорта вылета {NO_DATA}."
+            )
+        else:
+            facts.append(airport_fact(plan, cities))
     return "\n".join(facts)
 
 

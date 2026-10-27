@@ -1,13 +1,16 @@
 """Destination catalogue (T4, #8): one case per rule, no network (conftest.py)."""
 
+import importlib.util
 import re
 from datetime import date, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from api import catalog
 from api.contracts import ChatRequest, TripSpec
+from api.fixtures import WARM_WATER_C
 from api.guards import resolve_destination
 from api.model import chat
 from api.offers import offers_for_place, resolve_place
@@ -111,6 +114,29 @@ def test_trap_4_mountain_airport_is_nearest_by_road():
     assert rides and all(road["MRV"] <= x <= road["MRV"] + 10 for x in rides)
 
 
+def test_trap_4_small_road_gain_keeps_the_nearest_airport_by_line():
+    """TRAP-4: Дилижан stays on EVN; LWN is 106 km by road vs 108, a gain under 15 % and 20 km (#246)."""
+    place = catalog.resolve("Дилижан")
+    road = catalog.snapshot()["roads"]["Дилижан"]
+    assert road["LWN"] < road["EVN"] and road["EVN"] - road["LWN"] < 20
+    assert place["airport"]["iata"] == "EVN" and place["airport_km"] == road["EVN"]
+
+
+def test_trap_4_road_gain_is_a_share_or_km_not_both():
+    """TRAP-4: 60 km by line, 48 by road is a gain of 12 km = 20 %: switch (OR, not AND) (#246)."""
+    spec = importlib.util.spec_from_file_location(
+        "build_catalog", Path(__file__).parents[2] / "scripts" / "build_catalog.py"
+    )
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    place = {"ru": "X", "lat": 0.0, "lon": 0.0, "cc": "XX"}
+    ports = [["NEAR", 0.54, 0.0, "UTC", "XX"], ["FAR", 0.0, 0.6, "UTC", "XX"]]
+    switch = build.airport_fields(place, ports, {"X": {"NEAR": 60, "FAR": 48}}, None)
+    keep = build.airport_fields(place, ports, {"X": {"NEAR": 60, "FAR": 55}}, None)
+    assert switch["airport"]["iata"] == "FAR" and switch["airport_km"] == 48
+    assert keep["airport"]["iata"] == "NEAR" and keep["airport_km"] == 60
+
+
 def test_trap_6_airport_road_from_the_snapshot_else_straight_line():
     """TRAP-6: road km come from the roads snapshot in catalog.json (no network).
 
@@ -122,7 +148,12 @@ def test_trap_6_airport_road_from_the_snapshot_else_straight_line():
         ap = p["airport"]
         if ap.get("road"):
             known = {k: v for k, v in roads[p["name"]].items() if v is not None}
-            assert ap["km"] == known[ap["iata"]] == min(known.values()), p["name"]
+            best = min(known.values())
+            first = known[min(known, key=lambda k: catalog.km_between(p, ports[k]))]
+            # the road-nearest airport, or the straight-line one when the gain is small (#246)
+            assert ap["km"] == best or (
+                ap["km"] == first and first - best < min(20, 0.15 * first)
+            ), p["name"]
         else:
             assert ap["km"] == round(catalog.km_between(p, ports[ap["iata"]])), p["name"]
 
@@ -131,6 +162,17 @@ def test_country_in_text_gives_its_places():
     places = catalog.by_country("в Турцию")
     assert len(places) >= 10 and {p["country"] for p in places} == {"Турция"}
     assert catalog.resolve("в Турцию")["name"] == places[0]["name"] == "Анталия"
+
+
+def test_swim_tag_is_the_warm_season_of_the_sea():
+    """#224: «у моря» is not «море для купания»: Санкт-Петербург has the sea, 2 warm months only."""
+    assert catalog.SWIM_WATER_C == WARM_WATER_C
+    for p in catalog.places():
+        assert ("swim" in p["tags"]) == catalog.swims(p["climate"]["sea"]), p["name"]
+        assert "swim" not in p["tags"] or "sea" in p["tags"], p["name"]
+    spb = catalog.resolve("Санкт-Петербург")
+    assert spb["sea"] and "swim" not in spb["tags"]
+    assert "swim" in catalog.resolve("Сочи")["tags"]
 
 
 def test_find_filters_by_month_climate():

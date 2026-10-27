@@ -70,7 +70,8 @@ def test_weather_is_the_catalogue_climate(store, question):
     r = at(store, "assemble")
     reply = say(store, question, r.session_id).reply
     # the December climate of Сочи in catalog.json, named as an estimate, not a forecast
-    assert "Сочи в декабре: воздух 11.6 °C, вода 13.5 °C — оценка по каталогу, не прогноз." in reply
+    assert "Сочи в декабре: днём 11.6 °C, вода 13.5 °C — оценка по каталогу, не прогноз." in reply
+    assert "воздух" not in reply
     assert "Прогноза погоды в данных нет." in reply
     assert "План поездки" not in reply  # a fact, not a repeat of the plan
 
@@ -79,7 +80,7 @@ def test_weather_of_november_is_the_estimate(store):
     r = say(store, "Сочи из Москвы с 3 по 8 ноября, двое взрослых")
     r = say(store, "беру", r.session_id)
     reply = say(store, "какая погода?", r.session_id).reply
-    assert "Сочи в ноябре: воздух 15.7 °C, вода 17.1 °C" in reply and "не прогноз" in reply
+    assert "Сочи в ноябре: днём 15.7 °C, вода 17.1 °C" in reply and "не прогноз" in reply
 
 
 @pytest.mark.parametrize("question", VISA)

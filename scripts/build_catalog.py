@@ -11,14 +11,16 @@ Steps (raw files go to --data, outside git; the run can stop and resume, respons
 2. OurAirports airports.csv (public domain) + OpenFlights airports.dat (ODbL, zone by IATA):
    airports with scheduled service and an IATA code. The place's airport is the nearest by road
    among the candidates (candidates()); road km are the "roads" snapshot of the previous
-   catalog.json (OSRM, TRAP-6: no network). A place without a road to every candidate keeps the
-   nearest by straight line. --fetch-roads asks the OSRM demo server (one table request a
+   catalog.json (OSRM, TRAP-6: no network); it replaces the nearest by straight line only if the
+   road gain is >= 15 % or >= 20 km (ROAD_GAIN, #246). A place without a road to every candidate
+   keeps the nearest by straight line. --fetch-roads asks the OSRM demo server (one table request a
    place, 1 a second) for the mountain places with a choice of airports (#223: Домбай is MRV,
    not AER behind the ridge). --airports-only re-picks the airports of the existing --out.
 3. Open-Meteo Historical Weather (ERA5, CC BY 4.0): daily max air temperature and
    precipitation 2016–2025 (two 5-year requests) -> monthly means. Open-Meteo Marine (CC BY 4.0): sea surface
    temperature 2023–2025 (the Marine archive has no SST before 2023) for places with a sea cell
-   within SEA_KM.
+   within SEA_KM. Tag swim ("sea for swimming", #224) = SWIM_MONTHS or more months of the
+   sea at SWIM_WATER_C or warmer, from the same data; --swim-only re-tags the existing --out.
    Free tier: < 600 calls/min, < 5000/hour, < 10000/day; a long request counts as many
    calls (weight = max(1, variables/10 * days/14), open-meteo.com/en/pricing). Ten years for
    450 places is ~25000 calls, so the work is shared between machines (on a 429 the script
@@ -63,17 +65,28 @@ AIR_SPANS = (("air16", START, "2020-12-31"), ("air", "2021-01-01", END))  # cach
 SEA_START = "2023-01-01"  # Marine SST is null before 2023 (checked 2026-10-26)
 YEARS = 10
 SEA_KM = 30  # a sea cell of the Marine model this close to the centre: the place is on the sea
+SWIM_WATER_C = 21.5  # as WARM_WATER_C of backend/src/api/fixtures.py (a team estimate)
+SWIM_MONTHS = 3  # months with the sea this warm: a swimming season, not two weeks (#224)
+SWIM_SOURCE = (
+    f"Тег swim (море для купания, не то же, что sea) — есть, если вода {SWIM_WATER_C:g} °C и теплее "
+    f"не меньше {SWIM_MONTHS} месяцев в году по тем же данным; порог — оценка команды без источника. "
+)
 AIRPORT_KM = 200  # a farther airport is not the place's own, unless the place has no rail
 # A road candidate is up to ROAD_SPAN x the straight km of the nearest + ROAD_PLUS_KM: farther
 # airports do not win by road unless a ridge stands in the way (Домбай: AER 136, MRV 156 km)
 ROAD_SPAN, ROAD_PLUS_KM = 1.5, 30
+# The road-nearest airport replaces the straight-line nearest one only for a road gain of at
+# least ROAD_GAIN (share) or ROAD_GAIN_KM (#246: Дилижан stays EVN, 108 vs 106 km to LWN)
+ROAD_GAIN, ROAD_GAIN_KM = 0.15, 20
 AIRPORT_SOURCE = (
     "Аэропорт — с регулярными рейсами и кодом IATA "
     f"из OurAirports (public domain), своей страны, если такой есть ближе {AIRPORT_KM} км. "
     f"Кандидаты — аэропорты не дальше {ROAD_SPAN:g} × расстояние до ближайшего по прямой "
-    f"+ {ROAD_PLUS_KM} км. Выбран ближайший по дороге (roads — км по дороге, OSRM demo "
-    "router.project-osrm.org, данные OpenStreetMap, ODbL; null — дороги нет), тогда у "
-    "аэропорта road = true и km — по дороге. Если в roads нет дороги до каждого кандидата, "
+    f"+ {ROAD_PLUS_KM} км. Если в roads (км по дороге, OSRM demo router.project-osrm.org, "
+    "данные OpenStreetMap, ODbL; null — дороги нет) есть дорога до каждого кандидата, у "
+    "аэропорта road = true и km — по дороге. Тогда ближайший по прямой меняем на ближайший "
+    f"по дороге, только если выигрыш не меньше {ROAD_GAIN:.0%} или {ROAD_GAIN_KM} км. "
+    "Если дороги до каждого кандидата нет, "
     "выбран ближайший по прямой и km — по прямой. Пояс аэропорта — OpenFlights "
     "airports.dat (ODbL), для новых аэропортов — пояс ближайшего города GeoNames; "
     f"airport_km = null, если аэропорт дальше {AIRPORT_KM} км по прямой и есть вокзал "
@@ -1010,12 +1023,16 @@ def fetch_roads(r: dict, near: list[tuple[float, list]], roads: dict) -> None:
 
 def airport_fields(r: dict, airports: list[list], roads: dict, station: int | None) -> dict:
     """airport and airport_km of a place: the nearest by road when the roads snapshot has every
-    candidate ("road": true, km by road), else the nearest by straight line."""
+    candidate ("road": true, km by road), else the nearest by straight line. The straight-line
+    nearest airport is replaced only for a road gain of at least ROAD_GAIN or ROAD_GAIN_KM (#246)."""
     near = candidates(r, airports)
     road = roads.get(r["ru"], {})
     ok = [(road[a[0]], a, k) for k, a in near if road.get(a[0]) is not None]
     if ok and all(a[0] in road for _, a in near):
         ap_km, ap_, line = min(ok, key=lambda x: x[0])
+        first = road.get(near[0][1][0])
+        if first is not None and first - ap_km < min(ROAD_GAIN_KM, ROAD_GAIN * first):
+            ap_km, ap_, line = first, near[0][1], near[0][0]  # the gain is too small to switch
         mark = {"road": True}
     else:
         (line, ap_), mark = near[0], {}
@@ -1068,6 +1085,13 @@ def climate(lat: float, lon: float, cache_dir: Path) -> dict:
     return out
 
 
+def swim_tags(tags: list[str], sea: list | None) -> list[str]:
+    """tags without "swim", plus "swim" when the sea is warm SWIM_MONTHS of the year."""
+    tags = [t for t in tags if t != "swim"]
+    warm = sum(t is not None and t >= SWIM_WATER_C for t in sea or [])
+    return tags + ["swim"] * (warm >= SWIM_MONTHS)
+
+
 def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
@@ -1087,6 +1111,8 @@ def main() -> None:
                     help="ask OSRM for the roads of mountain places with a choice of airports")
     ap.add_argument("--airports-only", action="store_true",
                     help="re-pick the airports of the existing --out; needs only airports.csv")
+    ap.add_argument("--swim-only", action="store_true",
+                    help="re-tag swim in the existing --out from its sea climate; no network")
     ap.add_argument("--points", help="file ('-': stdin) with a JSON list of {name, lat, lon}: "
                     "fetch their climate to --export, no GeoNames")  # fmt: skip
     args = ap.parse_args()
@@ -1126,6 +1152,13 @@ def main() -> None:
         old["roads"] = {k: roads[k] for k in sorted(roads)}
         old["_source"] = re.sub(r"Аэропорт — .*?аэропорта с рейсами\. ", lambda _: AIRPORT_SOURCE,
                                 old["_source"], count=1)  # fmt: skip
+        write(args.out, old)
+        return
+    if args.swim_only:
+        for p in old["places"]:
+            p["tags"] = swim_tags(p["tags"], p["climate"]["sea"])
+        if SWIM_SOURCE not in old["_source"]:
+            old["_source"] = old["_source"].replace("тогда sea = true. ", "тогда sea = true. " + SWIM_SOURCE, 1)
         write(args.out, old)
         return
     files = {n: download(data, n) for n in URLS}
@@ -1220,6 +1253,7 @@ def main() -> None:
         tags = [t for t in r["tags"] if t not in ("hub", "main")]
         if sea:
             tags.append("sea")
+        tags = swim_tags(tags, clim["sea"])
         if (r["elev"] or 0) >= MOUNTAIN_M and "mountains" not in tags:
             tags.append("mountains")
         if args.fetch_roads and "mountains" in tags and len(near := candidates(r, airports)) > 1:
@@ -1254,7 +1288,7 @@ def main() -> None:
             f"максимума, °C; rain — осадки за месяц, мм; среднее за {START[:4]}–{END[:4]} "
             f"({YEARS} лет). sea — температура поверхности моря, Open-Meteo "
             f"Marine (CC BY 4.0), {SEA_START[:4]}–{END[:4]} (раньше 2023 в архиве нет); есть, если ячейка моря модели ближе {SEA_KM} км; "
-            "тогда sea = true. Тег mountains — высота от "
+            "тогда sea = true. " + SWIM_SOURCE + "Тег mountains — высота от "
             f"{MOUNTAIN_M} м или список отбора; ski, spa, city, nature, hub (город вылета), "
             "main (куда ведёт название страны) — список отбора команды. level (цена ночи 3★ "
             "на двоих, ₽), station_km и NO_RAIL — оценки команды без источника: для городов "
