@@ -270,11 +270,11 @@ def _hotel_base(place: dict, key: str, name: str, stars: int, lat: float, lon: f
     pets = pet_tag in ("yes", "leashed")
     if synthetic:
         flags = {
-            "family": r("family") < (0.8 if stars >= 4 or place["sea"] else 0.3),
-            "kids_club": place["sea"] and stars == 5,
+            "family": r("family") < (0.8 if stars >= 4 or place.get("sea", False) else 0.3),
+            "kids_club": place.get("sea", False) and stars == 5,
             "wheelchair": r("wheelchair") < (0.7 if stars >= 4 else 0.2),
             "elevator": stars >= 4 or r("elevator") < 0.6,
-            "beach": place["sea"] and (km <= 1.5 or stars >= 4),
+            "beach": place.get("sea", False) and (km <= 1.5 or stars >= 4),
             "parking": stars <= 2 or r("parking") < 0.6,
         }
         flags["elevator"] = flags["elevator"] or flags["wheelchair"]
@@ -310,7 +310,7 @@ def _osm_bases(place: dict) -> list[dict]:
 
 
 def _synthetic_bases(place: dict) -> list[dict]:
-    names = SEA_NAMES + CITY_NAMES if place["sea"] else CITY_NAMES
+    names = SEA_NAMES + CITY_NAMES if place.get("sea", False) else CITY_NAMES
     shift = int(_rand(place["name"], "names") * len(names))
     out = []
     for i, stars in enumerate(SYNTH_STARS):
@@ -334,8 +334,8 @@ def _default_meal(place: dict, base: dict) -> Meal:
     if stars == 3:
         return "BB" if r < 0.5 else "RO"
     if stars == 4:
-        return "HB" if place["sea"] and r < 0.5 else "BB"
-    return "AI" if place["sea"] else "BB"
+        return "HB" if place.get("sea", False) and r < 0.5 else "BB"
+    return "AI" if place.get("sea", False) else "BB"
 
 
 def _meals(place: dict, base: dict) -> list[Meal]:
