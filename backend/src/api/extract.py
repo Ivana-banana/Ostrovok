@@ -1459,9 +1459,14 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
             count = TWINS[m.group("twin")]
         if len(said) == 1 and count > 1 and (m.group("twin") or m.group("adj")):
             said = said * count
-        if plural and not said and not m.group(1) and re.match(r"\s*:", t[m.end() :]):
-            if CHILD_RE.search(t, m.end()):
-                continue  # «наши дети: у меня близнецы…»: the list that follows has them
+        if (
+            plural
+            and not said
+            and not m.group(1)
+            and re.match(r"\s*:", t[m.end() :])
+            and CHILD_RE.search(t, m.end())
+        ):
+            continue  # «наши дети: у меня близнецы…»: the list that follows has them
         if asking and len(said) < count:  # no age for every counted child: nobody is added
             if ASKING_NOTE not in notes:
                 notes.append(ASKING_NOTE)
