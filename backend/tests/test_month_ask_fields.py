@@ -215,3 +215,69 @@ def test_a_month_question_at_checkout_does_not_reach_the_model(store, model):
     assert r.stage == "checkout" and r.cart.total_rub == 45_100 and not r.voucher
     assert r.plan.spec.budget_rub is None and r.llm is False
     asks_to_move(r)
+
+
+# #208: a shift or a rebuild pick (#184) in the same message is not lost, with or without a
+# budget. The question about the month stays, and it is no consent.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "может в январе? на два дня позже",
+        "может в январе? бюджет 100 тысяч, на два дня позже",
+        "не в январе, на два дня позже",
+    ],
+)
+def test_a_shift_in_a_month_question_is_applied(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 5), date(2026, 12, 10), 12)
+    assert r.stage == "compare" and not r.cart.items
+    assert "Было → стало" in r.reply
+    assert "05.12" in changed(r, "даты").after
+    assert "Даты 05.12–10.12 вы назвали сами." in r.reply
+    if text.startswith("может"):
+        assert "Перенести на январь (тот же день и длина)" in r.reply
+        r = say(store, r.questions[0].options[0], r.session_id)  # the button moves new dates
+        assert (r.plan.spec.date_from, r.plan.spec.date_to) == (date(2027, 1, 5), date(2027, 1, 10))
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["может в январе? отель получше", "не в январе, отель получше", "может в январе? уже поездом"],
+)
+def test_a_rebuild_edit_in_a_month_question_is_applied(store, text):
+    first = named(store)
+    r = say(store, text, first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to, s.month) == (date(2026, 12, 3), date(2026, 12, 8), 12)
+    assert r.stage == "compare" and not r.cart.items
+    assert "вы назвали сами" in r.reply
+    assert "Было → стало" in r.reply and r.plan.selected != first.plan.selected
+    if "поездом" in text:
+        assert "транспорт: любой → поезд" in r.reply
+    if text.startswith("может"):
+        assert "Перенести на январь" in r.reply
+        assert next(q.options for q in r.questions) == ["Перенести на январь"]
+
+
+def test_a_shift_and_a_month_question_with_a_model(store, model):
+    first = named(store)
+    model.patch = {"wishes": ["тихо"]}
+    r = say(store, "может в январе? нам бы потише, на два дня позже", first.session_id)
+    s = r.plan.spec
+    assert (s.date_from, s.date_to) == (date(2026, 12, 5), date(2026, 12, 10))
+    assert "тихо" in s.wishes and "Даты 05.12–10.12 вы назвали сами." in r.reply
+    assert r.stage == "compare"
+
+
+def test_the_reason_for_no_change_comes_with_the_month_question(store):
+    first = named(store)
+    r = say(store, "поездом", first.session_id)
+    r = say(store, "может в январе? уже поездом", r.session_id)
+    assert "Уже поездом" in r.reply and "План не меняю" in r.reply
+    assert "Даты 03.12–08.12 вы назвали сами. Перенести на январь" in r.reply
+    assert next(q.options for q in r.questions) == ["Перенести на январь"]
+    assert r.plan.spec.date_from == date(2026, 12, 3) and r.stage == "compare"

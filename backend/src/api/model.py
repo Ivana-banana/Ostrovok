@@ -22,6 +22,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import llm
+from api.answers import plan_fact, without_plan_fields
 from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
 from api.contracts import (
     Cart,
@@ -1081,10 +1082,17 @@ def _question_fact(old: ChatReply, low: str) -> str:
 
 def _question_answer(old: ChatReply, low: str = "") -> str:
     """The reply to a question at assemble or checkout: the facts of the plan or the cart only
-    (TRAP-4), the stage and the cart stay."""
+    (TRAP-4), the stage and the cart stay. Weather, visas and «почему не <отель>» get the fact
+    and the hint of the stage, not a repeat of the plan (#186)."""
     head = "Это вопрос: план и корзину не меняю."
+    if old.stage == "compare":
+        head = "Это вопрос: план не меняю."
+    if fact := plan_fact(old.plan, low):
+        return f"{head}\n{fact}\n{HINTS[old.stage]}"
     if fact := _question_fact(old, low):
         head += "\n" + fact
+    if old.stage == "compare":
+        return f"{head}\n{HINTS['compare']}"
     if old.stage == "assemble":
         return f"{head}\n{_text_assemble(old.plan)}"
     rows = [f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in old.cart.items]
@@ -1397,7 +1405,22 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return old.model_copy(
                 update={"plan": plan or old.plan, "reply": text, "questions": [], "llm": False}
             )
-    if prev and old.stage in ("assemble", "checkout") and is_question(low, rules_found):
+    # #186: «какая погода в декабре?» at a December plan names no new field: still a question.
+    fact = plan_fact(old.plan, low) if prev and old.stage in PLAN3 else ""
+    asked = without_plan_fields(rules_found, old.plan) if fact else rules_found
+    if (
+        prev
+        and old.stage == "compare"
+        and ASKING_NOTE not in rules_notes  # «а дети бесплатно?» has its own answer (#179)
+        and is_question(low, asked)
+        and (fact or _question_fact(old, low))
+    ):
+        # #186: a question at compare with a fact to give («погода?», «почему не Бульвар?»)
+        # goes to no model and changes nothing; other questions go on as before.
+        return old.model_copy(
+            update={"reply": _question_answer(old, low), "questions": [], "llm": False}
+        )
+    if prev and old.stage in ("assemble", "checkout") and is_question(low, asked):
         # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
         kids_only = asking and ASKING_NOTE in rules_notes and not rules_found
         text = _text_kids_question(old) if kids_only else _question_answer(old, low)
@@ -1577,13 +1600,16 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # A route of an earlier message: the notice comes with the first plan (after a question)
         route = next((k for k in (ROUTE, CANDIDATES) if _noted(spec, k)), None)
 
+    def with_month(spec: TripSpec, text: str, questions: list[Question]):
+        """The dates stay: the line is built from the final spec, not from the old dates. The
+        general question is only for a message that changed nothing; here the dates stay."""
+        if not (month_note and spec.date_to):
+            return text, questions
+        line, chips = month_reply(spec, month_target or spec.date_from.month, "")
+        return f"{text}\n{line}", [*chips, *questions]
+
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
-        if month_note and plan.spec.date_to:
-            # The dates stay: the line is built from the final plan, not from the old dates. The
-            # general question is only for a message that changed nothing; here the dates stay.
-            line, chips = month_reply(plan.spec, month_target or plan.spec.date_from.month, "")
-            text = f"{text}\n{line}"
-            kw["questions"] = [*chips, *kw.get("questions", [])]
+        text, kw["questions"] = with_month(plan.spec, text, kw.get("questions", []))
         return ChatReply(
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
         )
@@ -1614,7 +1640,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         text = gone_text + _text_inspire(plan)
         return reply("inspire", plan, text, Cart(), questions=[question, *party_question(spec)])
 
-    if month_note and not dirty_nodes(old.plan.spec, spec):
+    if month_note and not (dirty_nodes(old.plan.spec, spec) or shifts or picks or lines):
         # Nothing else changed: the answer is about the dates only.
         text, questions = month_note
         if month_verdict == "stay":
@@ -1715,17 +1741,12 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             new = plan
         if new is not plan and old.stage == "checkout":
             note = "Корзина уже собрана, поэтому в ней ничего не меняю. Позицию убирает кнопка «Убрать» в корзине."
-            return old.model_copy(
-                update={"reply": f"{note} {HINTS['checkout']}", "questions": [], "llm": False}
-            )
+            text, questions = with_month(spec, f"{note} {HINTS['checkout']}", [])
+            return old.model_copy(update={"reply": text, "questions": questions, "llm": False})
         if new is plan:
+            text, questions = with_month(spec, " ".join([*_merged(lines), HINTS[old.stage]]), [])
             return old.model_copy(
-                update={
-                    "plan": plan,
-                    "reply": " ".join([*_merged(lines), HINTS[old.stage]]),
-                    "questions": [],
-                    "llm": False,
-                }
+                update={"plan": plan, "reply": text, "questions": questions, "llm": False}
             )
         new.changes = plan_changes(old.plan, new, old.cart, old.cart)
         body = (
@@ -1734,7 +1755,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             else _text_compare(new.model_copy(update={"changes": []}))
         )
         text = "\n".join([*_merged(lines), "Было → стало:", *describe(new.changes), body])
-        return old.model_copy(update={"plan": new, "reply": text, "questions": [], "llm": False})
+        text, questions = with_month(spec, text, [])
+        return old.model_copy(
+            update={"plan": new, "reply": text, "questions": questions, "llm": False}
+        )
 
     if old.stage == "compare" and (idx is not None or yes):
         hotels = hotel_rows(plan.offers, plan.selected)
