@@ -299,3 +299,66 @@ def test_kids_reply_dots(store):
     assert "взр. Отдельной" in say(store, "А дети бесплатно?", before.session_id).reply
     kids = say(store, "Сочи в ноябре на 5 ночей, вдвоём с ребёнком 4 года")
     assert "взр. + дети 4 лет. Отдельной" in say(store, "А дети бесплатно?", kids.session_id).reply
+
+
+# --- #275: a roster in words («я, муж, двое детей, бабушка с дедушкой») is 4 adults, not 2 ---
+
+C1 = (
+    "Едем я, муж, двое детей 6 и 9 лет и бабушка с дедушкой, в Анапу на 7 ночей с 1 июля, "
+    "поездом из Москвы"
+)
+SAME_BY_NUMBERS = (
+    "Едем 4 взрослых и двое детей 6 и 9 лет в Анапу на 7 ночей с 1 июля, поездом из Москвы"
+)
+
+
+def to_checkout(store, text):
+    r = say(store, text)
+    r = say(store, "беру", r.session_id)
+    r = say(store, "да", r.session_id)
+    assert r.stage == "checkout"
+    return r
+
+
+def train_prices(r):
+    return [o.price_rub for o in r.cart.items if o.kind == "transport"]
+
+
+def test_c1_grandparents_are_counted_and_the_train_is_priced_for_the_party(store):
+    r = to_checkout(store, C1)
+    spec = r.plan.spec
+    assert spec.adults == 4 and spec.children_ages == [6, 9]
+    assert not any("2 взросл" in a for a in spec.assumptions)
+    same = to_checkout(store, SAME_BY_NUMBERS)
+    assert train_prices(r) == train_prices(same) and train_prices(r)
+    two = to_checkout(store, "Едем вдвоём в Анапу на 7 ночей с 1 июля, поездом из Москвы")
+    assert min(train_prices(r)) > 2 * min(train_prices(two))
+
+
+@pytest.mark.parametrize(
+    "text, adults, kids",
+    [
+        ("Едем я с мамой в Сочи", 2, []),
+        ("Мы с женой и тёщей едем в Сочи", 3, []),
+        ("Летим в Сочи с мамой 70 лет", 2, []),
+        ("Бабушка, дедушка и внук 5 лет едут в Сочи", 2, [5]),
+        ("Нас трое взрослых, едем в Сочи", 3, []),
+    ],
+)
+def test_roster_words(text, adults, kids):
+    found, _ = extract(text)
+    assert found["adults"] == adults
+    assert found.get("children_ages", []) == kids
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Друг посоветовал Сочи в ноябре",
+        "Я хочу в Сочи, подруга говорит, там тепло",
+        "С 1 июля в Сочи на неделю",
+    ],
+)
+def test_one_role_word_that_is_no_companion_adds_nobody(text):
+    found, _ = extract(text)
+    assert "adults" not in found

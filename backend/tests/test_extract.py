@@ -800,6 +800,7 @@ def test_adults_are_counted_from_family_words(text, adults, kids):
     assert found["adults"] == adults
     assert found.get("children_ages") == kids
 
+
 # --- #274: colloquial names and typos in a message (TRAP-3) ---
 
 

@@ -152,7 +152,7 @@ ADDRESS_NEXT = re.compile(
 # «<word> на 3 дня» is a rebuild command («Перенеси на 2 дня позже»), never a note.
 LENGTH_NEXT = re.compile(r"\s*,\s*\d+\s*(?:ноч|дн|недел)")
 CHILD_RE = re.compile(
-    rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*)"
+    rf"\b(?:{NUM}\s+)?(?:реб[её]н\w*|дет(?:и|ей|ьми|ям)\b|сын\w*|доч\w*|малыш\w*|внук\w*|внуч\w*)"
 )
 # #195: «без детей», «без маленьких детей», «без мужа и детей», «без двоих детей» say there
 # are no children. Between «без» and the child stand only «X и» or one word in -их/-ых
@@ -1342,6 +1342,25 @@ def is_child_question(text: str) -> bool:
     return bool(CHILD_QUESTION_RE.search(text.lower().replace("ё", "е")))
 
 
+# #275: the speaker is in the party when the first role follows «с»/«со» («я с мамой») or when
+# «я»/«мы» stand before a list of roles («я, муж, бабушка»). «Бабушка, дедушка и внук» are 2.
+WITH_BEFORE_RE = re.compile(r"\bсо?\s+(?:(?:мо\w+|наш\w+|свои\w*)\s+)?$")
+ME_BEFORE_RE = re.compile(r"\b(?:я|мы)\s*,?\s*(?:и\s+)?$")
+
+
+def _family_adults(t: str) -> int:
+    """Adults named by family words; 0 when the words do not make a party."""
+    roles = list(ADULT_ROLE_RE.finditer(t))
+    if not roles:
+        return 0
+    before = t[: roles[0].start()]
+    me = bool(WITH_BEFORE_RE.search(before) or ME_BEFORE_RE.search(before))
+    n = sum(2 if r.group("two") else 1 for r in roles)
+    if len(roles) < 2 and not me:
+        return 0
+    return n + me
+
+
 def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None:
     """Adults, children with ages; «нас четверо» counts children out.
 
@@ -1394,9 +1413,9 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     elif not ages and (m := GROUP_RE.search(t)):  # «на двоих с ребёнком»: the child may count
         total = GROUP[m.group(1)] if m.group(1) else _num(m.group(2))
         found["adults"] = max(total - len(ages), 1)
-    elif len(roles := list(ADULT_ROLE_RE.finditer(t))) >= 2 and not SOLO_OTHER.search(t):
-        found["adults"] = 1 + sum(2 if r.group("two") else 1 for r in roles)
-        notes.append(f"взрослых: {found['adults']} (по составу семьи в тексте)")
+    elif (n := _family_adults(t)) and not SOLO_OTHER.search(t):
+        found["adults"] = n
+        notes.append(f"взрослых: {n} (по составу семьи в тексте)")
     elif SOLO_OTHER.search(t) or any(
         SOLO_NEXT.match(t, m.end()) or SOLO_PREV.search(t[: m.start()]) for m in SOLO_RE.finditer(t)
     ):
