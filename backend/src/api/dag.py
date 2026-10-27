@@ -16,7 +16,7 @@ Plan.changes are "before -> after" lines from spec fields and tool data, not the
 """
 
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
 from api.extract import EDIT_VERB, MONTH_NAMES, NUM, NUMS
@@ -327,12 +327,16 @@ def _rub(n: int) -> str:
     return f"{n:,} ₽".replace(",", " ")
 
 
+def period(s: TripSpec) -> str:
+    """«20.10–25.10»; with the year when a date is not in the current year (#159)."""
+    fmt = "%d.%m" if {s.date_from.year, s.date_to.year} == {date.today().year} else "%d.%m.%Y"
+    return f"{s.date_from.strftime(fmt)}–{s.date_to.strftime(fmt)}"
+
+
 def _dates(s: TripSpec) -> str:
     if not (s.date_from and s.date_to):
         return "не заданы"
-    return (
-        f"{s.date_from:%d.%m}–{s.date_to:%d.%m}, {s.nights or (s.date_to - s.date_from).days} ноч."
-    )
+    return f"{period(s)}, {s.nights or (s.date_to - s.date_from).days} ноч."
 
 
 def _guests(s: TripSpec) -> str:

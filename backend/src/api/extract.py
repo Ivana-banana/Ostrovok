@@ -759,6 +759,7 @@ WEEKDAYS = ("понедельник", "вторник", "среду", "четв�
 
 
 PAST_MARK = "уже прошло"  # in the note about a named day moved to next year
+PAST_WINDOW = timedelta(days=31)  # only a day this recent counts as a slip
 
 
 def is_past_note(assumption: str) -> bool:
@@ -819,7 +820,8 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
     except ValueError:
         notes.append(f"даты: «{d1} {m1}» нет в календаре, даты подобраны")
         return
-    if start.year > today.year:  # the named day passed this year: it is not silent (#159)
+    # A day passed in the last month may be a slip: say so (#159). «8 марта» in October is next year.
+    if start.year > today.year and date(today.year, start.month, start.day) >= today - PAST_WINDOW:
         notes.append(f"даты: {start:%d.%m} {PAST_MARK} — взят {start.year} год")
     found["date_from"] = start
     if d2 is None:

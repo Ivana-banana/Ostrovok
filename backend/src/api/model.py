@@ -39,6 +39,7 @@ from api.dag import (
     describe,
     dirty_nodes,
     is_shift_note,
+    period,
     replan,
     shift_dates,
 )
@@ -530,12 +531,6 @@ def _confirmed(text: str) -> bool:
     return bool(CONFIRM_RE.search(text)) and not NEGATION_RE.search(text)
 
 
-def _period(spec: TripSpec) -> str:
-    """«20.10–25.10»; with the year when a date is not in the current year (#159)."""
-    fmt = "%d.%m" if {spec.date_from.year, spec.date_to.year} == {date.today().year} else "%d.%m.%Y"
-    return f"{spec.date_from.strftime(fmt)}–{spec.date_to.strftime(fmt)}"
-
-
 def _tail(spec: TripSpec, hint: str) -> list[str]:
     head = ["Допущения: " + "; ".join(spec.assumptions) + "."] if spec.assumptions else []
     return head + [hint]
@@ -597,7 +592,7 @@ def _text_compare(plan: Plan) -> str:
     kids = f" + дети {', '.join(map(str, spec.children_ages))} лет" if spec.children_ages else ""
     lines = [
         (
-            f"{spec.destinations[0]}, {_period(spec)}, "
+            f"{spec.destinations[0]}, {period(spec)}, "
             f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
         ),
         *([line] if (line := missing_mode(plan)) else []),
@@ -880,7 +875,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         # The message asks to move the dates but says how far or which way in no known words (S2).
         s = old.plan.spec
         text = (
-            f"Не понял, что изменить в датах. Сейчас {_period(s)}. "
+            f"Не понял, что изменить в датах. Сейчас {period(s)}. "
             "Напишите, например: «на два дня позже», «обратно на день раньше» "
             "или «с 20 ноября на 5 ночей»."
         )
@@ -891,7 +886,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         except ValueError as e:
             text = (
                 f"{e} Из этого сообщения ничего не применено. "
-                f"Сейчас {_period(spec)}. {HINTS.get(old.stage, '')}"
+                f"Сейчас {period(spec)}. {HINTS.get(old.stage, '')}"
             )
             return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.

@@ -22,7 +22,7 @@ def today(monkeypatch):
             return cls(2026, 10, 27)
 
     monkeypatch.setattr("api.extract.date", FixedDate)
-    monkeypatch.setattr("api.model.date", FixedDate)
+    monkeypatch.setattr("api.dag.date", FixedDate)
 
 
 @pytest.fixture
@@ -49,6 +49,38 @@ def test_single_past_day_goes_to_next_year_with_a_note(today):
     found, notes = extract("Сочи 20 октября")
     assert found["date_from"] == date(2027, 10, 20)
     assert "2027" in year_notes(notes)[0]
+
+
+def test_a_day_long_gone_is_next_year_without_a_note(today, store):
+    found, notes = extract("Сочи с 2 по 8 января")
+    assert found["date_from"] == date(2027, 1, 2) and not year_notes(notes)
+    assert not year_notes(extract("Питер на 8 марта")[1])
+    r = say(store, "Сочи из Москвы с 2 по 8 января, двое взрослых")
+    assert r.plan.spec.date_from == date(2027, 1, 2)
+    assert "02.01.2027" in r.reply and not any("уже прошло" in a for a in r.plan.spec.assumptions)
+
+
+def test_a_day_passed_last_month_still_gets_the_note(today):
+    assert year_notes(extract("Сочи с 1 по 5 октября")[1])  # 26 days ago
+    assert not year_notes(extract("Сочи с 20 по 25 сентября")[1])  # 37 days ago
+
+
+def test_january_in_december_has_no_note(monkeypatch):
+    class Dec(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 12, 20)
+
+    monkeypatch.setattr("api.extract.date", Dec)
+    found, notes = extract("Сочи с 5 по 10 января")
+    assert found["date_from"] == date(2027, 1, 5) and not year_notes(notes)
+
+
+def test_change_line_shows_the_year(today, store):
+    r = say(store, "Сочи из Москвы с 20 по 25 октября, двое взрослых")
+    r = say(store, "на два дня позже", r.session_id)
+    dates = [c for c in r.plan.changes if c.what == "даты"]
+    assert dates and "20.10.2027" in dates[0].before and "22.10.2027" in dates[0].after
 
 
 @pytest.mark.parametrize(
