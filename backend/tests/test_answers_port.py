@@ -10,6 +10,7 @@ import re
 
 import pytest
 
+from api.answers import _versus
 from api.contracts import ChatRequest
 from api.guards import unknown_prices
 from api.model import chat
@@ -347,3 +348,13 @@ def test_a_mode_missing_from_the_offers_is_named(store):
     """No train to Antalya: the answer names the mode and the route."""
     _, r2 = ask(store, "assemble", "почему не поезд?", ANTALYA)
     assert "Поездов Москва → Анталия в предложениях плана нет" in r2.reply
+
+
+def test_225_comparison_without_transport_is_no_whole_trip(store):
+    r, r2 = ask(store, "compare", "чем Корстон лучше?", KAZAN)
+    assert "поездку целиком" in r2.reply
+    plan = r.plan.model_copy(update={"offers": [o for o in r.plan.offers if o.kind != "transport"]})
+    mine = next(h for h in hotel_rows(plan.offers, plan.selected) if h.offer_id in plan.selected)
+    other = next(h for h in hotel_rows(plan.offers, plan.selected) if h is not mine)
+    text = _versus(plan, mine, other, " в плане")
+    assert "поездку целиком" not in text and "Как добраться — нет данных" in text
