@@ -723,8 +723,21 @@ def pick_kinds(low: str) -> list[str]:
 
 
 def is_rebuild(low: str) -> bool:
-    """A phrase that asks to rebuild the plan: it is never a question or a consent (#184)."""
+    """A phrase that asks to rebuild the plan: it is never a consent (#184)."""
     return bool(pick_kinds(low) or NO_FLIGHT_RE.search(low) or stay_delta(low))
+
+
+EXISTS_RE = re.compile(r"\bесть\b")
+ORDER_RE = re.compile(r"\b(?:можно|хочу|хотим|давай\w*|сделай\w*)\b")
+
+
+def asks_about(low: str) -> bool:
+    """«Сколько стоит ещё ночь?», «а есть прямой рейс?», «отель получше — сколько стоит?» ask;
+    «а можно ли без перелёта?» and «хочу отель получше, сколько это?» order (#184). A question
+    word does not turn a rebuild phrase into an edit (#81, #181)."""
+    clean = re.sub(r"\bможно\s+(?:ли|будет)\b", "можно", low)
+    asked = QUESTION_WORD_RE.search(clean) or EXISTS_RE.search(clean)
+    return bool(asked and not ORDER_RE.search(clean))
 
 
 def stay_delta(low: str) -> tuple[int, str] | None:
@@ -763,25 +776,28 @@ def _kept_date_notes(spec: TripSpec, start: date, end: date) -> list[str]:
 
 def rebuild_spec_edit(
     spec: TripSpec, plan: Plan, low: str, found: dict, notes: list[str], lines: list[str]
-) -> None:
+) -> list[str] | None:
     """«Без перелёта», «на день дольше», «на 3 ночи» at a built plan: write the spec edit into
     `found` and `notes` (the DAG then re-plans), or add to `lines` the reason there is none.
 
     The edit reads the current spec, which the extractor does not see. A condition that already
-    holds («уже поездом») changes nothing."""
+    holds («уже поездом») changes nothing; the modes the user named are returned, to be written
+    into the spec without a re-plan (the offers are those of the plan), so they hold later."""
     legs = _legs_of(plan)
     ways = list(dict.fromkeys(WAY_OF[x.mode] for x in legs))
     done = f"Уже {' и '.join(ways)}: {'; '.join(x.title for x in legs)}. План не меняю."
+    pinned = None
     if NO_FLIGHT_RE.search(low) and "modes" not in found:
         if legs and all(x.mode != "flight" for x in legs):
             lines.append(done)
+            pinned = ["train", "car"]
         else:
             found["modes"] = ["train", "car"]
     elif set(found) == {"modes"} and legs and all(x.mode in found["modes"] for x in legs):
-        del found["modes"]  # «поездом» for a trip by train: the condition holds
+        pinned = found.pop("modes")  # «поездом» for a trip by train: the condition holds
         lines.append(done)
     if not (spec.date_from and spec.nights):
-        return
+        return pinned
     delta = stay_delta(low)
     absolute = (
         set(found) & DATE_KEYS == {"nights"}
@@ -789,34 +805,78 @@ def rebuild_spec_edit(
         and not any(is_too_long_note(n) for n in notes)
     )
     if delta is None and not absolute:
-        return
+        return pinned
     if delta is not None:
         found.pop("nights", None)  # «на 2 дня дольше» is no length of 1 night
         notes[:] = [n for n in notes if _label(n) != "длительность"]
         if set(found) & DATE_KEYS:
-            return
+            return pinned
         nights, said = spec.nights + delta[0], delta[1]
         if nights < 1:
             lines.append(
-                f"Меньше одной ночи не получится: сейчас {spec.nights} ноч.. План не меняю."
+                f"Меньше одной ночи не получится: сейчас {spec.nights} ноч. План не меняю."
             )
-            return
+            return pinned
         if nights > MAX_NIGHTS:
             lines.append(
-                f"Дольше {MAX_NIGHTS} ночей не планирую: сейчас {spec.nights} ноч.. План не меняю."
+                f"Дольше {MAX_NIGHTS} ночей не планирую: сейчас {spec.nights} ноч. План не меняю."
             )
-            return
+            return pinned
     else:
         nights, said = found["nights"], ""
         if nights == spec.nights:
             del found["nights"]
             lines.append(f"Уже {nights} ноч. План не меняю.")
-            return
+            return pinned
     end = spec.date_from + timedelta(days=nights)
     found.update(nights=nights, date_from=spec.date_from, date_to=end)
     if said:
         notes.append(f"длительность: {nights} ноч. («{said}», было {spec.nights})")
     notes.extend(n for n in _kept_date_notes(spec, spec.date_from, end) if n not in notes)
+    return pinned
+
+
+NOT_CHANGED = " План не меняю."
+
+
+def _replanned(line: str) -> str:
+    """A reason line in a reply where the DAG did change the plan: «План не меняю» would lie,
+    and the titles of the old legs would be stale."""
+    if line.startswith("Уже ") and ": " in line:
+        return line.split(": ", 1)[0] + "."
+    return line.removesuffix(NOT_CHANGED)
+
+
+def _merged(lines: list[str]) -> list[str]:
+    """«Уже поездом: X. План не меняю.» and «Уже без пересадок: X. План не меняю.» -> one line."""
+    heads, rest, body = [], [], ""
+    for line in lines:
+        head, _, tail = line.partition(": ")
+        if head.startswith("Уже ") and tail.endswith(NOT_CHANGED) and body in ("", tail):
+            heads.append(head.removeprefix("Уже "))
+            body = tail
+        else:
+            rest.append(line)
+    return [*([f"Уже {' и '.join(heads)}: {body}"] if heads else []), *rest]
+
+
+def _transport_changed(old: Plan, new: Plan) -> str:
+    """The line that names a change of the transport the user did not ask for: the DAG ranks
+    the trip again for the new dates, and the data give no other reason."""
+    a, b = _legs_of(old), _legs_of(new)
+    if len(a) != len(b) or [x.mode for x in a] == [x.mode for x in b]:
+        return ""
+    names = ["туда", "обратно"] if len(a) == 2 else [""] * len(a)
+    gen = {"train": "поезда", "car": "машины", "flight": "самолёта"}
+    parts = [
+        f"{n} {WAY_OF[y.mode]} вместо {gen[x.mode]}".strip()
+        for n, x, y in zip(names, a, b)
+        if x.mode != y.mode
+    ]
+    return (
+        f"Транспорт сменился: {', '.join(parts)}. Набор пересчитан под новые условия; "
+        "чтобы оставить прежний, напишите «поездом» или «самолётом»."
+    )
 
 
 def _hotel_of(plan: Plan) -> HotelOffer | None:
@@ -926,6 +986,13 @@ def _confirmed(text: str) -> bool:
 
 def is_question(low: str, found: dict) -> bool:
     """A question about the plan or the cart, not an edit (#81). `low` is lower case, no «ё»."""
+    if (
+        is_rebuild(low)
+        and asks_about(low)
+        and not (BOOK_RE.search(low) or STRONG_CONFIRM_RE.search(low))
+        and not (SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
+    ):
+        return True  # «сколько стоит ещё ночь?» asks, whatever length it names (#184)
     if (
         BOOK_RE.search(low)
         or any(
@@ -1312,12 +1379,16 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             )
     # #184: «без перелёта», «на день дольше», «отель получше» at a built plan are edits, never
     # a consent. The spec edits go into `found`; the picks run on the plan after the DAG.
-    planned = prev is not None and old.stage in PLAN3 and bool(old.plan.offers)
+    # A question («сколько стоит ещё ночь?») is none of this: the question rules answer it.
+    planned = (
+        prev is not None and old.stage in PLAN3 and bool(old.plan.offers) and not asks_about(low)
+    )
     rebuild = planned and is_rebuild(low)
     picks = pick_kinds(low) if planned else []
     lines: list[str] = []  # reasons there is nothing to change («уже поездом»)
-    if planned:
-        rebuild_spec_edit(old.plan.spec, old.plan, low, found, notes, lines)
+    pinned = (
+        rebuild_spec_edit(old.plan.spec, old.plan, low, found, notes, lines) if planned else None
+    )
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
     # «давай на месяц позже» moves the dates: no consent, and the model reads the message (#176).
@@ -1493,6 +1564,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     plan_dirty = bool(dirty_nodes(old.plan.spec, spec) or not plan.offers)
+    if pinned and spec.modes != pinned:
+        # «поездом» on a trip by train: the offers are right, only the constraint is kept (#184)
+        spec = spec.model_copy(update={"modes": pinned})
+        plan = plan.model_copy(update={"spec": spec})
     if plan_dirty:
         # The DAG recomputes only the nodes that depend on the changed fields (T6, #10).
         plan, cart, done = replan(old.plan, spec, old.cart)
@@ -1522,6 +1597,14 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             plan, more = rebuild_picks(plan, picks)
             lines = [*lines, *more]
             plan.changes = plan_changes(old.plan, plan, old.cart, cart)
+        lines = [_replanned(x) for x in lines]
+        same_trip = (old.plan.spec.destinations, old.plan.spec.origin, old.plan.spec.modes) == (
+            spec.destinations,
+            spec.origin,
+            spec.modes,
+        )
+        if same_trip and (line := _transport_changed(old.plan, plan)):
+            lines.append(line)
         text = _text_compare(plan.model_copy(update={"changes": []}))
         if spec.origin in spec.destinations:
             text += f" Город вылета {spec.origin} совпадает с направлением: перевозки в плане нет."
@@ -1554,7 +1637,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if new is plan:
             return old.model_copy(
                 update={
-                    "reply": " ".join([*lines, HINTS[old.stage]]),
+                    "plan": plan,
+                    "reply": " ".join([*_merged(lines), HINTS[old.stage]]),
                     "questions": [],
                     "llm": False,
                 }
@@ -1565,7 +1649,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             if old.stage == "assemble"
             else _text_compare(new.model_copy(update={"changes": []}))
         )
-        text = "\n".join([*lines, "Было → стало:", *describe(new.changes), body])
+        text = "\n".join([*_merged(lines), "Было → стало:", *describe(new.changes), body])
         return old.model_copy(update={"plan": new, "reply": text, "questions": [], "llm": False})
 
     if old.stage == "compare" and (idx is not None or yes):

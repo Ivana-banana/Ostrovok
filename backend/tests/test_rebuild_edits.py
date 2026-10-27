@@ -67,7 +67,10 @@ def test_condition_already_holds_says_so_and_changes_nothing(store, stage, text)
     assert set(modes(r)) == {"train"}
     r2 = say(store, text, r.session_id)
     assert "Уже поездом" in r2.reply
-    assert r2.plan == r.plan and r2.stage == stage and r2.cart == r.cart
+    # the offers, the pick and the timeline stay; only the named constraint is kept
+    same = r.plan.model_copy(update={"spec": r2.plan.spec})
+    assert r2.plan == same and r2.stage == stage and r2.cart == r.cart
+    assert r2.plan.spec.model_copy(update={"modes": []}) == r.plan.spec
 
 
 def test_long_flights_wish_is_no_ban_on_flights(store):
@@ -199,3 +202,84 @@ def test_rebuild_at_checkout_empties_the_cart_or_keeps_it(store):
     longer = say(store, "на день дольше", r.session_id)
     assert longer.stage == "compare" and longer.cart.items == []
     assert longer.plan.spec.nights == r.plan.spec.nights + 1
+
+
+# --- review of PR #203 ---
+
+
+@pytest.mark.parametrize("pin", ["поездом", "а можно без перелёта?"])
+@pytest.mark.parametrize("edit", ["на день дольше", "на 3 ночи"])
+def test_already_by_train_keeps_the_constraint_for_the_next_edit(store, pin, edit):
+    r = at(store, KAZAN, "compare")
+    r1 = say(store, pin, r.session_id)
+    assert "Уже поездом" in r1.reply and r1.plan.offers == r.plan.offers
+    assert r1.plan.selected == r.plan.selected and r1.plan.spec.modes
+    assert set(r1.plan.spec.modes) <= {"train", "car"}
+    r2 = say(store, edit, r1.session_id)
+    assert set(modes(r2)) == {"train"}  # main keeps the train after «поездом»
+    assert "Транспорт сменился" not in r2.reply
+
+
+def test_train_is_kept_after_assemble_and_a_longer_stay(store):
+    r = at(store, KAZAN, "assemble")
+    r1 = say(store, "поездом", r.session_id)
+    r2 = say(store, "на 2 дня дольше", r1.session_id)
+    assert set(modes(r2)) == {"train"}
+
+
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "сколько стоит ещё ночь?",
+        "сколько стоит ещё одна ночь?",
+        "а есть прямой рейс?",
+        "а отель получше сколько стоит?",
+        "есть ли отель получше?",
+        "а без перелёта есть?",
+    ],
+)
+def test_question_with_a_rebuild_phrase_changes_nothing(store, stage, text):
+    r = at(store, KAZAN, "assemble")
+    if stage == "checkout":
+        r = say(store, "да", r.session_id)
+    r2 = say(store, text, r.session_id)
+    assert "Это вопрос: план и корзину не меняю" in r2.reply
+    assert r2.plan == r.plan and r2.cart == r.cart and r2.stage == stage
+
+
+@pytest.mark.parametrize("text", ["а можно ли без перелёта?", "можно ли на день дольше?"])
+def test_can_i_question_is_still_a_request(store, text):
+    r = at(store, SOCHI, "assemble", ["возьми самолёт"])
+    r2 = say(store, text, r.session_id)
+    assert "Это вопрос" not in r2.reply and r2.plan != r.plan
+
+
+def test_no_changes_with_a_spec_edit_never_says_the_plan_stays(store):
+    r = at(store, KAZAN, "compare")
+    r2 = say(store, "на день дольше, без пересадок", r.session_id)
+    assert r2.plan.spec.nights == r.plan.spec.nights + 1 and "Было → стало:" in r2.reply
+    assert "План не меняю" not in r2.reply
+    assert all(x.changes == 0 for x in chosen(r2, "transport"))
+
+
+def test_two_reasons_about_one_plan_make_one_line(store):
+    r = at(store, KAZAN, "compare")
+    r2 = say(store, "поездом без пересадок", r.session_id)
+    assert r2.reply.count("Уже ") == 1 and "Уже поездом и без пересадок:" in r2.reply
+    assert r2.plan.selected == r.plan.selected
+
+
+def test_one_night_message_has_no_double_dot(store):
+    r = at(store, "Сочи, 1 ночь с 20 ноября, двое взрослых", "compare")
+    r2 = say(store, "на день короче", r.session_id)
+    assert "ноч.." not in r2.reply
+
+
+def test_changed_transport_is_named_when_the_user_asked_nothing_about_it(store):
+    r = at(store, KAZAN, "compare")
+    r2 = say(store, "на день дольше", r.session_id)
+    if sorted(modes(r2)) != sorted(modes(r)):
+        assert "Транспорт сменился" in r2.reply and "«поездом»" in r2.reply
+    else:
+        assert "Транспорт сменился" not in r2.reply
