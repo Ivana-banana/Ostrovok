@@ -1285,6 +1285,69 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
     found["date_to"], found["nights"] = end, (end - start).days
 
 
+_EN_MONTH = "|".join(sorted(MONTHS_EN, key=len, reverse=True))
+EN_DAY_MONTH_RE = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({_EN_MONTH})\b")
+EN_MONTH_DAY_RE = re.compile(
+    rf"\b({_EN_MONTH})\s+(\d{{1,2}})(?:st|nd|rd|th)?\b"
+    r"(?!\s*(?:nights?|days?|weeks?|adults?|people|persons?|guests?|kids?|child|children|\d|[:.]\d))"
+)
+
+
+def _dates_en(t: str, found: dict, notes: list[str]) -> None:
+    """#365 (C20): «from 20 November», «20th of November», «November 20»: the start day.
+
+    The month word is read by _dates; a day it did not find is set here (TRAP-3). «may» counts
+    after a number or a month-first day only; «I may 5 nights» is no date."""
+    if "date_from" in found:
+        return
+    if m := EN_DAY_MONTH_RE.search(t):
+        day, month = int(m.group(1)), MONTHS_EN[m.group(2)]
+    elif m := EN_MONTH_DAY_RE.search(t):
+        month, day = MONTHS_EN[m.group(1)], int(m.group(2))
+    else:
+        return
+    today = date.today()
+    try:
+        start = future_date(month, day, today)
+    except ValueError:
+        notes.append(f"даты: «{m.group(0)}» нет в календаре, даты подобраны")
+        return
+    if start.year > today.year and date(today.year, start.month, start.day) >= today - PAST_WINDOW:
+        notes.append(past_year_note(start, start.year))
+    found["date_from"], found["month"] = start, start.month
+
+
+# «на ноябрьские»: 4 November is the day of national unity, a fixed public holiday (Labour Code
+# of Russia, art. 112). Nothing else in the calendar is fixed: the weekend around it is taken.
+NOVEMBER_RE = re.compile(r"\bноябрьск\w*")
+
+
+def _november_holidays(t: str, found: dict, notes: list[str]) -> date | None:
+    """#365 (C21): «на ноябрьские» sets the start; returns the end, set by _november_end.
+
+    The Saturday before 4 November (Mon–Wed) or 4 November itself (Thu–Sun) to the holiday or the
+    Sunday after it. A year with a transfer of days off is an assumption, named in the note."""
+    m = NOVEMBER_RE.search(t)
+    if not m or "date_from" in found or NOT_NEW_YEAR_BEFORE.search(t[: m.start()]):
+        return None
+    today = date.today()
+    for year in (today.year, today.year + 1):
+        holiday = date(year, 11, 4)
+        if holiday.weekday() <= 2:
+            start, end = holiday - timedelta(days=(holiday.weekday() - 5) % 7), holiday
+        else:
+            start, end = holiday, holiday + timedelta(days=(6 - holiday.weekday()) or 1)
+        start = max(start, today + timedelta(days=1))
+        if end > start:
+            break
+    found["date_from"], found["month"] = start, 11
+    notes.append(
+        f"даты: {start:%d.%m}–{end:%d.%m} («{m.group(0)}»: 4 ноября — выходной по ТК РФ ст. 112, "
+        "перенос выходных в календаре года — допущение)"
+    )
+    return end
+
+
 # «дней 10 августа», «дней 5 тысяч»: the number after «дней» is a date or a sum, not a length.
 NOT_LENGTH_AFTER = rf"(?!\s*(?:{MONTH}|[-–—:.]\d|тыс|к\b|₽|руб|час|ч\b|чел|%))"
 
@@ -1398,6 +1461,9 @@ def _holiday_end(said: str, found: dict, notes: list[str]) -> None:
     )
 
 
+EACH_STAY_RE = re.compile(rf"\bпо\s+{NUM}\s*(ноч\w*|дн(?:я|ей)|день)")
+
+
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на месяц» (30), «на выходные» (пятница–воскресенье).
 
@@ -1411,6 +1477,13 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(r"\bна\s+(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
         found["nights"] = MAX_NIGHTS + 1  # too long, the 3 digits are no number the rules read
+    elif (m := EACH_STAY_RE.search(t)) and len(found.get("destinations", [])) >= 2:
+        # #365 (C19): «Питер и Москву, по 3 дня» is 3 days in each city: the trip, not one stay
+        per, cities = _num(m.group(1)), len(found["destinations"])
+        found["nights"] = per * cities - (1 if m.group(2).startswith(("дн", "ден")) else 0)
+        notes.append(
+            f"длительность: {found['nights']} ноч. на поездку («{m.group(0)}», городов: {cities})"
+        )
     elif m := re.search(rf"\b{NUM}\s*ноч\w*", t):
         n = _num(m.group(1))
         if n >= 1:

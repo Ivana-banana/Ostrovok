@@ -59,6 +59,7 @@ from api.extract import (
     CAPITAL_PLACES,
     DATE_KEYS,
     DEFAULT_NIGHTS,
+    EACH_STAY_RE,
     HOTEL_NOTE,
     MAX_NIGHTS,
     MONTH,
@@ -699,7 +700,8 @@ def is_route(message: str, destinations: list[str]) -> bool:
         return False
     stays = STAY_RE.findall(AHEAD_RE.sub(" ", low))
     linked = any(_city_in_clause(message, low, m, destinations[1:]) for m in LINK_RE.finditer(low))
-    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1
+    # #365: «по 3 дня» with two cities is a stay in each: a route
+    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1 or bool(EACH_STAY_RE.search(low))
 
 
 def severals(message: str, destinations: list[str]) -> str | None:
