@@ -927,7 +927,9 @@ def _without_changes(plan: Plan) -> tuple[Plan | None, str]:
     chosen = [new.get(x.offer_id, x.offer_id) for x in legs]
     out = plan.model_copy(
         update={
-            "selected": pick_hotel([*kept, *chosen], plan.offers, hotel.offer_id),
+            "selected": keep_refusal(
+                plan, pick_hotel([*kept, *chosen], plan.offers, hotel.offer_id)
+            ),
             "changes": [],
         }
     )
@@ -971,7 +973,10 @@ def _better_hotel(plan: Plan) -> tuple[Plan | None, str]:
     if cur.stars != nxt.stars:
         what.append(f"звёзды: {cur.stars or '—'}★ → {nxt.stars or '—'}★")
     out = plan.model_copy(
-        update={"selected": pick_hotel(plan.selected, plan.offers, nxt.offer_id), "changes": []}
+        update={
+            "selected": keep_refusal(plan, pick_hotel(plan.selected, plan.offers, nxt.offer_id)),
+            "changes": [],
+        }
     )
     out.timeline, out.issues = build_timeline(out)
     out.explanations = _explain(out)

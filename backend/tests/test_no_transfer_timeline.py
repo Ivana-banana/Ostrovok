@@ -22,6 +22,7 @@ from api.store import SessionStore
 from api.timeline import OWN_WAY, build_timeline
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч, нужен завтрак"
+KAZAN = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."
 
 
 @pytest.fixture
@@ -36,8 +37,8 @@ def say(store, text, sid=None) -> ChatReply:
     return chat(ChatRequest(session_id=sid, message=text), store)
 
 
-def at(store, stage: str) -> ChatReply:
-    r = say(store, SOCHI)
+def at(store, stage: str, request: str = SOCHI) -> ChatReply:
+    r = say(store, request)
     for text in ("беру", "да")[: {"assemble": 1, "checkout": 2}[stage]]:
         r = say(store, text, r.session_id)
     assert r.stage == stage
@@ -184,6 +185,35 @@ def test_trap_5_refusal_survives_a_train_in_the_chat(client):
     assert "Транспорт заменён" in r3.reply
     assert all(x.mode == "train" for x in selected(r3, "transport"))
     assert_no_transfer(r3)
+
+
+def test_trap_5_refusal_survives_a_better_hotel_in_the_chat(client):
+    """«без трансфера», then «отель получше» (#184): the new hotel brings no transfer."""
+    _, store = client
+    r = at(store, "assemble", KAZAN)
+    r2 = say(store, "давайте без трансфера", r.session_id)
+    r3 = say(store, "отель получше", r2.session_id)
+    assert "Отель получше" in r3.reply
+    assert selected(r3, "hotel")[0].offer_id != selected(r2, "hotel")[0].offer_id
+    assert_no_transfer(r3)
+    assert_own_way_check_in(r3)
+
+
+def test_trap_5_refusal_survives_a_direct_flight_in_the_chat(client):
+    """«без трансфера», then «без пересадок» (#184): the direct leg brings no transfer."""
+    _, store = client
+    r = at(store, "assemble", KAZAN)
+    r = say(store, "возьми самолёт", r.session_id)
+    r = say(store, "давайте без трансфера", r.session_id)
+    out = next(x for x in selected(r, "transport") if x.destination == "Казань")
+    stops = out.model_copy(update={"changes": 1, "title": out.title + ", пересадок: 1"})
+    offers = [stops if o.offer_id == out.offer_id else o for o in r.plan.offers]
+    store.put(r.model_copy(update={"plan": r.plan.model_copy(update={"offers": offers})}))
+    r2 = say(store, "без пересадок", r.session_id)
+    assert out.offer_id not in r2.plan.selected
+    assert all(x.changes == 0 for x in selected(r2, "transport"))
+    assert_no_transfer(r2)
+    assert_own_way_check_in(r2)
 
 
 def plan_without_transfers(city: str, day_in: date, day_out: date) -> Plan:
