@@ -57,7 +57,7 @@ from api.extract import (
     too_long_note,
     with_llm,
 )
-from api.fixtures import CATALOG, build_timeline, future_date
+from api.fixtures import CATALOG, COLD_MONTHS, build_timeline, future_date
 from api.fixtures import suggest_destinations as catalog_destinations
 from api.offers import find_offers, resolve_place
 from api.optimizer import (
@@ -200,7 +200,6 @@ EXCLUDED = "исключено"
 # #114: «тепло» in the wishes. Estimate without a source, like the climate of the catalogue:
 # in the cold half of the year a destination counts as warm if its November air is this warm.
 WARM_AIR_C = 15.0
-COLD_MONTHS = (10, 11, 12, 1, 2, 3, 4)
 
 
 def suggest_destinations(spec: TripSpec, limit: int = 4, exclude: list[str] | None = None):
