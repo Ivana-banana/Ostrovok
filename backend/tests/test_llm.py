@@ -521,7 +521,8 @@ def test_s4_phrase_of_the_eval_case_is_still_refused():
 def test_free_text_on_assemble_goes_to_the_model_and_a_service_word_does_not(
     monkeypatch, store, fake
 ):
-    """#49: «хотим с бассейном» is a wish and re-plans; «беру» is consent and calls no model."""
+    """#49: «хотим с бассейном» on assemble is a wish and re-plans to compare; «беру» there
+    (on compare, after the re-plan) is consent and calls no model."""
     r = say(store, SOCHI)
     r = say(store, "беру", r.session_id)
     assert r.stage == "assemble"
@@ -544,6 +545,17 @@ def test_free_text_on_checkout_goes_to_the_model(monkeypatch, store, fake):
     for text in ("беру", "да"):
         r = say(store, text, r.session_id)
     assert r.stage == "checkout"
+    calls = []
+    monkeypatch.setattr(llm, "extract_spec", lambda m, s, until=None, today=None: calls.append(m))
+    say(store, "хотим что-нибудь с бассейном", r.session_id)  # a question goes to no model (#81)
+    assert calls == ["хотим что-нибудь с бассейном"]
+
+
+def test_wish_question_on_checkout_goes_to_the_model(monkeypatch, store, fake):
+    """«а есть что-нибудь с бассейном?» asks for other offers: an edit, the model reads it (#81)."""
+    r = say(store, SOCHI)
+    for text in ("беру", "да"):
+        r = say(store, text, r.session_id)
     calls = []
     monkeypatch.setattr(llm, "extract_spec", lambda m, s, until=None, today=None: calls.append(m))
     say(store, "а есть что-нибудь с бассейном?", r.session_id)
