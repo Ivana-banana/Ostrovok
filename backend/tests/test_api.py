@@ -12,7 +12,7 @@ client = TestClient(app)
 def test_health():
     # /health требуют правила по технике (task/rules.md); /api/health — e2e пресета.
     for path in ("/health", "/api/health"):
-        assert client.get(path).json() == {"status": "ok"}
+        assert client.get(path).json()["status"] == "ok"  # modes: tests/test_ops.py
 
 
 def test_chat_follows_contract():

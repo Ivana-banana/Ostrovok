@@ -15,13 +15,15 @@ optimizer explanations; reply.llm is True only when its output was used. Without
 same path runs on rules (TRAP-1).
 """
 
+import logging
 import re
+import time
 from calendar import monthrange
 from datetime import date, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from api import catalog, llm
+from api import catalog, llm, ops
 from api.answers import (
     destination_line,
     is_hotel_compare,
@@ -102,6 +104,7 @@ from api.optimizer import (
 )
 from api.store import SessionStore
 
+log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
@@ -2084,6 +2087,24 @@ def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
     only, inside the transaction.
     """
     sid = req.session_id or uuid4().hex
-    prev = store.get(sid)
-    draft = step(prev, sid, req.message, use_llm=True)
-    return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
+    started = time.monotonic()
+    with ops.session(sid):
+        prev = store.get(sid)
+        with ops.collecting() as marks:  # #290: a failed provider is marked in the reply
+            draft = ops.mark(step(prev, sid, req.message, use_llm=True), marks)
+
+        def next_reply(cur: ChatReply | None) -> ChatReply:
+            if cur == prev:
+                return draft
+            with ops.collecting() as again:
+                return ops.mark(step(cur, sid, req.message), again)
+
+        reply = store.update(sid, next_reply)
+        log.info(
+            "chat stage=%s llm=%s marks=%d ms=%d",
+            reply.stage,
+            reply.llm,
+            len(reply.plan.issues),
+            (time.monotonic() - started) * 1000,
+        )
+        return reply
