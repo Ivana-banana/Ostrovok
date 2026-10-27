@@ -9,7 +9,7 @@
 .arch/
 **/_arch/kickoff-plan.json
 
-# Данные — вне git (загрузка по README); примеры — tests/fixtures/
+# Данные — вне git (загрузка по README; сырые данные коллектора — в GitHub Releases); примеры — tests/fixtures/
 data/*
 !data/README.md
 outputs/

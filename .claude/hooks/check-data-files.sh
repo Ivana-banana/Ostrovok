@@ -2,7 +2,7 @@
 # Страж коммита: данные и крупные файлы не попадают в git мимо Git LFS.
 # Проверяет индекс (staged):
 #   - файл в data/ или outputs/ (кроме README.md и .gitkeep) вне LFS — отказ: данные лежат
-#     вне git, загрузка — командой из README; маленькие примеры — в tests/fixtures/;
+#     вне git, загрузка — командой из README, сырые данные коллектора — в GitHub Releases; маленькие примеры — в tests/fixtures/;
 #   - любой файл ≥ MAX_FILE_MB (по умолчанию 5) вне LFS — отказ: git lfs track + .gitattributes.
 # Режимы:
 #   pre-tool — PreToolUse на Bash: срабатывает только на `git commit`, отказывает JSON-ом;
@@ -32,7 +32,7 @@ while IFS= read -r -d '' f; do
   case "$f" in
     data/README.md|outputs/README.md|*/.gitkeep|.gitkeep) ;;
     data/*|outputs/*)
-      FOUND+="$f: данные в git не кладём (загрузка — по README; пример — в tests/fixtures/)"$'\n'
+      FOUND+="$f: данные в git не кладём (загрузка — по README; сырые данные коллектора — в GitHub Releases; пример — в tests/fixtures/)"$'\n'
       continue ;;
   esac
   size=$(( $(wc -c < "$f") / 1024 / 1024 ))

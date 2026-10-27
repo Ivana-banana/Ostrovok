@@ -4,11 +4,13 @@ No model (TRAP-1): the rules read the message. Each class has its F-case in the 
 test and its negatives: the fix is for a class of phrases, not for one phrase.
 """
 
+import re
 from datetime import date, timedelta
 
 import pytest
 
-from api.contracts import ChatRequest
+from api import model
+from api.contracts import ChatRequest, TripSpec
 from api.extract import extract
 from api.model import chat
 from api.store import SessionStore
@@ -126,22 +128,43 @@ def test_other_modes_stay(text, modes):
 # ---------------------------------------------------------------- the origin is not named
 
 
+# #351: the question comes from the road sums of the offers, not from the distance. Бали for
+# 100 000 ₽ on all: the cheapest Москва round trip of the offers is over half of it.
+BALI = "Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч"
+
+
 def test_far_trip_with_a_whole_budget_asks_the_origin(store):
-    """F15: «Байкал… 200 тысяч на всё» and no origin. The road from Москва or from Иркутск
-    changes the total by a lot, so one question about the origin, not a silent «Москва»."""
-    r = say(store, F15)
+    """A whole budget the road from Москва eats over half of, and no origin: one question about
+    the origin, not a silent «Москва»."""
+    r = say(store, BALI)
     assert r.stage == "clarify" and len(r.questions) == 1
     q = r.questions[0]
     assert "откуда" in q.text.lower() and q.options[0] == "Из Москвы"
     after = say(store, "из Новосибирска", r.session_id)
     assert after.stage == "compare" and after.plan.spec.origin == "Новосибирск"
     assert after.plan.spec.destinations == r.plan.spec.destinations
+    assert after.plan.spec.budget_rub == 100_000 and after.questions == []
+
+
+def test_f15_asks_the_origin_with_both_sums(store):
+    """F15: «Байкал… 200 тысяч на всё» and no origin (#302). The Москва round trip costs over 15 %
+    of the budget more than from the cheapest big hub (#351): one question with both sums."""
+    r = say(store, F15)
+    assert r.stage == "clarify" and len(r.questions) == 1
+    q = r.questions[0]
+    assert "откуда" in q.text.lower() and q.options[0] == "Из Москвы"
+    # #351: the text says what the rule measures: the road sums, their difference and its share
+    assert "Из Москвы дорога туда и обратно ≈" in q.text and "разница ≈" in q.text
+    assert re.search(r"это \d+ % бюджета", q.text) and "уложит" not in q.text
+    assert "Иркутск" not in q.text  # «Байкал» is Иркутск: the place itself is no origin
+    after = say(store, "из Новосибирска", r.session_id)
+    assert after.stage == "compare" and after.plan.spec.origin == "Новосибирск"
     assert after.plan.spec.budget_rub == 200_000 and after.questions == []
 
 
 def test_far_trip_origin_option_keeps_the_trip(store):
     """The first option is the old default: the session goes on as before (make eval)."""
-    r = say(store, F15)
+    r = say(store, BALI)
     after = say(store, r.questions[0].options[0], r.session_id)
     assert after.stage == "compare" and after.plan.spec.origin == "Москва"
     assert ORIGIN_NOTE not in after.plan.spec.assumptions
@@ -167,6 +190,43 @@ def test_named_origin_far_trip_asks_nothing(store):
     """F08 class: the origin is named, the far trip goes on."""
     r = say(store, "Токио на 7 ночей в апреле, двое, бюджет 600 тысяч, из Москвы")
     assert r.stage == "compare" and r.questions == []
+
+
+@pytest.mark.parametrize("place", ["Сочи", "Анапа", "Геленджик", "Минводы"])
+def test_neighbour_hub_does_not_ask_the_origin(store, place):
+    """#380: Ростов-на-Дону is 318–427 км from these places. Its cheap road measured the
+    distance to the place, not the origin: the plan comes at once, Москва is an assumption."""
+    r = say(store, f"{place} в июле вдвоём, 100 тысяч на всё")
+    assert r.stage == "compare" and r.questions == []
+    assert ORIGIN_NOTE in r.plan.spec.assumptions
+
+
+@pytest.mark.parametrize(("best", "asks"), [(15_000, True), (15_001, False)])
+def test_origin_gap_threshold_side(monkeypatch, best, asks):
+    """#380: a gap of exactly ROAD_GAP (15.0 %) asks; the text never shows a share below it."""
+    sums = {"Москва": 30_000, "Новосибирск": best}  # home 30 % of the budget: under ROAD_SHARE
+    monkeypatch.setattr(model, "_round_trip", lambda probe, origin: sums.get(origin))
+    spec = TripSpec(destinations=["Сочи"], month=7, adults=2, budget_rub=100_000)
+    questions = model.far_origin_question(spec)
+    assert bool(questions) is asks
+    if asks:
+        assert "это 15 % бюджета" in questions[0].text
+
+
+@pytest.mark.parametrize(("home", "asks"), [(50_000, True), (49_999, False)])
+def test_origin_road_share_threshold_side(monkeypatch, home, asks):
+    """#380: a road from Москва of exactly ROAD_SHARE (50.0 %) of the budget asks."""
+    monkeypatch.setattr(model, "_round_trip", lambda probe, origin: {"Москва": home}.get(origin))
+    spec = TripSpec(destinations=["Сочи"], month=7, adults=2, budget_rub=100_000)
+    questions = model.far_origin_question(spec)
+    assert bool(questions) is asks
+    if asks:
+        assert "Дорога из Москвы — 50 % бюджета" in questions[0].text
+
+
+def test_origin_share_is_rounded_down():
+    """#380: the share is rounded down. 15.2 % reads «15 %»; 14.99 % does not read «15 %»."""
+    assert model._share(15_200, 100_000) == "15 %" and model._share(14_990, 100_000) == "14 %"
 
 
 # ---------------------------------------------------------------- the city of a hotel request
@@ -235,7 +295,7 @@ def test_counted_children_ask_nothing(store, text):
 
 
 def test_one_question_per_turn_the_origin_first(store):
-    """Far trip, whole budget, no origin and «с детьми»: the origin comes first, then nothing
+    """The road over half of the whole budget, no origin and «с детьми»: the origin comes first, then nothing
     more is asked (the plan goes on with the children as an assumption)."""
-    r = say(store, "Байкал с детьми в марте, 10 дней, двое взрослых, 200 тысяч на всё")
+    r = say(store, "Бали на 12 ночей, двое взрослых с детьми, перелёт и отель до 100 тысяч")
     assert len(r.questions) == 1 and "откуда" in r.questions[0].text.lower()
