@@ -1,8 +1,8 @@
 // Product name and the voice of the mascot. The agent is a banana and speaks in the masculine
 // gender: every text the client adds says «Собрал», «Нашёл», «Проверил».
 
-// The name comes later: change it here only.
-export const PRODUCT_NAME = "[Название]";
+// The working name until the team picks one: change it here only.
+export const PRODUCT_NAME = "О!дин запрос";
 export const PRODUCT_LINE = "агент путешествий · один запрос";
 
 // The thinking line while the agent answers: one verb every VERB_MS.
