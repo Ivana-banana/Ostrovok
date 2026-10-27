@@ -114,13 +114,17 @@ export type Plan = {
 
 export type Cart = { items: Offer[]; total_rub: number };
 
+// From the BookingProvider; a refusal is a 409, not a status (ADR-0002).
+export type BookingStatus = "created" | "confirmed" | "cancelled";
+
 export type Voucher = {
   booking_id: string;
   items: Offer[];
   spec: TripSpec;
   total_rub: number;
   created_at: string;
-  simulated: true;
+  status: BookingStatus;
+  simulated: boolean; // true: booking and payment are simulated; the voucher says so
 };
 
 export type ChatRequest = { session_id: string | null; message: string };
