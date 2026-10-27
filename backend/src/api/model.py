@@ -1261,7 +1261,7 @@ def _question_fact(old: ChatReply, low: str) -> str:
 # #369: «сколько это на 1 человека?», «покажи цену на человека»: a price per head from the plan
 # total; the party stays. «Есть номер на 2 человека?» asks about a room, not about the party.
 PER_HEAD_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
-PER_HEAD_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж|\?")
+PER_HEAD_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж\w*\s+цен")
 ROOM_FOR_RE = re.compile(r"\bномер\w*\s+на\s+(?:\d{1,2}|двоих|троих|четверых)\b")
 
 
@@ -1277,7 +1277,9 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
             return f"Состав не меняю: {people} чел. Итог пока не посчитан, цену на человека назвать не могу."
         return (
             f"Состав не меняю: {people} чел. Итого {_rub(total)} (синтетика), "
-            f"на человека около {_rub(round(total / people))} (синтетика)."
+            f"{'в среднем ' if spec.children_ages else ''}на человека около "
+            f"{_rub(round(total / people))} (синтетика)"
+            + (", дети по детскому тарифу." if spec.children_ages else ".")
         )
     if ROOM_FOR_RE.search(low) and "?" in low:
         return (
@@ -1635,7 +1637,13 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return old.model_copy(
             update={"reply": _question_answer(old, low), "questions": [], "llm": False}
         )
-    if prev and old.stage in PLAN3 and (reply := _per_head_reply(old, low)):
+    if (
+        prev
+        and old.stage in PLAN3
+        and not rules_found  # an edit in the same message is a rebuild, as before
+        and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
+        and (reply := _per_head_reply(old, low))
+    ):
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
         return drop_transfers(old)

@@ -1540,14 +1540,18 @@ MONEY_PER_PERSON_RE = re.compile(
 )
 
 
-def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None:
+def _people(
+    t: str, found: dict, notes: list[str], asking: bool = False, built: bool = False
+) -> None:
     """Adults, children with ages; «нас четверо» counts children out.
+
+    built: the plan exists; «на 1 человека» near a price word is then a unit, not a party (#369).
 
     asking: the message is a question at a built plan; a child without a number or an age in
     it adds nobody (#179)."""
     ages: list[int] = []
     no_kids = False
-    if PRICE_CUE_RE.search(t) or asking:
+    if built and (PRICE_CUE_RE.search(t) or asking):  # only at a built plan
         t = PER_PERSON_RE.sub(" ", t)  # #369: «на 1 человека» is a unit of price, not a party
     t = MONEY_PER_PERSON_RE.sub(r"\1", t)
     for m in CHILD_RE.finditer(t):
@@ -1827,7 +1831,7 @@ def extract(
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     if holiday:
         _holiday_end(holiday, found, notes)
-    _people(t, found, notes, asking)
+    _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
     if re.search(
         r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"

@@ -48,3 +48,50 @@ def test_budget_per_head_is_a_unit_not_the_party():
 def test_a_room_for_one_in_a_first_message_is_still_a_party():
     found, _ = extract("Сочи, номер на 1 человека, 50 тысяч")
     assert found["adults"] == 1
+
+
+# --- review: an edit in the same message is a rebuild; the first message keeps the party ---
+
+
+@pytest.mark.parametrize(
+    "question, field",
+    [
+        ("Покажи отели подешевле, до 20 тысяч на человека", "budget"),
+        ("Покажи варианты с бюджетом 30 тысяч на человека", "budget"),
+        ("Перенеси на 2 дня позже, сколько на человека выйдет?", "date"),
+    ],
+)
+def test_an_edit_with_a_per_head_phrase_is_still_a_rebuild(store, question, field):
+    r = say(store, FAMILY)
+    r2 = say(store, question, r.session_id)
+    assert "Состав не меняю" not in r2.reply
+    if field == "budget":
+        assert r2.plan.spec.budget_rub in (40_000, 60_000)
+    else:
+        assert r2.plan.spec.date_from > r.plan.spec.date_from
+
+
+def test_a_new_party_in_the_same_message_is_applied(store):
+    r = say(store, "Едем вчетвером в Сочи на 5 ночей с 1 июля")
+    r2 = say(store, "Нас будет двое. Есть номер на 2 человека?", r.session_id)
+    assert r2.plan.spec.adults == 2
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сколько стоит Сочи на одного человека на 5 ночей в июле?",
+        "Сочи на 5 ночей, номер на 1 человека, сколько стоит?",
+        "Цена поездки в Казань на 1 человека в ноябре",
+        "Еду в Сочи, цена на 1 человека до 40 тысяч",
+    ],
+)
+def test_in_the_first_message_for_one_person_is_the_party(text):
+    found, _ = extract(text)
+    assert found["adults"] == 1
+
+
+def test_children_in_the_party_name_the_child_fare(store):
+    r = say(store, FAMILY)
+    r2 = say(store, "Сколько это на 1 человека?", r.session_id)
+    assert "в среднем на человека" in r2.reply and "детскому тарифу" in r2.reply
