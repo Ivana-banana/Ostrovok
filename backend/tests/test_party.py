@@ -589,3 +589,43 @@ def test_337_months_added_in_a_dialog_do_not_add_a_child(store):
     r = say(store, "Едем с женой и сыном 6 лет в Сочи на 5 ночей с 1 июля")
     r = say(store, "сын 6 лет и 3 месяца, это важно?", r.session_id)
     assert r.plan.spec.children_ages == [6]
+
+
+# --- #341: a head count in words: «с друзьями, 4 человека», «4 чел.», «на 4 персоны» ---
+
+
+@pytest.mark.parametrize(
+    "text, adults, ages",
+    [
+        ("Поеду в Питербург из Казани на 3 дня с друзьями, 4 человека", 4, None),
+        ("Нас 4 человека, едем в Сочи", 4, None),
+        ("Сочи, компания из 5 человек", 5, None),
+        ("Сочи вчетвером", 4, None),
+        ("Сочи впятером", 5, None),
+        ("Сочи, 4 чел.", 4, None),
+        ("Сочи на 4 персоны", 4, None),
+        ("Сочи, 4 гостя", 4, None),
+        ("Едем компанией в 4 человека в Сочи", 4, None),
+        ("Сочи, 4 человека, из них двое детей 5 и 8", 2, [5, 8]),
+        ("Сочи, 2 человека", 2, None),
+        ("Сочи, 1 человек", 1, None),
+    ],
+)
+def test_341_head_count(text, adults, ages):
+    found, _ = extract(text)
+    assert found["adults"] == adults and found.get("children_ages") == ages
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "4 человека в номере максимум?",
+        "Рейтинг 4 человека из 5",
+        "Сочи на 4 ночи",
+        "Отель 4 звезды в Сочи",
+        "Номер до 4 человек, Сочи",
+    ],
+)
+def test_341_numbers_that_are_no_head_count(text):
+    found, _ = extract(text)
+    assert "adults" not in found
