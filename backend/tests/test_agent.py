@@ -3,6 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from api import catalog
 from api.contracts import ChatRequest
 from api.extract import extract
 from api.main import app, get_store
@@ -134,6 +135,29 @@ def _book(store, r):
     for text in ("беру", "да", "подтверждаю"):
         r = say(store, text, r.session_id)
     return r
+
+
+def test_trap_4_origin_off_the_hub_list_flies_from_the_nearest_hub(store):
+    """TRAP-4 (#104): Суздаль has no airport: the plan flies from the nearest hub and says so."""
+    spec = say(store, "Из Суздаля в Сочи в ноябре на 5 ночей").plan.spec
+    assert spec.origin != "Суздаль" and catalog.resolve(spec.origin)["hub"]
+    assert any(a.startswith("откуда:") and "Суздаль" in a and spec.origin in a
+               for a in spec.assumptions)  # fmt: skip
+
+
+def test_trap_4_unknown_origin_offline_is_moscow_with_a_note(store):
+    """TRAP-4, TRAP-6 (#104): Тихвин is not in the catalogue and there is no network."""
+    spec = say(store, "Из Тихвина в Сочи в ноябре").plan.spec
+    assert spec.origin == "Москва"
+    assert any(a.startswith("откуда:") and "не нашёл" in a for a in spec.assumptions)
+
+
+def test_hub_origin_named_later_stays_and_drops_the_hub_note(store):
+    """#104: Казань is a hub: a rebuild «из Казани» keeps it and the Суздаль note goes."""
+    r = say(store, "Из Суздаля в Сочи в ноябре на 5 ночей")
+    spec = say(store, "из Казани", r.session_id).plan.spec
+    assert spec.origin == "Казань"
+    assert not any(a.startswith("откуда:") for a in spec.assumptions)
 
 
 def test_origin_city_is_never_offered_as_destination(store):

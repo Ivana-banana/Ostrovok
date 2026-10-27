@@ -21,7 +21,7 @@ from datetime import date, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from api import llm
+from api import catalog, llm
 from api.answers import is_hotel_compare, plan_fact, span, without_plan_fields
 from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
 from api.contracts import (
@@ -497,6 +497,12 @@ def assume(spec: TripSpec) -> TripSpec:
     if not data["origin"]:
         data["origin"] = DEFAULT_ORIGIN
         note("откуда", "Москва (город вылета не назван)")
+    else:
+        # TRAP-4 (#104): no flight from a city off the hub list; the nearest hub, said aloud.
+        hub, why = catalog.origin_hub(data["origin"])
+        data["origin"] = hub["name"]
+        if why:
+            note("откуда", why[:1].lower() + why[1:])
     if data["hotel_budget_rub"] is not None:  # the rules wrote their note; the LLM did not
         note(HOTEL_NOTE, f"{_rub(data['hotel_budget_rub'])} за все ночи")
     resolve_hotel_budget(data)
