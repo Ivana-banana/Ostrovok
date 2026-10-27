@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import urllib.error
+from datetime import date
 
 import pytest
 
@@ -239,17 +240,36 @@ def test_llm_fills_what_rules_missed(store, fake):
     assert r.plan.spec.destinations == ["Сочи"] and "тепло" in r.plan.spec.wishes
 
 
+def test_llm_hotel_budget_gets_an_assumption_the_user_sees(store, fake):
+    """#41: the model reads «на проживание не больше сорока пяти тысяч»; the budget is shown."""
+    text = "Махнём в Сочи на три ночки, на проживание не больше сорока пяти тысяч"
+    assert "hotel_budget_rub" not in extract(text)[0]
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["Сочи"], "hotel_budget_rub": 45_000})
+    r = say(store, text)
+    assert r.llm is True and r.plan.spec.hotel_budget_rub == 45_000
+    assert r.plan.spec.budget_rub is None
+    assert "бюджет отеля: 45 000 ₽ за все ночи" in r.plan.spec.assumptions
+
+
+def test_llm_does_not_turn_the_hotel_sum_into_a_trip_budget():
+    """#41: the rules read «отель до 40 тысяч»; the same sum from the model is not a trip budget."""
+    found, _ = extract(SOCHI)
+    assert found["hotel_budget_rub"] == 40_000
+    assert "budget_rub" not in with_llm(found, {"budget_rub": 40_000})
+    assert with_llm(found, {"budget_rub": 150_000})["budget_rub"] == 150_000
+
+
 def test_rules_win_over_the_llm_and_dates_stay_one_group():
     found, _ = extract(SOCHI)
     patch = {
         "destinations": ["Анапа"],
         "date_from": found["date_from"].replace(day=25),
-        "budget_rub": 90_000,
+        "hotel_budget_rub": 90_000,
         "pets": True,
         "wishes": ["море"],
     }
     out = with_llm(found, patch)
-    assert out["destinations"] == ["Сочи"] and out["budget_rub"] == 40_000
+    assert out["destinations"] == ["Сочи"] and out["hotel_budget_rub"] == 40_000
     assert out["date_from"] == found["date_from"] and out["pets"] is True
     assert out["wishes"] == ["море"]
     assert with_llm(found, None) == found
@@ -299,8 +319,10 @@ def test_llm_patch_is_validated(fake):
         ({"wishes": [llm.SPEC_PROMPT.splitlines()[2]]}, None),  # the prompt is not echoed
         ({"destinations": ["Сочи"], "origin": "Москва", "nights": 3}, {}),  # echo of the spec
         ({"budget_rub": 0}, {}),  # «поставь цену 0»
+        ({"hotel_budget_rub": 0}, {}),
+        ({"hotel_budget_rub": 45_000}, {"hotel_budget_rub": 45_000}),
         ({"children_ages": [5, 40]}, {}),
-        ({"date_from": "2020-01-01", "date_to": "2020-01-05"}, {}),  # past dates
+        ({"date_from": "2020-01-01", "date_to": "2020-01-05"}, {"nights": 4}),  # model.py checks
         ({"date_from": "2099-03-01", "date_to": "2099-03-05", "nights": 9}, {"nights": 4}),
         ({"adults": 3, "meal": "BB"}, {"adults": 3, "meal": "BB"}),
     ]
@@ -312,6 +334,10 @@ def test_llm_patch_is_validated(fake):
         else:
             assert {k: v for k, v in (got or {}).items() if k in want} == want, patch
             assert want or got == {}, patch
+    # past dates reach model.py (#164): a silent drop here would hide them
+    fake.spec = lambda p: answer({**NULLS, "date_from": "2020-01-01", "date_to": "2020-01-05"})
+    got = llm.extract_spec("текст", spec)
+    assert got["date_from"] == date(2020, 1, 1) and got["date_to"] == date(2020, 1, 5)
 
 
 def test_user_text_is_data_and_source_texts_are_not_sent(store, fake):
@@ -413,13 +439,20 @@ def test_trap_4_explanation_keeps_only_numbers_from_the_facts(tmp_path, fake):
     assert new[1:] == plan.explanations[1:]
     fake.why = why("Около 9 800 ₽ за ночь")  # derived: price ÷ nights
     assert llm.explain(plan) is not None
-    assert plan.spec.budget_rub == 40_000
+    assert plan.spec.hotel_budget_rub == 40_000 and plan.spec.budget_rub is None
     fake.why = why(f"Ваш бюджет 40 000 ₽, отель {price} ₽")  # the budget named as the budget
     assert llm.explain(plan) is not None
+    fake.why = why(f"Бюджет отеля 40 000 ₽, отель {price} ₽ в него укладывается")  # #41
+    assert llm.explain(plan) is not None
+    plan.spec.budget_rub = 150_000  # both budgets in one text
+    fake.why = why(f"Бюджет поездки 150 000 ₽, бюджет отеля 40 000 ₽, отель {price} ₽")
+    assert llm.explain(plan) is not None
+    plan.spec.budget_rub = None
     for bad in (
         why("Отель за 12 345 ₽ — дешевле всех"),  # price not in the tools
         why("Отель стоит 40 000 ₽"),  # the budget is not a price (review of PR #47)
         why("Отель стоит 40 000"),
+        why("Отель стоит 40 000 ₽, бюджет отеля 40 000 ₽"),  # the hotel budget as a price
         why("До моря 97 м"),  # any number not in the facts
         why("Хороший отель", offer_id="h-made-up"),  # offer_id the optimizer did not explain
         why(llm.WHY_PROMPT.splitlines()[3]),  # the prompt is not echoed
@@ -493,7 +526,8 @@ def test_s4_phrase_of_the_eval_case_is_still_refused():
 def test_free_text_on_assemble_goes_to_the_model_and_a_service_word_does_not(
     monkeypatch, store, fake
 ):
-    """#49: «хотим с бассейном» is a wish and re-plans; «беру» is consent and calls no model."""
+    """#49: «хотим с бассейном» on assemble is a wish and re-plans to compare; «беру» there
+    (on compare, after the re-plan) is consent and calls no model."""
     r = say(store, SOCHI)
     r = say(store, "беру", r.session_id)
     assert r.stage == "assemble"
@@ -518,6 +552,18 @@ def test_free_text_on_checkout_goes_to_the_model(monkeypatch, store, fake):
     assert r.stage == "checkout"
     calls = []
     monkeypatch.setattr(llm, "extract_spec", lambda m, s, until=None, today=None: calls.append(m))
+    # a wish («хотим…») is no question: the model reads it (#81)
+    say(store, "хотим что-нибудь с бассейном", r.session_id)
+    assert calls == ["хотим что-нибудь с бассейном"]
+
+
+def test_wish_question_on_checkout_goes_to_the_model(monkeypatch, store, fake):
+    """«а есть что-нибудь с бассейном?» asks for other offers: an edit, the model reads it (#81)."""
+    r = say(store, SOCHI)
+    for text in ("беру", "да"):
+        r = say(store, text, r.session_id)
+    calls = []
+    monkeypatch.setattr(llm, "extract_spec", lambda m, s, until=None, today=None: calls.append(m))
     say(store, "а есть что-нибудь с бассейном?", r.session_id)
     assert calls == ["а есть что-нибудь с бассейном?"]
 
@@ -528,3 +574,15 @@ def test_second_half_of_a_month_is_no_hotel_pick(store):
     assert r.stage == "compare"
     r2 = say(store, "во второй половине ноября", r.session_id)
     assert r2.plan.selected == r.plan.selected and r2.stage == "compare"
+
+
+def test_model_answer_cannot_lift_an_earlier_refusal(store, fake):
+    """#113: the refusal of turn 1 holds against a model answer of turn 2 («Анталия» is in Turkey)."""
+    r = say(
+        store, "Едем с ребёнком в ноябре, хотим к морю. В Турции и Египте уже были, не хочется."
+    )
+    assert "исключено: Турция, Египет" in r.plan.spec.assumptions
+    fake.spec = lambda p: answer({**NULLS, "destinations": ["Анталия"]})
+    r = say(store, "подешевле, до 100 тысяч", r.session_id)
+    assert r.plan.spec.destinations == [] and "Анталия" not in [d.name for d in r.plan.destinations]
+    assert "исключено: Турция, Египет" in r.plan.spec.assumptions

@@ -5,8 +5,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from api import catalog
+from api.contracts import ChatRequest
 from api.guards import resolve_destination
+from api.model import chat
 from api.offers import resolve_place
+from api.store import SessionStore
 
 
 def test_snapshot_has_climate_zones_and_hubs():
@@ -19,6 +22,34 @@ def test_snapshot_has_climate_zones_and_hubs():
         assert len(c["air"]) == len(c["rain"]) == 12 and None not in c["air"] + c["rain"], p["name"]
         assert (c["sea"] is not None) == p["sea"], p["name"]
         assert c["sea"] is None or (len(c["sea"]) == 12 and None not in c["sea"]), p["name"]
+
+
+def test_trap_5_every_place_has_a_road():
+    """An airport with flights or a station: else the plan has no way there (Горно-Алтайск, B1)."""
+    bad = [
+        p["name"] for p in catalog.places() if p["airport_km"] is None and p["station_km"] is None
+    ]
+    assert bad == []
+    # RGK has no scheduled_service in OurAirports: the nearest airport with flights stands in
+    assert catalog.resolve("Горно-Алтайск")["airport"] == {
+        "iata": "NOZ", "km": 216, "tz": "Asia/Krasnoyarsk"
+    }  # fmt: skip
+
+
+def test_trap_5_altai_plan_has_a_flight_and_a_transfer(tmp_path):
+    """TRAP-5: «Алтай из Москвы» in rules mode reaches the cart with the road, not a hotel alone."""
+    store = SessionStore(tmp_path / "sessions.db")
+    r = chat(ChatRequest(message="Хочу на Алтай в июле на неделю из Москвы, двое взрослых"), store)
+    for text in ("беру", "да"):
+        r = chat(ChatRequest(session_id=r.session_id, message=text), store)
+    assert r.stage == "checkout" and r.llm is False
+    kinds = [i.kind for i in r.cart.items]
+    assert kinds.count("transport") == 2 and kinds.count("transfer") == 2
+    flights = [i for i in r.cart.items if i.kind == "transport"]
+    assert {(i.origin, i.destination, i.mode) for i in flights} == {
+        ("Москва", "Горно-Алтайск", "flight"), ("Горно-Алтайск", "Москва", "flight")
+    }  # fmt: skip
+    assert any("≈217.5 км" in i.title for i in r.cart.items if i.kind == "transfer")
 
 
 @pytest.mark.parametrize(
@@ -45,6 +76,7 @@ def test_trap_3_letters_after_a_short_name_are_not_a_case_ending():
     """TRAP-3: «Гори» (Georgia) is not «Гоа» + «ри»; «в Нижнем Новгороде» still is the city."""
     assert catalog.resolve("Гори") is None
     assert catalog.resolve("в Нижнем Новгороде")["name"] == "Нижний Новгород"
+    assert catalog.country_of("из Нидерландов") == "Нидерланды"
 
 
 def test_trap_5_home_airport_and_zone_of_a_new_airport():
@@ -81,6 +113,15 @@ def test_trap_6_no_network_unknown_name_gives_none():
     assert hub["name"] == "Москва" and "не нашёл" in note
 
 
+def test_trap_3_geocoder_is_asked_again_without_the_case_ending(geo):
+    """TRAP-3: «в Бледе» — the geocoder knows only «Блед»."""
+    place = catalog.lookup_online("Бледе", geo("Блед"))
+    assert place["name"] == "Блед" and place["slug"]
+    assert (
+        catalog.lookup_online("Старую", geo(catalog._stems("Старую"), "Стара-Загора")) is None
+    )  # not a case of it
+
+
 def test_trap_2_online_place_outside_snapshot():
     """TRAP-2: a place outside the snapshot from the geocoder and one year of climate."""
     days = [f"2025-{m:02d}-15" for m in range(1, 13)]
@@ -99,6 +140,25 @@ def test_trap_2_online_place_outside_snapshot():
     assert place["source"] == "online" and place["sea"] and place["airport"]["iata"]
     assert catalog.month_climate(place, 7) == (6, 20.0)
     assert resolve_place("Зурбаган") is place  # cached in the process
+
+
+def test_trap_6_a_network_error_is_remembered_for_a_minute_only(monkeypatch):
+    """TRAP-6: offline, one wait per city a minute; one timeout does not make it unknown until a restart."""
+    calls = []
+
+    def timeout(url: str, params: dict) -> dict:
+        calls.append(url)
+        raise TimeoutError
+
+    def nothing(url: str, params: dict) -> dict:
+        return {"results": []}
+
+    now = 1000.0
+    monkeypatch.setattr(catalog.time, "monotonic", lambda: now)
+    assert catalog.lookup_online("Зурбаган", timeout) is None
+    assert catalog.lookup_online("Зурбаган", timeout) is None and len(calls) == 1
+    now += catalog.FAILED_S
+    assert catalog.lookup_online("Зурбаган", nothing) is None and "зурбаган" in catalog._online
 
 
 def test_trap_6_empty_geocoder_answer_uses_snapshot():

@@ -57,7 +57,7 @@ AIR_SPANS = (("air16", START, "2020-12-31"), ("air", "2021-01-01", END))  # cach
 SEA_START = "2023-01-01"  # Marine SST is null before 2023 (checked 2026-10-26)
 YEARS = 10
 SEA_KM = 30  # a sea cell of the Marine model this close to the centre: the place is on the sea
-AIRPORT_KM = 200  # a farther airport is not the place's own: no flights there
+AIRPORT_KM = 200  # a farther airport is not the place's own, unless the place has no rail
 MOUNTAIN_M = 1000  # GeoNames elevation (DEM) from which a place counts as mountains
 DEFAULT_LEVEL = 5500  # api/offers.py DEFAULT_LEVEL
 UA = "nedovost-org catalog build (hackathon, github.com/ostrovok-hackathon-2026/nedovost-org)"
@@ -1110,7 +1110,6 @@ def main() -> None:
         # a home airport within reach, not the nearer one abroad: Выборг is LED, not LPP
         ap_ = home if km((r["lat"], r["lon"]), (home[1], home[2])) <= AIRPORT_KM else by_km[0]
         ap_km = round(km((r["lat"], r["lon"]), (ap_[1], ap_[2])))
-        own = ap_km <= AIRPORT_KM
         if r["ru"] in LEGACY:
             slug, level, station = LEGACY[r["ru"]]
         else:
@@ -1125,6 +1124,9 @@ def main() -> None:
             )
             station = None if r["ru"] in NO_RAIL else RAIL_COUNTRIES.get(r["country"])
         slugs.add(slug)
+        # no rail either: the nearest airport with flights however far, else no road at all.
+        # Горно-Алтайск: RGK has no scheduled_service in OurAirports, so its road is from NOZ
+        own = ap_km <= AIRPORT_KM or station is None
         print(f"[{i + 1}/{len(resolved)}] {r['ru']} (вызовов {LIMIT.total:.0f})", file=sys.stderr)
         CACHED_ONLY = args.cached_only or not lo <= i + 1 <= hi
         try:
@@ -1165,7 +1167,8 @@ def main() -> None:
             "Open-Meteo Geocoding (тоже GeoNames). Аэропорт — ближайший с регулярными рейсами "
             f"и кодом IATA из OurAirports (public domain), своей страны, если он ближе {AIRPORT_KM} км; "
             "его пояс — OpenFlights airports.dat (ODbL), для новых аэропортов — пояс ближайшего "
-            f"города GeoNames; airport_km = null, если аэропорт дальше {AIRPORT_KM} км. "
+            f"города GeoNames; airport_km = null, если аэропорт дальше {AIRPORT_KM} км и есть "
+            "вокзал (station_km); без вокзала — расстояние до ближайшего аэропорта с рейсами. "
             "Климат — Open-Meteo Historical Weather (ERA5, CC BY 4.0): air — среднее дневного "
             f"максимума, °C; rain — осадки за месяц, мм; среднее за {START[:4]}–{END[:4]} "
             f"({YEARS} лет). sea — температура поверхности моря, Open-Meteo "

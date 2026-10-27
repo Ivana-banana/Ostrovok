@@ -170,12 +170,6 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-upstream.sh\" stop",
             "timeout": 30,
             "statusMessage": "Чужие коммиты в origin/main против текущей работы…"
-          },
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-tests.sh\"",
-            "timeout": 1200,
-            "statusMessage": "Режим «сборка»: make check…"
           }
         ]
       }

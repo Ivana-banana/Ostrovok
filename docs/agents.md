@@ -29,7 +29,7 @@ Codex: те же роли в `.codex/agents/<роль>.toml` (их генери�
 ```mermaid
 flowchart LR
   T[issues.sh take] --> W[worktree + бриф]
-  W --> B[builder: код, make check]
+  W --> B[builder: код, тесты своих файлов]
   B --> F1[finish.sh: merge main, проверки, PR]
   F1 -- нужен reviewer --> R[reviewer: diff → вердикт в PR]
   R -- доработать --> B

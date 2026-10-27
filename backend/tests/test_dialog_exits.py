@@ -5,11 +5,18 @@ All run on rules, without a model (TRAP-1).
 
 import pytest
 
+from api import catalog
 from api.contracts import ChatRequest
 from api.extract import extract
-from api.fixtures import CATALOG
 from api.model import chat
 from api.store import SessionStore
+
+
+def in_catalog(name: str) -> bool:
+    """A place of catalog.json under its own name (#20: inspiration ranks the whole catalogue)."""
+    place = catalog.resolve(name)
+    return place is not None and place["name"] == name
+
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых"
 
@@ -89,7 +96,7 @@ def test_other_destination_clears_the_city_and_offers_variants(store, stage):
     assert r.cart.items == [] and r.voucher is None
     names = [d.name for d in r.plan.destinations]
     assert 2 <= len(names) <= 3 and "Сочи" not in names
-    assert set(names) <= set(CATALOG)  # from the catalogue, never invented
+    assert all(in_catalog(n) for n in names)  # from catalog.json, never invented
     assert r.questions[0].options == names
     picked = say(store, "1", r.session_id)  # a variant by its number leads on
     assert picked.plan.spec.destinations == [names[0]] and picked.stage == "compare"
@@ -99,7 +106,7 @@ def test_unknown_city_answer_has_two_or_three_variants(store):
     r = say(store, "Хиврии, 3 ночи с 20 ноября")
     assert r.stage == "select" and "другое направление" in r.reply
     options = r.questions[0].options
-    assert 2 <= len(options) <= 3 and set(options) <= set(CATALOG)
+    assert 2 <= len(options) <= 3 and all(in_catalog(o) for o in options)
     assert all(o in r.reply for o in options)
     # A message with no new city on the select stage gets the variants again.
     again = say(store, "не знаю", r.session_id)
