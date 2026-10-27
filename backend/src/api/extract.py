@@ -296,6 +296,12 @@ MODES = [
     ("car", r"\bна\s+(?:сво\w+\s+)?(?:машин|авто)"),
     ("flight", r"\b(?:самол[её]т|летим|лететь|полетим|рейс)"),
 ]
+# «без самолётов», «не хочу лететь»: the flight is banned (the spec keeps the other modes)
+NO_FLIGHT = re.compile(
+    r"\b(?:без|не)\s+(?:на\s+)?(?!долг|длинн)(?:перелет\w*|самолет\w*|авиа(?!билет|компани|линии|перевоз)\w*)"
+    r"|\bне\s+(?:хочу\s+|будем\s+|надо\s+)?(?:лететь|летим|полетим|летать)\b"
+    r"(?!\s+(?:долг|дольше|больше|более|\d|с\s+пересад))"  # a long flight, not every flight
+)
 # #114: «где тепло», «тёплые края», «жарко». «Тёплое море» is the sea wish (its water is checked),
 # «не тепло», «не люблю жару» and «тёплая куртка» are no wish for the warm.
 WARM = (
@@ -314,6 +320,11 @@ WISHES = [
     ("недорого", r"недорог|деш[её]в|бюджетн|эконом|\bcheap"),
     ("горы", r"\bгор(?:ы|ах|ам|ами|у)\b|\bгорн|\bmountains?\b"),
     ("лыжи", r"лыж|сноуборд|\bski"),
+    # #277: quiet and green words are the nature tag of the catalogue (api/inspire.py)
+    (
+        "природа",
+        r"\bлес(?:а|у|ом|е|ах|ов)?\b|\bлесн|природ|\bозер(?:о|а|у|ом|е|ах)?\b",
+    ),
     ("тепло", WARM),
     ("санаторий", r"санатор"),
     ("тяжело ходить", r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил"),
@@ -350,6 +361,15 @@ def is_chip_message(text: str) -> bool:
 
 def _month(word: str) -> int:
     return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»
+
+
+def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
+    """The match is a wish: «не люблю жару» and «без лесов» are not."""
+    if wish == "тепло":
+        return not _warm_refused(t, x)
+    if wish == "природа":
+        return not negated.search(t[: x.start()])
+    return True
 
 
 def _warm_refused(t: str, m: re.Match) -> bool:
@@ -1578,13 +1598,11 @@ def extract(
     modes = [
         m for m, p in MODES if any(not negated.search(t[: x.start()]) for x in re.finditer(p, t))
     ]
+    if not modes and NO_FLIGHT.search(t):  # #277: «без самолётов» bans one mode, the rest stay
+        modes = ["train", "car"]
     if modes:
         found["modes"] = modes
-    wishes = [
-        w
-        for w, p in WISHES
-        if any(w != "тепло" or not _warm_refused(t, x) for x in re.finditer(p, t))
-    ]
+    wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
     hours = r"\s*(?:ч\b|час\w*)\s+(?:в\s+пути|лет\w*|перел\w*|езд\w*|дорог\w*)"
     if m := re.search(rf"\b(?:до|не\s+(?:больше|дольше|более))\s+(\d{{1,2}}){hours}", t):
         found["max_travel_hours"] = float(m.group(1))
