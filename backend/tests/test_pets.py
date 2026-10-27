@@ -150,3 +150,34 @@ def test_simulator_dead_end_rule_ignores_the_catalogue_phrase(store):
     assert _is_pets_dead_end(dead)
     unknown = dead.model_copy(update={"reply": "Направления «Х» пока нет в каталоге."})
     assert not _is_pets_dead_end(unknown)
+
+
+# --- #149: more pet words; the simulator does not match the reply text ---
+
+
+@pytest.mark.parametrize(
+    "word", ["со щенком", "с щенка", "с котёнком", "с котенком", "с котят", "с псами", "два пса"]
+)
+def test_young_and_plural_pet_words_set_the_pet_flag(store, word):
+    r = say(store, f"Сочи {word} на выходные 12–14 декабря, из Москвы, двое взрослых")
+    assert r.plan.spec.pets
+
+
+@pytest.mark.parametrize("word", ["котел", "пасе", "псевдо", "псих", "скот", "котлета"])
+def test_look_alike_words_do_not_set_the_pet_flag(store, word):
+    r = say(store, f"Сочи, {word}, на выходные 12–14 декабря, из Москвы, двое взрослых")
+    assert not r.plan.spec.pets
+
+
+def test_dead_end_check_takes_the_catalogue_notice_from_the_shared_constant():
+    from types import SimpleNamespace as NS
+
+    from api.checks import _is_pets_dead_end
+    from api.model import NOT_IN_CATALOG
+
+    def reply(text):
+        plan = NS(spec=NS(pets=True), offers=[], selected=[])
+        return NS(plan=plan, stage="select", reply=text, questions=[NS(options=["Казань"])])
+
+    assert _is_pets_dead_end(reply("Варианты"))
+    assert not _is_pets_dead_end(reply(f"«Рим» {NOT_IN_CATALOG}."))
