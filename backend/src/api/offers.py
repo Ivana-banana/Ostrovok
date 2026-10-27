@@ -23,6 +23,7 @@ place with 101hotels facts come from scripts/calibrate_prices.py (catalog.json _
 import hashlib
 import json
 import math
+import re
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
 from pathlib import Path
@@ -60,10 +61,12 @@ SEA_NAMES = ["Морской бриз", "Лазурный берег", "Ривь
 NO_DIRECT = {"Италия", "Франция", "Испания", "Чехия", "Австрия", "Венгрия", "Германия",
              "Греция", "Кипр"}  # fmt: skip
 OUT_FLIGHTS = [(time(10, 30), 1.0), (time(17, 40), 0.9)]  # arrival, local to the place
-# A car (#276): at most MAX_DRIVE at the wheel a day, then a night on the road. Every
+# A car (#276, #321): at most MAX_DRIVE at the wheel a day, then a night on the road. Every
 # driving day starts at the same clock time: there at CAR_OUT, so that the car comes on the
-# check-in day; back at CAR_BACK, the hotel check-out (HotelOffer.check_out). A night on the
-# road costs ROAD_NIGHT_RUB a room, one room per car. Team estimates without a source.
+# check-in day; back at CAR_BACK, the hotel check-out (HotelOffer.check_out). MAX_DRIVE and
+# ROAD_NIGHT_RUB (a room, one room per car) are team estimates without a source (D-026). For
+# reference: Regulation (EC) 561/2006 lets a professional driver drive 9-10 h a day; a private
+# driver has no limit (research/domain.md).
 MAX_DRIVE = timedelta(hours=12)
 CAR_OUT, CAR_BACK = time(8, 0), time(12, 0)
 ROAD_NIGHT_RUB = 3500
@@ -419,6 +422,25 @@ def _car(
         "(бензин, платные дороги и ночёвки в пути, оценка)",
     )
     return leg.model_copy(update={"arrive_at": arrive, "title": title})
+
+
+ROAD_NIGHTS_RE = re.compile(r"ночёвок в пути: (\d+)")  # written by _car into the title
+
+
+def road_nights(leg: TransportOffer) -> int:
+    """Nights on the road of a car leg, from its title (_car); 0 for any other leg."""
+    m = ROAD_NIGHTS_RE.search(leg.title) if leg.mode == "car" else None
+    return int(m.group(1)) if m else 0
+
+
+def drive_time(leg: TransportOffer) -> timedelta:
+    """Time at the wheel of a car leg without its nights on the road; elapsed time otherwise.
+
+    _car drives 1 + nights equal days, each from the clock time of the start, so the last day
+    is the elapsed time without the full days."""
+    elapsed = leg.arrive_at.astimezone(UTC) - leg.depart_at.astimezone(UTC)
+    nights = road_nights(leg)
+    return (elapsed - timedelta(days=nights)) * (nights + 1)
 
 
 def _span_h(delta: timedelta) -> str:

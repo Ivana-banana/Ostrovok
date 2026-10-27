@@ -19,6 +19,21 @@ function render(r: ChatReply): Document {
 }
 
 suite("доска поездки", () => {
+  it("#321: машина с ночёвками — часы за рулём вместо «в пути», без повтора в минусах", () => {
+    const r = structuredClone(base);
+    const [d] = r.plan.destinations;
+    r.plan.destinations = [
+      { ...d, travel_hours: 33, tradeoffs: ["за рулём 18 ч, 1 ночёвка в пути", "от аэропорта 197 км"] },
+      { ...d, name: "Без ночёвок", travel_hours: 7.5, tradeoffs: ["дорога 7.5 ч"] },
+    ];
+    const cards = [...render(r).querySelectorAll(".dest")].map((c) => c.textContent ?? "");
+    expect(cards[0]).toContain("за рулём 18 ч, 1 ночёвка в пути");
+    expect(cards[0]).not.toContain("в пути 33");
+    expect(cards[0]).toContain("Минусы: от аэропорта 197 км");
+    expect(cards[0].match(/за рулём/g)).toHaveLength(1);
+    expect(cards[1]).toContain("в пути 7");
+    expect(cards[1]).toContain("Минусы: дорога 7.5 ч");
+  });
   it("TRAP-7: у каждой синтетической цены есть пометка «синтетика»", () => {
     const doc = render(hotelBought);
     const prices = [...doc.querySelectorAll(".price")];
