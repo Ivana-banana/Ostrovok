@@ -57,6 +57,7 @@ from api.extract import (
     is_excluded,
     is_past_note,
     is_too_long_note,
+    llm_past_dates,
     too_long_note,
     with_llm,
 )
@@ -831,6 +832,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             # The rules read the shift (which end, how far); the model must not add other dates.
             for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
                 llm_found.pop(k, None)
+    # Dates only the model read pass the check of the rules' dates (#164).
+    if llm_found and not DATE_KEYS & found.keys() and (past := llm_past_dates(llm_found)):
+        notes.append(past)
     if llm_found:
         # The model may not set a length the rules would not take; note and plan then agree (#160).
         rejected = any(is_too_long_note(n) for n in notes)

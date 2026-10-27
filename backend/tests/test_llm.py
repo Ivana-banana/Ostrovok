@@ -321,7 +321,7 @@ def test_llm_patch_is_validated(fake):
         ({"hotel_budget_rub": 0}, {}),
         ({"hotel_budget_rub": 45_000}, {"hotel_budget_rub": 45_000}),
         ({"children_ages": [5, 40]}, {}),
-        ({"date_from": "2020-01-01", "date_to": "2020-01-05"}, {}),  # past dates
+        ({"date_from": "2020-01-01", "date_to": "2020-01-05"}, {"nights": 4}),  # model.py checks
         ({"date_from": "2099-03-01", "date_to": "2099-03-05", "nights": 9}, {"nights": 4}),
         ({"adults": 3, "meal": "BB"}, {"adults": 3, "meal": "BB"}),
     ]
