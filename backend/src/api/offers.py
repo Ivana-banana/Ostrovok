@@ -26,6 +26,7 @@ import math
 import re
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
+from importlib.resources import files
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -47,6 +48,7 @@ from api.contracts import (
 )
 
 HERE = Path(__file__).parent
+ZONE_TAB = files("tzdata").joinpath("zoneinfo", "zone.tab")
 DEFAULT_LEVEL = 5500  # night in a 3-star room for two, roubles, when a place has no level
 SEASON = {1: 0.95, 2: 0.9, 3: 0.9, 4: 0.95, 5: 1.1, 6: 1.2, 7: 1.3, 8: 1.3, 9: 1.1, 10: 0.95,
           11: 0.9, 12: 1.05}  # fmt: skip
@@ -129,15 +131,28 @@ def _complete(p: dict) -> dict:
 
 
 def _open_airport(p: dict) -> dict:
-    """C8 (#363): a place behind a closed airport gets the nearest open airport of the data, km
-    by the straight line; the transfer prices the road by these km."""
+    """C8 (#363): a place behind a closed airport gets the nearest open airport of its country
+    (no border on the way), km by the straight line; the transfer prices the road by these km."""
     if not closed_airport(p):
         return p
-    ports = [a for a in catalog.snapshot()["airports"] if a[0] not in CLOSED_AIRPORTS]
-    pts = [{"iata": a[0], "lat": a[1], "lon": a[2], "tz": a[3]} for a in ports]
-    port = min(pts, key=lambda a: km_between(p, a))
+    port = min(_open_ports(p.get("cc", "")), key=lambda a: km_between(p, a), default=None)
+    if port is None:
+        return {**p, "airport": None, "airport_km": None}
     km = round(km_between(p, port))
     return {**p, "airport": {**port, "km": km}, "airport_km": km}
+
+
+@cache
+def _open_ports(cc: str) -> list[dict]:
+    """Open airports of the snapshot in a country: the country of an airport is the one of its
+    zone in zone.tab of the tzdata package."""
+    rows = (x.split("\t") for x in ZONE_TAB.read_text(encoding="utf-8").splitlines())
+    zones = {r[2] for r in rows if len(r) > 2 and r[0] == cc}
+    return [
+        {"iata": a[0], "lat": a[1], "lon": a[2], "tz": a[3]}
+        for a in catalog.snapshot()["airports"]
+        if a[3] in zones and a[0] not in CLOSED_AIRPORTS
+    ]
 
 
 def km_between(a: dict, b: dict) -> float:
@@ -428,6 +443,10 @@ FAR_AIRPORT_KM = 60  # a place farther from its airport has none of its own (#12
 # goes by train or car.
 CLOSED_AIRPORTS = {"AAQ", "EGO", "BZK", "VOZ", "URS", "LPK", "ROV", "SIP"}
 CLOSED_NOTE = "закрыт для рейсов (по данным на 27.10.2026)"
+# The last departure of an airport open only by day (research/domain.md, 27.10.2026): GDZ
+# 08:30-20:00, KRR 09:00-23:00 MSK. Only the return flight from the place reads it; the arrival
+# slots (OUT_FLIGHTS) are inside both windows.
+LAST_DEPARTURE = {"GDZ": time(20, 0), "KRR": time(23, 0)}
 
 
 def closed_airport(place: dict) -> str:
@@ -558,7 +577,6 @@ DAY_OUT, DAY_BACK, DAY_ARRIVE_BY = time(7, 40), time(16, 20), time(23, 0)
 # (SYNTH_KM); HUB_MARGIN as transfer_offers. Times of the transfer: _ride.
 CHECK_OUT = time(12, 0)
 FAR_HOTEL_KM = max(hi for _, hi in SYNTH_KM.values())
-NIGHT_END = time(5, 0)  # timeline.NIGHT_TO: a hotel reached later loses the check-in night
 HUB_MARGIN = {"flight": timedelta(minutes=120), "train": timedelta(minutes=40)}
 
 
@@ -567,9 +585,14 @@ def _hub_road(hub_km: float, hotel_km: float) -> float:
     return round(hub_km + 0.6 * hotel_km, 1)
 
 
+CITY_RIDE_KM = 100  # a transfer drives the first km at 35 km/h, the rest at the car speed (C8)
+
+
 def _ride(road: float) -> timedelta:
-    """A transfer ride: 10 minutes to board and 35 km/h."""
-    return _minutes((10 + road / 35 * 60) / 60)
+    """A transfer ride: 10 minutes to board, 35 km/h up to CITY_RIDE_KM, then the car speed of
+    a road leg (80 km/h, x1.1)."""
+    city, far = min(road, CITY_RIDE_KM), max(road - CITY_RIDE_KM, 0)
+    return _minutes(10 / 60 + city / 35 + far / 80 * 1.1)
 
 
 def _back_from(place: dict, mode: Mode, day: date) -> datetime:
@@ -633,22 +656,20 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
     if a["airport_km"] is not None and b["airport_km"] is not None and flies:
         pair = {a["country"], b["country"]}
         changes = int("Россия" in pair and bool(pair & NO_DIRECT))
-        hours = _flight_hours(km) + 3 * changes
-        base = 2200 + 3.6 * km + 3000 * changes
-        road = _ride(_hub_road(b["airport_km"], FAR_HOTEL_KM)) + timedelta(minutes=40)
-        lost = datetime.combine(there + timedelta(days=1), NIGHT_END, tb)
-        for i, (slot, k) in enumerate(OUT_FLIGHTS):
-            # A far airport (C8): a later slot that loses the check-in night is no offer.
-            if i and _shift(datetime.combine(there, slot, tb), road) >= lost:
-                continue
+        hours = _flight_hours(hops) + 3 * changes  # airport to airport (C8)
+        base = 2200 + 3.6 * hops + 3000 * changes
+        for slot, k in OUT_FLIGHTS:
             depart = _shift(datetime.combine(there, slot, tb), -_minutes(hours))
             price = fare("flight", base * k, there, slot)
             legs.append(_leg(spec, "flight", a, b, depart, hours, price, changes))
         earliest, taken = _back_from(b, "flight", back), set()
+        last = LAST_DEPARTURE.get((b.get("airport") or {}).get("iata", ""))
         for slot, k in BACK_FLIGHTS:
             # A far airport (#370): the slot moves after the check-out and the transfer.
             depart = max(datetime.combine(back, slot, tb), earliest)
-            if depart in taken:
+            if last and depart.time() > last:  # the airport closes (C8)
+                depart = datetime.combine(back, last, tb)
+            if depart < earliest or depart in taken:
                 continue
             taken.add(depart)
             price = fare("flight", base * k, back, slot)

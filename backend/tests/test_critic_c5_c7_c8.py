@@ -6,7 +6,7 @@ C8: Воронеж flies through VOZ, an airport closed to flights (research/dom
 no flight to it, a train or a flight through the nearest open airport, and the reason.
 """
 
-from datetime import date
+from datetime import date, time, timedelta
 
 import pytest
 
@@ -83,5 +83,24 @@ def test_C8_far_origin_flies_through_the_nearest_open_airport_to_the_cart(store)
     legs = chosen(r, "transport")
     assert legs and all("VOZ" not in o.title for o in legs)
     assert any(o.mode == "flight" and "через DME" in o.title for o in legs)
-    assert any("DME" in o.title and "км" in o.title for o in chosen(r, "transfer"))
+    rides = [o for o in chosen(r, "transfer") if "DME" in o.title]
+    assert rides
+    # 426 km: 100 km at 35 km/h, the rest at the car speed — not 12 h at the city speed.
+    assert all(o.arrive_at - o.depart_at < timedelta(hours=8) for o in rides)
     assert not [i for i in r.plan.issues if i.severity == "error"]
+
+
+def test_C8_substitute_airport_is_in_the_country_of_the_place(store):
+    """Курск (URS closed): the nearest open airport by the line is GME in Беларусь; the
+    substitute is a Russian one, and the flight time is to it."""
+    r = say(store, "Курск из Новосибирска, 7 ночей с 1 августа, двое взрослых")
+    flights = [o for o in r.plan.offers if o.kind == "transport" and o.mode == "flight"]
+    assert flights and all("через DME" in o.title and "GME" not in o.title for o in flights)
+    assert "GME" not in r.reply
+
+
+def test_C8_gelendzhik_return_leaves_before_the_airport_closes(store):
+    """GDZ takes flights 08:30-20:00 MSK (research/domain.md, 27.10.2026)."""
+    r = say(store, "Геленджик из Москвы, 3 ночи с 20 января")
+    back = [o for o in r.plan.offers if o.kind == "transport" and o.origin == "Геленджик"]
+    assert back and all(o.depart_at.time() <= time(20, 0) for o in back if o.mode == "flight")
