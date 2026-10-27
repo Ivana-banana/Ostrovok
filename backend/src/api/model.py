@@ -366,7 +366,8 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     # refusing makes it one (#198).
     parts = re.split(r",|\s(?:но|и|а)\s", clause, maxsplit=1)
     near, after = parts[0], parts[1] if len(parts) > 1 else ""
-    stop = r"нельзя|отпадает|отпадают|исключен|невозможн|отменя|неудобн"
+    strong = r"нельзя|отпадает|отпадают|исключен|невозможн"  # a refusal anywhere near the month
+    weak = r"отменя|неудобн"  # a refusal only as the whole part (#215)
     verbs = (
         r"подход|получ|выйд|выход|смож|мож|годит|хоч|хот|надо\b|нуж|вариант|устраива|катит"
         r"|рассматр|будет|удобн"
@@ -376,12 +377,13 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     end = r"(?=\s*(?:,|;|$))"
     # «январь нет», «январь — нет», «январь мимо», «в январе никак»: a bare no ends the part (#215)
     bare = rf"(?:нет|никак|мимо){end}"
-    gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{stop}|{bare})"
-    # After a comma only «не» + a verb may follow up to two words («увы, не получится»). A «нет»
-    # or «неудобно» deeper in the part belongs to a neighbour: «детей нет», «в декабре никак».
+    gone = rf"\s*(?:\S+\s+){{0,2}}?(?:не\b|{strong}|{weak}|{bare})"
+    # After a comma «не» + a verb and the strong words may follow up to two words («увы, не
+    # получится», «увы, нельзя»). A «нет» or «неудобно» deeper in the part belongs to a
+    # neighbour: «детей нет», «в декабре никак».
     refusing = (
         rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
-        rf"|не\s+{moves}{end}|не{end})|(?:{stop})\w*{end}|{bare})"
+        rf"|не\s+{moves}{end}|не{end}|{strong})|(?:{weak})\w*{end}|{bare})"
     )
     if negated or re.match(gone, near) or re.match(refusing, after):
         return "stay", month
