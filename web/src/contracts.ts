@@ -22,6 +22,9 @@ export type TripSpec = {
   refundable: boolean | null;
   modes: Mode[];
   max_travel_hours: number | null;
+  own_transport: boolean; // C5 (#408): own tickets, no transport searched
+  arrive_at: string | null; // own arrival, zoned
+  leave_at: string | null; // own departure, zoned
   wishes: string[];
   priorities: Priority[];
   assumptions: string[];

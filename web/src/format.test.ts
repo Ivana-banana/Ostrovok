@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 import type { ChatReply } from "./contracts";
-import { browserTime, describe, fieldLabel, movePriority, priorityMessage } from "./format";
+import { browserTime, describe, fieldLabel, guestsText, movePriority, priorityMessage, yearsText } from "./format";
 
 const reply = (llm: boolean): ChatReply => ({
   session_id: "s",
@@ -24,6 +24,9 @@ const reply = (llm: boolean): ChatReply => ({
       refundable: null,
       modes: [],
       max_travel_hours: null,
+      own_transport: false,
+      arrive_at: null,
+      leave_at: null,
       wishes: [],
       priorities: [],
       assumptions: [],
@@ -86,5 +89,21 @@ suite("browserTime", () => {
 
   it("не дата — строка как есть", () => {
     expect(browserTime("скоро")).toBe("скоро");
+  });
+});
+
+suite("гости в корзине и ваучере (#348)", () => {
+  it("возраст ребёнка: год, года, лет", () => {
+    const words = (ns: number[]) => ns.map(yearsText);
+    expect(words([1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 0])).toEqual([
+      "1 год", "2 года", "4 года", "5 лет", "11 лет", "12 лет", "14 лет", "21 год", "22 года", "25 лет", "до 1 года",
+    ]);
+  });
+  it("питомец стоит в строке гостей", () => {
+    expect(guestsText({ adults: 2, children_ages: [1, 2, 5], pets: true })).toBe(
+      "2 взр., дети: 1 год, 2 года, 5 лет, с питомцем",
+    );
+    expect(guestsText({ adults: 1, children_ages: [], pets: true })).toBe("1 взр., с питомцем");
+    expect(guestsText({ adults: 2, children_ages: [], pets: false })).toBe("2 взр.");
   });
 });
