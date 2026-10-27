@@ -36,7 +36,6 @@ from api.contracts import (
     Cart,
     ChatReply,
     ChatRequest,
-    Explanation,
     HotelOffer,
     Plan,
     Question,
@@ -93,13 +92,9 @@ from api.fixtures import CATALOG, build_timeline, future_date, rank
 from api.inspire import ROAD_LINE, suggest_destinations, unchecked_wishes
 from api.offers import find_offers, resolve_place, road_nights
 from api.optimizer import (
-    _hotel_why,
-    _leg_why,
-    _pool,
-    _risks,
-    _sacrificed,
+    bundles,
     dead_end_text,
-    enumerate_trips,
+    explain,
     hotel_rows,
     pets_possible,
     pick_hotel,
@@ -765,6 +760,27 @@ def _ordinal(text: str) -> int | None:
 
 
 LegCommand = tuple[str, str | int, str | None]
+# «второй отель и поезд»: the hotel row named in a pick of transport (same rows as «беру 2»).
+HOTEL_ROW_RES = (
+    re.compile(rf"\b({LEG_ORDINAL})\s+отел\w*"),
+    # A digit is a row only when it ends the clause: «отель 3 звезды», «отель 4*», «отель 5 км
+    # от центра», «до отеля 2 часа», «отель 4.5 и выше», «отель 3 и 4 звезды» state a need.
+    re.compile(
+        r"\bотел\w*\s+(?:№\s*|номер\s+)?(\d{1,2})(?![.,]\d)(?=\s*(?:$|[;.!?]|,(?!\s*\d)|и(?:$|\s+(?!выше|больше|более|ниже|\d))))"
+    ),
+)
+
+
+def hotel_row(text: str) -> int | None:
+    """The row from 0 of the hotel named in the message («второй отель», «отель 3»), or None."""
+    t = text.lower().replace("ё", "е")
+    for rx in HOTEL_ROW_RES:
+        if m := rx.search(t):
+            n = m.group(1)
+            return (
+                int(n) - 1 if n.isdigit() else next(i for i, st in enumerate(LEG_STEMS) if st in n)
+            )
+    return None
 
 
 def _leg_row(clause: str) -> tuple[int, str | None] | None:
@@ -808,33 +824,18 @@ def leg_commands(text: str) -> list[LegCommand]:
     return out
 
 
-def _explain(plan: Plan) -> list[Explanation]:
-    """Why of the selected trip, from the facts of the offers as the optimizer writes them.
-
-    The old text names the totals of the old selection, so it must not stay after a switch.
-    """
-    trips = enumerate_trips(plan.offers)
-    chosen = set(plan.selected)
-    trip = next((t for t in trips if set(t.ids) <= chosen), None)
-    if trip is None:
-        return []
-    pool, fits = _pool(plan.spec, trips)
-    hotel = Explanation(
-        offer_id=trip.hotel.offer_id,
-        why=_hotel_why(plan.spec, trip, pool),
-        tradeoffs=_sacrificed(plan.spec, trip, pool),
-        risks=_risks(plan.spec, trip, fits, trips),
-    )
-    return [hotel, *(_leg_why(trip, leg, plan.offers) for leg in trip.legs)]
-
-
 def _cheapest(legs: list[TransportOffer]) -> TransportOffer | None:
     return min(legs, key=lambda x: (x.price_rub, x.offer_id), default=None)
 
 
-def switch_transport(plan: Plan, text: str) -> tuple[Plan | None, str]:
+def switch_transport(
+    plan: Plan, text: str, hotel_row: int | None = None
+) -> tuple[Plan | None, str]:
     """The plan with the transport the user asked for, or None and the reason ("" if the
     message is not a pick).
+
+    hotel_row: the row from 0 of the hotel table («второй отель и поезд»): the pick changes the
+    hotel in the same step (hotel_rows, as «беру 2»).
 
     Only offers of the plan are chosen (TRAP-4). A mode word takes the selected leg of that
     mode, or else the cheapest one. The hotel stays; its transfers are derived again for the
@@ -848,6 +849,14 @@ def switch_transport(plan: Plan, text: str) -> tuple[Plan | None, str]:
     )
     if hotel is None:
         return None, "Сначала выберите отель."
+    old_hotel, hotel_note = hotel, ""
+    if hotel_row is not None:
+        rows = hotel_rows(plan.offers, plan.selected)
+        if not 0 <= hotel_row < len(rows):
+            return None, f"Отеля {hotel_row + 1} нет: в таблице их {len(rows)}."
+        hotel = rows[hotel_row]
+        if hotel.offer_id != old_hotel.offer_id:
+            hotel_note = f"Отель заменён: {hotel.title}. "
     table = [o for o in plan.offers if isinstance(o, TransportOffer)]
     dirs = {
         "there": [x for x in table if x.destination == hotel.city],
@@ -888,7 +897,7 @@ def switch_transport(plan: Plan, text: str) -> tuple[Plan | None, str]:
             return None, "Машина едет туда и обратно: смешать её с поездом или рейсом нельзя."
         new[loose[0]] = fit
     chosen = [x.offer_id for x in new.values() if x]
-    if chosen == [x.offer_id for x in now.values() if x]:
+    if chosen == [x.offer_id for x in now.values() if x] and not hotel_note:
         return None, "Этот транспорт уже выбран."
     by_id = {o.offer_id: o for o in plan.offers}
     kept = [i for i in plan.selected if not isinstance(by_id.get(i), TransportOffer)]
@@ -901,9 +910,11 @@ def switch_transport(plan: Plan, text: str) -> tuple[Plan | None, str]:
         }
     )
     out.timeline, out.issues = build_timeline(out)
-    out.explanations = _explain(out)
+    # The «Почему» and the labels of the bundles name the selected trip, not the old one.
+    out.explanations = explain(out.spec, out.offers, out.selected)
+    out.bundles = bundles(out.spec, out.offers, out.selected)
     titles = [x.title for x in new.values() if x]
-    return out, "Транспорт заменён: " + "; ".join(titles) + "."
+    return out, hotel_note + "Транспорт заменён: " + "; ".join(titles) + "."
 
 
 # #184: short rebuild phrases at a built plan. «без перелёта» and «на день дольше» edit the
@@ -1225,7 +1236,8 @@ def _without_changes(plan: Plan) -> tuple[Plan | None, str]:
         }
     )
     out.timeline, out.issues = build_timeline(out)
-    out.explanations = _explain(out)
+    out.explanations = explain(out.spec, out.offers, out.selected)
+    out.bundles = bundles(out.spec, out.offers, out.selected)
     titles = [by_id[i].title for i in chosen]
     return out, "Без пересадок: " + "; ".join(titles) + "."
 
@@ -1270,7 +1282,8 @@ def _better_hotel(plan: Plan) -> tuple[Plan | None, str]:
         }
     )
     out.timeline, out.issues = build_timeline(out)
-    out.explanations = _explain(out)
+    out.explanations = explain(out.spec, out.offers, out.selected)
+    out.bundles = bundles(out.spec, out.offers, out.selected)
     note = f"Отель получше — {nxt.title}: {'; '.join(what)} (синтетика)."
     if spec.hotel_budget_rub is not None and nxt.price_rub > spec.hotel_budget_rub:
         note += f" Дороже бюджета отеля ({_rub(spec.hotel_budget_rub)})."
@@ -1834,12 +1847,17 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         and not (HYPOTHESIS_RE.search(low) and not CHOICE_RE.search(low))
     )
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
-        plan, note = switch_transport(old.plan, message)
+        row = hotel_row(message)
+        plan, note = switch_transport(old.plan, message, row if old.stage == "compare" else None)
+        if plan and row is not None and old.stage == "assemble":
+            note = f"Отель уже выбран, сменить его можно на шаге сравнения. {note}"
         if no_transfer and old.stage == "assemble" and plan:  # «давай поездом, без трансфера»
             done = drop_transfers(old, plan)
             return done.model_copy(update={"reply": f"{note}\n{done.reply}"})
         if old.stage == "checkout" and (plan or note):
             note = "Корзина уже собрана, транспорт в ней не меняю."
+            if row is not None:
+                note = f"Отель уже выбран, сменить его можно на шаге сравнения. {note}"
             hint = HINTS["checkout"]
             return old.model_copy(update={"reply": f"{note} {hint}", "questions": [], "llm": False})
         if plan or note:
@@ -2251,6 +2269,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
             plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
+            # «Почему» and the bundles name the picked hotel, not the ranked one (#58).
+            plan.explanations = explain(plan.spec, plan.offers, plan.selected)
+            plan.bundles = bundles(plan.spec, plan.offers, plan.selected)
         plan.timeline, plan.issues = build_timeline(plan)
         if any(i.severity == "error" for i in plan.issues):
             return reply("compare", plan, _text_blocked(plan))  # #276: no cart with an error

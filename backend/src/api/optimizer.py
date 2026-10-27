@@ -75,6 +75,8 @@ PRIORITY_TEXT = {
     "rating": "рейтинг",
 }
 MAX_ALTERNATIVES = 3
+# Labels of the best bundle: every requirement met / the nearest trip. dag.py finds the ranking by them.
+BEST_LABELS = ("лучший по вашим приоритетам", "ближе всего к условиям")
 # Team estimate without a source (D-009): a leg longer than one night on the road does not go
 # first while a trip without such a leg exists.
 LONG_LEG_H = 13.0
@@ -585,6 +587,36 @@ def _bundle(label: str, t: Trip, tradeoffs: list[str]) -> Bundle:
     )
 
 
+def _explanations(
+    spec: TripSpec, t: Trip, offers: list[Offer], trips: list[Trip]
+) -> list[Explanation]:
+    """Why of trip t against the pool of the spec: the hotel first, then each leg."""
+    pool, fits = _pool(spec, trips)
+    hotel = Explanation(
+        offer_id=t.hotel.offer_id,
+        why=_hotel_why(spec, t, pool),
+        tradeoffs=_sacrificed(spec, t, pool) + _pets_skipped(spec, trips),
+        risks=_risks(spec, t, fits, trips),
+    )
+    return [hotel, *(_leg_why(t, leg, offers) for leg in t.legs)]
+
+
+def _selected_trip(trips: list[Trip], selected: list[str]) -> Trip | None:
+    chosen = set(selected)
+    return next((t for t in trips if set(t.ids) <= chosen), None)
+
+
+def explain(spec: TripSpec, offers: list[Offer], selected: list[str]) -> list[Explanation]:
+    """Why of the selected trip (not of the best one), from the facts of the offers.
+
+    Use it after the selection changed (another leg or hotel): the old text names the totals
+    of the old selection. Empty when the selection is not a whole trip of the offers.
+    """
+    trips = enumerate_trips(offers)
+    trip = _selected_trip(trips, selected)
+    return _explanations(spec, trip, offers, trips) if trip else []
+
+
 def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
     """Selected offers of the best trip, why for each of them, and the bundles to compare."""
     trips = enumerate_trips(offers)
@@ -600,17 +632,9 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
             return Ranked([], [], [])
         t = min(ok, key=lambda t: (t.road, t.hours, tuple(x.offer_id for x in t.legs)))
         return Ranked([x.offer_id for x in t.legs], [_leg_why(t, x, offers) for x in t.legs], [])
-    sacrificed = _sacrificed(spec, best, pool) + _pets_skipped(spec, trips)
-    explanations = [
-        Explanation(
-            offer_id=best.hotel.offer_id,
-            why=_hotel_why(spec, best, pool),
-            tradeoffs=sacrificed,
-            risks=_risks(spec, best, fits, trips),
-        )
-    ]
-    explanations += [_leg_why(best, leg, offers) for leg in best.legs]
-    label = "лучший по вашим приоритетам" if fits else "ближе всего к условиям"
+    explanations = _explanations(spec, best, offers, trips)
+    sacrificed = explanations[0].tradeoffs
+    label = BEST_LABELS[0] if fits else BEST_LABELS[1]
     bundles = [_bundle(label, best, sacrificed + best.rules)]
     bundles += [
         _bundle(lb, t, _versus(t, best)) for lb, t in _alternatives(spec, best, pool, trips)
@@ -624,9 +648,24 @@ def rank(spec: TripSpec, offers: list[Offer]) -> tuple[list[str], list[Explanati
     return r.selected, r.explanations
 
 
-def bundles(spec: TripSpec, offers: list[Offer]) -> list[Bundle]:
-    """Whole-trip options for Plan.bundles: the best one first."""
-    return optimize(spec, offers).bundles
+def bundles(spec: TripSpec, offers: list[Offer], selected: list[str] | None = None) -> list[Bundle]:
+    """Whole-trip options for Plan.bundles. The first one is always the best trip of the spec
+    (labelled BEST_LABELS): dag.py finds it by the label, to tell the ranking from a
+    manual pick.
+
+    With `selected` that is another trip (the user switched a leg or picked a hotel), the
+    bundle of the selected trip goes second as «ваш выбор»: it matches `explain`.
+    """
+    r = optimize(spec, offers)
+    trips = enumerate_trips(offers)
+    mine = _selected_trip(trips, selected or [])
+    if not r.bundles or mine is None or mine.ids == r.selected:  # no bundles: pets (#131)
+        return r.bundles
+    pool, _ = _pool(spec, trips)
+    old = next((b for b in r.bundles if b.offer_ids == mine.ids), None)
+    label = f"ваш выбор ({old.label})" if old else "ваш выбор"
+    own = _bundle(label, mine, _versus(mine, pool[0]))
+    return [r.bundles[0], own, *(b for b in r.bundles[1:] if b.offer_ids != mine.ids)]
 
 
 def pick_hotel(selected: list[str], offers: list[Offer], hotel_id: str) -> list[str]:
