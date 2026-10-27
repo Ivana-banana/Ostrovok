@@ -71,6 +71,8 @@ from api.extract import (
     PLACE_RES,
     SEASONS,
     _known,
+    asks_stay,
+    children_uncounted,
     excluded_places,
     extract,
     is_child_question,
@@ -270,6 +272,10 @@ ROUTE_RE = re.compile(
     r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
 )
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
+# #302: from this far (straight line from DEFAULT_ORIGIN) the road is a large part of a whole-trip
+# budget, so an unnamed origin is asked. Team estimate: Иркутск 4200 km asks, Анталия 2160 not.
+FAR_KM = 3000
+ORIGIN_OPTIONS = ("Москвы", "Санкт-Петербурга", "Екатеринбурга", "Новосибирска")
 MAX_CANDIDATES = 3  # the first is planned, the 2nd and the 3rd get a chip
 STAY_RE = re.compile(
     r"\b(?:\d+|од(?:ин|на|ну)|дв(?:а|е|ое)|тр(?:и|ое)|четыре|пять|шесть|семь|восемь|девять|десять)"
@@ -463,16 +469,44 @@ def party_question(spec: TripSpec) -> list[Question]:
     return [Question(text="Кто едет с ребёнком — сколько взрослых?", options=options)]
 
 
-def blocking_questions(spec: TripSpec) -> list[Question]:
+def far_origin_question(spec: TripSpec) -> list[Question]:
+    """F15 (#302): no origin, a far place and a budget for the whole trip. The road from the
+    default origin is a large part of that budget, so the origin is asked, not assumed."""
+    if spec.origin or spec.budget_rub is None or not spec.destinations:
+        return []
+    start, place = catalog.resolve(DEFAULT_ORIGIN), catalog.resolve(spec.destinations[0])
+    if not (start and place) or catalog.km_between(start, place) < FAR_KM:
+        return []
+    options = [f"Из {w}" for w in ORIGIN_OPTIONS]
+    text = "Откуда вы едете? От города вылета зависит цена дороги, а она в вашем бюджете."
+    return [Question(text=text + " Если города нет в кнопках, напишите «из …».", options=options)]
+
+
+def children_question(message: str, spec: TripSpec) -> list[Question]:
+    """F25 (#302): «с детьми» without a number and ages: asked, not two children of 7."""
+    if not (spec.children_ages and children_uncounted(message)):
+        return []
+    options = ["Один ребёнок, 5 лет", "Двое детей, 5 и 10 лет", "Трое детей, 3, 6 и 10 лет"]
+    return [Question(text="Сколько детей едет и сколько им лет?", options=options)]
+
+
+def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     """At most 2 questions, only when the message names neither a place nor a wish.
 
     A place or a wish is enough to move on: the rest becomes assumptions named in the reply.
-    One exception (#112): a child, no word about the adults and a fixed place. The guest count
-    sets the price and the booking, so it is asked, not assumed. Without a place the question
-    only goes next to the options (party_question), it never replaces them.
+    Exceptions ask one question, the most important first (#302): the city of a hotel request
+    (F14), the origin of a far trip with a whole budget (F15), the children without a number
+    (F25), then the adults next to a child (#112). The guest count sets the price and the
+    booking, so it is asked, not assumed. Without a place the adults question only goes next to
+    the options (party_question), it never replaces them.
     """
+    if not (spec.destinations or spec.wishes) and asks_stay(message):
+        return [Question(text="В каком городе нужна гостиница?", options=[])]
     party = party_question(spec) if spec.destinations else []
-    if spec.destinations or spec.wishes:
+    if spec.destinations:
+        first = far_origin_question(spec) or children_question(message, spec) or party
+        return first[:1]
+    if spec.wishes:
         return party
     out = []
     if not spec.month and not spec.date_from:
@@ -1839,7 +1873,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
         )
 
-    if prev is None and (questions := blocking_questions(spec)):
+    if prev is None and (questions := blocking_questions(spec, message)):
         return reply("clarify", Plan(spec=spec), _text_clarify(questions), questions=questions)
     spec = assume(spec)
     if not spec.destinations:
