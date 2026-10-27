@@ -50,6 +50,12 @@ def pay(client, r, total):
     )
 
 
+def second_attempt(keys: list[str], r) -> bool:
+    """Two calls of `book`: attempt 1 and attempt 2 of the same cart, keyed by the session."""
+    first, second = keys
+    return first.startswith(f"{r.session_id}:") and second == f"{first}:2"
+
+
 class Foreign(cart.SimulatedBooking):
     """A test adapter of another provider: counts calls, can refuse or change prices.
     Idempotent like a real one: the same key returns the same booking. `voucher_extra_rub`
@@ -138,7 +144,7 @@ def test_quote_with_another_total_is_409_and_the_next_confirmation_books_it(
     assert fresh.voucher is None and fresh.stage == "checkout"
     assert fresh.cart.total_rub == new_total
     v = pay(client, r, fresh.cart.total_rub).json()
-    assert v["total_rub"] == new_total and foreign.booked == [r.session_id]
+    assert v["total_rub"] == new_total and len(foreign.booked) == 1
 
 
 def test_chat_confirmation_after_a_price_change_shows_the_new_total(
@@ -169,7 +175,7 @@ def test_repeated_payment_is_one_booking_of_the_core(client, store, at_checkout,
     again = pay(client, r, r.cart.total_rub).json()
     chat_again = say(store, "подтверждаю", r.session_id)
     assert first["booking_id"] == again["booking_id"] == chat_again.voucher.booking_id == "F-1"
-    assert foreign.booked == [r.session_id]
+    assert len(foreign.booked) == 1
 
 
 def test_after_cancel_the_session_gets_a_new_booking(client, store, at_checkout, monkeypatch):
@@ -188,7 +194,7 @@ def test_after_cancel_the_session_gets_a_new_booking(client, store, at_checkout,
     assert second["booking_id"] == "F-2" != first["booking_id"]
     assert second["status"] == "confirmed"
     # The attempt key changes after a cancel: a real provider refuses a reused key.
-    assert foreign.booked == [r.session_id, f"{r.session_id}:2"]
+    assert second_attempt(foreign.booked, r)
 
 
 def test_voucher_with_another_total_than_the_quote_is_409_and_cancelled(
@@ -205,7 +211,7 @@ def test_voucher_with_another_total_than_the_quote_is_409_and_cancelled(
     # Not a dead end (B1): attempt 1 is closed, the next confirmation books under a new key.
     v = pay(client, r, r.cart.total_rub).json()
     assert v["booking_id"] == "F-2" and v["total_rub"] == r.cart.total_rub
-    assert foreign.booked == [r.session_id, f"{r.session_id}:2"]
+    assert second_attempt(foreign.booked, r)
     assert store.get(r.session_id).voucher.booking_id == "F-2"
 
 
@@ -224,7 +230,7 @@ def test_cancelled_voucher_from_the_provider_opens_a_new_attempt(
     monkeypatch.setattr(cart, "BOOKING", foreign)
     assert pay(client, r, r.cart.total_rub).status_code == 409
     v = pay(client, r, r.cart.total_rub).json()
-    assert v["booking_id"] == "F-2" and foreign.booked == [r.session_id, f"{r.session_id}:2"]
+    assert v["booking_id"] == "F-2" and second_attempt(foreign.booked, r)
 
 
 def test_simulated_booking_returns_the_same_booking_for_the_same_key(at_checkout):
@@ -260,7 +266,7 @@ def test_two_concurrent_confirms_of_one_session_store_one_booking(
     assert [x.status_code for x in out] == [200, 200]
     ids = {x.json()["booking_id"] for x in out}
     assert ids == {"F-1"} and store.get(r.session_id).voucher.booking_id == "F-1"
-    assert set(foreign.booked) == {r.session_id}
+    assert len(set(foreign.booked)) == 1
 
 
 def test_cart_edited_during_the_payment_is_said_in_the_reply(
@@ -311,9 +317,9 @@ def test_repeat_after_a_failed_session_write_books_nothing_new(
     monkeypatch.setattr(store, "update", fail_once)
     with pytest.raises(OSError):
         pay(client, r, r.cart.total_rub)
-    assert store.get(r.session_id).voucher is None and foreign.booked == [r.session_id]
+    assert store.get(r.session_id).voucher is None and len(foreign.booked) == 1
     v = pay(client, r, r.cart.total_rub).json()
-    assert v["booking_id"] == "F-1" and foreign.booked == [r.session_id]
+    assert v["booking_id"] == "F-1" and len(foreign.booked) == 1
     assert store.get(r.session_id).voucher.booking_id == "F-1"
 
 
@@ -348,3 +354,51 @@ def _no_nested(update):
             depth.pop()
 
     return wrapped
+
+
+RESTART = "начать заново, выходные в Санкт-Петербурге, из Москвы, 2 взрослых, 18–20 декабря"
+
+
+def second_trip(store, r) -> ChatReply:
+    r = say(store, RESTART, r.session_id)
+    r = say(store, "беру", r.session_id)
+    r = say(store, "да", r.session_id)
+    assert r.stage == "checkout" and r.voucher is None
+    return r
+
+
+def test_first_attempt_key_is_the_session_and_a_hash_of_what_is_bought(client, at_checkout):
+    r = at_checkout
+    key = cart.attempt_key(r.session_id, 1, r.plan.spec, r.cart)
+    assert key.startswith(f"{r.session_id}:") and len(key) == len(r.session_id) + 9
+    assert cart.attempt_key(r.session_id, 1, r.plan.spec, r.cart) == key
+    other = r.plan.spec.model_copy(update={"adults": 3})
+    assert cart.attempt_key(r.session_id, 1, other, r.cart) != key
+    assert cart.attempt_key(r.session_id, 2, r.plan.spec, r.cart) == f"{key}:2"
+
+
+def test_new_trip_after_restart_books_anew_via_the_button(client, store, at_checkout):
+    """#379 review: «начать заново» keeps the session id; the second trip is a new booking."""
+    r = at_checkout
+    v1 = pay(client, r, r.cart.total_rub).json()
+    assert pay(client, r, r.cart.total_rub).json()["booking_id"] == v1["booking_id"]
+    r2 = second_trip(store, r)
+    res = pay(client, r2, r2.cart.total_rub)
+    assert res.status_code == 200, res.json()
+    v2 = res.json()
+    assert v2["booking_id"] != v1["booking_id"] and v2["total_rub"] == r2.cart.total_rub
+    assert [i["offer_id"] for i in v2["items"]] == [o.offer_id for o in r2.cart.items]
+    # The same cart repeated is the same booking.
+    assert pay(client, r2, r2.cart.total_rub).json()["booking_id"] == v2["booking_id"]
+
+
+def test_new_trip_after_restart_books_anew_via_the_chat(client, store, at_checkout):
+    r = at_checkout
+    v1 = pay(client, r, r.cart.total_rub).json()
+    r2 = second_trip(store, r)
+    out = say(store, "подтверждаю", r2.session_id)
+    assert out.stage == "booked", out.reply
+    assert out.voucher.booking_id != v1["booking_id"]
+    assert out.voucher.total_rub == r2.cart.total_rub
+    again = say(store, "подтверждаю", r2.session_id)
+    assert again.voucher.booking_id == out.voucher.booking_id

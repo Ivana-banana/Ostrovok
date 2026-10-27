@@ -13,6 +13,7 @@
 - The session is changed in one store transaction, so parallel requests lose no update.
 """
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -322,7 +323,7 @@ def _book(spec: TripSpec, cart: Cart, key: str) -> Voucher:
     if voucher.status == "cancelled":
         text = f"Бронь не оформлена: система бронирования её отменила. {_KEEP}"
         raise _Rejected(text, voucher)
-    if voucher.total_rub != cart.total_rub or _items(voucher.items) != _items(cart.items):
+    if not _same_booking(voucher, cart):
         log.warning("booking: voucher %s differs from the quote", voucher.booking_id)
         try:
             BOOKING.cancel(voucher.booking_id)
@@ -371,10 +372,22 @@ def _booked(reply: ChatReply, cart: Cart, voucher: Voucher) -> ChatReply:
     return reply.model_copy(update=update)
 
 
-def attempt_key(session_id: str, attempt: int) -> str:
-    """Idempotency key of a booking attempt: the session id for the first attempt, then
-    `<session_id>:<n>`. A new attempt starts only after a cancel (BookingProvider)."""
-    return session_id if attempt <= 1 else f"{session_id}:{attempt}"
+def attempt_key(session_id: str, attempt: int, spec: TripSpec, cart: Cart) -> str:
+    """Idempotency key of a booking attempt: `<session_id>:<hash>` for the first attempt, then
+    `<session_id>:<hash>:<n>`. The hash covers what is bought: items with prices, the total,
+    the dates and the party. So a new trip of the same session («начать заново») is a new key,
+    and the same cart repeated is the same key. A new attempt of one cart starts only after a
+    cancel or a rejected booking (BookingProvider)."""
+    what = repr(
+        (_items(cart.items), cart.total_rub, spec.date_from, spec.date_to)
+        + (spec.adults, tuple(spec.children_ages), spec.pets)
+    )
+    h = hashlib.sha256(what.encode()).hexdigest()[:8]
+    return f"{session_id}:{h}" if attempt <= 1 else f"{session_id}:{h}:{attempt}"
+
+
+def _same_booking(v: Voucher, cart: Cart) -> bool:
+    return v.total_rub == cart.total_rub and _items(v.items) == _items(cart.items)
 
 
 def checkout_reply(reply: ChatReply, confirm_total_rub: int) -> ChatReply:
@@ -396,7 +409,7 @@ def checkout_reply(reply: ChatReply, confirm_total_rub: int) -> ChatReply:
         return changed
     # The chat has no attempt table (model.py holds the store): a stored voucher here is a
     # cancelled one, so the chat books as attempt 2.
-    key = attempt_key(reply.session_id, 2 if reply.voucher else 1)
+    key = attempt_key(reply.session_id, 2 if reply.voucher else 1, reply.plan.spec, quoted)
     return _booked(reply, quoted, _book(reply.plan.spec, quoted, key))
 
 
@@ -424,13 +437,19 @@ def cart_route(req: CartAction, store: SessionStore) -> Cart:
         raise _http(e) from e
 
 
-def _attempt(store: SessionStore, reply: ChatReply) -> tuple[int, Voucher | None]:
-    """The attempt to book under, and its voucher if the provider already booked it.
+def _attempt(store: SessionStore, reply: ChatReply, cart: Cart) -> tuple[int, Voucher | None]:
+    """The attempt to book `cart` under, and its voucher if the provider already booked it.
 
     The last attempt without a voucher is reused: the provider may have booked it before the
-    failure, and the same key returns that booking. An attempt whose voucher is cancelled, in
-    the attempt or in the session, gives way to a new one with a new key."""
+    failure, and the same key returns that booking. Its voucher is reused only if it is a
+    booking of this very cart (a repeat after a failed session write). An attempt whose
+    voucher is cancelled, in the attempt or in the session, or is another trip of the session
+    («начать заново»), gives way to a new attempt."""
     n, done = store.last_attempt(reply.session_id)
+    if done is not None and not _same_booking(done, cart):
+        n, done = n + 1, None
+        store.start_attempt(reply.session_id, n)
+        return n, done
     cancelled = (
         reply.voucher is not None
         and reply.voucher.status == "cancelled"
@@ -467,9 +486,10 @@ def checkout_route(req: CheckoutRequest, store: SessionStore) -> Voucher:
 
             store.update(sid, new_prices)
             raise CartRefusal(409, changed.reply)
-        n, done = _attempt(store, seen)
+        n, done = _attempt(store, seen, quoted)
         try:
-            voucher = done or _book(seen.plan.spec, quoted, attempt_key(sid, n))
+            key = attempt_key(sid, n, seen.plan.spec, quoted)
+            voucher = done or _book(seen.plan.spec, quoted, key)
         except _Rejected as e:
             store.save_voucher(sid, n, e.voucher)  # closes attempt n: the next one has a new key
             raise
