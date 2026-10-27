@@ -1030,7 +1030,7 @@ def airport_fields(r: dict, airports: list[list], roads: dict, station: int | No
     if ok and all(a[0] in road for _, a in near):
         ap_km, ap_, line = min(ok, key=lambda x: x[0])
         first = road.get(near[0][1][0])
-        if first is not None and first - ap_km < max(ROAD_GAIN_KM, ROAD_GAIN * first):
+        if first is not None and first - ap_km < min(ROAD_GAIN_KM, ROAD_GAIN * first):
             ap_km, ap_, line = first, near[0][1], near[0][0]  # the gain is too small to switch
         mark = {"road": True}
     else:
