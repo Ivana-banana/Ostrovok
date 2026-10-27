@@ -71,6 +71,17 @@ function button(text: string): HTMLButtonElement {
   return b;
 }
 
+async function type(label: string, value: string) {
+  const input = [...box.querySelectorAll("label")]
+    .find((l) => l.textContent?.startsWith(label))
+    ?.querySelector("input");
+  if (!input) throw new Error(`нет поля «${label}»`);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 async function click(text: string) {
   await act(async () => button(text).click());
   await flush();
@@ -197,6 +208,32 @@ suite("приложение", () => {
       confirm_total_rub: 600,
     });
     expect(box.querySelector("[aria-label='Ваучер']")?.textContent).toContain("OST-0001");
+  });
+
+  it("#367: имя и контакт из формы уходят в запрос как guest", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    routes["POST /api/checkout"] = () => ({ status: 200, body: booked.voucher });
+    await mount();
+    await type("Имя гостя", "  Иван Петров ");
+    await type("Контакт", "ivan@example.com");
+    await click("Подтвердить бронь");
+    expect(calls.find((c) => c.key === "POST /api/checkout")?.body).toEqual({
+      session_id: "s1",
+      confirm_total_rub: 600,
+      guest: { name: "Иван Петров", contact: "ivan@example.com" },
+    });
+  });
+
+  it("#367: контакт без имени — кнопка выключена и просит имя", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    await type("Контакт", "ivan@example.com");
+    expect(button("Подтвердить бронь").disabled).toBe(true);
+    expect(box.querySelector(".guest-form")?.textContent).toContain("Укажите имя");
+    await type("Имя гостя", "Иван");
+    expect(button("Подтвердить бронь").disabled).toBe(false);
   });
 
   it("подтверждение: 409 показывает текст сервера и не создаёт ваучер", async () => {
@@ -526,5 +563,65 @@ suite("чат как в мессенджере", () => {
       ["aside", "Допущения: даты не названы."],
       ["aside", "Не проверяю по данным: детская анимация."],
     ]);
+  });
+
+  it("пустой чат: без серого текста-дубля, примеры стоят прямо над полем ввода", async () => {
+    await mount();
+    expect(box.textContent).not.toContain("Опишите поездку одним сообщением. Я подберу");
+    expect(box.querySelector(".hello .chip")).toBeNull();
+    const starters = box.querySelector("[aria-label='Примеры для начала']");
+    expect(starters?.querySelectorAll("button")).toHaveLength(2);
+    expect(starters?.nextElementSibling?.matches("form.composer")).toBe(true);
+    await click("Выходные в Казани");
+    const input = box.querySelector("textarea[aria-label='Запрос']") as HTMLTextAreaElement;
+    expect(input.value).toContain("Выходные в Казани");
+    routes["POST /api/chat"] = () => ({ status: 200, body: checkoutStage });
+    await click("Отправить");
+    expect(box.querySelector("[aria-label='Примеры для начала']")).toBeNull();
+  });
+
+  it("чат не открылся (сеть) — на экране остаётся прежний чат, сохранённая сессия не меняется", async () => {
+    const now = Date.now();
+    localStorage.setItem(SESSION_KEY, "s1");
+    localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify([
+        { session_id: "s1", title: "Казань", updated_at: now },
+        { session_id: "s2", title: "Сочи", updated_at: now - 1 },
+      ]),
+    );
+    localStorage.setItem("trip.ui.s1", JSON.stringify({ messages: [{ role: "user", text: "Казань" }], removed: [] }));
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    routes["GET /api/session/s2"] = () => ({ status: 500 });
+    await mount();
+    const sochi = [...box.querySelectorAll(".chat-open")].find((b) => b.textContent === "Сочи") as HTMLButtonElement;
+    await act(async () => sochi.click());
+    await flush();
+    expect(box.querySelector("[role='alert']")?.textContent).toContain("Не удалось открыть чат.");
+    expect([...box.querySelectorAll(".msg.user")].map((m) => m.textContent)).toEqual(["Казань"]);
+    expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
+    expect(localStorage.getItem(SESSION_KEY)).toBe("s1");
+    expect(box.querySelector(".chat-list li.on")?.textContent).toContain("Казань");
+  });
+
+  it("чата нет на сервере — убран из списка, прежний чат на экране и в сохранённой сессии", async () => {
+    const now = Date.now();
+    localStorage.setItem(SESSION_KEY, "s1");
+    localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify([
+        { session_id: "s1", title: "Казань", updated_at: now },
+        { session_id: "gone", title: "Старая", updated_at: now - 1 },
+      ]),
+    );
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const old = [...box.querySelectorAll(".chat-open")].find((b) => b.textContent === "Старая") as HTMLButtonElement;
+    await act(async () => old.click());
+    await flush();
+    expect(box.querySelector("[role='note']")?.textContent).toContain("«Старая» больше не хранится");
+    expect(localStorage.getItem(SESSION_KEY)).toBe("s1");
+    expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
+    expect([...box.querySelectorAll(".chat-open")].map((b) => b.textContent)).toEqual(["Казань"]);
   });
 });
