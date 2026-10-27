@@ -50,6 +50,7 @@ from api.dag import (
     describe,
     dirty_nodes,
     is_shift_note,
+    own_tickets,
     period,
     replan,
     shift_dates,
@@ -655,7 +656,9 @@ def assume(spec: TripSpec) -> TripSpec:
         note("даты", f"{data['date_from']:%d.%m}–{end:%d.%m} (точных дат не было)")
     data["month"] = data["month"] or data["date_from"].month
     data["date_to"] = data["date_to"] or data["date_from"] + timedelta(days=data["nights"])
-    if not data["origin"]:
+    if data["own_transport"] and not data["origin"]:
+        pass  # own tickets (#408): no leg is searched, the origin is not needed
+    elif not data["origin"]:
         data["origin"] = DEFAULT_ORIGIN
         note("откуда", "Москва (город вылета не назван)")
     else:
@@ -1525,6 +1528,7 @@ def _text_compare(plan: Plan) -> str:
             f"{spec.destinations[0]}, {period(spec)}, "
             f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
         ),
+        *([_cap(line) + "."] if (line := own_tickets(spec)) else []),
         *([line] if (line := destination_line(plan)) else []),
         *([line] if (line := closed_line(plan)) else []),
         *([line] if (line := missing_mode(plan)) else []),
@@ -1563,7 +1567,9 @@ def _text_compare(plan: Plan) -> str:
         lines
         + _tail(
             spec,
-            "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».",
+            "Напишите «беру» или номер отеля."
+            if spec.own_transport
+            else "Напишите «беру» или номер отеля; транспорт — «возьми поезд» или «рейс 2».",
             _road_note(plan),
         )
     )
