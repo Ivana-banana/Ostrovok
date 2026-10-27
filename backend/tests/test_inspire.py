@@ -6,8 +6,8 @@ Rules only, no model (TRAP-1). The requests are the jury and operator comments o
 import pytest
 
 from api import catalog, inspire
-from api.extract import extract
 from api.contracts import ChatRequest, TripSpec
+from api.extract import extract
 from api.fixtures import WARM_WATER_C, future_date
 from api.model import chat
 from api.store import SessionStore
