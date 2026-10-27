@@ -783,6 +783,24 @@ def test_hotel_with_a_bare_number_that_is_not_money_has_no_budget(text):
     assert "hotel_budget_rub" not in found and "budget_rub" not in found and notes == []
 
 
+# #275: adults are counted from the family words, not guessed as 2.
+@pytest.mark.parametrize(
+    "text, adults, kids",
+    [
+        ("Едем я, муж, двое детей 6 и 9 лет и бабушка с дедушкой, в Анапу на 7 ночей", 4, [6, 9]),
+        ("Едем с ребёнком 5 лет, с дедушкой и бабушкой в Сочи", 3, [5]),
+        ("Мы с мужем, моими родителями и сыном 5 лет летим в Сочи", 4, [5]),
+        ("Поедем я, мама, папа и сестра с дочкой 3 года в Казань", 4, [3]),
+        ("Едем я, жена, друг и подруга в Сочи на 5 ночей", 4, None),
+        ("Едем с мужем и ребёнком 4 года в Сочи", 2, [4]),
+    ],
+)
+def test_adults_are_counted_from_family_words(text, adults, kids):
+    found, _ = extract(text)
+    assert found["adults"] == adults
+    assert found.get("children_ages") == kids
+
+
 # --- #274: colloquial names and typos in a message (TRAP-3) ---
 
 
