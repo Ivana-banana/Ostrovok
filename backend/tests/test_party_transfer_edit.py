@@ -159,3 +159,44 @@ def test_transfer_question_is_still_a_question(store):
     r = at(store, "assemble")
     r2 = say(store, "а трансфер нужен?", r.session_id)
     assert r2.plan == r.plan and r2.stage == "assemble" and "Это вопрос" in r2.reply
+
+
+ASKS_ABOUT_TRANSFER = [
+    "а без трансфера как добраться?",
+    "сколько стоит без трансфера?",
+    "без трансфера дороже?",
+    "трансфер не нужен?",
+    "нам трансфер не нужен?",
+]
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize("text", ASKS_ABOUT_TRANSFER)
+def test_question_about_no_transfer_is_a_question(monkeypatch, store, text, stage, model):
+    r = at(store, stage)
+    calls = []
+    if model:
+        stub_model(monkeypatch, calls)
+    r2 = say(store, text, r.session_id)
+    assert "Это вопрос" in r2.reply and calls == []
+    assert r2.plan == r.plan and r2.cart == r.cart and r2.stage == stage
+
+
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "можно без трансфера?",
+        "не нужен трансфер",
+        "нам трансфер не нужен",
+        "трансфер не нужен",
+        "трансфер нам не нужен, давайте дальше",
+    ],
+)
+def test_no_transfer_said_as_a_request_is_an_edit(store, text, stage):
+    r = at(store, stage)
+    r2 = say(store, text, r.session_id)
+    assert r2.stage == stage and transfers(r2) == []
+    assert all(o.kind != "transfer" for o in r2.cart.items)
+    assert (r2.cart.items == []) == (stage == "assemble")

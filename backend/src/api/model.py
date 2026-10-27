@@ -155,8 +155,14 @@ NO_TRANSFER_RE = re.compile(
     r"(?<!\bне\s)\bбез\s+(?:\w+\s+)?трансфер\w*"
     r"|\b(?:убер\w+|убра\w+|удал\w+|исключ\w+)\s+(?:\w+\s+)?трансфер\w*"
     r"|\bоткаж\w*\s+от\s+(?:\w+\s+)?трансфер\w*"
-    r"|\bне\s+нужн\w*\s+(?:\w+\s+)?трансфер\w*|\bтрансфер\w*\s+(?:нам\s+)?не\s+(?:нужн|надо)"
+    r"|\bне\s+нуж(?:ен|на|но|ны)\s+(?:\w+\s+)?трансфер\w*"
+    r"|\bтрансфер\w*\s+(?:нам\s+)?не\s+(?:нуж(?:ен|на|но|ны)|надо)\b"
 )
+# «как добраться без трансфера?», «сколько стоит без трансфера?», «без трансфера дороже?» ask.
+# A bare «трансфер не нужен?» asks too; «а давайте без трансфера?» and «можно без трансфера?» order.
+ASKS_RE = re.compile(r"\b(?:как|сколько)\b|\bли\b")
+ASKS_COMPARE_RE = re.compile(r"\b(?:дороже|дешевле|выгодн\w*)\b")
+
 EDIT_KEYS = {
     "destinations", "date_from", "date_to", "month", "nights", "adults", "children_ages",
     "origin", "budget_rub", "hotel_budget_rub", "pets", "max_travel_hours",
@@ -1039,9 +1045,17 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         prev
         and old.stage in ("assemble", "checkout")
         and NO_TRANSFER_RE.search(low)
-        and not re.search(r"\bли\b", low)
         and not (HYPOTHESIS_RE.search(low) and not CHOICE_RE.search(low))
     )
+    if no_transfer and (
+        ASKS_RE.search(low)
+        or QUESTION_WORD_RE.search(low)
+        or ("?" in low and (ASKS_COMPARE_RE.search(low) or re.search(r"\bне\s+(?:нуж|надо)", low)))
+    ):
+        # #193: a question about the transfer is answered from the plan and changes nothing.
+        return old.model_copy(
+            update={"reply": _question_answer(old, low), "questions": [], "llm": False}
+        )
     if no_transfer and not rules_found:
         return drop_transfers(old)
     pure = (
