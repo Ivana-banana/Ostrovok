@@ -358,6 +358,16 @@ NO_FLIGHT = re.compile(
     r"|\bне\s+(?:хочу\s+|будем\s+|надо\s+)?(?:лететь|летим|полетим|летать)\b"
     r"(?!\s+(?:долг|дольше|больше|более|\d|с\s+пересад))"  # a long flight, not every flight
 )
+# #302: a meal or a mode refused after its name: «all inclusive не надо», «самолёт ни за что».
+# «не надо» refuses only at the end of its clause: «поезд, не надо пересадок» keeps the train.
+REFUSED_BEFORE_RE = re.compile(r"\b(?:не|без|никак\w*)\s+(?:\w+\s+)?$")
+REFUSED_AFTER_RE = re.compile(
+    r"\w*\s*(?:[—–:-]\s*)?(?:(?:мне|нам|точно|совсем|вообще)\s+)?"
+    r"(?:ни\s+за\s+что|исключ\w*|отпада\w*|не\s+вариант|не\s+рассматрива\w*"
+    r"|не\s+(?:надо|нужн\w*|нужен|хочу|хотим|хочется|подходит|интересн\w*)"
+    r"(?=\s*(?:[.,;!?)]|$)|\s+(?:и|а|но)\b))"
+)
+FLIGHT_FEAR_RE = re.compile(r"аэрофоб|бо(?:юсь|имся|ится)\s+(?:летать|летет|самол)")
 # #114: «где тепло», «тёплые края», «жарко». «Тёплое море» is the sea wish (its water is checked),
 # «не тепло», «не люблю жару» and «тёплая куртка» are no wish for the warm.
 WARM = (
@@ -426,6 +436,24 @@ def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
     if wish == "природа":
         return not negated.search(t[: x.start()])
     return True
+
+
+def _refused(t: str, m: re.Match) -> bool:
+    """«без all inclusive», «самолёт ни за что»: the named thing is refused, not wanted (#302)."""
+    return bool(REFUSED_BEFORE_RE.search(t[: m.start()]) or REFUSED_AFTER_RE.match(t, m.end()))
+
+
+def _meal(t: str) -> str | None:
+    """The first wanted meal; a refused breakfast («завтрак не нужен») is room only."""
+    refused = []
+    for p, v in MEALS:
+        xs = list(re.finditer(p, t))
+        if v == "RO" and xs:
+            return v  # «без завтрака» names the refusal itself
+        if any(not _refused(t, x) for x in xs):
+            return v
+        refused += [v] if xs else []
+    return "RO" if "BB" in refused else None
 
 
 def _warm_refused(t: str, m: re.Match) -> bool:
@@ -1152,7 +1180,9 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
             found["date_from"] = today + timedelta(
                 days=n * (7 if m.group(2).startswith("нед") else 1)
             )
-        elif m := re.search(rf"\b(?:в|во|на)\s+({'|'.join(WEEKDAYS)})\b", t):
+        elif m := re.search(
+            rf"\b(?:в|во|на)\s+(?:(?:эт[уо]т?|ближайш\w+)\s+)?({'|'.join(WEEKDAYS)})\b", t
+        ):
             wd, month = WEEKDAYS.index(m.group(1)), found.get("month")
             if month and month != (today + timedelta(days=1)).month:
                 base = future_date(month, 1)  # first such weekday of the named month
@@ -1389,6 +1419,36 @@ ASKING_NOTE = "дети: вопрос, состав не менял — чтоб
 
 def is_child_question(text: str) -> bool:
     return bool(CHILD_QUESTION_RE.search(text.lower().replace("ё", "е")))
+
+
+# #302: a stay is asked for («гостиницу на пятницу», «нужен отель»): it needs a city.
+STAY_ASK_RE = re.compile(
+    r"\b(?:отел(?:ь|я|ю|е|и|ей|ям|ях|ями)\b|гостиниц\w*|хостел\w*|апартамент\w*|жиль[еяю]\w*"
+    r"|переночев\w*|заброниру\w*)"
+)
+
+
+def asks_stay(text: str) -> bool:
+    return bool(STAY_ASK_RE.search(text.lower().replace("ё", "е")))
+
+
+def children_uncounted(text: str) -> bool:
+    """«с детьми», «дети»: children without a number and without ages (#302, F25).
+
+    The rules guess two children of 7 then; the number and the ages set the price, so they are
+    asked. «двое детей», «дети 4 и 7 лет», «без детей» are counted."""
+    t = text.lower().replace("ё", "е")
+    for m in CHILD_RE.finditer(t):
+        if m.group(1) or not m.group(0).split()[-1].startswith("дет"):
+            continue
+        if NO_CHILD_BEFORE.search(t[: m.start()]) or re.match(r"\s*(?:нет|не)\b", t[m.end() :]):
+            continue  # «без детей», «детей нет»
+        if AGES_RE.match(t, m.end()) or AGES_LIST_RE.match(t, m.end()):
+            continue
+        if AGES_BARE_RE.match(t, m.end()):
+            continue
+        return True
+    return False
 
 
 # #275: only the roles in a travel chain are companions: after «с/со» («я с мамой»), right after
@@ -1720,13 +1780,17 @@ def extract(
         t,
     ):
         found["pets"] = True
-    if meal := next((v for p, v in MEALS if re.search(p, t)), None):
+    if meal := _meal(t):
         found["meal"] = meal
     negated = re.compile(r"\b(?:не|без)\s+(?:\w+\s+)?$")  # «не хочу лететь», «не на машине»
-    modes = [
-        m for m, p in MODES if any(not negated.search(t[: x.start()]) for x in re.finditer(p, t))
-    ]
-    if not modes and NO_FLIGHT.search(t):  # #277: «без самолётов» bans one mode, the rest stay
+    hits = {m: list(re.finditer(p, t)) for m, p in MODES}
+    modes = [m for m, xs in hits.items() if any(not _refused(t, x) for x in xs)]
+    # A refusal after the word bans the flight; a refusal before it is NO_FLIGHT's: «не хочу
+    # лететь долго» bans a long flight only (#277).
+    refused_after = any(REFUSED_AFTER_RE.match(t, x.end()) for x in hits["flight"])
+    if not modes and (refused_after or NO_FLIGHT.search(t) or FLIGHT_FEAR_RE.search(t)):
+        # #277, #302: «без самолётов», «самолёт ни за что» ban the flight, the rest stay.
+        # «не хочу поезд» bans nothing: it is no pick at a built plan (test_transport_choice).
         modes = ["train", "car"]
     if modes:
         found["modes"] = modes
