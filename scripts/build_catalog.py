@@ -1028,7 +1028,9 @@ def airport_fields(r: dict, airports: list[list], roads: dict, station: int | No
     Хужир uses the documented road and ferry from Иркутск (research/domain.md, C10, #386),
     since straight-line proximity to UUD across Lake Baikal is not a usable transfer."""
     if r["ru"] == "Хужир":
-        port = next(a for a in airports if a[0] == "IKT")
+        port = next((a for a in airports if a[0] == "IKT"), None)
+        if port is None:
+            raise SystemExit("airports snapshot has no IKT: Хужир needs its road and ferry")
         return {"airport": {"iata": port[0], "km": 256, "tz": port[3],
                             "road": True, "ferry": True}, "airport_km": 256}  # fmt: skip
     near = candidates(r, airports)

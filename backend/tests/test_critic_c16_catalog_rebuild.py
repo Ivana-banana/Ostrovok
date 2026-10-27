@@ -23,6 +23,16 @@ def test_TRAP_3_country_prefix_in_an_ordinary_word_is_not_a_destination(text):
     assert not found.get("destinations")
 
 
+@pytest.mark.parametrize(
+    ("text", "dests"),
+    [("Россия, море в августе с ребёнком из Москвы, неделя", None),
+     ("Россия, хочу в Сочи на неделю", ["Сочи"])],
+)  # fmt: skip
+def test_TRAP_3_leading_country_yields_to_a_city_or_inspiration(text, dests):
+    found, _ = extract(text)
+    assert found.get("destinations") == dests
+
+
 @pytest.mark.parametrize("text", [C16, C16.lower(), "  " + C16])
 def test_C16_TRAP_3_country_at_message_start_is_a_destination(text):
     found, _ = extract(text)

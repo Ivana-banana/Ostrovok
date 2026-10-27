@@ -1021,11 +1021,15 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     hits += [(m.start(), name, m.end()) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
     # Exact names and aliases only: «Мальдивы на неделю», but never «Кубик льда» (#386).
     start = len(t) - len(t.lstrip())
-    for country, aliases in catalog.snapshot()["countries"].items():
-        for alias in (country.lower().replace("ё", "е"), *aliases):
-            m = re.match(re.escape(alias) + r"(?![\w-])", t[start:])
-            if m and not any(s == start for s, _, _ in hits):
-                hits.append((start, country, start + m.end()))
+    lead = next(
+        (
+            (start, country, start + m.end())
+            for country, aliases in catalog.snapshot()["countries"].items()
+            for alias in (country.lower().replace("ё", "е"), *aliases)
+            if (m := re.match(re.escape(alias) + r"(?![\w-])", t[start:]))
+        ),
+        None,
+    )
     spans = []
     for m in re.finditer(r"(?:^|[\s,(])(?:[вВ]о?|[нН]а)\s+(?=[А-ЯЁ])", text):
         free = t[m.end()] != " " and not _place_at(text, t, m.end())  # " ": the origin span
@@ -1041,6 +1045,10 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n, m.end(1)))
+    # The leading country is a destination only alone and with a main place: «Россия, хочу в Сочи»
+    # is Сочи; «Россия, море» has no main place and stays an inspiration request.
+    if lead and not hits and any(p["main"] for p in catalog.by_country(lead[1])):
+        hits.append(lead)
     pair_sides = _or_pairs(text, t, hits)
     if switch := _switch_city(text):
         hits.append((*switch, _word_end(t, switch[0])))
