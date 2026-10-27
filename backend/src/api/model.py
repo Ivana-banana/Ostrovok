@@ -1258,6 +1258,35 @@ def _question_fact(old: ChatReply, low: str) -> str:
     return ""
 
 
+# #369: «сколько это на 1 человека?», «покажи цену на человека»: a price per head from the plan
+# total; the party stays. «Есть номер на 2 человека?» asks about a room, not about the party.
+PER_HEAD_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
+PER_HEAD_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж|\?")
+ROOM_FOR_RE = re.compile(r"\bномер\w*\s+на\s+(?:\d{1,2}|двоих|троих|четверых)\b")
+
+
+def _per_head_reply(old: ChatReply, low: str) -> str:
+    """The reply to a price-per-head question, from the plan only (TRAP-4); "" if it is none."""
+    spec = old.plan.spec
+    people = spec.adults + len(spec.children_ages)
+    if PER_HEAD_RE.search(low) and PER_HEAD_CUE_RE.search(low):
+        total = old.cart.total_rub or sum(
+            o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
+        )
+        if not total:
+            return f"Состав не меняю: {people} чел. Итог пока не посчитан, цену на человека назвать не могу."
+        return (
+            f"Состав не меняю: {people} чел. Итого {_rub(total)} (синтетика), "
+            f"на человека около {_rub(round(total / people))} (синтетика)."
+        )
+    if ROOM_FOR_RE.search(low) and "?" in low:
+        return (
+            f"Состав не меняю: в плане {people} чел. Чтобы пересчитать на другой состав, "
+            "напишите, кто едет: например, «нас двое»."
+        )
+    return ""
+
+
 def _question_answer(
     old: ChatReply, low: str = "", message: str = "", found: dict | None = None
 ) -> str:
@@ -1606,6 +1635,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         return old.model_copy(
             update={"reply": _question_answer(old, low), "questions": [], "llm": False}
         )
+    if prev and old.stage in PLAN3 and (reply := _per_head_reply(old, low)):
+        return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
         return drop_transfers(old)
     # #186, #216: «какая погода в декабре?» at a December plan names no new field: still a
