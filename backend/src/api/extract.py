@@ -187,7 +187,6 @@ BUDGET_RES = [  # (pattern, multiplier); «к» counts only right after the numb
     (r"\b(\d{1,3}(?:\s\d{3})+|\d{4,7})\s*(?:₽|руб|р\b)", 1),
     (r"\bбюджет\w*\s*(?:до\s+|около\s+)?(\d{4,7})\b", 1),
 ]
-RUB_RE = BUDGET_RES[4][0]  # an explicit «₽/руб/р»: a ruble sum beats a foreign word
 # #158: a budget in another currency is never read as rubles: (label, symbol, words).
 CURRENCIES = [
     ("евро", "€", r"евро|eur"),
@@ -964,20 +963,36 @@ def _rub(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 
 
+def _currency_of(before: str, after: str) -> str | None:
+    """The foreign currency written right after a sum («1000 евро») or before it («$1500»)."""
+    for label, symbol, words in CURRENCIES:
+        sym = re.escape(symbol) if symbol else "(?!)"
+        if re.match(rf"\s*(?:{sym}|(?:{words})\b)", after) or (
+            symbol and before.rstrip().endswith(symbol)
+        ):
+            return label
+    return None
+
+
+def _standalone_currency(t: str) -> str | None:
+    """A foreign sum no ruble pattern took: «$1500», «1500$», «бюджет 3 евро», «1000 евро» first."""
+    cue = r"(?:бюджет\w*|до|потол\w+|лимит\w*|максимум\w*|около|порядка|не\s+(?:больше|более))"
+    for label, symbol, words in CURRENCIES:
+        sym = re.escape(symbol) if symbol else "(?!)"
+        by_symbol = rf"{sym}\s*\d|\d\s*{sym}"
+        by_word = rf"(?:\A\s*|{cue}\s+(?:\w+\s+)?){AMOUNT_UNIT}(?:{words})\b"
+        if re.search(by_symbol, t) or re.search(by_word, t):
+            return label
+    return None
+
+
 def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> None:
     """The first sum in the message; said about the hotel, it still counts for the whole trip.
 
     #158: a foreign currency is no rubles (budget stays unset, the note says so); «на каждого»
     multiplies by the adults, «в сутки» by the nights (the note names the factors).
     nights, adults: the plan's values when the message does not state them."""
-    if not re.search(RUB_RE, t):
-        for label, symbol, words in CURRENCIES:
-            sym = re.escape(symbol) if symbol else "(?!)"
-            if re.search(rf"{sym}\s*\d|{AMOUNT_UNIT}(?:{sym}|(?:{words})\b)", t):
-                # None, not absent: the model must not add the sum as rubles.
-                found["budget_rub"] = None
-                notes.append(f"бюджет: в {label} — не пересчитываю, уточните в рублях")
-                return
+    foreign = None
     hits = [(m, v, True) for p, v in MILLION_RES for m in re.finditer(p, t)]
     hits += [(m, k, False) for p, k in BUDGET_RES for m in re.finditer(p, t)]
     for m, k, is_word in hits:
@@ -988,6 +1003,9 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
         else:
             value = int(float(m.group(1).replace(" ", "").replace(",", ".")) * k)
             tail = re.sub(r"^[а-яa-z₽.]*", "", t[m.end() :])  # the rest of «тысяч», «рублей»
+        if label := _currency_of(t[: m.start()], tail):
+            foreign = foreign or label  # not this sum: a ruble sum may follow
+            continue
         tail = re.sub(r"^\s*(?:(?:₽|руб[а-я]*\.?|р\b\.?)\s*)?", "", tail)
         per_person = per_night = False
         for _ in range(2):  # «на человека в сутки»
@@ -1016,6 +1034,10 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
             # TODO(T7, #13): a hotel-only budget; TripSpec has one budget for the trip.
             notes.append(f"бюджет: {_rub(total)} ₽ на всю поездку (сказано про отель)")
         return
+    # No ruble sum: «бюджет 1000 евро», «$1500». None, not absent: the model must not add rubles.
+    if label := foreign or _standalone_currency(t):
+        found["budget_rub"] = None
+        notes.append(f"бюджет: в {label} — не пересчитываю, уточните в рублях")
 
 
 def extract(

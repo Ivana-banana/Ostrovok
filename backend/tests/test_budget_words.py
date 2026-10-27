@@ -53,9 +53,22 @@ def test_foreign_currency_end_to_end_keeps_budget_unset(store):
     assert "не укладывается в бюджет" not in reply.reply
 
 
-def test_ruble_sum_wins_over_a_foreign_word():
-    found, notes = extract("бюджет 100 000 руб, отель у моря, как в Европе, 5 евро кофе")
-    assert found["budget_rub"] == 100_000 and not budget_notes(notes)
+@pytest.mark.parametrize(
+    ("text", "budget"),
+    [
+        ("бюджет 100 000 руб, отель у моря, как в Европе, 5 евро кофе", 100_000),
+        ("бюджет 150 тысяч рублей, это около 1500 евро", 150_000),
+        ("80 тыс руб, виза 80 евро", 80_000),
+        ("100к руб и 200 евро наличными", 100_000),
+        ("бюджет 100 тысяч, 5 ночей, 2 евро чаевые", 100_000),
+        ("Стамбул, 100 тысяч, обмен 1 лира", 100_000),
+        ("бюджет 100 тысяч, билеты по $200", 100_000),
+        ("бюджет 90 тысяч, кофе 3 евро, отель 5000 ₽ за ночь", 90_000),
+    ],
+)
+def test_ruble_sum_wins_over_a_foreign_word_elsewhere(text, budget):
+    found, notes = extract(text)
+    assert found["budget_rub"] == budget and not budget_notes(notes)
 
 
 def test_a_new_ruble_budget_replaces_the_foreign_note(store):
