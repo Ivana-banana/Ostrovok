@@ -241,6 +241,13 @@ def _friends(t: str, m: re.Match) -> tuple[int, str]:
     return n + 1, f"взрослых: {n + 1} (вы и {said})"
 
 
+# #322: «трое детей 3, 5 и 8» (no «лет»): a list of two or more numbers right after the child
+# noun. A unit after it («5 ночей», «2 и 3 класса», «100 тысяч») says the numbers are not ages.
+AGES_BARE_RE = re.compile(
+    r"\s*\(?((?>(?:\d{1,2}\s*(?:,|и)\s*(?=\d))+)\d{1,2})\)?(?![\d.,]*\d)"
+    r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
+)
 AGES_RE = re.compile(r"\D{0,12}?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)")
 # #193: «дети с нами — двое, 5 и 8 лет»: a dash or a colon, an optional count word, the ages.
 AGES_LIST_RE = re.compile(
@@ -1348,12 +1355,13 @@ def is_child_question(text: str) -> bool:
 # внук 5 лет»). Roles after «без», «к», «навестить», «рядом с» or as a subject are not.
 # A child phrase becomes «§» so that the chain goes through it («двое детей 6 и 9 лет»).
 CHILD_PHRASE_RE = re.compile(
-    CHILD_RE.pattern + r"(?:\s+\d+(?:\s*(?:и|,)\s*\d+)*\s*(?:лет|года|год|мес\w*))?"
+    CHILD_RE.pattern
+    + r"(?:\s+\d+(?:\s*(?:и|,)\s*\d+)*\s*(?:лет|года|год|мес\w*)|\s*\(\d+(?:\s*(?:и|,)\s*\d+)*\))?"
 )
-_ITEM = rf"(?:(?:мо\w+|наш\w+|свои\w*)\s+)?(?:\b{ROLE_SRC}\b|§)"
+_ITEM = rf"(?:(?:мо\w+|наш\w+|свои\w*|ег?о|её|ее|их)\s+)?(?:\b{ROLE_SRC}\b|§)"
 CHAIN_RE = re.compile(
-    rf"(?P<s>\b(?:я|мы)\b[\s,]*(?:и\s+|со?\s+)?|\bсо?\s+)?"
-    rf"(?P<c>{_ITEM}(?:[\s,]*(?:и\s+|со?\s+)?{_ITEM})*)"
+    rf"(?P<s>\b(?:я|мы)\b[\s,]*(?:и\s+)?(?:со?\s+)?|\bсо?\s+)?"
+    rf"(?P<c>{_ITEM}(?:[\s,]*(?:и\s+)?(?:со?\s+)?{_ITEM})*)"
 )
 NEAR_BEFORE_RE = re.compile(
     r"\b(?:рядом|около|возле|близко|недалеко|у|без|к|маму|папу|бабушку|дедушку|жену|мужа"
@@ -1363,7 +1371,8 @@ NEAR_BEFORE_RE = re.compile(
 
 def _family_adults(t: str) -> int:
     """Adults named by family words in a travel chain; 0 when the words do not make a party."""
-    t = CHILD_PHRASE_RE.sub("§", t)
+    # a grown-up son («сын с женой») is a travelling adult: a role word stands for him
+    t = CHILD_PHRASE_RE.sub(lambda m: "брат" if ADULT_KIN_RE.match(t, m.end()) else "§", t)
     adults, me = 0, False
     for m in CHAIN_RE.finditer(t):
         chain = m.group("c")
@@ -1378,7 +1387,9 @@ def _family_adults(t: str) -> int:
     return adults + me
 
 
-ADULT_KIN_RE = re.compile(r"\s+с\s+(?:жен\w*|мужем|невестк\w*|зят\w*)")
+ADULT_KIN_RE = re.compile(
+    r"\s+(?:и\s+)?с\s+(?:ег?о\s+|её\s+|ее\s+)?(?:жен\w*|мужем|невестк\w*|зят\w*)"
+)
 
 
 def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None:
@@ -1403,6 +1414,10 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
             a = None  # «детям до 12 лет скидка?»: 12 is a limit of a fare, not an age
         said = [int(x) for x in re.findall(r"\d+", a.group(1))] if a else []
         said = [0 if a.group(2) == "мес" else x for x in said if x <= 17]
+        if not a and not asking and (b := AGES_BARE_RE.match(t, m.end())):
+            bare = [int(x) for x in re.findall(r"\d+", b.group(1))]
+            if max(bare) <= 17 and (not m.group(1) or _num(m.group(1)) == len(bare)):
+                said = bare
         plural = m.group(0).split()[-1].startswith("дет")
         count = _num(m.group(1)) if m.group(1) else len(said) or (2 if plural else 1)
         if asking and len(said) < count:  # no age for every counted child: nobody is added
