@@ -220,6 +220,10 @@ def _friends(t: str, m: re.Match) -> tuple[int, str]:
 
 
 AGES_RE = re.compile(r"\D{0,12}?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)")
+# #193: «дети с нами — двое, 5 и 8 лет»: a dash or a colon, an optional count word, the ages.
+AGES_LIST_RE = re.compile(
+    r"\s*(?:с\s+нами\s*)?[—–:-]\s*(?:[а-я]+\s*,\s*)?((?:\d{1,2}\s*(?:,|и)\s*)*\d{1,2})\s*(лет|год|мес)"
+)
 BUDGET_RES = [  # (pattern, multiplier); «к» counts only right after the number: «150к»
     (r"\b(\d+(?:[.,]\d+)?)\s*(?:млн|миллион)", 1_000_000),
     (r"\b(\d+(?:[.,]\d+)?)\s*(?:тыс|тр\b|т\.р)", 1000),
@@ -1225,7 +1229,7 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     it adds nobody (#179)."""
     ages: list[int] = []
     for m in CHILD_RE.finditer(t):
-        a = AGES_RE.match(t, m.end())
+        a = AGES_RE.match(t, m.end()) or AGES_LIST_RE.match(t, m.end())
         if asking and a and THRESHOLD_RE.search(t[m.end() : a.start(1)]):
             a = None  # «детям до 12 лет скидка?»: 12 is a limit of a fare, not an age
         said = [int(x) for x in re.findall(r"\d+", a.group(1))] if a else []

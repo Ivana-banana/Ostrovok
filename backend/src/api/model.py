@@ -21,7 +21,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from api import llm
-from api.cart import CartRefusal, checkout_reply, fill_cart
+from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, sync_plan
 from api.contracts import (
     Cart,
     ChatReply,
@@ -141,7 +141,15 @@ WISH_BEFORE_RE = re.compile(
 # есть?» has a choice verb: it picks.
 HYPOTHESIS_RE = re.compile(r"\bесли\b[^?]*\?|\b(?:задерж|опозда)\w*")
 CHOICE_RE = re.compile(
-    r"\b(?:возьм|бер[уие]|давай|хоч|хотим|поменя|смен|замен|переключ|выбер|оформ)\w*"
+    r"\b(?:(?:возьм|давай|хоч|хотим|поменя|смен|замен|переключ|выбер|оформ)\w*|бер(?:у|и|ем|ите|ете)\b)"
+)
+# #193: «давайте без трансфера» is an edit even with a consent word in it. «нужен ли трансфер?»
+# and «а трансфер нужен?» ask; they are not here.
+NO_TRANSFER_RE = re.compile(
+    r"(?<!\bне\s)\bбез\s+(?:\w+\s+)?трансфер\w*"
+    r"|\b(?:убер\w+|убра\w+|удал\w+|исключ\w+)\s+(?:\w+\s+)?трансфер\w*"
+    r"|\bоткаж\w*\s+от\s+(?:\w+\s+)?трансфер\w*"
+    r"|\bне\s+нужн\w*\s+(?:\w+\s+)?трансфер\w*|\bтрансфер\w*\s+(?:нам\s+)?не\s+(?:нужн|надо)"
 )
 EDIT_KEYS = {
     "destinations", "date_from", "date_to", "month", "nights", "adults", "children_ages",
@@ -874,6 +882,36 @@ def _text_kids_question(old: ChatReply) -> str:
     ).strip()
 
 
+def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
+    """#193: «давайте без трансфера» at assemble or checkout. The transfers leave the plan (at
+    checkout also the cart); the timeline is built again (TRAP-5). The stage stays: a plain
+    consent fills the cart. The model does not read the message; the prices stay from the plan."""
+    plan = plan or old.plan
+    gone = [o for o in plan.offers if o.kind == "transfer" and o.offer_id in plan.selected]
+    if not gone:
+        text = f"Трансфера в плане нет, менять нечего. {HINTS[old.stage]}"
+        return old.model_copy(update={"plan": plan, "reply": text, "questions": [], "llm": False})
+    cart, ids = old.cart, {o.offer_id for o in gone}
+    if old.stage == "checkout":
+        for o in gone:
+            cart = edit_cart(plan, cart, "remove", o.offer_id)
+        plan = sync_plan(plan, old.cart, cart)
+    else:
+        plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
+        plan.timeline, plan.issues = build_timeline(plan)
+    # The checker derives a transfer from the hotel and the leg; the user does not take it.
+    plan.timeline = [e for e in plan.timeline if e.offer_id not in ids]
+    rows = "; ".join(f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in gone)
+    head = f"Убираю трансфер из плана: {rows}."
+    if old.stage == "assemble":
+        text = f"{head} В корзину пока ничего не кладу.\n{_text_assemble(plan)}"
+    else:
+        text = f"{head} В корзине теперь {_rub(cart.total_rub)} (синтетика). {HINTS['checkout']}"
+    return old.model_copy(
+        update={"plan": plan, "cart": cart, "reply": text, "questions": [], "llm": False}
+    )
+
+
 def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) -> ChatReply:
     """One user message -> the next ChatReply of the session.
 
@@ -912,6 +950,16 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     # #179: «А дети бесплатно?» at a built plan is a question, not a party: nobody is added.
     asking = old.stage in PLAN_STAGES and is_child_question(message)
     rules_found, rules_notes = extract(message, bool(old.plan.spec.destinations), asking=asking)
+    # #193: «без трансфера» is an edit even with «давай» in it; it never reaches the cart as a consent.
+    no_transfer = (
+        prev
+        and old.stage in ("assemble", "checkout")
+        and NO_TRANSFER_RE.search(low)
+        and not re.search(r"\bли\b", low)
+        and not (HYPOTHESIS_RE.search(low) and not CHOICE_RE.search(low))
+    )
+    if no_transfer and not rules_found:
+        return drop_transfers(old)
     pure = (
         set(rules_found) <= {"modes"}
         and not SHIFT_RE.search(low)
@@ -919,6 +967,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
     )
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
         plan, note = switch_transport(old.plan, message)
+        if no_transfer and old.stage == "assemble" and plan:  # «давай поездом, без трансфера»
+            done = drop_transfers(old, plan)
+            return done.model_copy(update={"reply": f"{note}\n{done.reply}"})
         if old.stage == "checkout" and (plan or note):
             note = "Корзина уже собрана, транспорт в ней не меняю."
             hint = HINTS["checkout"]
