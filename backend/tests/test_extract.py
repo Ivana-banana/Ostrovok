@@ -781,3 +781,27 @@ def test_hotel_with_flight_sum_is_the_trip_budget_and_a_dearer_cart_is_flagged(t
 def test_hotel_with_a_bare_number_that_is_not_money_has_no_budget(text):
     found, notes = extract(text)
     assert "hotel_budget_rub" not in found and "budget_rub" not in found and notes == []
+
+
+# --- #274: colloquial names and typos in a message (TRAP-3) ---
+
+
+def test_trap_3_colloquial_origin_and_typo_destination():
+    found, _ = extract("из Ебурга в Кисловоцк на неделю в мае")
+    assert found["origin"] == "Екатеринбург"
+    assert found["destinations"] == ["Кисловодск"]
+
+
+@pytest.mark.parametrize(
+    "text", ["в Минводы в июне", "хочу в Мин Воды в июне", "в Минеральные Воды в июне",
+             "из Москвы в Минводы на неделю"],
+)  # fmt: skip
+def test_trap_3_min_vody_is_one_place(text):
+    found, _ = extract(text)
+    assert found["destinations"] == ["Минеральные Воды"]
+
+
+def test_trap_3_no_place_in_ordinary_sentences():
+    for text in ("Хорошо бы недорого, с ребенком на 5 дней", "Привет! Хотим отдохнуть в мае"):
+        found, _ = extract(text)
+        assert not found.get("destinations"), text

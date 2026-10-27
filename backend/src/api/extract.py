@@ -11,6 +11,7 @@ import functools
 import re
 from datetime import date, timedelta
 
+from api import catalog
 from api.fixtures import CATALOG, future_date
 from api.guards import name_candidates
 from api.offers import places, resolve_place
@@ -111,6 +112,8 @@ def _two_word_places() -> None:
 
 
 _two_word_places()
+# «Минводы», «Мин Воды» is the place «Минеральные Воды», not a second one (TRAP-3, #274).
+PLACE_RES.append(("Минеральные Воды", re.compile(rf"\bминвод\w*|{AFTER_PREPOSITION}мин\s+вод\w*")))
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой",
               "европа", "европе", "европу", "европы"}  # fmt: skip
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
@@ -819,6 +822,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     else:
         m = None
     if m:
+        if home := catalog.respelled(name):
+            name = home["name"]  # «Ебург» -> Екатеринбург (#274)
         found["origin"] = name
         end = t.find(" ", m.end())
         end = len(t) if end < 0 else end
@@ -868,6 +873,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         place = resolve_place(name)
         if place and place.get("source") == "online":
             name = place["name"]  # the geocoder's name: «Бледе» is the place «Блед» (TRAP-3)
+        elif fixed := catalog.respelled(name):
+            name = fixed["name"]  # «Ебург», «Кисловоцк» are the places of the catalogue (#274)
         if s in pair_sides and place and place["country"] in refused:
             continue  # «Турция или Египет, в Египте уже были»: no Хургада (#151)
         if place and mentions[s][2] in COUNTRIES and place["name"] in refused:

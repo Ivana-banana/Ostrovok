@@ -382,3 +382,24 @@ def test_trap_6_empty_geocoder_answer_uses_snapshot():
     """TRAP-6: the geocoder answered nothing, the snapshot has the place."""
     snap = {"Сочи": {"lat": 43.6, "lon": 39.7}}
     assert resolve_destination("Сочи", {}, lambda n: None, snapshot=snap)["source"] == "snapshot"
+
+
+# --- #274: colloquial names and typos (TRAP-3) ---
+
+
+@pytest.mark.parametrize(
+    ("written", "name"),
+    [("Ебург", "Екатеринбург"), ("Ебурга", "Екатеринбург"), ("Кисловоцк", "Кисловодск"),
+     ("Минводы", "Минеральные Воды"), ("Мин Воды", "Минеральные Воды"),
+     ("Минеральные Воды", "Минеральные Воды"), ("Питер", "Санкт-Петербург"),
+     ("СПб", "Санкт-Петербург"), ("Мск", "Москва"), ("Нижний", "Нижний Новгород"),
+     ("Новосиб", "Новосибирск"), ("Екб", "Екатеринбург")],
+)  # fmt: skip
+def test_trap_3_colloquial_names_and_typos(written, name):
+    assert catalog.resolve(written)["name"] == name
+
+
+def test_trap_3_typo_does_not_hit_ordinary_words_or_other_places():
+    for word in ("Хорошо", "Привет", "Выходные", "Погода", "Ребенок", "Недорого", "Гагра", "Омск"):
+        found = catalog.resolve(word)
+        assert found is None or found["name"] == word, (word, found and found["name"])

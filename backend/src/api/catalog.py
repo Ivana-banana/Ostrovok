@@ -56,6 +56,12 @@ CASES = {"", "а", "я", "у", "ю", "е", "и", "ы", "ой", "ей", "ом", "
 LEAD_CLASSES = ("еэё", "ий", "ckh", "jyi")
 LEAD = {ch: cls[0] for cls in LEAD_CLASSES for ch in cls}
 VOWELS = set("аеёиоуыэюяaeiou")
+# Colloquial names and abbreviations that are not in the aliases of the snapshot (TRAP-3, #274).
+COLLOQUIAL = {"ебург": "Екатеринбург", "екат": "Екатеринбург", "минводы": "Минеральные Воды",
+              "мин воды": "Минеральные Воды", "новосиб": "Новосибирск", "нск": "Новосибирск",
+              "владик": "Владивосток", "питербург": "Санкт-Петербург", "петербург": "Санкт-Петербург"}  # fmt: skip
+TYPO_MIN_LEN = 6  # a shorter word may differ by one letter from another place: «Омск», «Томск»
+TYPO_EDITS, TYPO_LONG = 1, 9  # letters to change in a name; 2 for a name of TYPO_LONG letters
 PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _deadline: ContextVar[float | None] = ContextVar("geocode_deadline", default=None)
@@ -125,6 +131,17 @@ def _keys() -> list[tuple[str, dict]]:
     return [(norm(k), p) for p in places() for k in (p["name"], *p["aliases"])]
 
 
+def _typo(a: str, b: str) -> bool:
+    """Levenshtein distance up to TYPO_EDITS: one letter, two in a name of TYPO_LONG or more."""
+    limit = TYPO_EDITS + (len(b) >= TYPO_LONG)
+    row = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, cb in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (ca != cb))
+    return row[-1] <= limit
+
+
 def _query(text: str) -> str:
     return PREPOSITION.sub("", norm(normalize_toponym(text)))
 
@@ -167,7 +184,30 @@ def resolve(text: str) -> dict | None:
     # best. «Гагра» is not «Агра»; «Емал» is close to «Чемал», so it is not «Мале» (#267).
     if close and _lead_close(_stems(q), close[0]):
         return stems[close[0]]
+    return None if close else _respelled(q)
+
+
+def _respelled(q: str) -> dict | None:
+    """A colloquial name or a typo of one place in a long name: «Кисловоцк»; None if not sure."""
+    by_name = {p["name"]: p for p in places()}
+    for k, n in COLLOQUIAL.items():
+        if _same_words(q.split(), k.split()):
+            return by_name.get(n)
+    if len(q) < TYPO_MIN_LEN:
+        return None
+    # A wrong letter or two in a long name. Only one such place, else it is a guess.
+    stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
+    typo = [s for s in stems if len(s) >= TYPO_MIN_LEN and s != _stems(q) and _typo(_stems(q), s)]
+    if len(typo) == 1 and _lead_close(_stems(q), typo[0]):
+        return stems[typo[0]]
     return None
+
+
+def respelled(text: str) -> dict | None:
+    """Place when the text is a colloquial name or a typo («Ебург», «Кисловоцк»), else None (#274)."""
+    q = _query(text)
+    known = any(_same_words(q.split(), k.split()) for k, _ in _keys())
+    return None if known or not q else _respelled(q)
 
 
 def month_climate(place: dict, month: int) -> tuple[float | None, float | None]:
