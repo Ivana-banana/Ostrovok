@@ -9440,6 +9440,9 @@
      null
     ]
    }
+  },
+  "https://geocoding-api.open-meteo.com/v1/search?count=1&language=ru&format=json&name=%D0%91%D0%BB%D0%B5%D0%B4%D0%B5": {
+   "generationtime_ms": 0.10704994
   }
  }
 }

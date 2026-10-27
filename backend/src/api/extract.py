@@ -918,13 +918,13 @@ def _capital(text: str, pos: int) -> str | None:
 
 
 def _nominative(word: str) -> str:
-    """Unknown names: «Грузию» -> «Грузия», «Иркутске» -> «Иркутск», «Аляске» -> «Аляска»,
-    «Сиену» -> «Сиена» (after «в» the ending -у/-ю is the accusative of -а/-я)."""
+    """Unknown names: «Грузию» -> «Грузия», «Иркутске» -> «Иркутск», «Аляске» -> «Аляска».
+
+    Other endings stay: «Малибу», «Сан-Паулу» are no accusative. The geocoder asks the name as
+    written first and then the nominative guesses (catalog.lookup_online, TRAP-3)."""
     word = re.sub(r"и[ию]$", "ия", word)
     if re.search(r"[аеёиоуыэюя]ск[еу]$", word):
         return word[:-1] + "а"  # «Аляске» -> «Аляска»; «Иркутске» has a consonant before «ск»
-    if re.search(r"[бвгджзклмнпрстфхцчшщ][ую]$", word) and len(word) >= 5:
-        return word[:-1] + ("а" if word[-1] == "у" else "я")
     return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
 
 

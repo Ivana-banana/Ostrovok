@@ -216,18 +216,24 @@ def _monthly(days: list[str], values: list, how=statistics.fmean) -> list[float 
 
 
 def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
-    """The geocoder's answer for a name in any case: the nominative guesses are asked in order.
+    """The geocoder's answer for a name in any case (TRAP-3).
 
-    «Старую Ладогу» asks «Старая Ладога», «Бледе» asks «Блед», «Бледа», «Бледь» (TRAP-3). A guess
-    is taken only if its answer is the same words as the name up to a case ending: «Старую» is
-    not a case of «Стара-Загора». The name as written is asked last and is taken as it comes.
+    The name as written is asked first, as the user wrote it: «Кале» is Calais, «Малибу» is not
+    a case of «Малиба». Only when the geocoder knows nothing, the nominative guesses follow:
+    «Старую Ладогу» asks «Старая Ладога», «Бледе» asks «Блед», «Бледа», «Бледь». The answer to a
+    guess is taken only if it is the same words as the guess and as the name up to a case ending:
+    «Старая» is not «Стара-Загора».
     """
     ask = {"count": 1, "language": "ru", "format": "json"}
-    for guess in name_candidates(name):
+    written = name.strip()
+    for guess in dict.fromkeys([written, *name_candidates(name)]):
         found = fetch(GEOCODE, {**ask, "name": guess}).get("results")
-        if guess != name.strip():
+        if guess != written:
             found = [
-                g for g in found or [] if _same_words(norm(name).split(), norm(g["name"]).split())
+                g
+                for g in found or []
+                if _same_words(norm(guess).split(), norm(g["name"]).split())
+                and _same_words(norm(name).split(), norm(g["name"]).split())
             ]
         if found:
             return found[0]
