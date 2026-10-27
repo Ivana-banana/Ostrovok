@@ -185,6 +185,13 @@ PAIR_RE = re.compile(
     r"|\bсемь(?:я|е|и|ей|ю)\b|\bсемейн\w*|\b(?:едем|летим|поедем|полетим|хотим|планируем"
     r"|собираемся|отдыхаем)\b"
 )
+# #275: grown-up relatives and friends named in a list («я, муж, бабушка с дедушкой»): each is
+# a traveller, «родители» are two. The speaker is one more.
+ADULT_ROLE_RE = re.compile(
+    r"\b(?:(?P<two>родител\w*)|муж(?:ем|а|ья)?|жен(?:а|ой|ы)|супруг\w*|мам(?:а|ой|ы)|пап(?:а|ой|ы)"
+    r"|бабушк\w*|дедушк\w*|сестр(?:а|ой|ы)|брат(?:ом|а)?|друг(?:ом|а)?|подруг(?:а|ой|и)"
+    r"|коллег\w*|тещ\w*|тест(?:ь|ем)|свекр\w*)\b"
+)
 # «for two», «for 3 adults»; not «for 3 nights».
 EN_GROUP_RE = re.compile(
     rf"\bfor\s+{NUM_EN}\b(?!\s*-?(?:nights?|days?|weeks?|hours?|months?))|\bas a couple"
@@ -1326,6 +1333,9 @@ def _people(t: str, found: dict, notes: list[str], asking: bool = False) -> None
     elif not ages and (m := GROUP_RE.search(t)):  # «на двоих с ребёнком»: the child may count
         total = GROUP[m.group(1)] if m.group(1) else _num(m.group(2))
         found["adults"] = max(total - len(ages), 1)
+    elif len(roles := list(ADULT_ROLE_RE.finditer(t))) >= 2 and not SOLO_OTHER.search(t):
+        found["adults"] = 1 + sum(2 if r.group("two") else 1 for r in roles)
+        notes.append(f"взрослых: {found['adults']} (по составу семьи в тексте)")
     elif SOLO_OTHER.search(t) or any(
         SOLO_NEXT.match(t, m.end()) or SOLO_PREV.search(t[: m.start()]) for m in SOLO_RE.finditer(t)
     ):
