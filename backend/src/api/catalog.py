@@ -5,7 +5,8 @@ _source. Free text resolves to a place: case, ё/е, a leading preposition, Russ
 ru/en aliases (TRAP-3), a country name (its main place), then a close spelling (same first letter up to
 LEAD_CLASSES, or a vowel more or less at the start).
 A name outside the snapshot goes to lookup_online: the Open-Meteo geocoder and one year of
-climate with a short timeout. Any error there gives None, never an exception (TRAP-2, TRAP-6).
+climate with a short timeout. A geocoder error gives None; climate errors keep the city with
+unknown climate values and an absent sea hint (TRAP-2, TRAP-6).
 """
 
 import difflib
@@ -384,14 +385,26 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     lat, lon = round(g["latitude"], 4), round(g["longitude"], 4)
     span = {"latitude": lat, "longitude": lon, "start_date": f"{YEAR}-01-01",
             "end_date": f"{YEAR}-12-31", "timezone": "auto"}  # fmt: skip
-    d = fetch(ARCHIVE, {**span, "daily": "temperature_2m_max,precipitation_sum"})["daily"]
-    air = _monthly(d["time"], d["temperature_2m_max"])
-    rain = _monthly(d["time"], d["precipitation_sum"], sum)  # mm in the month
-    s = fetch(MARINE, {**span, "daily": "sea_surface_temperature_mean"})
+    air, rain, notes = [None] * 12, [None] * 12, []
+    try:
+        d = fetch(ARCHIVE, {**span, "daily": "temperature_2m_max,precipitation_sum"})["daily"]
+        air = _monthly(d["time"], d["temperature_2m_max"])
+        rain = _monthly(d["time"], d["precipitation_sum"], sum)  # mm in the month
+    except (OSError, KeyError, IndexError, TypeError, ValueError):
+        air, rain = [None] * 12, [None] * 12
+        notes.append("Климат не загрузился: температура воздуха и осадки неизвестны.")
     here, sea = {"lat": lat, "lon": lon}, None
-    if km_between(here, {"lat": s["latitude"], "lon": s["longitude"]}) <= SEA_KM:
-        sea = _monthly(s["daily"]["time"], s["daily"]["sea_surface_temperature_mean"])
-        sea = sea if any(x is not None for x in sea) else None
+    sea_known = True
+    try:
+        s = fetch(MARINE, {**span, "daily": "sea_surface_temperature_mean"})
+        if km_between(here, {"lat": s["latitude"], "lon": s["longitude"]}) <= SEA_KM:
+            sea = _monthly(s["daily"]["time"], s["daily"]["sea_surface_temperature_mean"])
+            sea = sea if any(x is not None for x in sea) else None
+            sea_known = sea is not None
+    except (OSError, KeyError, IndexError, TypeError, ValueError):
+        sea_known = False
+    if not sea_known:
+        notes.append("Данные о море не загрузились: наличие моря и температура воды неизвестны.")
     airport, line, flaky = _airport(here, fetch)
     country = g.get("country", "")
     levels = [p["level"] for p in places() if p["country"] == country]
@@ -402,7 +415,11 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
         "tags": ["sea"] * (sea is not None) + ["swim"] * swims(sea), "aliases": [norm(name)] if norm(name) != norm(g["name"]) else [],
         "airport": airport, "airport_km": airport["km"] if line <= AIRPORT_KM else None,
         "climate": {"air": air, "rain": rain, "sea": sea}, "source": "online",
-    } | ({"_flaky": True} if flaky else {})  # fmt: skip
+    } | ({"_flaky": True} if flaky or notes else {})  # fmt: skip
+    if not sea_known:
+        del place["sea"]  # Place.sea is optional: unknown is not False.
+    if notes:
+        place["climate_notes"] = notes
     if levels:
         place["level"] = int(statistics.median(levels))
     return place

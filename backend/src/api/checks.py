@@ -907,6 +907,8 @@ def unseen_findings(run: Run, expect: dict) -> list[tuple[str, str, str]]:
         water = catalog.month_climate(place, month)[1] if place else None
         if place is None:
             out.append(("тёплое море", UNKNOWN, "города нет в catalog.json и у геокодера"))
+        elif "sea" not in place:
+            out.append(("тёплое море", UNKNOWN, "наличие моря и температура воды неизвестны"))
         elif not place["sea"]:
             put("тёплое море", False, f"{first.city}: моря нет (catalog.json)")
         elif water is not None:

@@ -486,9 +486,11 @@ def destination_line(plan: Plan) -> str:
         )
     if port := place.get("airport"):
         parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км {_how(port)}")
+    notes = " ".join(place.get("climate_notes", []))
     if not parts:
-        return ""
-    return "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
+        return notes
+    line = "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
+    return line + (" " + notes if notes else "")
 
 
 def airport_fact(plan: Plan, cities: list[str] | None = None) -> str:
