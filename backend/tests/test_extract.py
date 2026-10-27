@@ -902,6 +902,29 @@ def test_weekday_range_turn_has_no_date_assumption(tuesday, tmp_path):
     assert not [a for a in spec.assumptions if "дат" in a.lower()], spec.assumptions
 
 
+def test_weekday_range_api_returns_dates_without_date_assumptions(tuesday, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from api.main import app, get_store
+
+    store = SessionStore(tmp_path / "sessions.db")
+    monkeypatch.setitem(app.dependency_overrides, get_store, lambda: store)
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={"message": "Казань со среды по пятницу"})
+        assert response.status_code == 200
+        body = response.json()
+        spec = body["plan"]["spec"]
+        assert (spec["date_from"], spec["date_to"], spec["nights"]) == (
+            "2026-10-28",
+            "2026-10-30",
+            2,
+        )
+        assert not any("дат" in note.lower() for note in spec["assumptions"])
+        saved = client.get(f"/api/session/{body['session_id']}")
+        assert saved.status_code == 200
+        assert saved.json()["plan"]["spec"] == spec
+
+
 @pytest.mark.parametrize(
     ("text", "start", "end", "month"),
     [
