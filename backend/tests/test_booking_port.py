@@ -233,6 +233,28 @@ def test_cancelled_voucher_from_the_provider_opens_a_new_attempt(
     assert v["booking_id"] == "F-2" and second_attempt(foreign.booked, r)
 
 
+def test_chat_confirmation_after_a_cancelled_booking_books_under_a_new_key(
+    store, at_checkout, monkeypatch
+):
+    """#382: the chat books through the attempt table, as POST /api/checkout does. An idempotent
+    provider returns the cancelled booking for the old key; the next «подтверждаю» gets a new key."""
+    r = at_checkout
+
+    class CancelsFirst(Foreign):
+        def book(self, spec, c, session_id):
+            v = super().book(spec, c, session_id)
+            return v.model_copy(update={"status": "cancelled"}) if v.booking_id == "F-1" else v
+
+    foreign = CancelsFirst()
+    monkeypatch.setattr(cart, "BOOKING", foreign)
+    out = say(store, "подтверждаю", r.session_id)
+    assert out.voucher is None and out.stage == "checkout" and "отменила" in out.reply
+    out = say(store, "подтверждаю", r.session_id)
+    assert out.stage == "booked", out.reply
+    assert out.voucher.booking_id == "F-2" and second_attempt(foreign.booked, r)
+    assert store.last_attempt(r.session_id) == (2, out.voucher)
+
+
 def test_simulated_booking_returns_the_same_booking_for_the_same_key(at_checkout):
     """The reference adapter keeps the port invariant: same key, same booking; cancel marks it."""
     sim = cart.SimulatedBooking()

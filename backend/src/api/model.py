@@ -1717,6 +1717,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
 
     use_llm: ask the model (llm.py) when it is configured; this blocks on the network, so the
     caller runs it outside the store transaction.
+
+    «подтверждаю» at checkout raises _Confirm instead of a reply: the booking calls the
+    provider and the store, so only chat() catches it and books (#382).
     """
     low = message.lower().replace("ё", "е")
     restart = RESTART_RE.search(message) and not NOT_RESTART_RE.search(low)
@@ -2239,11 +2242,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             f"(синтетика, оплата имитируется). {HINTS['checkout']}"
         )
         return reply("checkout", plan, text, cart)
-    if booking:
-        try:  # the same rules as POST /api/checkout; the user saw the stored cart total
-            return checkout_reply(old, old.cart.total_rub).model_copy(update={"llm": used})
-        except CartRefusal as e:
-            return reply(old.stage, plan, e.text)
+    if booking:  # chat() books outside the session lock; the user saw the stored cart total
+        raise _Confirm(old.cart.total_rub)
     text = HINTS.get(old.stage, "Уточните запрос.")
     if old.stage == "select":
         text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
@@ -2258,8 +2258,27 @@ def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
     and a slow model must not hold the other sessions. The draft is written only if the
     session did not change meanwhile; otherwise the step runs again on the new state, rules
     only, inside the transaction.
+
+    «подтверждаю» at checkout (step raises _Confirm) books through cart.checkout_reply, the
+    path of POST /api/checkout: outside the store lock, with the attempt table (#382). The
+    booking reply is a rule-based turn: llm is False.
     """
     sid = req.session_id or uuid4().hex
     prev = store.get(sid)
-    draft = step(prev, sid, req.message, use_llm=True)
-    return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
+    try:
+        draft = step(prev, sid, req.message, use_llm=True)
+        return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
+    except _Confirm as c:
+        try:
+            return checkout_reply(store, sid, c.total_rub).model_copy(update={"llm": False})
+        except CartRefusal as e:  # the cart stays open; the reply says why
+            why = {"reply": e.text, "questions": [], "llm": False}
+            return store.update(sid, lambda cur: cur.model_copy(update=why))
+
+
+class _Confirm(Exception):  # a signal from step() to chat(), not an error
+    """step() met «подтверждаю» at checkout; chat() books the cart of this total."""
+
+    def __init__(self, total_rub: int):
+        super().__init__(total_rub)
+        self.total_rub = total_rub
