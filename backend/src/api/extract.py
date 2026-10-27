@@ -758,6 +758,14 @@ def _english_places(t: str, found: dict) -> None:
 WEEKDAYS = ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
 
 
+PAST_MARK = "уже прошло"  # in the note about a named day moved to next year
+PAST_WINDOW = timedelta(days=31)  # only a day this recent counts as a slip
+
+
+def is_past_note(assumption: str) -> bool:
+    return PAST_MARK in assumption
+
+
 def _dates(t: str, found: dict, notes: list[str]) -> None:
     """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day."""
     d = r"(\d{1,2})(?:-?го)?"
@@ -806,11 +814,15 @@ def _dates(t: str, found: dict, notes: list[str]) -> None:
         return
     said = (two or one or m).group(0)
     found["month"] = _month(m1)
+    today = date.today()
     try:
-        start = future_date(_month(m1), int(d1))
+        start = future_date(_month(m1), int(d1), today)
     except ValueError:
         notes.append(f"даты: «{d1} {m1}» нет в календаре, даты подобраны")
         return
+    # A day passed in the last month may be a slip: say so (#159). «8 марта» in October is next year.
+    if start.year > today.year and date(today.year, start.month, start.day) >= today - PAST_WINDOW:
+        notes.append(f"даты: {start:%d.%m} {PAST_MARK} — взят {start.year} год")
     found["date_from"] = start
     if d2 is None:
         return
