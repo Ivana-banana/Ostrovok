@@ -1598,7 +1598,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
                 llm_found.pop(k, None)
     # Dates only the model read pass the check of the rules' dates (#164).
-    past = llm_past_dates(llm_found) if llm_found and not DATE_KEYS & found.keys() else None
+    past = llm_past_dates(llm_found) if llm_found else None
+    if past and DATE_KEYS & found.keys() and not DATE_KEYS & llm_found.keys():
+        past = None  # the model's dates are dropped; the rules' dates stay, nothing to tell
     if past:
         notes.append(past)
     if llm_found:

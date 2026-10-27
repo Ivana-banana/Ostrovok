@@ -265,7 +265,8 @@ def test_llm_does_not_turn_the_hotel_sum_into_a_trip_budget():
     assert with_llm(found, {"budget_rub": 150_000})["budget_rub"] == 150_000
 
 
-def test_rules_win_over_the_llm_and_dates_stay_one_group():
+def test_llm_wins_over_the_rules_and_dates_stay_one_group():
+    """#258: the model's fields replace the rules'; its date group replaces the rules' group."""
     found, _ = extract(SOCHI)
     patch = {
         "destinations": ["Анапа"],
@@ -275,9 +276,10 @@ def test_rules_win_over_the_llm_and_dates_stay_one_group():
         "wishes": ["море"],
     }
     out = with_llm(found, patch)
-    assert out["destinations"] == ["Сочи"] and out["hotel_budget_rub"] == 40_000
-    assert out["date_from"] == found["date_from"] and out["pets"] is True
-    assert out["wishes"] == ["море"]
+    assert out["destinations"] == ["Анапа"] and out["hotel_budget_rub"] == 90_000
+    assert out["date_from"] == patch["date_from"] and "date_to" not in out
+    assert out["pets"] is True and out["wishes"] == ["море"]
+    assert with_llm(found, {"pets": True})["date_from"] == found["date_from"]  # silent: rules stay
     assert with_llm(found, None) == found
 
 
