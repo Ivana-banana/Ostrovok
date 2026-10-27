@@ -188,3 +188,46 @@ def test_trap_3_jury_table(store, text, refused, kept):
     assert not any(is_excluded(n, refused) for n in names(r) + r.plan.spec.destinations)
     assert r.plan.spec.destinations == kept or not kept
     assert not set(kept) & set(refused)
+
+
+# #127: the tails of #113.
+def test_trap_3_refusal_by_verb_ellipsis():
+    """«Турцию не хочу, Египет тоже»: «тоже» without a verb goes on the refusal."""
+    text = "Турцию не хочу, Египет тоже"
+    assert "destinations" not in extract(text)[0]
+    assert excluded_places(text) == ["Турция", "Египет"]
+    assert excluded_places("Не хочу в Турцию, а в Египет тоже") == ["Турция", "Египет"]
+    # With a wish verb or without a refusal before, «тоже» adds a wish.
+    assert extract("Хочу в Турцию, Египет тоже")[0]["destinations"] == ["Турция", "Хургада"]
+    assert excluded_places("Хочу в Турцию, Египет тоже") == []
+    assert extract("Турцию не хочу, Египет тоже хочу")[0]["destinations"] == ["Хургада"]
+    assert excluded_places("Турцию не хочу, Египет тоже хочу") == ["Турция"]
+
+
+def test_trap_3_except_then_also_refused():
+    text = "Кроме Турции, Египет тоже не хочу"
+    assert "destinations" not in extract(text)[0]
+    assert excluded_places(text) == ["Турция", "Египет"]
+
+
+def test_trap_3_marker_stands_for_its_own_mention():
+    # The wish «опять в Сочи» is no wish for Анапа; Сочи is wanted again.
+    text = "Уже были в Сочи и в Анапе, хотим опять в Сочи"
+    assert extract(text)[0]["destinations"] == ["Сочи"]
+    assert excluded_places(text) == ["Анапа"]
+    # «в Анапу не хотим» is no dislike of Сочи.
+    text = "Уже были в Сочи, в Анапу не хотим"
+    assert extract(text)[0]["destinations"] == ["Сочи"]
+    assert excluded_places(text) == ["Анапа"]
+
+
+def test_trap_3_country_in_a_case_is_the_country():
+    """«Египте» is the country Египет, not a new city named «Египте»."""
+    from api.extract import _capital
+
+    assert _capital("Египте", 0) == "Египет"
+    assert _capital("Таиланде", 0) == "Таиланд"
+    assert _capital("Грузию", 0) == "Грузия"
+    for text in ("Хочу в Египте", "Хочу отдохнуть в Египте"):
+        assert extract(text)[0]["destinations"] == ["Египет"]
+    assert extract("Хочу в Таиланде")[0]["destinations"] == ["Таиланд"]

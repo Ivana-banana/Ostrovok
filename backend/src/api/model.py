@@ -45,7 +45,9 @@ from api.dag import (
 )
 from api.extract import (
     DATE_KEYS,
+    DEFAULT_NIGHTS,
     HOTEL_NOTE,
+    MAX_NIGHTS,
     MONTH_NAMES,
     PER_NIGHT_NOTE_RE,
     excluded_places,
@@ -53,6 +55,8 @@ from api.extract import (
     is_chip_message,
     is_excluded,
     is_past_note,
+    is_too_long_note,
+    too_long_note,
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date
@@ -72,7 +76,6 @@ from api.optimizer import (
 )
 from api.store import SessionStore
 
-DEFAULT_NIGHTS = 7
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
@@ -259,6 +262,8 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
         if "даты" not in stated and assumed:  # the dates were guessed, not said; a shift is said
             data["date_from"] = None
             stated.add("даты")
+    if any(is_too_long_note(n) for n in notes):
+        stated.add("длительность")  # a length not taken: its note replaces the old one (#160)
     kept = [a for a in data["assumptions"] if _label(a) not in stated]
     data["assumptions"] = kept + [n for n in notes if n not in kept]
     for k, v in found.items():
@@ -787,6 +792,10 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         old.plan.spec.nights or DEFAULT_NIGHTS,
         old.plan.spec.adults,
     )
+    # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
+    asks_length = any(is_too_long_note(n) for n in notes)
+    yes = _confirmed(t) and not asks_length
+    service = prev is not None and (pick or (consent and not asks_length))
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
     other = (
@@ -811,6 +820,16 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             # The rules read the shift (which end, how far); the model must not add other dates.
             for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
                 llm_found.pop(k, None)
+    if llm_found:
+        # The model may not set a length the rules would not take; note and plan then agree (#160).
+        rejected = any(is_too_long_note(n) for n in notes)
+        said = llm_found.get("nights", 0)
+        if said > MAX_NIGHTS and "nights" not in found and not rejected:
+            notes.append(too_long_note(f"{said} ночей", old.plan.spec.nights or DEFAULT_NIGHTS))
+            rejected = True
+        if rejected or said > MAX_NIGHTS:
+            llm_found.pop("nights", None)
+            llm_found.pop("date_to", None)  # derived from the length again
     if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
         notes.append(PARTY_UNKNOWN)
     if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
@@ -962,7 +981,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             return reply("compare", plan, f"{notice}\n{text}", cart, questions=[*chips, *questions])
         return reply("compare", plan, text, cart, questions=questions)
 
-    if old.stage == "compare" and (idx is not None or _confirmed(t)):
+    if old.stage == "compare" and (idx is not None or yes):
         hotels = hotel_rows(plan.offers, plan.selected)
         picks = idx is not None and idx < len(hotels)
         if not picks and not pets_possible(spec, plan.offers) and not _hotel_selected(plan):
@@ -973,7 +992,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
         plan.timeline, plan.issues = build_timeline(plan)
         return reply("assemble", plan, _text_assemble(plan))
-    if old.stage == "assemble" and _confirmed(t):
+    if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
         text = (
             f"В корзине {len(cart.items)} поз. на {_rub(cart.total_rub)} "
