@@ -7,6 +7,7 @@ the same `found`; with_llm merges it: rules first, the LLM fills what rules miss
 Invalid values (31 ноября, 0 ночей) are skipped with a note, never an exception.
 """
 
+import functools
 import re
 from datetime import date, timedelta
 
@@ -361,6 +362,12 @@ def _place_at(text: str, t: str, pos: int) -> str | None:
     )
 
 
+@functools.cache
+def _stem_re(stem: str, short: bool) -> re.Pattern:
+    # 445 places overflow the re module cache (512): compile each stem once (#232)
+    return re.compile(re.escape(stem) + (CASES_SHORT if short else CASES))
+
+
 def _known(word: str) -> str | None:
     """«Иркутске», «иркутска» -> «Иркутск» (TRAP-3): one-word names of places.json, any case."""
     w = word.lower().replace("ё", "е")
@@ -370,7 +377,7 @@ def _known(word: str) -> str | None:
             continue
         stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
         short = len(stem) <= 3
-        if w == n or re.fullmatch(re.escape(stem) + (CASES_SHORT if short else CASES), w):
+        if w == n or _stem_re(stem, short).fullmatch(w):
             if short and w != n and w in NOT_SHORT_FORMS:
                 continue
             return p["name"]
