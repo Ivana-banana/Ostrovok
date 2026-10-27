@@ -262,8 +262,8 @@ def _hotel(
     # A tariff (price and offer_id) does not depend on the clock. The free-cancellation rate
     # exists only until its deadline: after it the hotel sells the non-refundable rate alone,
     # so no two tariffs of a hotel share (meal, refundable).
-    # Free cancellation only from 3 stars (team estimate), in the share of hotels with it on the
-    # 101hotels city page (#119), else in 80% (team estimate).
+    # Free cancellation only from 3 stars (team estimate), in the share of 3+ star hotels with it
+    # on the 101hotels city page (#119), else in 80% (team estimate).
     share = place.get("free_cancel_share", 0.8)
     refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 1 - share
     free_until = None

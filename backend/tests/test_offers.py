@@ -163,8 +163,8 @@ def test_tariffs_are_the_same_in_every_process():
     hotels = kinds(find_offers(s, "Сочи"), "hotel")
     first = [(h.offer_id, h.price_rub) for h in hotels[:2]]
     assert first == [
-        ("h-aer-s0-ROn-20261211-3n-2a", 6_400),  # Сочи level 3000 from 101hotels (#119)
-        ("h-aer-s0-BBn-20261211-3n-2a", 8_700),
+        ("h-aer-s0-ROn-20261211-3n-2a", 4_700),  # Сочи level 2200 from 101hotels (#119)
+        ("h-aer-s0-BBn-20261211-3n-2a", 6_400),
     ]
     assert hotels == kinds(find_offers(s, "Сочи"), "hotel")
 
