@@ -896,7 +896,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             for k in ("nights", *(DATE_KEYS if "date_from" not in found else ())):
                 llm_found.pop(k, None)
     # Dates only the model read pass the check of the rules' dates (#164).
-    if llm_found and not DATE_KEYS & found.keys() and (past := llm_past_dates(llm_found)):
+    past = llm_past_dates(llm_found) if llm_found and not DATE_KEYS & found.keys() else None
+    if past:
         notes.append(past)
     if llm_found:
         # The model may not set a length the rules would not take; note and plan then agree (#160).
@@ -939,7 +940,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
 
     found = without_origin(found)
     spec = merged(found)
-    used = False  # the LLM output changed this reply
+    used = bool(past)  # the LLM output changed this reply; a note about its dates is a change
     if llm_found:
         with_model = without_origin(
             with_llm(found, llm_found, [*refused_before(old.plan.spec), *new_refused])

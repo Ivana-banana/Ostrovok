@@ -107,17 +107,39 @@ def test_model_dates_far_in_the_past_are_not_applied_and_the_note_says_so(today,
     assert spec.date_from is not None and spec.date_from >= date(2026, 10, 27)
     assert spec.date_from != date(2027, 8, 20)
     notes = past_notes(spec)
-    assert len(notes) == 1 and "от модели (20.08.2026)" in notes[0] and "не применены" in notes[0]
+    assert len(notes) == 1 and "от модели 20.08.2026" in notes[0] and "не применены" in notes[0]
     assert "не применены" in r.reply
 
 
 def test_far_past_note_does_not_reset_the_dates_on_the_next_turn(today, model, store):
-    model.patch = {"destinations": ["Сочи"], "date_from": "2026-08-20", "date_to": "2026-08-25"}
-    r = say(store, TEXT)
-    start = r.plan.spec.date_from
+    # Dates the user said (not a guess) stay when the model brings dates from the past.
+    r = say(store, "Сочи из Москвы с 3 по 8 декабря, двое взрослых")
+    assert r.plan.spec.date_from == date(2026, 12, 3)
+    model.patch = {"date_from": "2026-08-20", "date_to": "2026-08-25"}
+    r = say(store, "Хочу потеплее, чтобы было спокойно", r.session_id)
+    assert r.llm is True and len(past_notes(r.plan.spec)) == 1
+    assert r.plan.spec.date_from == date(2026, 12, 3)
     model.patch = {}
     r = say(store, "на 4 ночи", r.session_id)
-    assert r.plan.spec.date_from == start and r.plan.spec.nights == 4
+    assert r.plan.spec.date_from == date(2026, 12, 3) and r.plan.spec.nights == 4
+
+
+def test_far_past_note_goes_when_the_user_names_dates(today, model, store):
+    model.patch = {"destinations": ["Сочи"], "date_from": "2026-08-20", "date_to": "2026-08-25"}
+    r = say(store, TEXT)
+    assert len(past_notes(r.plan.spec)) == 1
+    model.patch = {}
+    r = say(store, "с 10 по 15 декабря", r.session_id)
+    assert r.plan.spec.date_from == date(2026, 12, 10)
+    assert not any("не применены" in a for a in r.plan.spec.assumptions)
+
+
+def test_far_past_dates_alone_still_mark_the_reply_as_model_made(today, model, store):
+    model.patch = {"destinations": ["Сочи"]}
+    r = say(store, TEXT)
+    model.patch = {"date_from": "2026-08-20", "date_to": "2026-08-25"}
+    r = say(store, "Хочу потеплее, чтобы было спокойно", r.session_id)
+    assert r.llm is True and len(past_notes(r.plan.spec)) == 1
 
 
 def test_model_dates_in_the_future_stay_as_they_are_without_a_note(today, model, store):

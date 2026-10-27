@@ -901,7 +901,7 @@ def llm_past_dates(llm_found: dict, today: date | None = None) -> str | None:
         return past_year_note(start, moved.year)
     for k in DATE_KEYS:
         llm_found.pop(k, None)
-    return f"даты от модели ({start:%d.%m.%Y}) {PAST_GONE_MARK} — не применены"
+    return f"даты: от модели {start:%d.%m.%Y} {PAST_GONE_MARK} — не применены"
 
 
 def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:

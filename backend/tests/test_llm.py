@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import urllib.error
+from datetime import date
 
 import pytest
 
@@ -333,6 +334,10 @@ def test_llm_patch_is_validated(fake):
         else:
             assert {k: v for k, v in (got or {}).items() if k in want} == want, patch
             assert want or got == {}, patch
+    # past dates reach model.py (#164): a silent drop here would hide them
+    fake.spec = lambda p: answer({**NULLS, "date_from": "2020-01-01", "date_to": "2020-01-05"})
+    got = llm.extract_spec("текст", spec)
+    assert got["date_from"] == date(2020, 1, 1) and got["date_to"] == date(2020, 1, 5)
 
 
 def test_user_text_is_data_and_source_texts_are_not_sent(store, fake):
