@@ -44,6 +44,7 @@ from api.dag import (
     shift_dates,
 )
 from api.extract import (
+    ASKING_NOTE,
     DATE_KEYS,
     DEFAULT_NIGHTS,
     HOTEL_NOTE,
@@ -52,6 +53,7 @@ from api.extract import (
     PER_NIGHT_NOTE_RE,
     excluded_places,
     extract,
+    is_child_question,
     is_chip_message,
     is_excluded,
     is_past_note,
@@ -731,6 +733,20 @@ HINTS: dict[Stage, str] = {
 }
 
 
+PLAN_STAGES = ("inspire", "select", "compare", "assemble", "checkout")
+
+
+def _text_kids_question(old: ChatReply) -> str:
+    """The answer to «А дети бесплатно?» (#179): the party stays, the data has no free places."""
+    spec = old.plan.spec
+    kids = f" + дети {', '.join(map(str, spec.children_ages))} лет" if spec.children_ages else ""
+    return (
+        f"Состав не меняю: {spec.adults} взр.{kids}. Бесплатно ли ребёнку и какая скидка, "
+        "зависит от возраста и отеля; в расчёте цена для ребёнка идёт по возрасту (синтетика). "
+        "Чтобы добавить ребёнка, напишите возраст: «с ребёнком 5 лет». " + HINTS.get(old.stage, "")
+    ).strip()
+
+
 def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) -> ChatReply:
     """One user message -> the next ChatReply of the session.
 
@@ -793,12 +809,17 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         _confirmed(t) or bool(BOOK_RE.search(t))
     )
     pick = old.stage in ("inspire", "compare") and idx is not None
+    # #179: «А дети бесплатно?» at a built plan is a question, not a party: nobody is added.
+    asking = old.stage in PLAN_STAGES and is_child_question(message)
     found, notes = extract(
         message,
         bool(old.plan.spec.destinations),
         old.plan.spec.nights or DEFAULT_NIGHTS,
         old.plan.spec.adults,
+        asking,
     )
+    if asking and ASKING_NOTE in notes and not found:
+        return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
     # «давай на 400 ночей» asks for a length: no consent, and the model reads the message (#168)
     asks_length = any(is_too_long_note(n) for n in notes)
     # «давай на месяц позже» moves the dates, the plan has no such shift: no consent either (#173)
@@ -823,6 +844,8 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if service or other or not use_llm or is_chip_message(message)  # chips: S9, #76
         else llm.extract_spec(message, old.plan.spec, deadline)
     )
+    if llm_found and ASKING_NOTE in notes:
+        llm_found.pop("children_ages", None)  # a question names no child (#179)
     if SHIFT_RE.search(t.replace("ё", "е")):
         found.pop("nights", None)  # «на неделю позже» moves the dates, the length stays
         if llm_found:
