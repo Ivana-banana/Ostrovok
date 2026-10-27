@@ -431,7 +431,7 @@ function Transport({ plan, stage, busy, onSend }: {
                     {localTime(t.arrive_at)} <small>{t.destination}</small>
                   </td>
                   <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
-                  <td className="num" data-label="Пересадки">{t.changes || "нет"}</td>
+                  <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
                   <td className="num cost">
                     <Price value={t.price_rub} synthetic={t.synthetic} />
                   </td>

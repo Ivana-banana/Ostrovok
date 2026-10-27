@@ -8,8 +8,9 @@ import { Mascot } from "./Mascot";
 const STEPS: { label: string; stages: Stage[] }[] = [
   { label: "Уточнение", stages: ["clarify"] },
   { label: "Вдохновение", stages: ["inspire", "select"] },
-  { label: "Сравнение", stages: ["compare", "assemble"] },
-  { label: "Корзина", stages: ["checkout"] },
+  { label: "Сравнение", stages: ["compare"] },
+  // assemble: the plan is built and the chat asks «Оформляем?» — the step of the cart
+  { label: "Корзина", stages: ["assemble", "checkout"] },
   { label: "Бронь", stages: ["booked"] },
 ];
 
@@ -92,7 +93,15 @@ export function AgentText({ text, synthetic, typing, onTick, onDone }: {
     return () => clearInterval(t);
   }, [typing]); // the text of a typing message does not change
   if (typing && shown < words.length) {
-    return <p className="typing caret">{words.slice(0, shown).join("")}</p>;
+    // A screen reader gets the whole text at once, not the pieces of the typing.
+    return (
+      <>
+        <span className="sr-only">{text}</span>
+        <p className="typing caret" aria-hidden="true">
+          {words.slice(0, shown).join("")}
+        </p>
+      </>
+    );
   }
   return (
     <>

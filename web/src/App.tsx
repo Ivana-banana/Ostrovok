@@ -154,7 +154,8 @@ export function App() {
   }
 
   // Opens a saved chat: the server keeps the last reply, the browser keeps the messages.
-  async function load(id: string, failText: string) {
+  // prev: the chat on the screen before; it comes back when the new one does not open.
+  async function load(id: string, failText: string, prev?: { reply: ChatReply | null; ui: Ui }) {
     const no = ++loadNo.current;
     setRestoring(true);
     setError(null);
@@ -163,8 +164,12 @@ export function App() {
       const r = await getSession(id);
       if (no !== loadNo.current) return;
       if (!r) {
-        dropSid();
+        if (readSid() === id) dropSid();
         dropUi(id);
+        if (prev) {
+          setReply(prev.reply);
+          setUi(prev.ui);
+        }
         const gone = chatsNow.current.find((c) => c.session_id === id);
         editChats((list) => removeChat(list, id));
         if (gone) setNote(`Чат «${gone.title}» больше не хранится на сервере. Убрал его из списка.`);
@@ -182,7 +187,13 @@ export function App() {
       const first = saved.messages.find((m) => m.role === "user")?.text ?? "";
       editChats((list) => (list.some((c) => c.session_id === id) ? list : touchChat(list, id, first)));
     } catch (e) {
-      if (no === loadNo.current) setError(`${failText} ${userError(e)}`);
+      if (no !== loadNo.current) return;
+      setError(`${failText} ${userError(e)}`);
+      // The stored session still is the previous chat: show it again, not an empty screen.
+      if (prev) {
+        setReply(prev.reply);
+        setUi(prev.ui);
+      }
     } finally {
       if (no === loadNo.current) setRestoring(false);
     }
@@ -322,10 +333,11 @@ export function App() {
   function openChat(id: string) {
     setDrawer(false);
     if (busy || id === sid) return;
+    const prev = { reply, ui };
     setReply(null);
     setUi(EMPTY_UI);
     setText("");
-    void load(id, "Не удалось открыть чат.");
+    void load(id, "Не удалось открыть чат.", prev);
   }
 
   function deleteChat(id: string) {
@@ -503,22 +515,6 @@ export function App() {
               <div className="hello">
                 <Mascot size={56} />
                 <h2>Куда поедем?</h2>
-                <p>Опишите поездку одним сообщением. Я подберу варианты, проверю стыковки и соберу корзину.</p>
-                <div className="chips">
-                  {EXAMPLES.map((ex) => (
-                    <button
-                      key={ex}
-                      type="button"
-                      className="chip example"
-                      onClick={() => {
-                        setText(ex);
-                        box.current?.focus();
-                      }}
-                    >
-                      {ex}
-                    </button>
-                  ))}
-                </div>
               </div>
             )}
             {restoring && <p className="muted">Восстанавливаю поездку…</p>}
@@ -528,7 +524,12 @@ export function App() {
                   <div className="b">{m.text}</div>
                 </div>
               ) : (
-                <div key={i} className="msg agent" role={i === lastAgent ? "status" : undefined}>
+                <div
+                  key={i}
+                  className="msg agent"
+                  role={i === lastAgent ? "status" : undefined}
+                  aria-busy={typing === i || undefined}
+                >
                   <Mascot size={30} />
                   <div className="b">
                     <AgentText
@@ -578,6 +579,23 @@ export function App() {
           <button type="button" className="plan-sheet-open" aria-controls="plan" onClick={() => setPlanOpen(true)}>
             План поездки
           </button>
+        )}
+        {!ui.messages.length && !restoring && (
+          <div className="starters" aria-label="Примеры для начала">
+            {EXAMPLES.map((ex) => (
+              <button
+                key={ex}
+                type="button"
+                className="chip example"
+                onClick={() => {
+                  setText(ex);
+                  box.current?.focus();
+                }}
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
         )}
         <form
           className="composer"

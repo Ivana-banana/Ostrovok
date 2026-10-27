@@ -532,7 +532,7 @@ mark {
 }
 
 .hello {
-  margin: 10vh auto 0;
+  margin: 18vh auto 0;
   max-width: 560px;
   text-align: center;
   animation: rise 0.4s ease both;
@@ -678,7 +678,26 @@ mark {
   color: var(--warn);
 }
 
-/* composer */
+/* composer; on an empty chat the example requests sit right above it */
+
+.starters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  max-width: calc(var(--thread-w) + 40px);
+  margin: 0 auto;
+  padding: 0 20px 10px;
+  animation: rise 0.4s ease both;
+}
+
+.starters .chip {
+  flex: 1 1 260px;
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  color: var(--text-2);
+}
 
 .plan-sheet-open {
   display: none;
@@ -1046,7 +1065,7 @@ tr .tag {
     white-space: normal;
   }
 
-  .grid-table td:not(.name, .cost, .act, .no):has(+ td:not(.act, .cost))::after {
+  .grid-table td:not(.name, .cost, .act, .no, [data-label="Отправление"]):has(+ td:not(.act, .cost, .zero))::after {
     content: " · ";
   }
 
@@ -1061,8 +1080,24 @@ tr .tag {
     font-size: var(--fs-s);
   }
 
-  .grid-table td.no {
-    display: none;
+  .grid-table td.no,
+  .grid-table td.zero {
+    display: none; /* «Пересадки: нет» is the usual case: only a real change is shown */
+  }
+
+  /* Transport: «10.12 18:50 Москва → 11.12 07:10 Казань», time and city never split. */
+  .grid-table td[data-label="Отправление"],
+  .grid-table td[data-label="Прибытие"] {
+    white-space: nowrap;
+  }
+
+  .grid-table td[data-label="Отправление"]::before,
+  .grid-table td[data-label="Прибытие"]::before {
+    content: none;
+  }
+
+  .grid-table td[data-label="Отправление"]::after {
+    content: " → ";
   }
 
   .grid-table td.cost {
@@ -1662,6 +1697,14 @@ button.param.assumed {
 
   .composer {
     padding: 0 10px 10px;
+  }
+
+  .starters {
+    padding: 0 10px 8px;
+  }
+
+  .starters .chip {
+    flex-basis: 100%;
   }
 
   .msg.user .b {
