@@ -58,14 +58,14 @@ def test_C10_TRAP_5_olkhon_plan_has_no_timeline_error(store):
 def test_C14_TRAP_5_compare_reply_times_carry_zones_and_duration(store):
     r = say(store, C14)
     assert r.stage == "compare"
-    rows = [x for x in r.reply.splitlines() if x.startswith("Рейс ")]
-    assert rows
-    for row in rows:
-        assert re.search(r"вылет \d{2}\.\d{2} \d{2}:\d{2} \(UTC[+-]\d+\)", row), row
-        assert len(re.findall(r"\d{2}:\d{2}", row)) == 2, row  # the start time is not repeated
-        assert re.search(r"прилёт \d{2}\.\d{2} \d{2}:\d{2} \(UTC[+-]\d+\)", row), row
-        hours = int(re.search(r"в пути (\d+) ч", row).group(1))
-        assert hours >= 9, row  # never a flight under 2 h
+    # #349: the legs are on the board, not in the chat; the offers keep zone-aware times (TRAP-5)
+    assert "Рейс 1." not in r.reply and "на доске" in r.reply
+    legs = [o for o in r.plan.offers if o.kind == "transport"]
+    assert legs
+    for o in legs:
+        assert o.depart_at.utcoffset() is not None and o.arrive_at.utcoffset() is not None
+        hours = (o.arrive_at - o.depart_at).total_seconds() / 3600
+        assert hours >= 9 or o.depart_at.utcoffset() != o.arrive_at.utcoffset(), o.title
 
 
 def test_C14_TRAP_5_assemble_reply_every_time_has_a_zone(store):
@@ -94,11 +94,9 @@ def test_C14_TRAP_5_train_and_car_rows_use_their_own_verbs(store, text, start, e
     """Review of #384: a train or a car has no «вылет» and no «прилёт»."""
     r = say(store, text)
     assert r.stage == "compare"
-    rows = [x for x in r.reply.splitlines() if x.startswith("Рейс ")]
-    assert rows
-    for row in rows:
-        assert "вылет" not in row and "прилёт" not in row, row
-        assert f"· {start} " in row and f" → {end} " in row, row
+    # #349: the rows are on the board; the chat names no flight words for a train or a car
+    assert "вылет" not in r.reply and "прилёт" not in r.reply
+    assert any(o.kind == "transport" and o.mode != "flight" for o in r.plan.offers)
 
 
 def test_issue_line_has_one_period(store):

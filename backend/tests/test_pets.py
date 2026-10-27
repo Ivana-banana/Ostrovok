@@ -44,8 +44,8 @@ def test_kazan_reply_says_the_pet_condition_is_unconfirmed_and_offers_a_way_out(
     assert "уточнив у отеля" in r.reply
     options = r.questions[0].options
     assert options and "Казань" not in options
-    rows = hotel_rows(r)
-    assert len(rows) == 5 and all("нет отметки о животных" in x for x in rows)
+    rows = [x for x in r.reply.splitlines() if x.startswith("Нет отметки о животных")]
+    assert rows == ["Нет отметки о животных: у 5 из 5 отелей."]
 
 
 def test_kazan_beru_is_no_consent_and_fills_no_cart(store):

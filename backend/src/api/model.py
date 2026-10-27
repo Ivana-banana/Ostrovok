@@ -104,7 +104,6 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
-from api.timeline import VERBS
 
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
@@ -1520,6 +1519,7 @@ def missing_mode(plan: Plan) -> str:
 def _text_compare(plan: Plan) -> str:
     spec = plan.spec
     kids = f" + дети {', '.join(map(str, spec.children_ages))} лет" if spec.children_ages else ""
+    rows = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
     lines = [
         (
             f"{spec.destinations[0]}, {period(spec)}, "
@@ -1529,28 +1529,14 @@ def _text_compare(plan: Plan) -> str:
         *([line] if (line := closed_line(plan)) else []),
         *([line] if (line := missing_mode(plan)) else []),
         *([line] if (line := rooms_line(spec)) else []),
-        "Отели:",
+        # #349: the hotels and legs are on the board; the chat keeps a short summary.
+        (
+            "Отели и рейсы — на доске: детали и номера там. "
+            f"Отелей: {len(rows)}, рейсов: {sum(o.kind == 'transport' for o in plan.offers)}."
+        ),
     ]
-    hotels = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
-    pet = spec.pets
-    for i, h in enumerate(hotels, 1):
-        cancel = "бесплатная отмена" if h.cancellation.refundable else "невозвратный"
-        lines.append(
-            f"{i}. {h.title} — {h.stars}★, рейтинг {h.rating}, {h.meal}, {cancel} — "
-            f"{_rub(h.price_rub)}"
-            + (" · нет отметки о животных" if pet and not h.pets_allowed else "")
-        )
-    legs = [o for o in plan.offers if o.kind == "transport"]
-    if legs:
-        lines.append("Транспорт:")
-    for i, o in enumerate(legs, 1):
-        no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
-        # C14 (#364, TRAP-5): local times with their zones, the verbs of the mode and the
-        # duration; the start time leaves the title so it is not shown twice.
-        start, end = (v.lower() for v in VERBS[o.mode])
-        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
-        when = f"{start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)}"
-        lines.append(f"Рейс {i}. {title} — {_rub(o.price_rub)}{no_pet} · {when}")
+    if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
+        lines.append(f"Нет отметки о животных: у {n} из {len(rows)} отелей.")
     chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
     lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
     for e in plan.explanations[:1]:

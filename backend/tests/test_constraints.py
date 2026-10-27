@@ -34,7 +34,7 @@ def test_train_to_station_less_city_is_named_not_replaced_silently(store):
     assert legs and {o.mode for o in legs} == {"flight"}  # the data has no train there
     line = next(x for x in r.reply.splitlines() if "в данных нет" in x)
     assert "Поезд" in line and "Геленджик" in line and "перелёт" in line
-    assert r.reply.index(line) < r.reply.index("Отели:")  # before the offers and the booking
+    assert r.reply.index(line) < r.reply.index("на доске")  # before the offers and the booking
 
 
 def test_car_to_another_continent_is_named(store):

@@ -757,12 +757,10 @@ def test_compare_lists_a_hotel_once_with_its_best_tariff(store):
     rows = hotel_rows(r.plan.offers, r.plan.selected)
     assert len(hotels) > len(rows) and 3 <= len(rows) <= 5
     assert len({h.title for h in rows}) == len(rows)
-    lines = [x for x in r.reply.splitlines() if x[:2] in {f"{i}." for i in range(1, 10)}]
-    assert len(lines) == len(rows)
+    assert "на доске" in r.reply and len(r.reply.splitlines()) <= 12  # #349: no list in chat
+    assert not any(h.title in r.reply.split("Предлагаю:")[0] for h in rows)
     assert sum(h.offer_id in r.plan.selected for h in rows) == 1  # the ranked tariff is a row
     assert rows[1].offer_id not in r.plan.selected
-    for i, h in enumerate(rows, 1):
-        assert h.title in lines[i - 1] and h.meal in lines[i - 1]
     r = say(store, "второй", r.session_id)
     assert [
         o.offer_id for o in r.plan.offers if o.offer_id in r.plan.selected and o.kind == "hotel"
