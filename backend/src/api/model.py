@@ -1711,6 +1711,9 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
 
     use_llm: ask the model (llm.py) when it is configured; this blocks on the network, so the
     caller runs it outside the store transaction.
+
+    «подтверждаю» at checkout raises _Confirm instead of a reply: the booking calls the
+    provider and the store, so only chat() catches it and books (#382).
     """
     low = message.lower().replace("ё", "е")
     restart = RESTART_RE.search(message) and not NOT_RESTART_RE.search(low)
@@ -2249,6 +2252,10 @@ def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
     and a slow model must not hold the other sessions. The draft is written only if the
     session did not change meanwhile; otherwise the step runs again on the new state, rules
     only, inside the transaction.
+
+    «подтверждаю» at checkout (step raises _Confirm) books through cart.checkout_reply, the
+    path of POST /api/checkout: outside the store lock, with the attempt table (#382). The
+    booking reply is a rule-based turn: llm is False.
     """
     sid = req.session_id or uuid4().hex
     prev = store.get(sid)
@@ -2256,11 +2263,10 @@ def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
         draft = step(prev, sid, req.message, use_llm=True)
         return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
     except _Confirm as c:
-        # «подтверждаю» books by the path of POST /api/checkout, with its attempt table (#382).
         try:
-            return checkout_reply(store, sid, c.total_rub)
+            return checkout_reply(store, sid, c.total_rub).model_copy(update={"llm": False})
         except CartRefusal as e:  # the cart stays open; the reply says why
-            why = {"reply": e.text, "questions": []}
+            why = {"reply": e.text, "questions": [], "llm": False}
             return store.update(sid, lambda cur: cur.model_copy(update=why))
 
 
