@@ -222,6 +222,99 @@ def test_trap_2_online_place_outside_snapshot():
     assert resolve_place("Зурбаган") is place  # cached in the process
 
 
+def _bled_with_roads(geo, road_km: list | None):
+    """The online place «Блед» (46.4, 14.1); OSRM answers `road_km` to the nearest airports."""
+    base = geo("Блед")
+
+    def fetch(url: str, params: dict) -> dict:
+        if not url.startswith(catalog.OSRM):
+            return base(url, params)
+        if road_km is None:
+            raise OSError("no network")
+        assert len(url.removeprefix(catalog.OSRM).split(";")) == len(road_km) + 1
+        return {"code": "Ok", "distances": [[0, *[m and m * 1000 for m in road_km]]]}
+
+    here = {"lat": 46.4, "lon": 14.1}
+    ports = [{"iata": a[0], "lat": a[1], "lon": a[2]} for a in catalog.snapshot()["airports"]]
+    near = sorted(ports, key=lambda a: catalog.km_between(here, a))
+    return fetch, near
+
+
+def test_trap_6_online_airport_straight_line_without_network_is_marked(geo):
+    """TRAP-6: OSRM is down: the nearest airport by line, "road": False, the place works."""
+    fetch, near = _bled_with_roads(geo, None)
+    place = catalog.lookup_online("Блед", fetch)
+    ap = place["airport"]
+    assert ap["iata"] == near[0]["iata"] and ap["road"] is False
+    assert ap["km"] == round(catalog.km_between(place, near[0]))
+    assert place["airport_km"] == ap["km"]
+    assert not catalog.ONLINE_CACHE.exists()  # one OSRM flake is not frozen on disk
+
+
+def test_trap_2_online_airport_by_road_when_osrm_answers(geo):
+    """TRAP-2: a ridge in the way (Домбай): the 2nd airport (KLU, LJU) is 40 km by road, the 1st 90."""
+    fetch, near = _bled_with_roads(geo, [90, 40])
+    ap = catalog.lookup_online("Блед", fetch)["airport"]
+    assert ap["iata"] == near[1]["iata"] and ap["km"] == 40 and ap["road"] is True
+    assert catalog.ONLINE_CACHE.exists()  # a road answer is cached with the place
+
+
+@pytest.mark.parametrize("roads", [[100, 84], [200, 178]])
+def test_trap_2_online_road_gain_is_a_share_or_km_not_both(geo, roads):
+    """TRAP-2: only one threshold holds: 16 km = 16 % (< 20 km), 22 km = 11 % (< 15 %): switch.
+
+    `max` of the two thresholds would keep the nearest in both cases (#246, as in the snapshot).
+    """
+    first, second = roads
+    gain = first - second
+    assert (gain >= 0.15 * first) != (gain >= 20)  # exactly one condition holds
+    assert gain < max(20, 0.15 * first)  # a `max` rule would not switch
+    fetch, near = _bled_with_roads(geo, roads)
+    ap = catalog.lookup_online("Блед", fetch)["airport"]
+    assert ap["iata"] == near[1]["iata"] and ap["km"] == second and ap["road"] is True
+
+
+def test_trap_6_online_airport_one_candidate_does_not_ask_osrm(geo, monkeypatch):
+    """TRAP-6: a single candidate airport: no OSRM request, the straight line."""
+    monkeypatch.setattr(catalog, "ROAD_CANDIDATES", 1)
+    fetch, near = _bled_with_roads(geo, [90])  # the fake asserts the URL has 2 points if asked
+    asked = []
+
+    def spy(url: str, params: dict) -> dict:
+        asked.append(url)
+        return fetch(url, params)
+
+    ap = catalog.lookup_online("Блед", spy)["airport"]
+    assert ap["iata"] == near[0]["iata"] and ap["road"] is False
+    assert not any(u.startswith(catalog.OSRM) for u in asked)
+    assert catalog.ONLINE_CACHE.exists()  # nothing flaked: the place is cached
+
+
+def test_trap_2_online_airport_keeps_the_nearest_for_a_small_road_gain(geo):
+    """TRAP-2: 100 km by road to the nearest, 90 to the second: a gain under 15 % and 20 km (#246)."""
+    fetch, near = _bled_with_roads(geo, [100, 90])
+    ap = catalog.lookup_online("Блед", fetch)["airport"]
+    assert ap["iata"] == near[0]["iata"] and ap["km"] == 100 and ap["road"] is True
+
+
+def test_trap_6_online_airport_without_a_road_to_the_nearest_takes_the_next(geo):
+    """TRAP-6: OSRM finds no road (null) to the nearest airport: the next one by road."""
+    fetch, near = _bled_with_roads(geo, [None, 70])
+    ap = catalog.lookup_online("Блед", fetch)["airport"]
+    assert ap["iata"] == near[1]["iata"] and ap["km"] == 70 and ap["road"] is True
+
+
+def test_online_road_choice_equals_the_snapshot_rule():
+    """The road constants of catalog.py mirror scripts/build_catalog.py (one rule, D-020)."""
+    spec = importlib.util.spec_from_file_location(
+        "build_catalog", Path(__file__).parents[2] / "scripts" / "build_catalog.py"
+    )
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    for name in ("ROAD_SPAN", "ROAD_PLUS_KM", "ROAD_GAIN", "ROAD_GAIN_KM", "OSRM", "AIRPORT_KM"):
+        assert getattr(catalog, name) == getattr(build, name), name
+
+
 def test_trap_6_a_network_error_is_remembered_for_a_minute_only(monkeypatch):
     """TRAP-6: offline, one wait per city a minute; one timeout does not make it unknown until a restart."""
     calls = []
