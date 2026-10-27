@@ -45,6 +45,7 @@ from api.dag import (
 )
 from api.extract import (
     DATE_KEYS,
+    DEFAULT_NIGHTS,
     MONTH_NAMES,
     excluded_places,
     extract,
@@ -70,7 +71,6 @@ from api.optimizer import (
 )
 from api.store import SessionStore
 
-DEFAULT_NIGHTS = 7
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
