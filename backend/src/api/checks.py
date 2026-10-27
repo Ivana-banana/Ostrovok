@@ -41,6 +41,7 @@ from api.contracts import (
 )
 from api.fixtures import WARM_WATER_C
 from api.main import app, get_store
+from api.model import NOT_IN_CATALOG
 from api.offers import _norm, osm_hotels, resolve_place, transfer_id
 from api.optimizer import optimize
 from api.store import SessionStore
@@ -182,7 +183,7 @@ def _is_pets_dead_end(r: ChatReply) -> bool:
         and r.stage in ("select", "compare")
         and r.questions
         and r.questions[0].options
-        and "нет в каталоге" not in r.reply
+        and NOT_IN_CATALOG not in r.reply
         and not any(x.kind == "hotel" for x in _chosen(r.plan))
     )
 

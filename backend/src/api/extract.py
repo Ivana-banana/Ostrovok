@@ -854,7 +854,13 @@ def extract(text: str, has_destination: bool = False) -> tuple[dict, list[str]]:
     _nights(t, found, notes)
     _people(t, found, notes)
     _budget(t, found, notes)
-    if re.search(r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|\bпс(?:а|у|ом|е)\b|питом", t):
+    if re.search(
+        r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"
+        r"|\bпс(?:а|у|ом|е|ы|ов|ам|ами|ах)\b"
+        r"|\bщен(?:ок|ка|ку|ком|ке|ки|ков|кам|ками|ках)\b|\bщенят(?:а|ам|ами|ах)?\b"
+        r"|\bкот[её]н(?:ок|ка|ку|ком|ке)\b|\bкотят(?:а|ам|ами|ах)?\b",
+        t,
+    ):
         found["pets"] = True
     if meal := next((v for p, v in MEALS if re.search(p, t)), None):
         found["meal"] = meal

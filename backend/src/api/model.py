@@ -68,6 +68,7 @@ from api.optimizer import (
 from api.store import SessionStore
 
 DEFAULT_NIGHTS = 7
+NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
@@ -845,7 +846,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
         if not plan.offers:
             # TODO(T4, #8): the geocoder and synthetic offers cover any city.
             text = (
-                f"Направления «{spec.destinations[0]}» пока нет в каталоге, предложений нет. "
+                f"Направления «{spec.destinations[0]}» пока {NOT_IN_CATALOG}, предложений нет. "
                 f"{HINTS['select']}"
             )
             text, questions = _no_offers(plan, text)
@@ -873,7 +874,7 @@ def step(prev: ChatReply | None, sid: str, message: str, use_llm: bool = False) 
             # The user named a city that is not in the catalogue and picked another one:
             # the reply says so, the new city never comes silently (#93).
             gone, now = ", ".join(swapped), spec.destinations[0]
-            text = f"«{gone}» нет в каталоге. По вашему выбору — {now}.\n{text}"
+            text = f"«{gone}» {NOT_IN_CATALOG}. По вашему выбору — {now}.\n{text}"
         questions = party_question(spec)
         if route:
             notice, chips = route_reply(spec.destinations, route)
