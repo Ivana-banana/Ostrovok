@@ -805,3 +805,9 @@ def test_trap_3_no_place_in_ordinary_sentences():
     for text in ("Хорошо бы недорого, с ребенком на 5 дней", "Привет! Хотим отдохнуть в мае"):
         found, _ = extract(text)
         assert not found.get("destinations"), text
+
+
+@pytest.mark.parametrize("name", ["Коломбо", "Чиангмай", "Чианграй"])
+def test_trap_3_exact_catalogue_name_is_not_respelled(name):
+    found, _ = extract(f"хочу в {name} в мае")
+    assert found["destinations"] == [name]

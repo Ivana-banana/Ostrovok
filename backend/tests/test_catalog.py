@@ -403,3 +403,14 @@ def test_trap_3_typo_does_not_hit_ordinary_words_or_other_places():
     for word in ("Хорошо", "Привет", "Выходные", "Погода", "Ребенок", "Недорого", "Гагра", "Омск"):
         found = catalog.resolve(word)
         assert found is None or found["name"] == word, (word, found and found["name"])
+
+
+def test_trap_3_respelling_never_rewrites_a_catalogue_name():
+    """«Коломбо» is not «Коломна», «Чиангмай» is not «Чианграй»: every key is itself (#274)."""
+    bad = []
+    for p in catalog.places():
+        for k in (p["name"], *p["aliases"]):
+            r = catalog.respelled(k)
+            if r is not None and r["name"] != p["name"]:
+                bad.append((k, r["name"]))
+    assert bad == []

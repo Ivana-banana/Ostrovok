@@ -206,7 +206,7 @@ def _respelled(q: str) -> dict | None:
 def respelled(text: str) -> dict | None:
     """Place when the text is a colloquial name or a typo («Ебург», «Кисловоцк»), else None (#274)."""
     q = _query(text)
-    known = any(_same_words(q.split(), k.split()) for k, _ in _keys())
+    known = any(k == q or _same_words(q.split(), k.split()) for k, _ in _keys())
     return None if known or not q else _respelled(q)
 
 
