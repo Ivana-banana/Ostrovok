@@ -11,6 +11,7 @@ import functools
 import re
 from datetime import date, timedelta
 
+from api import catalog
 from api.fixtures import CATALOG, future_date
 from api.guards import name_candidates
 from api.offers import places, resolve_place
@@ -111,6 +112,8 @@ def _two_word_places() -> None:
 
 
 _two_word_places()
+# «Минводы», «Мин Воды» is the place «Минеральные Воды», not a second one (TRAP-3, #274).
+PLACE_RES.append(("Минеральные Воды", re.compile(rf"\bминвод\w*|{AFTER_PREPOSITION}мин\s+вод\w*")))
 NOT_PLACES = {"новый", "выходные", "майские", "праздники", "отель", "отпуск", "домой",
               "европа", "европе", "европу", "европы"}  # fmt: skip
 # First word as a destination (TRAP-2). A city of places.json counts in any case and form.
@@ -806,6 +809,38 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
     return sides
 
 
+TRANSFER = re.compile(r"с\s+пересадкой\s+(?:в|во|на)\s+$")
+VIA = re.compile(r"через\s+$")
+
+
+def _transit_dropped(t: str, hits: list) -> list:
+    """Hits without transit points (#274): the place after «с пересадкой в», or after «через» when
+    it has its own airport that serves another named place («через Минводы» to Кисловодск, MRV).
+    «через Нижний в Сочи» is a route stop and stays. The last place is never dropped."""
+
+    def iata(name: str) -> str | None:
+        p = resolve_place(name)
+        return (p or {}).get("airport", {}).get("iata")
+
+    out = []
+    for h in hits:
+        before = t[: h[0]]
+        own = ((resolve_place(h[1]) or {}).get("airport") or {}).get("km", 99) <= 25  # own airport
+        hub = (
+            VIA.search(before)
+            and own
+            and iata(h[1])
+            and any(
+                o[1] != h[1] and not VIA.search(t[: o[0]]) and iata(o[1]) == iata(h[1])
+                for o in hits
+            )
+        )
+        if TRANSFER.search(before) or hub:
+            continue
+        out.append(h)
+    return out or hits
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -819,6 +854,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     else:
         m = None
     if m:
+        if home := catalog.respelled(name):
+            name = home["name"]  # «Ебург» -> Екатеринбург (#274)
         found["origin"] = name
         end = t.find(" ", m.end())
         end = len(t) if end < 0 else end
@@ -848,6 +885,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         hits.append((*first, _word_end(t, first[0])))
     elif not hits and not has_destination:
         _vetoed_first_word(text, t, notes)
+    # A transit point is no destination (#274): «через Минводы», «с пересадкой в Москве».
+    hits = _transit_dropped(t, hits)
     # Mentions for the negation: the places above and the bare countries («Турцию и Египет…»).
     # The refused name is the country when the word is one: «египет» is a hit of Хургада.
     mentions = {s: (e, name, name) for s, name, e in hits}
@@ -868,6 +907,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         place = resolve_place(name)
         if place and place.get("source") == "online":
             name = place["name"]  # the geocoder's name: «Бледе» is the place «Блед» (TRAP-3)
+        elif fixed := catalog.respelled(name):
+            name = fixed["name"]  # «Ебург», «Кисловоцк» are the places of the catalogue (#274)
         if s in pair_sides and place and place["country"] in refused:
             continue  # «Турция или Египет, в Египте уже были»: no Хургада (#151)
         if place and mentions[s][2] in COUNTRIES and place["name"] in refused:
