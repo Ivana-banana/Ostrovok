@@ -493,6 +493,16 @@ def _span_h(delta: timedelta) -> str:
     return f"{hours} ч {minutes:02d} мин" if minutes else f"{hours} ч"
 
 
+# Rail (#343): the route is RAIL_DETOUR x the straight line. A day train goes DAY_TRAIN_KMH on
+# average with its stops, an overnight one 70 km/h; a high-speed pair has its time from
+# HIGH_SPEED_H. Calibrated on 4 pairs within ±20 % (research/domain.md, D-028): «Сапсан» Москва
+# -> Санкт-Петербург 3:30-4:15 (source); Москва -> Казань ~12 h, Санкт-Петербург -> Петрозаводск
+# ~5.5 h, Москва -> Сочи ~24 h (team estimates). Prices do not depend on the speed.
+RAIL_DETOUR = 1.2
+DAY_TRAIN_KMH = 75
+HIGH_SPEED_H = {frozenset(("Москва", "Санкт-Петербург")): 4.0}
+
+
 def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[TransportOffer]:
     """There on date_from and back on date_to: flights, trains, and a car if asked for."""
     km = km_between(origin, place)
@@ -520,11 +530,12 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
             depart = datetime.combine(back, slot, tb)
             price = fare("flight", base * k, back, slot)
             legs.append(_leg(spec, "flight", b, a, depart, hours, price, changes))
-    route = km * 1.2
+    route = km * RAIL_DETOUR
     if a["station_km"] is not None and b["station_km"] is not None and route <= 3000:
         trains = []
-        if route <= 800:  # day train
-            hours, base = max(0.5, route / 170), 700 + 3.4 * route
+        if route <= 800:  # day train; a high-speed line has its own time (#343)
+            fast = HIGH_SPEED_H.get(frozenset((a["name"], b["name"])))
+            hours, base = fast or max(0.5, route / DAY_TRAIN_KMH), 700 + 3.4 * route
             trains.append((hours, base, datetime.combine(there, time(7, 40), ta), time(16, 20)))
         if route >= 600:  # overnight train: arrives in the morning
             hours, base = route / 70, 1100 + 3.0 * route
