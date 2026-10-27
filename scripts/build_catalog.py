@@ -1024,7 +1024,13 @@ def fetch_roads(r: dict, near: list[tuple[float, list]], roads: dict) -> None:
 def airport_fields(r: dict, airports: list[list], roads: dict, station: int | None) -> dict:
     """airport and airport_km of a place: the nearest by road when the roads snapshot has every
     candidate ("road": true, km by road), else the nearest by straight line. The straight-line
-    nearest airport is replaced only for a road gain of at least ROAD_GAIN or ROAD_GAIN_KM (#246)."""
+    nearest airport is replaced only for a road gain of at least ROAD_GAIN or ROAD_GAIN_KM (#246).
+    Хужир uses the documented road and ferry from Иркутск (research/domain.md, C10, #386),
+    since straight-line proximity to UUD across Lake Baikal is not a usable transfer."""
+    if r["ru"] == "Хужир":
+        port = next(a for a in airports if a[0] == "IKT")
+        return {"airport": {"iata": port[0], "km": 256, "tz": port[3],
+                            "road": True, "ferry": True}, "airport_km": 256}  # fmt: skip
     near = candidates(r, airports)
     road = roads.get(r["ru"], {})
     ok = [(road[a[0]], a, k) for k, a in near if road.get(a[0]) is not None]
