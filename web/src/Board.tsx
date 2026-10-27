@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type {
   Bundle,
   Cart,
@@ -48,6 +49,35 @@ export function Price({ value, synthetic = true }: { value: number; synthetic?: 
     </span>
   );
 }
+
+// Free text from the backend ("дороже на 3 300 ₽", "было 6 400 ₽"): every price in it gets the
+// same label as a price (TRAP-7). The text holds prices of the offers, so the label follows them.
+// Not marked: a budget (the number the user typed) and a sum that already has the label.
+const AMOUNT = /\d[\d\s\u00a0]*\s?₽/g;
+const AFTER_BUDGET = /бюджет[а-яё]*(\s+отеля)?\s*$/i;
+const LABELLED = /^\s*\(?синтетика/;
+export function Money({ text, synthetic = true }: { text: string; synthetic?: boolean }) {
+  if (!synthetic) return <>{text}</>;
+  const out: ReactNode[] = [];
+  let at = 0;
+  for (const m of text.matchAll(AMOUNT)) {
+    const end = m.index + m[0].length;
+    if (AFTER_BUDGET.test(text.slice(0, m.index)) || LABELLED.test(text.slice(end))) continue;
+    out.push(text.slice(at, m.index));
+    out.push(
+      <span key={m.index} className="price">
+        {m[0]}
+        <span className="synth">синтетика</span>
+      </span>,
+    );
+    at = end;
+  }
+  out.push(text.slice(at));
+  return <>{out}</>;
+}
+
+// plan.changes rows "бюджет" and "бюджет отеля" hold the number of the user.
+const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
 
@@ -203,7 +233,9 @@ function Destinations({ plan, stage, busy, onSend }: {
               <h3>
                 {d.name} <small>{d.country}</small>
               </h3>
-              <p>{d.why}</p>
+              <p>
+                <Money text={d.why} synthetic={d.synthetic} />
+              </p>
               <p>
                 от <Price value={d.est_total_rub} synthetic={d.synthetic} /> на всех
               </p>
@@ -213,7 +245,11 @@ function Destinations({ plan, stage, busy, onSend }: {
                 {d.water_c !== null && `, вода ${d.water_c} °C`}
                 {(d.air_c !== null || d.water_c !== null) && " (оценка)"}
               </p>
-              {d.tradeoffs.length > 0 && <p className="muted">Минусы: {d.tradeoffs.join("; ")}</p>}
+              {d.tradeoffs.length > 0 && (
+                <p className="muted">
+                  Минусы: <Money text={d.tradeoffs.join("; ")} synthetic={d.synthetic} />
+                </p>
+              )}
               {d.violates.length > 0 && (
                 <p className="bad">Нарушает требования: {d.violates.join("; ")}</p>
               )}
@@ -420,7 +456,11 @@ function Bundles({ plan }: { plan: Plan }) {
                 <li key={id}>{title(id)}</li>
               ))}
             </ul>
-            {b.tradeoffs.length > 0 && <p className="muted">Минусы: {b.tradeoffs.join("; ")}</p>}
+            {b.tradeoffs.length > 0 && (
+              <p className="muted">
+                Минусы: <Money text={b.tradeoffs.join("; ")} synthetic={synthetic(b)} />
+              </p>
+            )}
           </article>
         ))}
       </div>
@@ -431,17 +471,24 @@ function Bundles({ plan }: { plan: Plan }) {
 function Explanations({ plan }: { plan: Plan }) {
   if (!plan.explanations.length) return null;
   const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? id;
+  const synth = isSynthetic(plan.offers);
   return (
     <section className="card" aria-label="Почему этот выбор">
       <h2>Почему этот выбор</h2>
       <ul className="plain">
         {plan.explanations.map((e) => (
           <li key={e.offer_id}>
-            <b>{title(e.offer_id)}</b>: {e.why}
+            <b>{title(e.offer_id)}</b>: <Money text={e.why} synthetic={synth} />
             {e.tradeoffs.length > 0 && (
-              <div className="muted">Чем пожертвовали: {e.tradeoffs.join("; ")}</div>
+              <div className="muted">
+                Чем пожертвовали: <Money text={e.tradeoffs.join("; ")} synthetic={synth} />
+              </div>
             )}
-            {e.risks.length > 0 && <div className="warn">Риски: {e.risks.join("; ")}</div>}
+            {e.risks.length > 0 && (
+              <div className="warn">
+                Риски: <Money text={e.risks.join("; ")} synthetic={synth} />
+              </div>
+            )}
           </li>
         ))}
       </ul>
@@ -451,14 +498,21 @@ function Explanations({ plan }: { plan: Plan }) {
 
 function Changes({ plan }: { plan: Plan }) {
   if (!plan.changes.length) return null;
+  const synth = isSynthetic(plan.offers);
   return (
     <section className="card" aria-label="Что изменилось">
       <h2>Что изменилось</h2>
       <ul className="plain">
         {plan.changes.map((c) => (
           <li key={c.what}>
-            {fieldLabel(c.what)}: было <s>{changeValue(c.before)}</s> → стало{" "}
-            <b>{changeValue(c.after)}</b>
+            {fieldLabel(c.what)}: было{" "}
+            <s>
+              <Money text={changeValue(c.before)} synthetic={synth && !isBudget(c.what)} />
+            </s>{" "}
+            → стало{" "}
+            <b>
+              <Money text={changeValue(c.after)} synthetic={synth && !isBudget(c.what)} />
+            </b>
           </li>
         ))}
       </ul>
@@ -492,7 +546,9 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
       <ol className="timeline">
         {plan.timeline.map((e, i) => (
           <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined}>
-            <time>{localTime(e.at)}</time> <span className="gone-title">{e.title}</span>
+            <time>{localTime(e.at)}</time> <span className="gone-title">
+              <Money text={e.title} synthetic={isSynthetic(plan.offers)} />
+            </span>
             {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}
           </li>
         ))}
@@ -502,7 +558,7 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
         if (issue.fixes.length > 0 && fixes.length === 0) return null; // only for a removed item
         return (
         <div key={i} className={`issue ${issue.severity}`} role="note">
-          <b>{issue.severity === "error" ? "Ошибка стыковки" : "Внимание"}:</b> {issue.text}
+          <b>{issue.severity === "error" ? "Ошибка стыковки" : "Внимание"}:</b> <Money text={issue.text} synthetic={isSynthetic(plan.offers)} />
           {fixes.length > 0 && (
             <ul>
               {fixes.map((id) => {
