@@ -378,3 +378,75 @@ def test_country_on_the_origin_question_shows_its_places(store):
     names = [d.name for d in r.plan.destinations]
     assert len(names) >= 2
     assert all(catalog.resolve(n)["country"] == "Турция" for n in names)
+
+
+def _only_turkey(r):
+    from api import catalog
+
+    names = [d.name for d in r.plan.destinations]
+    assert names and all(catalog.resolve(n)["country"] == "Турция" for n in names), names
+
+
+def test_country_survives_the_next_message(store):
+    """#452: the country stays in the trip: «в декабре» after «Турция» shows Turkey again."""
+    first = say(store, "Тёплое море в ноябре, недорого, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    _only_turkey(r)
+    r = say(store, "в декабре", r.session_id)
+    assert r.stage == "inspire" and r.plan.spec.destinations == []
+    _only_turkey(r)
+
+
+def test_country_survives_the_party_answer(store):
+    """#452: «Хочу отдохнуть» → «Турция» → the party answer: still the places of Турция."""
+    first = say(store, "Хочу отдохнуть")
+    r = say(store, "Турция", first.session_id)
+    r = say(store, "Двое взрослых и ребёнок 5 лет", r.session_id)
+    assert r.stage == "inspire"
+    _only_turkey(r)
+
+
+def test_country_more_gives_turkey_or_a_hint(store):
+    """#452: «ещё» after «Турция» shows other places of Турция, or says nothing is left."""
+    first = say(store, "Тёплое море в ноябре, недорого, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    shown = {d.name for d in r.plan.destinations}
+    r = say(store, "ещё", r.session_id)
+    names = {d.name for d in r.plan.destinations}
+    if names - shown:
+        from api import catalog
+
+        assert all(catalog.resolve(n)["country"] == "Турция" for n in names - shown)
+    else:
+        assert "Других направлений" in r.reply
+
+
+def test_named_place_or_country_clears_the_country(store):
+    """#452: a place named later ends the country; another country takes its place."""
+    first = say(store, "Тёплое море в ноябре, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    r = say(store, "Анталья", r.session_id)
+    assert r.plan.spec.destinations and not any(
+        a.startswith("страна") for a in r.plan.spec.assumptions
+    )
+    first = say(store, "Тёплое море в ноябре, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    r = say(store, "лучше Египет", r.session_id)
+    assert not any(a.startswith("страна") for a in r.plan.spec.assumptions)
+
+
+def test_country_without_fitting_places_says_so(store, monkeypatch):
+    """#452: no place of Турция fits: the reply says so, it does not fall back silently."""
+    from api import model
+
+    real = model.suggest_destinations
+
+    def none_in_the_country(spec, n, excluded=()):
+        return [] if "Египет" in excluded else real(spec, n, excluded)
+
+    monkeypatch.setattr(model, "suggest_destinations", none_in_the_country)
+    first = say(store, "Тёплое море в ноябре, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    assert r.stage == "inspire" and r.plan.destinations
+    assert "в стране «Турция» мест нет" in r.reply
+    assert not any(a.startswith("страна") for a in r.plan.spec.assumptions)
