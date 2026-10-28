@@ -6,7 +6,7 @@ No model (TRAP-1): the rules read the messages. The answer spellings are TRAP-3.
 import pytest
 
 from api.contracts import ChatRequest
-from api.model import ORIGIN_ASK, chat
+from api.model import ORIGIN_ASK, SAME_PLACE, chat
 from api.store import SessionStore
 
 CHIPS = ["Из Москвы", "Из Санкт-Петербурга", "Из Екатеринбурга", "Из Новосибирска", "Из Казани"]
@@ -174,11 +174,12 @@ def test_place_abroad_answers_where_to_go_not_where_from(store, answer):
 
 
 def test_country_off_the_snapshot_from_the_geocoder_is_no_origin(geo, monkeypatch, store):
-    """#442, TRAP-6: the geocoder finds «Бодрум» in Турция: abroad, so it is not the origin."""
+    """#442, TRAP-6: the geocoder finds «Бодрум» in Турция. The trip has no place yet: a place
+    abroad is where to go, not the origin. With a place it is the origin (the Минск test)."""
     from api import catalog
 
     monkeypatch.setattr(catalog, "_get", geo("Бодрум", country="Турция"))
-    first = say(store, "Сочи на 4 ночи в июле, двое взрослых")
+    first = say(store, "Хочу отдохнуть")
     r = say(store, "Бодрум", first.session_id)
     assert r.plan.spec.origin == "Москва" and ORIGIN_NOTE in r.plan.spec.assumptions
 
@@ -225,3 +226,60 @@ def test_far_origin_chips_keep_the_five_in_a_row(monkeypatch):
     spec = TripSpec(destinations=["Сочи"], month=7, adults=2, budget_rub=100_000)
     (q,) = model.far_origin_question(spec)
     assert q.options == [*CHIPS, "Из Омска"]
+
+
+SOCHI_TRIP = "Сочи на 4 ночи в июле, двое взрослых"
+
+
+@pytest.mark.parametrize("answer", ["Минск", "Алматы"])
+def test_place_abroad_with_a_trip_place_is_the_origin(store, answer):
+    """#442 review: the trip has its place; a city abroad is where the user flies from (the
+    nearest hub is said aloud, as before), not a new destination."""
+    first = say(store, SOCHI_TRIP)
+    r = say(store, answer, first.session_id)
+    s = r.plan.spec
+    assert r.stage == "compare" and s.destinations == ["Сочи"]
+    assert any(a.startswith("откуда") and answer in a for a in s.assumptions)
+
+
+def test_country_with_a_trip_place_keeps_the_place(store):
+    """#442 review: «Турция» to a Сочи trip silently replaced Сочи."""
+    first = say(store, SOCHI_TRIP)
+    r = say(store, "Турция", first.session_id)
+    assert r.plan.spec.destinations == ["Сочи"]
+    assert r.plan.spec.origin == "Москва" and ORIGIN_NOTE in r.plan.spec.assumptions
+
+
+@pytest.mark.parametrize("first_text", [SOCHI_TRIP, "Хочу отдохнуть"])
+def test_home_country_is_no_destination(store, first_text):
+    """#442 review: «Россия» became a destination «нет в каталоге»: the departure country names
+    neither the place nor the city of departure."""
+    first = say(store, first_text)
+    r = say(store, "Россия", first.session_id)
+    assert "Россия" not in r.plan.spec.destinations
+    assert r.stage in ("compare", "inspire")
+    if first_text == SOCHI_TRIP:
+        assert r.plan.spec.destinations == ["Сочи"]
+
+
+def test_origin_equal_to_the_place_with_more_fields_is_asked_again(store):
+    """#442 review: «Казань, двое взрослых» to a Kazan trip skipped the second question; the
+    other fields of the answer stay in the trip."""
+    first = say(store, "Казань на 3 ночи в декабре, бюджет 50 тысяч, с ребёнком 5 лет")
+    r = say(store, "Казань, трое взрослых", first.session_id)
+    assert r.stage == "clarify" and r.plan.spec.origin is None
+    q = origin_q(r)
+    assert q and SAME_PLACE in q.text
+    assert r.plan.spec.adults == 3
+    after = say(store, "Из Казани", r.session_id)
+    assert after.plan.spec.origin == "Казань" and after.plan.spec.adults == 3
+
+
+def test_place_abroad_as_the_trip_place_is_asked_again(store):
+    first = say(store, "Анталья на 5 ночей в июле, двое")
+    r = say(store, "Анталья", first.session_id)
+    q = origin_q(r)
+    assert r.stage == "clarify" and q and SAME_PLACE in q.text
+    assert q.options[0] == "Из города Анталия"  # no genitive rule: the name keeps its case
+    after = say(store, q.options[0], r.session_id)
+    assert after.stage == "compare" and after.plan.spec.destinations == ["Анталия"]

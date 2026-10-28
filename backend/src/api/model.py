@@ -621,27 +621,33 @@ def origin_name(text: str) -> str | None:
     return forms[close[0]] if close else None
 
 
+def _home_countries() -> set[str]:
+    """The countries of the departure hubs (Россия)."""
+    return {h["country"] for h in catalog.hubs()}
+
+
 def _abroad(place: dict | None) -> bool:
-    """A place outside the countries of the departure hubs (Россия)."""
-    return place is not None and place["country"] not in {h["country"] for h in catalog.hubs()}
+    return place is not None and place["country"] not in _home_countries()
 
 
-def bare_origin(message: str) -> str | None:
+def bare_origin(message: str, has_place: bool = True) -> str | None:
     """The answer to the origin question without «из»: «Питер», «мск, вдвоём». A clause with «в»,
-    «на», «до» names a destination or a sum, not the origin. A country or a place abroad
-    («Турция», «Анталья») names where the user goes, not where from (#442)."""
+    «на», «до» names a destination or a sum, not the origin. A country is never the origin.
+
+    has_place: the trip has its place already. Without it, a place abroad («Анталья») names
+    where the user goes, not where from (#442); with it, «Минск» is the origin as before."""
     for clause in re.split(r"[,;.!?\n]+", message):
         c = clause.strip()
         if not c or re.match(r"(?i)(?:в|во|на|до|к|ко|по|за)\s", c) or catalog.country_of(c):
             continue
         if name := origin_name(c):
-            if _abroad(catalog.resolve(name)):
-                continue
+            if not has_place and _abroad(catalog.resolve(name)):
+                continue  # «Анталья» on «Хочу отдохнуть»: the destination, read by extract
             return name
         words = c.split()
         capital = len(c) >= 4 and len(words) <= 3 and all(w[:1].isupper() for w in words)
         # «Орск»: a name off the catalogue, from the geocoder (TRAP-6: None offline)
-        if capital and (place := catalog.lookup_online(c)) and not _abroad(place):
+        if capital and (place := catalog.lookup_online(c)) and (has_place or not _abroad(place)):
             return place["name"]
     return None
 
@@ -1864,10 +1870,15 @@ def _said_origin(old: ChatReply, message: str, found: dict) -> str | None:
     asked = [q.text for q in old.questions] if old.stage == "clarify" else []
     if not any(a.startswith(ORIGIN_ASK) for a in asked) or {STAY_ASK, BOOKING_ASK} & set(asked):
         return None
-    if name := bare_origin(message):
+    has_place = bool(old.plan.spec.destinations)
+    if name := bare_origin(message, has_place):
         _with_origin(found, name)
-    elif "destinations" not in found and (country := catalog.country_of(message)):
-        found["destinations"] = [country]  # «Турция»: where to go, not where from (#442)
+    elif (country := catalog.country_of(message)) and (has_place or country in _home_countries()):
+        # «Россия» names no place; «Турция» to a Сочи trip does not replace Сочи (#442)
+        if found.get("destinations") == [country]:
+            del found["destinations"]
+    elif not has_place and country and "destinations" not in found:
+        found["destinations"] = [country]  # «Турция» on «Хочу отдохнуть»: where to go (#442)
     return name
 
 
@@ -1879,13 +1890,9 @@ def same_place_question(old: ChatReply, name: str, found: dict) -> list[Question
     asked once more; a second «Казань» or «Из Казани» is the user's choice and goes on."""
     spec = old.plan.spec
     places = {(p or {}).get("name", d) for d in spec.destinations for p in [catalog.resolve(d)]}
-    if (
-        name not in places
-        or set(found) - {"origin"}
-        or any(SAME_PLACE in q.text for q in old.questions)
-    ):
+    if name not in places or any(SAME_PLACE in q.text for q in old.questions):
         return []
-    here = f"Из {gen}" if (gen := _genitive(name)) else _from(name).capitalize()
+    here = f"Из {gen}" if (gen := _genitive(name)) else f"Из города {name}"
     text = (
         f"{ORIGIN_ASK} {name} {SAME_PLACE} Если вы уже там, дорога не нужна: нажмите «{here}». "
         "Если нет — выберите город вылета или напишите «из …»."
@@ -2088,7 +2095,12 @@ def step(
         return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
     said_origin = _said_origin(old, message, found)  # #436, TRAP-3
     if said_origin and (again := same_place_question(old, said_origin, found)):
-        return old.model_copy(update={"reply": again[0].text, "questions": again, "llm": False})
+        # The other fields of the answer («Казань, трое взрослых») stay in the trip.
+        rest = {k: v for k, v in found.items() if k != "origin" and k in TripSpec.model_fields}
+        spec = TripSpec.model_validate({**old.plan.spec.model_dump(), **rest})
+        plan = old.plan.model_copy(update={"spec": spec})
+        update = {"plan": plan, "reply": again[0].text, "questions": again, "llm": False}
+        return old.model_copy(update=update)
     if refused_month:
         found.pop("month", None)  # «не в январе», «отпуск до января»: no new month (#190)
         notes[:] = [n for n in notes if _label(n) != "когда"]
