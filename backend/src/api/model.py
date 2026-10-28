@@ -75,6 +75,7 @@ from api.extract import (
     DEFAULT_NIGHTS,
     HOTEL_NOTE,
     MAX_NIGHTS,
+    MODES,
     MONTH,
     MONTH_NAMES,
     MONTHS,
@@ -1553,6 +1554,25 @@ VERSUS_ORDER_RE = re.compile(
     r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
 )
 MARKET_RE = re.compile(r"\bв\s+среднем\b|рынк|\bобычно\b")  # «дешевле, чем в среднем?»
+# «а дешевле, чем в Турции» inside a longer message: the comparison words only (#483)
+VERSUS_CLAUSE_RE = re.compile(
+    r"(?i)\b(?:а\s+)?(?:это\s+)?(?:дешевле|дороже|выгоднее),?\s+чем\s+(?:в\s+|на\s+)?[\w-]+"
+)
+
+
+MODE_NAMES = {"train": "поезд", "flight": "самолёт", "car": "машина"}
+
+
+def _mode_versus_reply(old: ChatReply, modes: list[str]) -> str:
+    """«поезд дешевле, чем самолёт?»: the cheapest offer of each mode in the plan (TRAP-4)."""
+    rows = []
+    for mode in modes:
+        prices = [o.price_rub for o in old.plan.offers if getattr(o, "mode", None) == mode]
+        name = MODE_NAMES[mode].capitalize()
+        rows.append(
+            f"{name}: от {_rub(min(prices))} (синтетика)" if prices else f"{name}: в плане нет"
+        )
+    return f"Это вопрос: план не меняю. {'; '.join(rows)}. {HINTS[old.stage]}"
 
 
 def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
@@ -1563,8 +1583,10 @@ def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
         return ""
     spec = old.plan.spec
     others = [d for d in found.get("destinations", []) if d not in spec.destinations]
+    if not others and len(modes := [m for m, rx in MODES if re.search(rx, low)]) == 2:
+        return _mode_versus_reply(old, modes)  # #483: «а поезд дешевле, чем самолёт?»
     if not (others or MARKET_RE.search(low)):
-        return ""  # «а поезд дешевле, чем самолёт?»: not this question, the old rules read it
+        return ""
     total = old.cart.total_rub or sum(
         o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
     )
@@ -2143,10 +2165,17 @@ def step(
     if (
         prev
         and old.stage in PLAN3
-        and set(rules_found) <= {"destinations", "wishes"}  # «дешевле, чем 50 тысяч?» is a budget
+        and set(rules_found) <= {"destinations", "wishes", "modes"}  # «…чем 50 тысяч?» is a budget
         and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
         and (reply := _price_versus_reply(old, low, rules_found))
     ):
+        # #483: «дешевле, чем в Турции, с бассейном?» — the question changes nothing, the wish
+        # next to it is still an edit: the rest of the message goes on without the comparison.
+        if set(rules_found.get("wishes", [])) - {"недорого"} and (
+            rest := VERSUS_CLAUSE_RE.sub(" ", message).strip(" ,?")
+        ):
+            done = step(prev, sid, rest, use_llm, origin)
+            return done.model_copy(update={"reply": f"{reply.split(' Чтобы')[0]}\n{done.reply}"})
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
         return drop_transfers(old)

@@ -80,7 +80,6 @@ def test_price_versus_budget_is_still_an_edit(store, question):
         "сделай дешевле, чем в Турции",
         "а есть отель дешевле, чем этот?",
         "а можно дешевле, чем сейчас?",
-        "а поезд дешевле, чем самолёт?",
     ],
 )
 def test_price_versus_request_is_not_the_answer(store, request_):
@@ -89,3 +88,21 @@ def test_price_versus_request_is_not_the_answer(store, request_):
     assert "по рынку" not in after.reply
     assert "цифр не выдумываю" not in after.reply
     assert "недорого" in after.plan.spec.wishes  # the old rules read it as a wish
+
+
+# #483: a mode comparison is a question too: the answer has the plan prices, the spec stays.
+def test_mode_versus_question_changes_nothing(store):
+    before = at(store, "compare")
+    after = say(store, "а поезд дешевле, чем самолёт?", before.session_id)
+    assert after.plan.spec == before.plan.spec and after.stage == "compare"
+    assert "план не меняю" in after.reply
+    assert "Поезд:" in after.reply and "Самолёт:" in after.reply
+
+
+def test_wish_next_to_a_versus_question_is_applied(store):
+    before = at(store, "compare")
+    after = say(store, "а дешевле, чем в Турции, с санаторием?", before.session_id)
+    assert after.plan.spec.destinations == before.plan.spec.destinations
+    assert "недорого" not in after.plan.spec.wishes
+    assert set(after.plan.spec.wishes) - set(before.plan.spec.wishes), after.plan.spec.wishes
+    assert "цифр не выдумываю" in after.reply
