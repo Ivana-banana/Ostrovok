@@ -424,7 +424,18 @@ WISHES = [
     ("шопинг", r"шопинг|аутлет"),
     ("музеи", r"\bмузе[йяеи]\w*|выставк|\bтеатр"),
     ("йога", r"\bйог(?:а|и|е|у|ой)\b|\bйог-|ретрит"),
-    ("тяжело ходить", r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил"),
+    (
+        "тяжело ходить",
+        r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил|на\s+коляске|инвалидн\w*\s+коляск|колясочник|кресл\w*[\s-]+коляск",
+    ),
+    # #338: hard conditions of a stay; no hotel field checks them, the reply says so
+    ("детская коляска", r"детск\w*\s+коляск|\bс\s+коляск\w*"),
+    ("веганское питание", r"веган|вегетариан"),
+    (
+        "поздний заезд",
+        r"засел\w*(?:\s+\w+)?\s+(?:ночью|поздно|сразу)|засел\w*\s+после\s+\d|поздн\w*\s+(?:заезд|заселен)|ночн\w*\s+заезд",
+    ),
+    ("детская кроватка", r"кроватк|колыбел|\bманеж"),
     ("вино и еда", r"\bвин[оа]\b|\bвинн|гастро|\bеда\b|\bкухн"),
     ("с удобствами", r"удобств|палатк"),
     ("красиво", r"красив"),
@@ -463,7 +474,11 @@ def _month(word: str) -> int:
 NO_DATA_WISHES = (
     "северное сияние", "киты", "термальные источники", "фестиваль", "дайвинг", "серфинг",
     "рыбалка", "сафари", "шопинг", "музеи", "йога",
+    "детская коляска", "веганское питание", "поздний заезд", "детская кроватка",
 )  # fmt: skip
+HARD_WISHES = NO_DATA_WISHES[-4:]  # #338: named as not checked (model._unchecked_lines)
+LANDMARK_RE = re.compile(r"\b(?:у|возле|около|рядом\s+с)\s+([А-ЯЁ][\w-]+)(?!\s+мор|\s+озер)")
+BREAKFAST_FROM_RE = re.compile(r"завтрак\w*\s+с\s+(\d{1,2})(?::(\d\d))?(?!\d)")
 
 
 def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
@@ -1989,6 +2004,11 @@ def extract(
     if modes:
         found["modes"] = modes
     wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
+    for m in LANDMARK_RE.finditer(text):  # #338: «отель у Технопарка»; cities are no landmark
+        if not _known(m.group(1)):
+            wishes.append(f"рядом: {m.group(1)}")
+    if m := BREAKFAST_FROM_RE.search(t):
+        wishes.append(f"завтрак с {int(m.group(1)):02d}:{m.group(2) or '00'}")
     hours = r"\s*(?:ч\b|час\w*)\s+(?:в\s+пути|лет\w*|перел\w*|езд\w*|дорог\w*)"
     if m := re.search(rf"\b(?:до|не\s+(?:больше|дольше|более))\s+(\d{{1,2}}){hours}", t):
         found["max_travel_hours"] = float(m.group(1))
