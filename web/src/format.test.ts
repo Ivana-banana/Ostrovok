@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 import type { ChatReply } from "./contracts";
-import { brief, browserTime, offerParts, describe, withoutNoAi, fieldLabel, guestsText, movePriority, priorityMessage, yearsText, zoneLabel, zonedTime } from "./format";
+import { brief, browserTime, offerParts, describe, withoutNoAi, fieldLabel, guestsText, movePriority, nightsText, priorityMessage, yearsText, zoneLabel, zonedTime } from "./format";
 
 const reply = (llm: boolean): ChatReply => ({
   session_id: "s",
@@ -93,6 +93,12 @@ suite("browserTime", () => {
 });
 
 suite("гости в корзине и ваучере (#348)", () => {
+  it("#597: ночи: ночь, ночи, ночей", () => {
+    expect([1, 2, 4, 5, 11, 12, 21, 22, 25].map(nightsText)).toEqual([
+      "1 ночь", "2 ночи", "4 ночи", "5 ночей", "11 ночей", "12 ночей", "21 ночь", "22 ночи", "25 ночей",
+    ]);
+  });
+
   it("возраст ребёнка: год, года, лет", () => {
     const words = (ns: number[]) => ns.map(yearsText);
     expect(words([1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 0])).toEqual([

@@ -57,6 +57,14 @@ export function yearsText(n: number): string {
   return `${n} ${word}`;
 }
 
+// «1 ночь», «2 ночи», «5 ночей», «11 ночей», «21 ночь».
+export function nightsText(n: number): string {
+  const m100 = n % 100;
+  const m10 = n % 10;
+  const word = m100 > 10 && m100 < 15 ? "ночей" : m10 === 1 ? "ночь" : m10 > 1 && m10 < 5 ? "ночи" : "ночей";
+  return `${n} ${word}`;
+}
+
 // «Гости» of the cart and the voucher: «2 взр., дети: 1 год, 5 лет, с питомцем».
 export function guestsText(spec: Pick<TripSpec, "adults" | "children_ages" | "pets">): string {
   const parts = [`${spec.adults} взр.`];
