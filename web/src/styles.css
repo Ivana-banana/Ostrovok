@@ -210,81 +210,46 @@ button.icon {
   overflow: visible;
 }
 
-.mascot .skin {
+.mascot .body,
+.mascot .arm {
   fill: var(--acc);
+}
+
+.mascot .shade {
+  fill: #edbe00;
+}
+
+.mascot .arm,
+.mascot .outline {
   stroke: var(--ink);
-  stroke-width: 2.6;
+  stroke-width: 12;
+  stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.mascot .arm {
+.mascot .outline {
   fill: none;
-  stroke: var(--ink);
-  stroke-width: 2.6;
-  stroke-linecap: round;
 }
 
-.mascot .shine,
-.mascot .ridge,
-.mascot .mouth,
-.mascot .joy {
-  fill: none;
-  stroke-linecap: round;
-}
-
-.mascot .shine {
-  stroke: #fff6b0;
-  stroke-width: 2.4;
-}
-
-.mascot .ridge {
-  stroke: #e8b900;
-  stroke-width: 1.6;
+.mascot .outline.facet {
+  stroke-width: 5;
 }
 
 .mascot .stem,
-.mascot .tip,
-.mascot .eyes ellipse {
+.mascot .eyes {
   fill: var(--ink);
-}
-
-.mascot .stem {
-  stroke: var(--ink);
-  stroke-width: 1.2;
-  stroke-linejoin: round;
-}
-
-.mascot .glint {
-  fill: #fff;
-}
-
-.mascot .cheek {
-  fill: #ff8a7a;
-  opacity: 0.6;
-}
-
-.mascot .mouth,
-.mascot .joy {
-  stroke: var(--ink);
-  stroke-width: 2;
-}
-
-.mascot .joy {
-  display: none;
-  stroke-width: 2.2;
 }
 
 /* every moving part turns around its own box */
 .mascot .bw,
 .mascot .arm,
-.mascot .face,
 .mascot .eyes {
   transform-box: fill-box;
 }
 
 .mascot .bw {
   transform-origin: 50% 100%;
-  animation: m-breathe 3.2s ease-in-out infinite;
+  animation: m-sway 4.2s ease-in-out infinite;
 }
 
 .mascot .eyes {
@@ -292,16 +257,12 @@ button.icon {
   animation: m-blink 4.7s infinite;
 }
 
-.mascot .face {
-  animation: m-look 9s ease-in-out infinite;
-}
-
 .mascot .arm-l {
   transform-origin: 100% 0%;
 }
 
 .mascot .arm-r {
-  transform-origin: 0% 100%;
+  transform-origin: 0% 0%;
 }
 
 .mascot:hover .bw {
@@ -309,10 +270,9 @@ button.icon {
 }
 
 /* hello: waves from time to time, the eyes follow the pointer */
-.mascot.hello .face {
-  animation: none;
-  transform: translate(var(--lx), var(--ly));
-  transition: transform 0.15s ease-out;
+.mascot.hello .eyes {
+  translate: var(--lx) var(--ly);
+  transition: translate 0.15s ease-out;
 }
 
 .mascot.hello .arm-r {
@@ -323,40 +283,26 @@ button.icon {
   animation: m-hop 3.6s ease-in-out infinite;
 }
 
-/* thinking: Mascot.tsx tosses the whole drawing; the face just blinks */
-.mascot.thinking .face {
-  animation: none;
-}
-
 /* happy: the trip is booked */
 .mascot.happy .bw {
-  animation: m-jump 0.9s cubic-bezier(0.3, 0, 0.4, 1) 3;
-}
-
-.mascot.happy .eyes,
-.mascot.happy .mouth {
-  display: none;
-}
-
-.mascot.happy .joy {
-  display: inline;
+  animation: m-jump 0.9s cubic-bezier(0.3, 0, 0.4, 1) 2;
 }
 
 .mascot.happy .arm-l {
-  animation: m-cheer-l 0.45s ease-in-out 6 alternate;
+  animation: m-cheer-l 0.45s ease-in-out 4 alternate;
 }
 
 .mascot.happy .arm-r {
-  animation: m-cheer-r 0.45s ease-in-out 6 alternate;
+  animation: m-cheer-r 0.45s ease-in-out 4 alternate;
 }
 
-@keyframes m-breathe {
+@keyframes m-sway {
   0%,
   100% {
     transform: none;
   }
   50% {
-    transform: scale(1.03, 0.97);
+    transform: rotate(2deg) scale(1.01, 0.99);
   }
 }
 
@@ -374,25 +320,6 @@ button.icon {
   91.5%,
   94.5% {
     transform: scaleY(0.1);
-  }
-}
-
-@keyframes m-look {
-  0%,
-  30%,
-  100% {
-    transform: none;
-  }
-  36%,
-  52% {
-    transform: translate(-1.6px, 0.4px);
-  }
-  60%,
-  76% {
-    transform: translate(1.4px, -0.8px);
-  }
-  84% {
-    transform: none;
   }
 }
 
