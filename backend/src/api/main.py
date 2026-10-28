@@ -1,6 +1,7 @@
 """FastAPI: /api/* for the web client, /api/v1/* for partners (#289, #435), /embed.js and the
 built frontend (web/dist) on /. Partner keys, CORS and idempotency — api/partner.py."""
 
+import os
 from functools import cache
 from pathlib import Path
 from typing import Annotated
@@ -10,12 +11,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from api import offers
 from api.cart import cart_route, checkout_route
 from api.contracts import Cart, CartAction, ChatReply, ChatRequest, CheckoutRequest, Voucher
 from api.guards import llm_available
 from api.model import chat
 from api.partner import checkout_once, cors_options, plan_reply, require_key
 from api.store import SessionStore, db_path
+from api.travelpayouts import TravelpayoutsTransport
 
 V1 = "Партнёрский API /api/v1"
 WEB = "Веб-клиент /api"
@@ -34,6 +37,10 @@ DESCRIPTION = """\
 
 **Виджет.** `<script src="http://localhost:8080/embed.js" data-partner="…"></script>`.
 """
+
+# Real flights (#261) only with a token in .env; without it synthetic transport (TRAP-1).
+if token := os.environ.get("TRAVELPAYOUTS_TOKEN", "").strip():
+    offers.TRANSPORT = TravelpayoutsTransport(token)
 
 app = FastAPI(title="О!дин запрос — API агента путешествий", version="1.0", description=DESCRIPTION)
 if cors := cors_options():
