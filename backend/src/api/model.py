@@ -199,6 +199,12 @@ NO_TRANSFER_RE = re.compile(
 # A bare «трансфер не нужен?» asks too; «а давайте без трансфера?» and «можно без трансфера?» order.
 ASKS_RE = re.compile(r"(?<!\bтак\s)\bкак\b(?!-)|\bсколько\b|\bли\b")
 ASKS_COMPARE_RE = re.compile(r"\b(?:дороже|дешевле|выгодн\w*)\b")
+# #204: a command and then «сколько» asks the new sum: «уберите трансфер — сколько выйдет?»,
+# «без трансфера, сколько будет?». It is an edit. «Сколько стоит без трансфера?» asks first.
+COMMAND_SUM_RE = re.compile(
+    r"\b(?:(?:убер(?:и|ите|ём|ем)|удал(?:и|ите)|исключ(?:и|ите)|откаж(?:ись|итесь)\w*)\s+"
+    r"(?:\w+\s+)?(?:от\s+)?|без\s+(?:\w+\s+)?)трансфер\w*[^?]*?[,;:—–-]\s*(?:а\s+)?сколько\b"
+)
 
 EDIT_KEYS = {
     "destinations", "date_from", "date_to", "month", "nights", "adults", "children_ages",
@@ -2211,7 +2217,7 @@ def _text_kids_question(old: ChatReply) -> str:
     ).strip()
 
 
-def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
+def drop_transfers(old: ChatReply, plan: Plan | None = None, asked_sum: bool = False) -> ChatReply:
     """#193: «давайте без трансфера» at assemble or checkout. The transfers leave the plan (at
     checkout also the cart); the timeline is built again (TRAP-5). The stage stays: a plain
     consent fills the cart. The model does not read the message; the prices stay from the plan."""
@@ -2232,6 +2238,9 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
     head = f"Убираю трансфер из плана: {rows}."
     if old.stage == "assemble":
         text = f"{head} В корзину пока ничего не кладу.\n{_text_assemble(plan)}"
+        if asked_sum:  # #204: the new sum is the sum of the plan offers, no model writes it
+            total = sum(o.price_rub for o in plan.offers if o.offer_id in plan.selected)
+            text = f"{head} Выйдет {_rub(total)} (синтетика).\n{_text_assemble(plan)}"
     else:
         text = f"{head} В корзине теперь {_rub(cart.total_rub)} (синтетика). {HINTS['checkout']}"
     return old.model_copy(
@@ -2376,6 +2385,7 @@ def step(
         no_transfer
         and set(rules_found) <= {"wishes"}
         and not SHIFT_RE.search(low)
+        and not COMMAND_SUM_RE.search(low)
         and (
             ASKS_RE.search(low)
             or QUESTION_WORD_RE.search(low)
@@ -2406,7 +2416,7 @@ def step(
     ):
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
-        return drop_transfers(old)
+        return drop_transfers(old, asked_sum=bool(COMMAND_SUM_RE.search(low)))
     # #186, #216: «какая погода в декабре?» at a December plan names no new field: still a
     # question. A question with a fact to give («погода?», «почему не Бульвар?», «почему не
     # поезд?») goes to no model, changes nothing, and is no transport pick.
@@ -2862,6 +2872,14 @@ def step(
             if plan.changes:  # the dropped hotel must show as a change (#136)
                 text = "\n".join(["Было → стало:", *describe(plan.changes), text])
             return reply(stage, plan, text, cart, questions=questions)
+        if no_transfer:
+            # #204: «без трансфера и на неделю позже»: the new plan keeps no transfer, and the
+            # refusal stays for the next turns. The timeline is built again (TRAP-5).
+            plan = remember_refusal(plan, {"out", "back"})
+            plan.selected = keep_refusal(plan, plan.selected)
+            plan.timeline, plan.issues = build_timeline(plan)
+            plan.changes = plan_changes(old.plan, plan, old.cart, cart)
+            lines.append("Трансфер убран: до отеля и обратно добираетесь сами.")
         why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
         if why and why != plan.explanations:
             plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)
