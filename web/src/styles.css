@@ -11,7 +11,7 @@
   --acc-soft: #fffbe0; /* picked row */
 
   --paper: #fbfaf6; /* chat pane */
-  --panel: #f6f4ee; /* plan pane */
+  --panel: #f6f4ee; /* folded blocks under the answer */
   --card: #ffffff;
   --chip: #f2f0e9;
   --pill: #f0eee7;
@@ -47,8 +47,8 @@
   --shadow-lg: 0 12px 40px rgb(20 20 20 / 28%);
 
   --side-w: 268px;
-  --plan-w: clamp(380px, 33vw, 500px);
-  --thread-w: 760px;
+  --road-w: 300px;
+  --thread-w: 840px; /* the one window: the chat with the cards of the stage (#434) */
   --bar-h: 54px;
 
   color-scheme: light;
@@ -153,17 +153,13 @@ button.icon {
   font-size: var(--fs-s);
 }
 
-/* ---------- layout: chats | chat | plan ---------- */
+/* ---------- layout: chats | chat | trip roadmap ---------- */
 
 .app {
   display: grid;
-  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  grid-template-columns: var(--side-w) minmax(0, 1fr) var(--road-w);
   height: 100vh;
   height: 100dvh;
-}
-
-.app.plan-open {
-  grid-template-columns: var(--side-w) minmax(0, 1fr) var(--plan-w);
 }
 
 /* ---------- sidebar ---------- */
@@ -184,32 +180,302 @@ button.icon {
   padding: 4px 8px 14px;
 }
 
-.brand > div {
+.brand b {
   flex: 1;
   min-width: 0;
-}
-
-.brand b {
   font-size: 17px;
   letter-spacing: 0.2px;
 }
 
-.brand small {
-  display: block;
-  color: var(--side-muted);
-  font-size: 11px;
-}
+/* ---------- the banana mascot (Mascot.tsx) ---------- */
 
 .mascot {
   display: inline-grid;
   place-items: center;
   flex: none;
-  border-radius: 30%;
-  background: var(--acc);
+  --lx: 0px;
+  --ly: 0px;
 }
 
-.mascot.thinking {
-  animation: bob 1.1s ease-in-out infinite;
+.mascot svg {
+  overflow: visible;
+}
+
+.mascot .body,
+.mascot .arm {
+  fill: var(--acc);
+}
+
+.mascot .shade {
+  fill: #edbe00;
+}
+
+.mascot .arm,
+.mascot .outline {
+  stroke: var(--ink);
+  stroke-width: 12;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mascot .outline {
+  fill: none;
+}
+
+.mascot .outline.facet {
+  stroke-width: 5;
+}
+
+.mascot .stem,
+.mascot .eyes {
+  fill: var(--ink);
+}
+
+/* every moving part turns around its own box */
+.mascot .bw,
+.mascot .arm,
+.mascot .eyes {
+  transform-box: fill-box;
+}
+
+.mascot .bw {
+  transform-origin: 50% 100%;
+  animation: m-sway 4.2s ease-in-out infinite;
+}
+
+.mascot .eyes {
+  transform-origin: 50% 50%;
+  animation: m-blink 4.7s infinite;
+}
+
+.mascot .arm-l {
+  transform-origin: 100% 0%;
+}
+
+.mascot .arm-r {
+  transform-origin: 0% 0%;
+}
+
+.mascot:hover .bw {
+  animation: m-wiggle 0.6s ease-in-out;
+}
+
+/* hello: waves from time to time, the eyes follow the pointer */
+.mascot.hello .eyes {
+  translate: var(--lx) var(--ly);
+  transition: translate 0.15s ease-out;
+}
+
+.mascot.hello .arm-r {
+  animation: m-wave 3.6s ease-in-out infinite;
+}
+
+.mascot.hello .bw {
+  animation: m-hop 3.6s ease-in-out infinite;
+}
+
+/* moods (moodOf): brows and ^ ^ eyes are hidden until a mood shows them */
+.mascot .brow,
+.mascot .joy {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 15;
+  stroke-linecap: round;
+}
+
+.mascot .brows,
+.mascot .joy {
+  display: none;
+}
+
+.mascot .brow {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+.mascot.curious .brows,
+.mascot.puzzled .brows,
+.mascot.glad .joy,
+.mascot.happy .joy {
+  display: inline;
+}
+
+.mascot.glad .eyes,
+.mascot.happy .eyes {
+  display: none;
+}
+
+.mascot.curious .brow-l {
+  visibility: hidden;
+}
+
+.mascot.curious .brow-r {
+  transform: translateY(-16px) rotate(-14deg);
+}
+
+.mascot.curious .bw {
+  transform: rotate(-7deg);
+  animation: m-tilt 0.5s ease-out;
+}
+
+.mascot.puzzled .brow-l {
+  transform: translateY(8px) rotate(-22deg);
+}
+
+.mascot.puzzled .brow-r {
+  transform: translateY(8px) rotate(22deg);
+}
+
+.mascot.puzzled .eyes {
+  translate: 0 14px;
+}
+
+.mascot.puzzled .bw {
+  animation: m-shrug 0.7s ease-in-out;
+}
+
+.mascot.glad .bw {
+  animation: m-hop 1.2s ease-in-out;
+}
+
+@keyframes m-tilt {
+  from {
+    transform: none;
+  }
+}
+
+@keyframes m-shrug {
+  0%,
+  100% {
+    transform: none;
+  }
+  30% {
+    transform: translateY(1px) scale(1.03, 0.96);
+  }
+  60% {
+    transform: rotate(-3deg);
+  }
+}
+
+/* happy: the trip is booked */
+.mascot.happy .bw {
+  animation: m-jump 0.9s cubic-bezier(0.3, 0, 0.4, 1) 2;
+}
+
+.mascot.happy .arm-l {
+  animation: m-cheer-l 0.45s ease-in-out 4 alternate;
+}
+
+.mascot.happy .arm-r {
+  animation: m-cheer-r 0.45s ease-in-out 4 alternate;
+}
+
+@keyframes m-sway {
+  0%,
+  100% {
+    transform: none;
+  }
+  50% {
+    transform: rotate(2deg) scale(1.01, 0.99);
+  }
+}
+
+@keyframes m-blink {
+  0%,
+  44%,
+  48%,
+  90%,
+  93%,
+  96%,
+  100% {
+    transform: none;
+  }
+  46%,
+  91.5%,
+  94.5% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes m-wiggle {
+  0%,
+  100% {
+    transform: none;
+  }
+  25% {
+    transform: rotate(-8deg);
+  }
+  50% {
+    transform: rotate(7deg) scale(1.04, 0.96);
+  }
+  75% {
+    transform: rotate(-4deg);
+  }
+}
+
+@keyframes m-wave {
+  0%,
+  55%,
+  100% {
+    transform: none;
+  }
+  62%,
+  76%,
+  90% {
+    transform: rotate(-35deg);
+  }
+  69%,
+  83% {
+    transform: rotate(10deg);
+  }
+}
+
+@keyframes m-hop {
+  0%,
+  50%,
+  100% {
+    transform: none;
+  }
+  54% {
+    transform: scale(1.06, 0.92);
+  }
+  60% {
+    transform: translateY(-5px) scale(0.96, 1.05);
+  }
+  66% {
+    transform: scale(1.04, 0.95);
+  }
+  70% {
+    transform: none;
+  }
+}
+
+@keyframes m-jump {
+  0%,
+  100% {
+    transform: none;
+  }
+  15% {
+    transform: scale(1.1, 0.88);
+  }
+  45% {
+    transform: translateY(-8px) rotate(-6deg) scale(0.94, 1.08);
+  }
+  75% {
+    transform: scale(1.08, 0.92);
+  }
+}
+
+@keyframes m-cheer-l {
+  to {
+    transform: rotate(50deg);
+  }
+}
+
+@keyframes m-cheer-r {
+  to {
+    transform: rotate(-40deg);
+  }
 }
 
 .newchat {
@@ -405,34 +671,263 @@ button.icon {
   text-overflow: ellipsis;
 }
 
-.stage {
+/* the trip roadmap: the right column (#434). Steps of the trip, not the plan data. */
+
+.roadmap {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.roadmap .hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  height: var(--bar-h);
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.road-close {
+  display: none !important;
+}
+
+.road {
   margin: 0;
-  padding: 0;
+  padding: 18px 18px 8px;
   list-style: none;
-  font-size: var(--fs-xs);
+}
+
+.road li {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  padding-bottom: 18px;
   color: var(--muted);
 }
 
-.stage li {
-  padding: 3px 8px;
+/* the line from a step to the next one */
+.road li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 30px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--line);
+}
+
+.road li.done:not(:last-child)::before {
+  background: var(--ink);
+}
+
+.road .dot {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 2px solid #c9c6bb;
+  border-radius: 50%;
+  background: var(--paper);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.road li.done .dot {
+  border-color: var(--ink);
+  background: var(--ink);
+  font-size: 0; /* the ✓ of the text is drawn by ::after: the same in every font */
+}
+
+.road li.done .dot::after {
+  content: "";
+  width: 5px;
+  height: 10px;
+  margin-top: -3px;
+  border: solid var(--acc);
+  border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg);
+}
+
+.road li.now .dot {
+  border-color: var(--ink);
+  background: var(--acc);
+  color: var(--acc-ink);
+  box-shadow: 0 0 0 4px rgb(255 216 0 / 35%);
+}
+
+.road li.now.done .dot {
+  background: var(--ink);
+}
+
+.road-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 4px;
+  font-size: var(--fs-s);
+  overflow-wrap: anywhere;
+}
+
+.road .label {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  color: inherit;
+  text-align: left;
+}
+
+.road li.done,
+.road li.now {
+  color: var(--text);
+}
+
+.road button.label {
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 3px;
+}
+
+.road button.label:hover {
+  text-decoration-color: var(--ink);
+}
+
+.road .what {
+  color: var(--muted);
+}
+
+.road li:not(.done, .now) .what {
+  color: #9a9a92;
+}
+
+.road .result {
+  justify-self: start;
+  margin-top: 2px;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.road .nowline {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 4px 9px;
+  border-radius: var(--r-xs);
+  background: var(--ink);
+  color: var(--acc);
+  font-weight: 600;
+}
+
+.roadmap .sources {
+  margin: auto 18px 0;
+  padding: 12px 0 16px;
+}
+
+/* below 1100 px: the step under the header, a tap opens the roadmap */
+.step-caption {
+  display: none;
+}
+
+.step-bar {
+  display: block;
+  height: 3px;
+  margin-top: 5px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.step-bar i {
+  display: block;
+  height: 100%;
+  background: var(--acc);
+  box-shadow: inset 0 -1px 0 rgb(20 20 20 / 25%);
+}
+
+/* trip parameters: one strip of chips under the header (#434) */
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 8px max(20px, calc((100% - var(--thread-w)) / 2 + 20px));
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  font-size: 12.5px;
+}
+
+.strip .params,
+.strip .params ul,
+.strip .spec,
+.strip .params li {
+  display: contents;
+}
+
+.strip button.param,
+.strip .spec > div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-height: 30px;
+  padding: 5px 10px;
   border-radius: var(--r-pill);
-  background: var(--pill);
   white-space: nowrap;
 }
 
-.stage li.done {
-  background: #e9e7df;
-  color: #444444;
+.strip .spec > div {
+  border: 1px solid var(--line);
+  background: var(--card);
 }
 
-.stage li.now {
-  background: var(--ink);
-  color: var(--acc);
+.strip .param-name,
+.strip .spec dt {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.strip .spec dd {
+  margin: 0;
+  font-weight: 600;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.strip .param-tag {
+  display: none; /* the dashed border and the title say it; the hint line explains it */
+}
+
+.strip .params > .muted {
+  order: 10;
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.strip .editor {
+  order: 11;
+  flex-basis: 100%;
+  margin: 4px 0 2px;
 }
 
 .feed {
+  position: relative; /* hidden labels (.sr-only) stay inside the scroll, not under the page */
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -445,6 +940,7 @@ button.icon {
 }
 
 .msg {
+  scroll-margin-top: 16px;
   margin: 0 0 22px;
   animation: rise 0.35s ease both;
 }
@@ -488,12 +984,6 @@ button.icon {
   font-size: var(--fs-s);
 }
 
-.caret::after {
-  content: "▍";
-  color: var(--muted);
-  animation: blink 1s steps(2) infinite;
-}
-
 mark {
   background: var(--acc);
   color: var(--acc-ink);
@@ -501,9 +991,65 @@ mark {
   border-radius: 4px;
 }
 
+/* the block of the current stage under the last answer: as wide as the chat (#434) */
 .attach {
-  margin: -10px 0 22px 42px;
+  margin: -8px 0 22px;
+  container: plan / inline-size;
   animation: rise 0.4s ease both;
+}
+
+.attach .questions {
+  margin: 0 0 12px 42px;
+}
+
+.attach .cards {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+.more {
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+  font-size: var(--fs-s);
+}
+
+.more > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.more > summary::before {
+  content: "▸";
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+
+.more[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.more > summary span {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.more > .sec,
+.more > .dests {
+  margin: 0 10px 10px;
+}
+
+.more > .sec {
+  animation: none;
 }
 
 .questions p {
@@ -576,6 +1122,76 @@ mark {
 .think .verb {
   font-weight: 600;
   color: var(--text);
+  /* a yellow glint runs along the verb */
+  background: linear-gradient(90deg, var(--text) 0 40%, #c9a800 50%, var(--text) 60% 100%) 0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 1.8s linear infinite;
+}
+
+/* the paper plane: flies nose first along a dashed route */
+.think .route {
+  position: relative;
+  flex: none;
+  width: 64px;
+  height: 32px;
+}
+
+.think .route .path {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2;
+  stroke-dasharray: 3 4;
+  opacity: 0.45;
+  animation: dash 0.9s linear infinite;
+}
+
+.think .route .plane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 16px;
+  height: 16px;
+  offset-rotate: auto;
+  fill: var(--acc);
+  stroke: var(--ink);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+  animation: fly 1.8s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+
+@keyframes fly {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  10%,
+  90% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
 }
 
 .think .dots::after {
@@ -608,6 +1224,8 @@ mark {
   font-size: var(--fs-s);
   transition: transform 0.15s, box-shadow 0.15s;
   animation: rise 0.4s ease both;
+  display: flex;
+  flex-direction: column;
 }
 
 .card:hover {
@@ -642,7 +1260,7 @@ mark {
 }
 
 .card button {
-  margin-top: 8px;
+  margin-top: auto; /* the buttons of a row of cards sit on one line (#450) */
   width: 100%;
   border: 0;
   border-radius: var(--r-sm);
@@ -653,12 +1271,16 @@ mark {
 }
 
 .tags {
-  margin: 6px 0 0;
+  margin: 6px 0 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .tag {
   display: inline-block;
-  margin: 2px 4px 0 0;
+  white-space: nowrap;
+  margin: 0;
   padding: 2px 7px;
   border-radius: var(--r-pill);
   background: var(--chip);
@@ -697,10 +1319,6 @@ mark {
   border-radius: var(--r-sm);
   padding: 9px 12px;
   color: var(--text-2);
-}
-
-.plan-sheet-open {
-  display: none;
 }
 
 .composer {
@@ -754,47 +1372,41 @@ mark {
 .composer-hint {
   max-width: var(--thread-w);
   margin: 6px auto 0;
-  text-align: center;
+  text-align: right;
   font-size: var(--fs-xs);
   color: var(--muted);
 }
 
-/* ---------- plan panel ---------- */
-
-.plan {
-  display: none;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--line);
-  background: var(--panel);
-}
-
-.plan-open .plan {
-  display: flex;
-  animation: slideIn 0.25s ease both;
-}
-
-.plan .hd {
+/* a quiet «?»: on click the note opens inline next to it, covering nothing (details/summary) */
+.hint {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
+}
+
+.composer-hint.hint {
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+}
+
+.hint summary {
+  display: inline-flex;
   flex: none;
-  height: var(--bar-h);
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  list-style: none;
 }
 
-.plan .hd b {
-  font-size: 14px;
+.hint summary::-webkit-details-marker {
+  display: none;
 }
 
-.plan .bd {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 14px 16px 20px;
-  container: plan / inline-size;
+.hint p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.foot .hint {
+  align-self: flex-start;
 }
 
 .empty {
@@ -924,7 +1536,7 @@ mark {
 /* tables: hotels, transport */
 
 .sec .scroll {
-  overflow-x: auto; /* wide table on a wide panel; a narrow panel gets compact rows */
+  overflow-x: auto; /* wide table on a wide block; a narrow block gets compact rows */
 }
 
 .board .dests {
@@ -1043,9 +1655,10 @@ tr .tag {
   font-weight: 600;
 }
 
-/* A narrow panel: a row is a compact block. Name on top, price with «синтетика» at the right,
-   the other cells as one muted line. All cells stay in the DOM (e2e reads them by column). */
-@container plan (max-width: 720px) {
+/* The block in the chat (up to 800 px): a row is a compact block. Name on top, price with
+   «синтетика» at the right, the other cells as one muted line. All cells stay in the DOM (e2e
+   reads them by column). A wider block gets the full table. */
+@container plan (max-width: 860px) {
   .grid-table thead {
     position: absolute;
     width: 1px;
@@ -1123,6 +1736,11 @@ tr .tag {
 
   .grid-table .when {
     white-space: nowrap;
+  }
+
+  .grid-table .zone {
+    font-size: 0.8em;
+    color: var(--muted, inherit);
   }
 
   .grid-table td[data-label="Отправление"]::before,
@@ -1235,8 +1853,8 @@ ul.plain li:last-child {
 
 .timeline li {
   position: relative;
-  margin-left: 4px;
-  padding: 5px 0 5px 12px;
+  margin-left: 6px;
+  padding: 5px 0 5px 16px;
   border-left: 2px solid var(--line);
   animation: rise 0.35s ease both;
   animation-delay: calc(var(--i, 0) * 90ms);
@@ -1245,10 +1863,10 @@ ul.plain li:last-child {
 .timeline li::before {
   content: "";
   position: absolute;
-  left: -7px;
-  top: 10px;
-  width: 12px;
-  height: 12px;
+  left: -6px;
+  top: 9px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--card);
   border: 2px solid var(--ink);
@@ -1371,6 +1989,29 @@ button.primary:hover:not(:disabled),
   margin-top: 0;
 }
 
+/* the main action of a stage is the last in its block and sticks to the bottom of the feed (#450) */
+.board > .next,
+.sec > button.primary {
+  position: sticky;
+  bottom: 8px;
+  z-index: 3;
+  box-shadow: 0 0 0 6px var(--paper);
+  border-radius: 12px;
+}
+
+.buy .price {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 6px;
+  align-items: baseline;
+}
+
+.buy .synth {
+  font-size: 10.5px;
+  opacity: 0.85;
+}
+
 .voucher {
   border: 2px solid var(--ink);
 }
@@ -1423,7 +2064,7 @@ li.chip button {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 8px;
-  margin-top: 20px;
+  margin-top: 28px;
   padding-top: 10px;
   border-top: 1px solid var(--line);
   color: var(--muted);
@@ -1432,6 +2073,41 @@ li.chip button {
 
 .sources a {
   color: var(--text);
+}
+
+.sources details {
+  display: contents;
+}
+
+.sources summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.sources summary::-webkit-details-marker {
+  display: none;
+}
+
+.qmark {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sources details[open] .qmark,
+.hint[open] .qmark {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--acc);
 }
 
 /* parameters of the trip (ParamsBar): agent-chosen values are dashed */
@@ -1584,16 +2260,6 @@ button.param.assumed {
   }
 }
 
-@keyframes bob {
-  0%,
-  100% {
-    transform: translateY(0) rotate(-6deg);
-  }
-  50% {
-    transform: translateY(-4px) rotate(6deg);
-  }
-}
-
 @keyframes blink {
   50% {
     opacity: 0;
@@ -1624,15 +2290,19 @@ button.param.assumed {
   }
 }
 
+/* The sidebar shows the «Без ИИ» badge on a wide screen: the stage block does not repeat it.
+   Without the sidebar (tablet, phone) the block keeps the note (TRAP-1). */
+@media (min-width: 1100px) {
+  .attach .board > .badge {
+    display: none;
+  }
+}
+
 /* ---------- tablet: the chat list slides in from the left ---------- */
 
 @media (max-width: 1099px) {
   .app {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .app.plan-open {
-    grid-template-columns: minmax(0, 1fr) var(--plan-w);
   }
 
   .side {
@@ -1669,60 +2339,71 @@ button.param.assumed {
     gap: 8px;
   }
 
-  .stage li:not(.now) {
-    display: none;
-  }
-}
-
-/* ---------- phone: the plan is a bottom sheet over the chat ---------- */
-
-@media (max-width: 759px) {
-  .app.plan-open {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .plan {
+  .roadmap {
     position: fixed;
-    inset: 48px 0 0 0;
-    z-index: 15;
-    border-left: 0;
-    border-radius: 18px 18px 0 0;
+    inset: 0 0 0 auto;
+    z-index: 30;
+    width: min(340px, 90vw);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform 0.2s ease, visibility 0.2s;
     box-shadow: var(--shadow-lg);
   }
 
-  .plan-open .plan {
-    animation: sheetUp 0.25s ease both;
+  .road-open .roadmap {
+    transform: none;
+    visibility: visible;
   }
 
-  .plan-open .main::after {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 14;
-    background: var(--backdrop);
+  .road-close {
+    display: inline-grid !important;
   }
 
-  .plan .bd {
-    padding: 12px;
+  .step-caption::after {
+    content: "Путь поездки ›"; /* a tap opens the roadmap; the text of the button stays the step */
+    position: absolute;
+    top: 7px;
+    right: 20px;
+    color: var(--muted);
+    font-weight: 500;
   }
 
-  .plan-toggle,
-  .stage {
-    display: none;
-  }
-
-  .plan-sheet-open {
+  .step-caption {
+    position: relative;
     display: block;
-    align-self: center;
-    margin: 0 0 8px;
-    padding: 7px 16px;
+    flex: none;
+    width: 100%;
+    padding: 7px 20px 6px;
     border: 0;
-    border-radius: var(--r-pill);
-    background: var(--ink);
-    color: var(--acc);
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+    font-size: var(--fs-xs);
     font-weight: 600;
-    font-size: var(--fs-s);
-    box-shadow: var(--shadow-card);
+    color: var(--text-2);
+    text-align: left;
+  }
+}
+
+/* ---------- phone: the step caption with a thin bar, chips in one scrolling row ---------- */
+
+@media (max-width: 759px) {
+  .step-caption {
+    padding: 6px 12px 5px;
+  }
+
+  .strip {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 6px 12px;
+    scrollbar-width: none;
+  }
+
+  .strip:has(.editor) {
+    flex-wrap: wrap; /* the editor needs the whole width */
+  }
+
+  .strip .params > .muted {
+    display: none;
   }
 
   .thread {
@@ -1745,7 +2426,30 @@ button.param.assumed {
     max-width: 85%;
   }
 
-  .attach {
+  .attach .questions {
     margin-left: 0;
   }
+}
+
+/* «Показать ещё» under the destination cards: a secondary button, not the «Подробнее» panel (#451) */
+.more-dests {
+  display: block;
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+  font-size: var(--fs-s);
+}
+
+.more-dests:hover:not(:disabled) {
+  background: var(--chip);
+}
+
+.foot .qmark {
+  color: var(--side-muted);
+  border-color: var(--ink-3);
 }

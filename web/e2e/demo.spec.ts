@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-// Сценарий демо жюри S6 (eval/cases.json): запрос в чат, дальше только клики на доске
-// поездки до ваучера, затем перезагрузка. Работает на агенте с фикстурами (без ключа LLM).
+// Сценарий демо жюри S6 (eval/cases.json): запрос в чат, дальше только клики по карточкам
+// этапа под ответом агента до ваучера, затем перезагрузка (одно окно, #434). Работает на агенте с фикстурами (без ключа LLM).
 const REQUEST = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё.";
 
 // #334: семья с ребёнком и младенцем — самая длинная подпись мест в строке перелёта.
@@ -68,6 +68,10 @@ test("S6: запрос → сравнение → план → корзина �
   await page.getByLabel("Запрос").fill(REQUEST);
   await page.getByRole("button", { name: "Отправить" }).click();
   await expect(page.getByRole("status")).not.toBeEmpty();
+  // #434: справа — путь поездки: текущий шаг «Сравнение», пройденные — с итогом из данных.
+  const road = page.getByRole("complementary", { name: "Путь поездки" });
+  await expect(road.locator("[aria-current='step']")).toContainText("Сравнение");
+  await expect(road.locator("li.done").nth(1)).toContainText("Казань");
 
   // Сравнение: ≥ 3 отеля, цены с пометкой «синтетика», транспорт со временем в пути.
   const hotels = page.getByRole("region", { name: "Сравнение отелей" });
@@ -140,6 +144,10 @@ test("S6: запрос → сравнение → план → корзина �
   await page.reload();
   await expect(page.getByRole("region", { name: "Ваучер" }).locator("h2")).toHaveText(booking ?? "");
   await expect(page.getByRole("region", { name: "Корзина" })).toBeVisible();
+  // #434: после брони сравнение свёрнуто в «Варианты» под ответом и открывается кликом.
+  const options = page.locator(".attach details.options");
+  await expect(page.getByRole("region", { name: "Сравнение отелей" })).toBeHidden();
+  await options.locator("summary").click();
   await expect(page.getByRole("region", { name: "Сравнение отелей" })).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -147,17 +155,27 @@ test("S6: запрос → сравнение → план → корзина �
 const noPageScroll = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
 
-test("ширина телефона: чат и доска без горизонтальной прокрутки страницы", async ({ page }) => {
+test("ширина телефона: чат с карточками этапа без горизонтальной прокрутки страницы", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await page.getByLabel("Запрос").fill(REQUEST);
   await page.getByRole("button", { name: "Отправить" }).click();
   await expect(page.getByRole("status")).not.toBeEmpty();
   expect(await noPageScroll(page)).toBe(false);
-  // The plan is a sheet: it opens by the button and closes by ✕.
-  await page.getByRole("button", { name: "План поездки" }).click();
-  const hotels = page.getByRole("region", { name: "Сравнение отелей" });
+  // #434: one window — the comparison stands in the chat under the answer, no plan panel.
+  const hotels = page.locator(".feed").getByRole("region", { name: "Сравнение отелей" });
   await expect(hotels).toBeVisible();
+  await expect(page.getByRole("button", { name: /План/ })).toHaveCount(0);
+  // The progress is a caption with a bar on a phone: «Шаг 3 из 5 · Сравнение».
+  await expect(page.locator(".step-caption")).toHaveText("Шаг 3 из 5 · Сравнение");
+  // A tap opens the roadmap of the trip as a sheet; ✕ closes it.
+  const road = page.getByRole("complementary", { name: "Путь поездки" });
+  await expect(road).toBeHidden();
+  await page.locator(".step-caption").click();
+  await expect(road.locator("[aria-current='step']")).toContainText("Сравнение");
+  expect(await noPageScroll(page)).toBe(false);
+  await page.getByRole("button", { name: "Закрыть путь поездки" }).click();
+  await expect(road).toBeHidden();
   expect(await noPageScroll(page)).toBe(false);
   // TRAP-7: every price of the tables is visible with «синтетика», inside the screen, no scroll.
   for (const name of ["Сравнение отелей", "Сравнение транспорта"]) {
@@ -173,10 +191,11 @@ test("ширина телефона: чат и доска без горизон�
       expect(b && b.x >= 0 && b.x + b.width <= 390, `цена ${i + 1} в «${name}» в пределах экрана`).toBe(true);
     }
   }
-  const panelScroll = await page.locator(".plan .bd").evaluate((e) => e.scrollWidth > e.clientWidth);
-  expect(panelScroll).toBe(false);
-  await page.getByRole("button", { name: "Свернуть план" }).click();
-  await expect(hotels).toBeHidden();
+  const blockScroll = await page.locator(".attach").evaluate((e) => e.scrollWidth > e.clientWidth);
+  expect(blockScroll).toBe(false);
+  // The parameters are one row of chips above the chat: the row scrolls, not the page.
+  await expect(page.getByRole("region", { name: "Параметры поездки" })).toContainText("Казань");
+  expect(await noPageScroll(page)).toBe(false);
   // Chats: a drawer by ☰.
   await page.getByRole("button", { name: "Список чатов" }).click();
   await expect(page.getByRole("button", { name: "＋ Новый чат" })).toBeVisible();
@@ -188,7 +207,6 @@ test("ширина телефона: длинная подпись мест се
   await page.goto("/");
   await page.getByLabel("Запрос").fill(FAMILY);
   await page.getByRole("button", { name: "Отправить" }).click();
-  await page.getByRole("button", { name: "План поездки" }).click();
   const hotels = page.getByRole("region", { name: "Сравнение отелей" });
   await hotels.getByRole("button", { name: /^Выбрать/ }).first().click();
   await expect(page.getByRole("region", { name: "Таймлайн" })).toBeVisible();
@@ -290,7 +308,6 @@ test("ширина телефона: транспорт — время с гор
   await page.goto("/");
   await page.getByLabel("Запрос").fill(REQUEST);
   await page.getByRole("button", { name: "Отправить" }).click();
-  await page.getByRole("button", { name: "План поездки" }).click();
   const transport = page.getByRole("region", { name: "Сравнение транспорта" });
   await expect(transport).toBeVisible();
   // Pick a hotel: the picked rows lose the «Выбрать» button, their cell is empty.
@@ -308,7 +325,6 @@ for (const width of [390, 360]) {
     await page.goto("/");
     await page.getByLabel("Запрос").fill(LONG_CITY);
     await page.getByRole("button", { name: "Отправить" }).click();
-    await page.getByRole("button", { name: "План поездки" }).click();
     const transport = page.getByRole("region", { name: "Сравнение транспорта" });
     await expect(transport).toContainText("Минеральные Воды");
     await transportLayout(transport);
@@ -319,30 +335,31 @@ for (const width of [390, 360]) {
 test.describe("с анимацией", () => {
   test.use({ reducedMotion: "no-preference" });
 
-  test("ответ печатается, затем видны подсказки, клик по подсказке уходит агенту", async ({ page }) => {
+  test("пока ответ не готов — только индикатор мысли, затем сообщение целиком с блоком этапа", async ({ page }) => {
     await page.goto("/");
-    // Record that the reply was typed: the typing node lives ≤ 1.5 s, polling could miss it.
+    // Record what the chat showed while it thought: the indicator lives ~1 s, polling could miss it.
     await page.evaluate(() => {
-      const w = window as unknown as { typed: boolean; busy: boolean };
-      w.typed = false;
-      w.busy = false;
+      const w = window as unknown as { thought: boolean; leaked: boolean };
+      w.thought = false;
+      w.leaked = false;
       new MutationObserver(() => {
-        if (document.querySelector(".msg.agent .typing")) w.typed = true;
-        if (document.querySelector(".msg.agent[aria-busy='true']")) w.busy = true;
+        if (document.querySelector(".think")) {
+          w.thought = true;
+          if (document.querySelector(".msg.agent .typing, .attach .board")) w.leaked = true;
+        }
       }).observe(document.body, { subtree: true, childList: true, attributes: true });
     });
     await page.getByLabel("Запрос").fill("Хочу на море");
     await page.getByRole("button", { name: "Отправить" }).click();
     const status = page.getByRole("status");
     await expect(status).not.toBeEmpty();
-    // Typing ends in ≤ 1.5 s: the message is not busy, the hints appear under it.
-    await expect(status).not.toHaveAttribute("aria-busy", "true", { timeout: 5000 });
+    await expect(page.locator(".think")).toHaveCount(0);
     const seen = await page.evaluate(() => {
-      const w = window as unknown as { typed: boolean; busy: boolean };
-      return { typed: w.typed, busy: w.busy };
+      const w = window as unknown as { thought: boolean; leaked: boolean };
+      return { thought: w.thought, leaked: w.leaked };
     });
-    expect(seen.typed, "ответ печатался по словам").toBe(true);
-    expect(seen.busy, "сообщение было aria-busy во время печати").toBe(true);
+    expect(seen.thought, "индикатор мысли был виден").toBe(true);
+    expect(seen.leaked, "текст и карточки не показывались до готовности").toBe(false);
     const hint = page.locator(".attach").getByRole("button").first();
     await expect(hint).toBeVisible();
     const label = (await hint.getAttribute("aria-label")) ?? (await hint.textContent()) ?? "";
