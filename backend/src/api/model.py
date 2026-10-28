@@ -116,6 +116,7 @@ from api.store import SessionStore
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
+NO_PET_MARK = "Нет отметки о животных:"  # the count line of the compare reply (#475)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
@@ -1763,7 +1764,7 @@ def _text_compare(plan: Plan) -> str:
         ),
     ]
     if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
-        lines.append(f"Нет отметки о животных: у {n} из {len(rows)} отелей.")
+        lines.append(f"{NO_PET_MARK} у {n} из {len(rows)} отелей.")
     # C14 (#364, TRAP-5): the chosen legs keep local times with zones (_offer_lines, #468).
     lines += _offer_lines(plan)
     for e in plan.explanations[:1]:
@@ -1857,7 +1858,10 @@ def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
     spec = plan.spec
     text = dead_end_text(spec, plan.offers)
     if plan.selected:  # the hotels, as the user must see them to pick one
-        text = _text_compare(plan).split("\nПредлагаю:")[0] + "\n" + text
+        head = _text_compare(plan).split("\nПредлагаю:")[0].split("\n")
+        # #475: the dead end paragraph says it about the pets; no count line before it
+        head = [x for x in head if not x.startswith(NO_PET_MARK)]
+        text = "\n".join(head) + "\n" + text
     text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
     return ("compare" if plan.selected else "select"), plan, text, questions
 
