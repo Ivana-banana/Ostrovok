@@ -232,3 +232,37 @@ def test_trap_3_country_in_a_case_is_the_country():
     for text in ("Хочу в Египте", "Хочу отдохнуть в Египте"):
         assert extract(text)[0]["destinations"] == ["Египет"]
     assert extract("Хочу в Таиланде")[0]["destinations"] == ["Таиланд"]
+
+
+# #172: the tails of #127.
+def test_trap_3_not_x_but_y_too_keeps_y_wanted():
+    """«Не Турция, а Египет тоже»: «а» turns to Египет, «тоже» is no refusal."""
+    text = "Не Турция, а Египет тоже"
+    assert excluded_places(text) == ["Турция"]
+    assert extract(text)[0]["destinations"] == ["Хургада"]
+    # With a verb the refusal goes on («тоже» stands for the verb).
+    assert excluded_places("Не хочу в Турцию, а в Египет тоже") == ["Турция", "Египет"]
+
+
+def test_trap_3_did_not_like_is_a_refusal():
+    """«Сочи не понравился, Анапа тоже»: both are refused (the pinned reading of «тоже»)."""
+    text = "Сочи не понравился, Анапа тоже"
+    assert excluded_places(text) == ["Сочи", "Анапа"]
+    assert "destinations" not in extract(text)[0]
+    assert excluded_places("Сочи понравился, Анапа тоже") == []
+
+
+def test_trap_3_origin_is_nominative():
+    """`_capital` brings the origin to the nominative: «из Беларуси» -> «Беларусь»."""
+    assert extract("Хотим на море из Беларуси")[0]["origin"] == "Беларусь"
+
+
+@pytest.mark.parametrize(
+    ("case", "name"),
+    [("Кубе", "Куба"), ("Мексике", "Мексика"), ("Омане", "Оман"), ("Катаре", "Катар"),
+     ("Тунисе", "Тунис")],
+)  # fmt: skip
+def test_trap_3_country_case_is_nominative(case, name):
+    assert extract(f"Хочу на море в {case}")[0]["destinations"] == [name]
+    assert excluded_places(f"Не хочу в {case}") == [name]
+    assert extract(f"Хочу из {case} в Сочи")[0]["origin"] == name
