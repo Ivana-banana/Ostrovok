@@ -9,11 +9,10 @@ model (TRAP-1). Numbers come from the offers and the catalogue (TRAP-4); each pr
 import re
 
 import pytest
+from talk import say
 
 from api.answers import _versus
-from api.contracts import ChatRequest
 from api.guards import unknown_prices
-from api.model import chat
 from api.optimizer import hotel_rows
 from api.store import SessionStore
 
@@ -26,10 +25,6 @@ PLAN_REPEAT = "План поездки:"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def at(store, stage, first=SOCHI):

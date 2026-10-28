@@ -1,8 +1,12 @@
 """Session store: session_id -> the last ChatReply as JSON (stdlib sqlite3).
 
-Table `booking_attempts` keeps the booking attempts of POST /api/checkout (#376): the attempt
+Table `booking_attempts` keeps the booking attempts of a session (#376): POST /api/checkout
+and the chat confirmation book through it (#382, cart.checkout_reply). The attempt
 is saved before the provider call and its voucher right after it, outside the session lock.
 A repeat after a failed session write finds the voucher here and does not book again.
+
+Table `idempotency_keys` (#435): the Idempotency-Key header of POST /api/v1/checkout -> the
+request it came with and its voucher. A repeat of the key returns that voucher and books nothing.
 """
 
 import os
@@ -32,6 +36,10 @@ class SessionStore:
             "CREATE TABLE IF NOT EXISTS booking_attempts ("
             "session_id TEXT NOT NULL, attempt INTEGER NOT NULL, voucher TEXT, "
             "PRIMARY KEY (session_id, attempt))"
+        )
+        self._run(
+            "CREATE TABLE IF NOT EXISTS idempotency_keys ("
+            "key TEXT PRIMARY KEY, request TEXT NOT NULL, voucher TEXT)"
         )
 
     def _run(self, sql: str, args: tuple = ()) -> tuple | None:
@@ -75,6 +83,25 @@ class SessionStore:
             "SELECT voucher FROM booking_attempts WHERE session_id = ? AND attempt = ?",
             (session_id, attempt),
         )
+        return Voucher.model_validate_json(row[0]) if row and row[0] else voucher
+
+    def claim_key(self, key: str, request: str) -> tuple[str, Voucher | None]:
+        """The request the key was first used with and its voucher; a new key is saved with
+        `request` and returns (request, None)."""
+        self._run(
+            "INSERT OR IGNORE INTO idempotency_keys (key, request) VALUES (?, ?)", (key, request)
+        )
+        row = self._run("SELECT request, voucher FROM idempotency_keys WHERE key = ?", (key,))
+        assert row is not None  # inserted above or before
+        return row[0], Voucher.model_validate_json(row[1]) if row[1] else None
+
+    def keep_key(self, key: str, voucher: Voucher) -> Voucher:
+        """Store the voucher of the key once; return the stored one."""
+        self._run(
+            "UPDATE idempotency_keys SET voucher = ? WHERE key = ? AND voucher IS NULL",
+            (voucher.model_dump_json(), key),
+        )
+        row = self._run("SELECT voucher FROM idempotency_keys WHERE key = ?", (key,))
         return Voucher.model_validate_json(row[0]) if row and row[0] else voucher
 
     def put(self, reply: ChatReply) -> None:

@@ -4,9 +4,8 @@ re-plans; no sum is invented (TRAP-4). Without a model (TRAP-1)."""
 import re
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.store import SessionStore
 
 START = "Сочи на 5 ночей с 10 ноября вдвоём, самолётом из Москвы"
@@ -16,10 +15,6 @@ HINT = "Напишите «беру» или номер отеля"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def total_of(reply) -> int:

@@ -2,12 +2,11 @@
 
 import pytest
 from fastapi.testclient import TestClient
+from talk import say
 
 from api import catalog
-from api.contracts import ChatRequest
 from api.extract import extract
 from api.main import app, get_store
-from api.model import chat
 from api.store import SessionStore
 
 S1 = (
@@ -19,10 +18,6 @@ S1 = (
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def test_s1_goes_ahead_with_stated_assumptions(store):
@@ -182,12 +177,12 @@ def test_destination_equal_to_origin_is_said_honestly_before_confirmation(store)
     assert not [i for i in r.plan.selected if i.startswith("t-")]
 
 
-def test_other_destination_keeps_two_or_three_options_without_the_origin(store):
+def test_other_destination_keeps_options_without_the_origin(store):
     r = say(store, "на море в ноябре из Сочи")
     for text in ("другое направление", "другие варианты"):
         r = say(store, text, r.session_id)
         names = [d.name for d in r.plan.destinations]
-        assert 2 <= len(names) <= 3 and "Сочи" not in names
+        assert 2 <= len(names) <= 4 and "Сочи" not in names  # #451: a batch of up to 4
         assert "Сочи" not in r.questions[0].options
 
 
@@ -200,5 +195,6 @@ def test_inspire_keeps_four_options_without_the_origin(store):
 def test_select_exit_does_not_offer_the_origin(store):
     r = say(store, "Хиврии, 3 ночи с 20 ноября")
     r = say(store, "летим из Казани", r.session_id)
+    r = say(store, "Россия", r.session_id)  # #346: the country first, then its cities
     options = r.questions[0].options
     assert 2 <= len(options) <= 3 and "Казань" not in options

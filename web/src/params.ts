@@ -79,7 +79,8 @@ export function paramChips(spec: TripSpec): ParamChip[] {
 // Assumptions that no chip shows (route, refused places, notes about the user's own words, ...).
 export function otherAssumptions(spec: TripSpec): string[] {
   const checks = Object.values(AGENT_CHOICE);
-  return spec.assumptions.filter((a) => !checks.some((is) => is(a)));
+  // «уже показаны: …» is the state of «ещё» (#451), not an assumption of the agent: not shown.
+  return spec.assumptions.filter((a) => !checks.some((is) => is(a)) && !a.startsWith("уже показаны"));
 }
 
 // Chat messages of the chip editors. The agent reads them like any user message (rule form

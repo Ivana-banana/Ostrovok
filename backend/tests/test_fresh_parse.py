@@ -8,10 +8,11 @@ import re
 from datetime import date, timedelta
 
 import pytest
+from talk import ask, say
 
-from api.contracts import ChatRequest
+from api import model
+from api.contracts import TripSpec
 from api.extract import extract
-from api.model import chat
 from api.store import SessionStore
 
 F14 = "Забронируй мне гостиницу на эту пятницу, две ночи"
@@ -31,10 +32,6 @@ ORIGIN_NOTE = "откуда: Москва (город вылета не назв
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 # ---------------------------------------------------------------- meal refused after its name
@@ -135,7 +132,7 @@ BALI = "Бали на 12 ночей вдвоём, перелёт и отель �
 def test_far_trip_with_a_whole_budget_asks_the_origin(store):
     """A whole budget the road from Москва eats over half of, and no origin: one question about
     the origin, not a silent «Москва»."""
-    r = say(store, BALI)
+    r = ask(store, BALI)
     assert r.stage == "clarify" and len(r.questions) == 1
     q = r.questions[0]
     assert "откуда" in q.text.lower() and q.options[0] == "Из Москвы"
@@ -148,7 +145,7 @@ def test_far_trip_with_a_whole_budget_asks_the_origin(store):
 def test_f15_asks_the_origin_with_both_sums(store):
     """F15: «Байкал… 200 тысяч на всё» and no origin (#302). The Москва round trip costs over 15 %
     of the budget more than from the cheapest big hub (#351): one question with both sums."""
-    r = say(store, F15)
+    r = ask(store, F15)
     assert r.stage == "clarify" and len(r.questions) == 1
     q = r.questions[0]
     assert "откуда" in q.text.lower() and q.options[0] == "Из Москвы"
@@ -163,7 +160,7 @@ def test_f15_asks_the_origin_with_both_sums(store):
 
 def test_far_trip_origin_option_keeps_the_trip(store):
     """The first option is the old default: the session goes on as before (make eval)."""
-    r = say(store, BALI)
+    r = ask(store, BALI)
     after = say(store, r.questions[0].options[0], r.session_id)
     assert after.stage == "compare" and after.plan.spec.origin == "Москва"
     assert ORIGIN_NOTE not in after.plan.spec.assumptions
@@ -177,12 +174,15 @@ def test_far_trip_origin_option_keeps_the_trip(store):
         "Минск 14 ноября на 2 ночи, еду одна",  # F07 class
     ],
 )
-def test_default_origin_is_said_not_asked(store, text):
-    """F07, F12, F16, F24: the default origin is an assumption the user sees."""
-    r = say(store, text)
-    assert r.stage == "compare" and r.questions == []
-    assert ORIGIN_NOTE in r.plan.spec.assumptions
-    assert "откуда: Москва (город вылета не назван)" in r.reply
+def test_default_origin_is_asked_then_said(store, text):
+    """F07, F12, F16, F24: the origin is asked first (#436). An answer without a city leaves
+    the default origin as an assumption the user sees."""
+    r = ask(store, text)
+    assert r.stage == "clarify" and r.questions[0].text.startswith(model.ORIGIN_ASK)
+    after = say(store, "пока не знаю", r.session_id)
+    assert after.stage == "compare" and after.questions == []
+    assert ORIGIN_NOTE in after.plan.spec.assumptions
+    assert "откуда: Москва (город вылета не назван)" in after.reply
 
 
 def test_named_origin_far_trip_asks_nothing(store):
@@ -191,14 +191,53 @@ def test_named_origin_far_trip_asks_nothing(store):
     assert r.stage == "compare" and r.questions == []
 
 
+@pytest.mark.parametrize("place", ["Сочи", "Анапа", "Геленджик", "Минводы"])
+def test_neighbour_hub_does_not_ask_the_origin(store, place):
+    """#380: Ростов-на-Дону is 318–427 км from these places. Its cheap road measured the
+    distance to the place, not the origin: the origin question names no road sums (#436)."""
+    r = ask(store, f"{place} в июле вдвоём, 100 тысяч на всё")
+    assert r.stage == "clarify" and len(r.questions) == 1
+    assert r.questions[0].text.startswith(model.ORIGIN_ASK) and "≈" not in r.questions[0].text
+
+
+@pytest.mark.parametrize(("best", "asks"), [(15_000, True), (15_001, False)])
+def test_origin_gap_threshold_side(monkeypatch, best, asks):
+    """#380: a gap of exactly ROAD_GAP (15.0 %) asks; the text never shows a share below it."""
+    sums = {"Москва": 30_000, "Новосибирск": best}  # home 30 % of the budget: under ROAD_SHARE
+    monkeypatch.setattr(model, "_round_trip", lambda probe, origin: sums.get(origin))
+    spec = TripSpec(destinations=["Сочи"], month=7, adults=2, budget_rub=100_000)
+    questions = model.far_origin_question(spec)
+    assert bool(questions) is asks
+    if asks:
+        assert "это 15 % бюджета" in questions[0].text
+
+
+@pytest.mark.parametrize(("home", "asks"), [(50_000, True), (49_999, False)])
+def test_origin_road_share_threshold_side(monkeypatch, home, asks):
+    """#380: a road from Москва of exactly ROAD_SHARE (50.0 %) of the budget asks."""
+    monkeypatch.setattr(model, "_round_trip", lambda probe, origin: {"Москва": home}.get(origin))
+    spec = TripSpec(destinations=["Сочи"], month=7, adults=2, budget_rub=100_000)
+    questions = model.far_origin_question(spec)
+    assert bool(questions) is asks
+    if asks:
+        assert "Дорога из Москвы — 50 % бюджета" in questions[0].text
+
+
+def test_origin_share_is_rounded_down():
+    """#380: the share is rounded down. 15.2 % reads «15 %»; 14.99 % does not read «15 %»."""
+    assert model._share(15_200, 100_000) == "15 %" and model._share(14_990, 100_000) == "14 %"
+
+
 # ---------------------------------------------------------------- the city of a hotel request
 
 
 def test_hotel_request_without_a_place_asks_the_city(store):
-    """F14: «гостиницу на эту пятницу» used to ask the month and the budget."""
-    r = say(store, F14)
-    assert r.stage == "clarify" and len(r.questions) == 1
-    assert "город" in r.questions[0].text.lower()
+    """F14: «гостиницу на эту пятницу» used to ask the month and the budget. The origin goes
+    first in the same turn (#436); a bare city answers the city of the hotel."""
+    r = ask(store, F14)
+    assert r.stage == "clarify" and len(r.questions) == 2
+    assert r.questions[0].text.startswith(model.ORIGIN_ASK)
+    assert "город" in r.questions[1].text.lower()
     assert "бюджет" not in r.reply.lower()
     after = say(store, "Казань", r.session_id)
     assert after.stage == "compare" and after.plan.spec.destinations == ["Казань"]
@@ -207,15 +246,16 @@ def test_hotel_request_without_a_place_asks_the_city(store):
 
 @pytest.mark.parametrize("text", ["Нужен отель на выходные", "Найди жильё на 3 ночи в декабре"])
 def test_stay_request_asks_the_city(store, text):
-    r = say(store, text)
-    assert r.stage == "clarify" and len(r.questions) == 1
-    assert "город" in r.questions[0].text.lower()
+    r = ask(store, text)
+    assert r.stage == "clarify" and len(r.questions) == 2
+    assert "город" in r.questions[1].text.lower()
 
 
 @pytest.mark.parametrize("text", ["привет", "хочу куда-нибудь в ноябре"])
 def test_vague_request_keeps_its_questions(store, text):
-    r = say(store, text)
-    assert not any("город" in q.text.lower() for q in r.questions)
+    r = ask(store, text)
+    others = [q for q in r.questions if not q.text.startswith(model.ORIGIN_ASK)]
+    assert others and not any("город" in q.text.lower() for q in others)
 
 
 def test_hotel_by_the_sea_is_a_wish_not_a_city_question(store):
@@ -256,8 +296,11 @@ def test_counted_children_ask_nothing(store, text):
     assert r.stage == "compare" and r.questions == []
 
 
-def test_one_question_per_turn_the_origin_first(store):
-    """The road over half of the whole budget, no origin and «с детьми»: the origin comes first, then nothing
-    more is asked (the plan goes on with the children as an assumption)."""
-    r = say(store, "Бали на 12 ночей, двое взрослых с детьми, перелёт и отель до 100 тысяч")
-    assert len(r.questions) == 1 and "откуда" in r.questions[0].text.lower()
+def test_one_turn_the_origin_first(store):
+    """The road over half of the whole budget, no origin and «с детьми»: one turn, the origin
+    first, the children next to it (#436): no second turn of questions."""
+    r = ask(store, "Бали на 12 ночей, двое взрослых с детьми, перелёт и отель до 100 тысяч")
+    assert len(r.questions) == 2 and "откуда" in r.questions[0].text.lower()
+    assert "дет" in r.questions[1].text
+    after = ask(store, "Из Москвы, двое детей 5 и 10 лет", r.session_id)
+    assert after.stage == "compare" and after.plan.spec.children_ages == [5, 10]

@@ -7,11 +7,11 @@ of a clarify question, then «1» / «беру» / «да» / «подтверж
 """
 
 import pytest
+from talk import say
 
 from api import catalog
-from api.contracts import ChatRequest, HotelOffer
+from api.contracts import HotelOffer
 from api.extract import extract
-from api.model import chat
 from api.store import SessionStore
 
 
@@ -44,10 +44,6 @@ OFF_CATALOG = [
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def walk(store, text, limit=8):
@@ -112,8 +108,8 @@ def test_trap_2_unknown_city_is_not_swapped_for_a_catalogue_city(store, text, ci
     assert r.stage == "select" and r.voucher is None and r.cart.items == []
     assert r.plan.spec.destinations == [city]
     assert city in r.reply and "нет в каталоге" in r.reply
-    options = r.questions[0].options
-    assert 2 <= len(options) <= 3 and all(in_catalog(o) for o in options)
+    # #346: no unrelated cities as «alternatives»; the agent asks for the country
+    assert [q.options for q in r.questions] == [[]] and "стран" in r.questions[0].text
     # Anything but a pick keeps the named city and books nothing.
     again = say(store, "подтверждаю", r.session_id)
     assert again.stage == "select" and again.plan.spec.destinations == [city]
@@ -121,8 +117,9 @@ def test_trap_2_unknown_city_is_not_swapped_for_a_catalogue_city(store, text, ci
 
 
 def test_trap_2_explicit_pick_is_said_in_the_reply(store):
-    r = walk(store, HANOI)
+    r = say(store, "Россия", walk(store, HANOI).session_id)  # #346: the country, then the cities
     name = r.questions[0].options[0]
+    assert in_catalog(name) and catalog.resolve(name)["country"] == "Россия"
     picked = say(store, "1", r.session_id)
     assert picked.stage == "compare" and picked.plan.spec.destinations == [name]
     assert "Кандалакша" in picked.reply and name in picked.reply

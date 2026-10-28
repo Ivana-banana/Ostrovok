@@ -1,10 +1,9 @@
 """#141: the default departure city is told when it drops out; a dash in a question is no route."""
 
 import pytest
+from talk import ask, say
 
 from api import llm
-from api.contracts import ChatRequest
-from api.model import chat
 from api.store import SessionStore
 
 TOLD = "город вылета по умолчанию"
@@ -13,10 +12,6 @@ TOLD = "город вылета по умолчанию"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 @pytest.mark.parametrize(
@@ -28,9 +23,12 @@ def say(store, text, sid=None):
     ],
 )
 def test_dropped_default_origin_is_told(store, text, dests):
-    r = say(store, text)
-    assert r.plan.spec.destinations == dests
-    assert r.plan.spec.origin == "Москва"
+    """#436: the origin is asked next; the dropped default is told until the user answers."""
+    r = ask(store, text)
+    assert r.stage == "clarify" and r.plan.spec.destinations == dests
+    assert any(TOLD in a and "«из …»" in a for a in r.plan.spec.assumptions)
+    r = ask(store, "пока не знаю", r.session_id)
+    assert r.plan.spec.destinations == dests and r.plan.spec.origin == "Москва"
     assert any(TOLD in a and "«из …»" in a for a in r.plan.spec.assumptions)
 
 
@@ -52,14 +50,16 @@ def test_model_cannot_bring_the_origin_back_as_a_stay(monkeypatch, store):
         return {"destinations": ["Москва", "Казань"]}
 
     monkeypatch.setattr(llm, "extract_spec", stub)
-    r = say(store, "хочу куда-нибудь на выходные")
-    assert r.llm is True
+    r = ask(store, "хочу куда-нибудь на выходные")
+    assert r.llm is True and r.plan.spec.destinations == ["Казань"]
+    r = say(store, "Из Москвы", r.session_id)
     assert "Москва" not in r.plan.spec.destinations
     assert r.plan.spec.destinations == ["Казань"]
 
 
 def test_second_turn_keeps_one_origin_line(store):
-    r = say(store, "хочу на море")
+    r = ask(store, "хочу на море")
+    r = ask(store, "пока не знаю", r.session_id)  # #436: the origin question is not answered
     r = say(store, "Москва или Сочи", r.session_id)
     lines = [a for a in r.plan.spec.assumptions if a.startswith("откуда:")]
     assert len(lines) == 1 and TOLD in lines[0]

@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
+from talk import say
 
 from api.contracts import ChatRequest
 from api.extract import extract, is_chip_message
@@ -204,13 +205,13 @@ def test_invalid_range_end_is_skipped_with_an_assumption():
 
 
 def test_s3b_vague_request_goes_ahead_and_names_assumptions(tmp_path):
-    r = chat(ChatRequest(message=S3B), SessionStore(tmp_path / "s.db"))
+    r = say(SessionStore(tmp_path / "s.db"), S3B)  # #436: the origin chip is answered first
     assert r.stage == "inspire" and r.questions == []
     assert r.plan.spec.assumptions and "Допущения:" in r.reply
 
 
 def test_s3a_chat_asks_nothing_and_compares(tmp_path):
-    r = chat(ChatRequest(message=S3A), SessionStore(tmp_path / "s.db"))
+    r = say(SessionStore(tmp_path / "s.db"), S3A)  # #436: the origin chip is answered first
     assert r.stage == "compare" and r.questions == []
     assert not any(a.startswith(("даты:", "длительность:")) for a in r.plan.spec.assumptions)
     spec = r.plan.spec
@@ -223,7 +224,7 @@ def test_s3a_chat_asks_nothing_and_compares(tmp_path):
 def test_s3a_plan_has_a_hotel_within_40000_and_reaches_the_booking(tmp_path):
     """S3-A: the hotel is picked within its own budget, the trip total is not limited by it."""
     store = SessionStore(tmp_path / "s.db")
-    r = chat(ChatRequest(message=S3A), store)
+    r = say(store, S3A)
     hotels = [o for o in r.plan.offers if o.kind == "hotel" and o.offer_id in r.plan.selected]
     assert len(hotels) == 1 and hotels[0].price_rub <= 40_000 and hotels[0].meal != "RO"
     assert not any("бюджет" in x for e in r.plan.explanations for x in e.risks)
@@ -509,6 +510,8 @@ def test_trap3_name_with_comma_is_an_address_not_the_city_vladimir(has_destinati
 
 def test_trap3_name_with_comma_in_the_first_message_goes_to_inspire():
     r = step(None, "s", "Владимир, хочу на море в ноябре")
+    assert r.stage == "clarify" and r.plan.spec.destinations == []  # #436: the origin first
+    r = step(r, "s", "Из Москвы")
     assert r.stage == "inspire" and r.plan.spec.destinations == []
 
 
@@ -863,3 +866,36 @@ def test_trap_3_c15_full_turn_has_no_missing_catalogue_reply(tmp_path):
 def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
     found, _ = extract(text)
     assert found["destinations"] == dests
+
+
+# #362: «в конце января» is the end of the month, not its first days.
+@pytest.mark.parametrize(
+    ("text", "low", "high"),
+    [("Стамбул в конце января, двое", 20, 31), ("Стамбул, конец января", 20, 31),
+     ("Стамбул под конец января", 20, 31), ("Стамбул ближе к концу января", 20, 31),
+     ("Стамбул в последних числах января", 20, 31),
+     ("Стамбул в начале марта", 1, 10), ("Стамбул, начало марта", 1, 10),
+     ("Стамбул в первых числах марта", 1, 10),
+     ("Стамбул в середине мая", 10, 20)],
+)  # fmt: skip
+def test_month_part_sets_the_check_in_day(tuesday, text, low, high):
+    found, notes = extract(text)
+    assert low <= found["date_from"].day <= high, found
+    assert found["month"] == found["date_from"].month
+    assert any(n.startswith("даты: с ") and "допущение" in n for n in notes), notes
+
+
+def test_month_part_keeps_the_trip_length_past_the_month_end(tuesday):
+    found, _ = extract("Стамбул в конце января на 10 ночей")
+    assert found["date_from"] == date(2027, 1, 25)
+    assert found["nights"] == 10
+
+
+def test_month_part_in_the_current_month_is_not_a_year_ahead(tuesday):
+    found, _ = extract("Казань в конце октября")
+    assert found["date_from"] == date(2026, 10, 28)  # today is 27.10: the end is still ahead
+
+
+def test_month_without_a_part_has_no_day(tuesday):
+    found, _ = extract("Стамбул в январе")
+    assert "date_from" not in found
