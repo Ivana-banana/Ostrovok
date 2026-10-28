@@ -33,12 +33,12 @@ describe("#431: фильтры отелей чипами", () => {
   it("без фильтров чипы говорят «любое»; с фильтрами показывают выбор", async () => {
     const a = await mount(empty);
     expect(plain(a.box.textContent ?? "")).toContain("Питаниелюбое");
-    expect(plain(a.box.textContent ?? "")).toContain("Отменалюбая");
+    expect(plain(a.box.textContent ?? "")).toContain("Условия отменылюбая");
     expect(plain(a.box.textContent ?? "")).toContain("Бюджет отеляне задан");
     a.done();
     const b = await mount(with_({ meal: "AI", refundable: true, hotel_budget_rub: 40000, nights: 5 }));
     expect(plain(b.box.textContent ?? "")).toContain("Питаниевсё включено");
-    expect(plain(b.box.textContent ?? "")).toContain("Отменабесплатная");
+    expect(plain(b.box.textContent ?? "")).toContain("Условия отменыбесплатная");
     expect(plain(b.box.textContent ?? "")).toContain("Бюджет отеля8 000 ₽ за ночь");
     b.done();
   });
@@ -63,12 +63,12 @@ describe("#431: фильтры отелей чипами", () => {
 
   it("отмена: клик шлёт «С бесплатной отменой»; включённый фильтр недоступен", async () => {
     const t = await mount(empty);
-    await act(async () => t.button("Отмена").click());
+    await act(async () => t.button("Условия отмены").click());
     expect(t.sent).toEqual(["С бесплатной отменой"]);
     t.done();
     const on = await mount(with_({ refundable: true }));
-    expect(on.button("Отмена").disabled).toBe(true);
-    expect(on.button("Отмена").getAttribute("aria-pressed")).toBe("true");
+    expect(on.button("Условия отмены").disabled).toBe(true);
+    expect(on.button("Условия отмены").getAttribute("aria-pressed")).toBe("true");
     on.done();
   });
 
@@ -95,8 +95,11 @@ describe("#431: фильтры отелей чипами", () => {
     await act(async () => t.button("Бюджет отеля").click());
     await act(async () => t.button("Готово").click());
     await act(async () => t.button("Бюджет отеля").click());
+    // another sum is typed, then cancelled: nothing is sent
+    await act(async () => t.box.querySelector<HTMLButtonElement>("form .options button")!.click());
     await act(async () => t.button("Отмена").click());
     expect(t.sent).toEqual([]);
+    expect(t.button("Готово")).toBeUndefined(); // the editor is closed
     t.done();
   });
 

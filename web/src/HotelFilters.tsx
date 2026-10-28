@@ -97,7 +97,7 @@ export function HotelFilters({ spec, disabled, onSend }: {
             aria-pressed={refundable} disabled={disabled || refundable}
             title={refundable ? "Фильтр включён. Снять его можно сообщением в чате." : undefined}
             onClick={() => onSend(REFUNDABLE_MESSAGE)}>
-            <span className="param-name">Отмена</span>
+            <span className="param-name">Условия отмены</span>
             <strong className="param-value">{refundable ? "бесплатная" : "любая"}</strong>
           </button>
         </li>

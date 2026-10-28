@@ -1,6 +1,6 @@
 """#431: the phrases of the hotel filter chips of the web UI are read as the spec fields.
 
-The chips send chat messages (web/src/hotels.ts). Each phrase must set its field in a plan
+The chips send chat messages (web/src/params.ts). Each phrase must set its field in a plan
 that already exists, with no new search. Without a model (TRAP-1).
 """
 
@@ -46,4 +46,12 @@ def test_hotel_budget_per_night_phrase(store):
     second = say(store, "Отель до 8000 ₽ за ночь", first.session_id)
     assert second.plan.spec.hotel_budget_rub == 8000 * 5
     assert second.plan.spec.budget_rub == first.plan.spec.budget_rub
+    assert second.plan.spec.destinations == first.plan.spec.destinations
+
+
+def test_hotel_budget_all_nights_phrase(store):
+    """The chip sends this phrase when the plan has no number of nights (web/src/params.ts)."""
+    first = say(store, START)
+    second = say(store, "Отель до 60000 ₽ за все ночи", first.session_id)
+    assert second.plan.spec.hotel_budget_rub == 60000
     assert second.plan.spec.destinations == first.plan.spec.destinations
