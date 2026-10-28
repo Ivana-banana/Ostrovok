@@ -319,6 +319,24 @@ test("ширина телефона: транспорт — время с гор
   expect(await noPageScroll(page)).toBe(false);
 });
 
+// #478: the legs and transfers of the offer stand in grids; no sideways scroll on the phone.
+test("ширина 390 px: Туда, Обратно и Трансферы в ответе без горизонтальной прокрутки", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("Запрос").fill(FAMILY + ", туда и обратно");
+  await page.getByRole("button", { name: "Отправить" }).click();
+  const offer = page.locator("ul.points").first();
+  await expect(offer).toContainText("Обратно");
+  await expect(offer).toContainText("Трансферы");
+  const wide = await page.evaluate(() => ({
+    page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    grids: [...document.querySelectorAll<HTMLElement>(".pt-route")].map((g) => g.scrollWidth - g.clientWidth),
+  }));
+  expect(wide.page).toBeLessThanOrEqual(0);
+  expect(wide.grids.length).toBeGreaterThanOrEqual(3);
+  for (const g of wide.grids) expect(g).toBeLessThanOrEqual(0);
+});
+
 for (const width of [390, 360]) {
   test(`ширина ${width} px: длинный город в транспорте переносится, прокрутки вбок нет (TRAP-2)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
