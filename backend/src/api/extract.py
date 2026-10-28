@@ -1139,14 +1139,21 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             hits.append((m.start(1), n, m.end(1)))
     tails = [m.span(1) for m in TAIL_PLACE.finditer(text)]
     # «в Тайланд, пхукет»: after a country a lowercase place at the end counts too (#345).
+    lower_tails = {}  # span -> the country before the comma: the place must be of this country
     for m in TAIL_LOWER.finditer(t):
         head = t[: m.start()]
-        if any(c.end() == len(head) for _, rx in COUNTRY_RES for c in rx.finditer(head)):
-            tails.append(m.span(1))
+        for country, rx in COUNTRY_RES:
+            if any(c.end() == len(head) for c in rx.finditer(head)):
+                tails.append(m.span(1))
+                lower_tails[m.span(1)] = country
     for s, e in [*tails, *(m.span(1) for m in FOR_PLACE.finditer(t))]:  # «…, Бали», «ради Бали»
         taken = t[s] == " " or any(hs <= s < he for hs, _, he in hits)  # " ": the origin span
         name = None if taken else _catalog_word(text[s:e])
         as_written = bool(name) and name.lower().replace("ё", "е") == t[s:e]
+        if name and (s, e) in lower_tails:
+            place = resolve_place(name)
+            if not place or place["country"] != lower_tails[(s, e)]:
+                continue  # «в Грузию, губа»: Губа is no place of Грузия
         if name and name not in PERSON_CITIES and (as_written or (s, e) not in tails):
             hits.append((s, name, e))
     # The leading country is a destination only alone and with a main place: «Россия, хочу в Сочи»
@@ -1175,6 +1182,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     refused_at = {s for s, n in zip(starts, neg, strict=True) if n}
     refused = list(dict.fromkeys(mentions[s][2] for s in starts if s in refused_at))
     dests = []
+    by_country_word: dict[str, str | None] = {}
     for s, name, _ in sorted(hits):
         if s in refused_at or name == found.get("origin"):
             continue
@@ -1194,11 +1202,17 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
                 continue
             notes.append(f"направление: «{place['name']}» исключена, вместо неё {alt}")
             name = alt
+        # The country word of the hit, if the hit is one: «Таиланд», and «египет» as Хургада.
+        via = mentions[s][2] if mentions[s][2] in COUNTRIES else None
         if name not in dests:
             dests.append(name)
-    # A place inside a named country wins over the country (#345): «в Тайланд на Пхукет» is Пхукет.
-    inside = {p["country"] for d in dests if d not in COUNTRIES and (p := resolve_place(d))}
-    dests = [d for d in dests if d not in COUNTRIES or d not in inside]
+            by_country_word[name] = via
+        elif via is None:
+            by_country_word[name] = None
+    # A place inside a named country wins over the country (#345): «в Тайланд на Пхукет» is Пхукет,
+    # «в Египет в Дахаб» is Дахаб, not Хургада, the city of the catalogue for the word «Египет».
+    named = {p["country"] for d in dests if by_country_word[d] is None and (p := resolve_place(d))}
+    dests = [d for d in dests if by_country_word[d] not in named]
     if dests:
         found["destinations"] = dests
     return refused

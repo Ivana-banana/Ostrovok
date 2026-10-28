@@ -17,6 +17,11 @@ from api.extract import extract
         ("в Тайланд, пхукет", "Пхукет"),  # TRAP-3
         ("в Турцию в Анталью", "Анталия"),
         ("в Турцию в Анталью с 5 по 15 декабря", "Анталия"),
+        # «египет» is a catalogue stem of Хургада: the named place still wins over it
+        ("в Египет в Шарм-эль-Шейх", "Шарм-эль-Шейх"),
+        ("в Египет, Шарм-эль-Шейх", "Шарм-эль-Шейх"),
+        ("в Египет, в Дахаб", "Дахаб"),
+        ("в Египет, дахаб", "Дахаб"),  # TRAP-3
     ],
 )
 def test_place_inside_country_wins(text, place):
@@ -29,3 +34,8 @@ def test_bare_country_stays_a_destination():
 
 def test_two_countries_stay_two_destinations():
     assert extract("Хочу в Турцию, Египет")[0]["destinations"] == ["Турция", "Хургада"]
+
+
+def test_lowercase_tail_place_must_be_of_the_named_country():
+    # Губа is a place of Азербайджан, not of Грузия: no second destination
+    assert extract("в Грузию, губа")[0]["destinations"] == ["Грузия"]
