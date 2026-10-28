@@ -1548,8 +1548,14 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
 
 # #311: «дешевле, чем в Турции?», «это дешевле, чем в среднем?» ask for a comparison. They name no
 # new place and no «недорого» wish; the plan stays. A request («хочу дешевле, чем сейчас») is an edit.
-# #390: «а в Турции дешевле?» asks the same without «чем»: a new place in the message decides.
-PRICE_VERSUS_RE = re.compile(r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\?")
+# #390: «а в Турции дешевле?» asks the same without «чем». Only the whole message «[а] в <place in
+# the prepositional case> дешевле?»: «поехали в Египет, там дешевле?» and «в Турцию, там дешевле?»
+# move the trip, as on main.
+PRICE_VERSUS_RE = re.compile(
+    r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?"
+    r"|^\s*(?:а\s+)?(?:в|на)\s+(?:\w+\s+)?\w*[^\Wую]\s+(?:будет\s+|вс[её]\s+же\s+)?"
+    r"(?:дешевле|дороже|выгоднее)\s*\?\s*$"
+)
 VERSUS_ORDER_RE = re.compile(
     r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
 )
