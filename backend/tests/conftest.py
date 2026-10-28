@@ -8,6 +8,10 @@ from api import catalog
 # Tests never call Travelpayouts (TRAP-6): api.main picks the real adapter by this token at
 # import, and test modules import api.main after this file.
 os.environ.pop("TRAVELPAYOUTS_TOKEN", None)
+# Same for the live 101hotels pricing (#511, TRAP-6): api.main installs it by this flag at import
+# (on by default). The suite stays offline and deterministic; the adapter is tested directly in
+# test_live_hotels.py.
+os.environ["LIVE_HOTELS"] = "0"
 
 
 @pytest.fixture(autouse=True)
