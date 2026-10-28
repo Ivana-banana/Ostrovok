@@ -860,6 +860,17 @@ def _ordinal(text: str) -> int | None:
     return ORDINALS[m.group(1)[:4]] if m.group(1) else int(m.group(2)) - 1
 
 
+def named_in(text: str, names: list[str]) -> str | None:
+    """#458: the first of the names that the text mentions (case and ending ignored), or None."""
+    t = catalog.norm(text)
+    hits = []
+    for n in dict.fromkeys(names):
+        stem = catalog._stem(catalog.norm(n))
+        if m := re.search(rf"(?<!\w){re.escape(stem)}", t):
+            hits.append((m.start(), -len(stem), n))  # earliest, then the longest: Вена < Венеция
+    return min(hits)[2] if hits else None
+
+
 LegCommand = tuple[str, str | int, str | None]
 # «второй отель и поезд»: the hotel row named in a pick of transport (same rows as «беру 2»).
 HOTEL_ROW_RES = (
@@ -1550,7 +1561,8 @@ def _question_answer(
 
 
 def _tail(spec: TripSpec, hint: str, extra: list[str] | None = None) -> list[str]:
-    said = [*spec.assumptions, *(extra or [])]
+    # #458: the note «уже показаны» is internal state, not text for the user
+    said = [*(a for a in spec.assumptions if _label(a) != SHOWN), *(extra or [])]
     head = ["Допущения: " + "; ".join(said) + "."] if said else []
     return head + [hint]
 
@@ -2247,8 +2259,27 @@ def step(
             llm_found.pop("date_to", None)  # derived from the length again
     if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
         notes.append(PARTY_UNKNOWN)
-    if old.stage in ("inspire", "select") and idx is not None and idx < len(old.plan.destinations):
-        found["destinations"] = [old.plan.destinations[idx].name]
+    if old.stage in ("inspire", "select") and idx is not None:
+        # #458: a name beside the number wins: «третий: Александрия» after «ещё» is Александрия,
+        # even if row 3 of the new batch is another place. A name that matches no shown place
+        # and not the row asks which one (no guess).
+        row = old.plan.destinations[idx].name if idx < len(old.plan.destinations) else None
+        shown = [
+            *(d.name for d in old.plan.destinations),
+            *shown_before(old.plan.spec),
+            *old.plan.spec.destinations,
+        ]
+        by_name = named_in(message, shown)
+        said = found.get("destinations") or []
+        if by_name:
+            found["destinations"] = [by_name]
+        elif said and (row is None or not named_in(row, said)):
+            options = [d.name for d in old.plan.destinations]
+            text = "Номер и название не совпадают. Какое направление берём?"
+            q = Question(text="Какое направление?", options=options)
+            return old.model_copy(update={"reply": text, "questions": [q], "llm": False})
+        elif row:
+            found["destinations"] = [row]
         (llm_found or {}).pop("destinations", None)  # the model does not see the numbered list
     # The departure city is no destination (#139): «Москва — Питер — Казань» starts in Москва.
     # It runs after the model too (#141): the model may return the departure city as a stay.
@@ -2519,6 +2550,8 @@ def step(
 
     if old.stage == "compare" and (idx is not None or yes):
         hotels = hotel_rows(plan.offers, plan.selected)
+        if idx is not None and (by_title := named_in(message, [h.title for h in hotels])):
+            idx = next(i for i, h in enumerate(hotels) if h.title == by_title)  # #458: name wins
         picks = idx is not None and idx < len(hotels)
         if not picks and not pets_possible(spec, plan.offers) and not _hotel_selected(plan):
             stage, plan, text, questions = _pets_dead_end(plan)  # «беру» is no consent (#131)

@@ -417,14 +417,14 @@ suite("доска поездки", () => {
     expect(o.main).toBe(o.at("Корзина"));
   });
 
-  it("#450: варианты прошлого ответа остаются под ним, свёрнутые, кнопки выбора живые", () => {
+  it("#450: варианты прошлого ответа остаются под ним, кнопки выбора живые", () => {
     const r = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
     const doc = new DOMParser().parseFromString(
       renderToStaticMarkup(<EarlierChoices reply={r} current={r} busy={false} onSend={noop} />),
       "text/html",
     );
     const d = doc.querySelector("details.earlier");
-    expect(d?.hasAttribute("open")).toBe(false);
+    expect(d?.hasAttribute("open")).toBe(true) // #458: destination batches stay open;
     expect(d?.querySelectorAll("button[aria-label^='Выбрать направление']").length).toBe(r.plan.destinations.length);
     // «ещё» is understood only in the current block: an older block has no such button
     expect(doc.querySelector("button.more-dests")).toBeNull();
@@ -465,10 +465,9 @@ suite("доска поездки", () => {
     }
   });
 
-  it("#450: старый блок направлений жив только при том же списке; иначе подпись и 0 кнопок", () => {
+  it("#450/#458: старый блок направлений жив, пока выбор места идёт; после выбора — подпись и 0 кнопок", () => {
     const old = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
-    const cur = structuredClone(old);
-    cur.plan.destinations = cur.plan.destinations.map((x) => ({ ...x, name: `${x.name} (другой)` })); // «ещё» changed the list
+    const cur = { ...structuredClone(old), stage: "compare" as const };
     const d = new DOMParser().parseFromString(
       renderToStaticMarkup(<EarlierChoices reply={old} current={cur} busy={false} onSend={noop} />),
       "text/html",
@@ -488,8 +487,33 @@ suite("доска поездки", () => {
     );
     const btn = box.querySelectorAll<HTMLButtonElement>("details.earlier button[aria-label^='Выбрать направление']")[0];
     await act(async () => btn.click());
-    // the first row: the same destination in the current plan, so the number points to it
-    expect(sent).toEqual([`первый: ${old.plan.destinations[0].name}`]);
+    // #458: the name only, no number
+    expect(sent).toEqual([old.plan.destinations[0].name]);
+    act(() => root.unmount());
+    box.remove();
+  });
+  it("#458: «Ранее предлагал» — имена прошлых пачек кнопками; клик шлёт имя; старый блок открыт и жив", async () => {
+    const cur = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
+    cur.plan.spec.assumptions = [...cur.plan.spec.assumptions, "уже показаны: Кировск, Губаха, " + cur.plan.destinations[0].name];
+    const sent: string[] = [];
+    const box = document.createElement("div");
+    document.body.append(box);
+    const root = createRoot(box);
+    await act(async () => root.render(<Board reply={cur} busy={false} removed={[]} onSend={(t) => sent.push(t)} onCart={noop} onCheckout={noop} />));
+    const line = box.querySelector(".earlier-names");
+    expect(line?.textContent).toContain("Ранее предлагал");
+    expect([...line!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Кировск", "Губаха"]);
+    await act(async () => line!.querySelectorAll("button")[1].click());
+    expect(sent).toEqual(["Губаха"]);
+    // an old batch stays open and live after the list changed
+    const old = structuredClone(cur);
+    cur.plan.destinations = cur.plan.destinations.map((x) => ({ ...x, name: `${x.name} (другой)` }));
+    const html = new DOMParser().parseFromString(
+      renderToStaticMarkup(<EarlierChoices reply={old} current={cur} busy={false} onSend={noop} />),
+      "text/html",
+    );
+    expect(html.querySelector("details.earlier")?.hasAttribute("open")).toBe(true);
+    expect(html.querySelectorAll("details.earlier button[aria-label^='Выбрать направление']").length).toBe(old.plan.destinations.length);
     act(() => root.unmount());
     box.remove();
   });
