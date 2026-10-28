@@ -1,4 +1,5 @@
-import { Fragment, type ReactNode, useEffect, useState } from "react";
+import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useId, useState } from "react";
+import { Alternatives, type Choice, optionsOf } from "./Alternatives";
 import { Money, Price } from "./Board";
 import { VERBS, VERB_MS } from "./brand";
 import type { ChatReply, Mode, Stage } from "./contracts";
@@ -228,13 +229,29 @@ const facts = (list: string[]) => list.join(" · ");
 const LABELS = { hotel: "Отель", transfer: "Трансферы", extra: "Доп. услуга", included: "Включено" };
 
 // One item of the proposed trip: icon, label and price on the first row, the facts below.
-function PointRow({ point: p, synthetic }: { point: Point; synthetic: boolean }) {
+// #489: with `choice` and two options or more the item is a disclosure of the other options.
+function PointRow({ point: p, synthetic, choice }: { point: Point; synthetic: boolean; choice?: Choice }) {
   const icon = p.kind === "leg" ? p.mode : p.kind;
   const label = p.kind === "leg" ? p.label : LABELS[p.kind];
+  const [open, setOpen] = useState(false);
+  const altId = useId();
+  const more = choice ? optionsOf(label, choice.reply).length : 0;
+  const toggle = more < 2 ? null : {
+    role: "button",
+    tabIndex: 0,
+    "aria-expanded": open,
+    "aria-controls": altId,
+    onClick: () => setOpen(!open),
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      setOpen(!open);
+    },
+  };
   return (
-    <li className="pt">
+    <li className={toggle ? "pt pt-alt" : "pt"}>
       <Icon name={icon} />
-      <div className="pt-body">
+      <div className="pt-body" {...toggle}>
         <div className="pt-row">
           <span className="pt-name">
             <b>{label}</b>
@@ -281,7 +298,9 @@ function PointRow({ point: p, synthetic }: { point: Point; synthetic: boolean })
             ))}
           </div>
         )}
+        {toggle && <span className="pt-more">{open ? "Скрыть варианты" : `Варианты: ${more}`}</span>}
       </div>
+      {toggle && open && choice && <Alternatives id={altId} label={label} choice={choice} />}
     </li>
   );
 }
@@ -290,7 +309,8 @@ function PointRow({ point: p, synthetic }: { point: Point; synthetic: boolean })
 // until the answer is ready the chat shows only the Thinking indicator (#450).
 // #468: the proposed trip is a list, one item per line; every price has a small «синтетика»
 // chip (TRAP-7). The details are folded under «Подробнее».
-export function AgentText({ text, synthetic }: { text: string; synthetic: boolean }) {
+// #489: `choice` (the reply of this text, only the last answer) opens the other options of an item.
+export function AgentText({ text, synthetic, choice }: { text: string; synthetic: boolean; choice?: Choice }) {
   const parts = offerParts(text);
   if (!parts) return <Lines text={text} synthetic={synthetic} />;
   const lines = (part: string[]) => part.map((l, i) => <Line key={i} text={l} synthetic={synthetic} />);
@@ -301,7 +321,7 @@ export function AgentText({ text, synthetic }: { text: string; synthetic: boolea
       {parts.points ? (
         <ul className="plain offer points">
           {parts.points.map((p, i) => (
-            <PointRow key={i} point={p} synthetic={synthetic} />
+            <PointRow key={i} point={p} synthetic={synthetic} choice={choice} />
           ))}
           <li className="pt sum">
             <span className="pt-ic" />

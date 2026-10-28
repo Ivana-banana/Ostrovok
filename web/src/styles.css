@@ -2685,3 +2685,138 @@ h3,
   font-family: var(--font-head);
   font-weight: 700;
 }
+
+/* #489: an item of the answer opens the other options of its kind, with badges of the best */
+.msg.agent ul.points li.pt-alt {
+  flex-wrap: wrap;
+}
+
+.pt-alt > .pt-body {
+  cursor: pointer;
+  border-radius: var(--r-xs);
+}
+
+.pt-alt > .pt-body:hover .pt-more {
+  text-decoration: underline;
+}
+
+.pt-more {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--fs-s);
+}
+
+.pt-more::after {
+  content: " ▾";
+}
+
+.pt-alt > .pt-body[aria-expanded="true"] .pt-more::after {
+  content: " ▴";
+}
+
+.msg.agent ul.alts {
+  flex: none;
+  width: calc(100% - 34px); /* under the text of the item, past the icon */
+  margin: 6px 0 0 34px;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--card);
+}
+
+.msg.agent ul.alts li.alt {
+  display: flex;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line-2);
+}
+
+.msg.agent ul.alts li.alt:first-child {
+  border-top: none;
+}
+
+.msg.agent ul.alts li.alt.chosen {
+  background: var(--acc-soft);
+}
+
+.alt-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.alt-title {
+  font-weight: 700;
+}
+
+.alt-facts {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.alt-end {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.alt-mark {
+  font-size: var(--fs-s);
+  font-weight: 700;
+}
+
+/* pills as on Aviasales: each badge its own colour, none purple as the «синтетика» chip */
+.alt-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
+.alt-badge.cheap {
+  background: #e2f4e8;
+  color: #176b3a; /* 6.2:1 */
+}
+
+.alt-badge.fast {
+  background: #e3effc;
+  color: #0b56a3; /* 6.6:1 */
+}
+
+.alt-badge.rating {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.alt-badge.center {
+  background: #def3f2;
+  color: #0d5f61; /* 6.6:1 */
+}
+
+@media (max-width: 480px) {
+  .msg.agent ul.alts {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .alt-body {
+    flex-basis: 100%;
+  }
+
+  .msg.agent ul.alts li.alt {
+    flex-wrap: wrap;
+  }
+
+  .alt-end {
+    margin-left: auto;
+  }
+}
