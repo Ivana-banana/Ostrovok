@@ -39,3 +39,20 @@ def test_two_countries_stay_two_destinations():
 def test_lowercase_tail_place_must_be_of_the_named_country():
     # Губа is a place of Азербайджан, not of Грузия: no second destination
     assert extract("в Грузию, губа")[0]["destinations"] == ["Грузия"]
+
+
+@pytest.mark.parametrize(
+    ("text", "dests"),
+    [
+        ("в Таиланд, Вьетнам", ["Таиланд", "Вьетнам"]),
+        ("в Италию, Франция", ["Италия", "Франция"]),
+        ("в Турцию, Греция", ["Турция", "Греция"]),
+        ("в Испанию, Португалия", ["Испания", "Португалия"]),
+    ],
+)
+def test_capitalized_tail_country_stays_a_second_destination(text, dests):
+    assert extract(text)[0]["destinations"] == dests
+
+
+def test_capitalized_tail_place_of_another_country_stays():
+    assert len(extract("в Таиланд, Бали")[0]["destinations"]) == 2

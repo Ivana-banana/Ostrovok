@@ -1141,6 +1141,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     # «в Тайланд, пхукет»: after a country a lowercase place at the end counts too (#345).
     lower_tails = {}  # span -> the country before the comma: the place must be of this country
     for m in TAIL_LOWER.finditer(t):
+        if not text[m.start(1)].islower():
+            continue  # a capitalized name is TAIL_PLACE's: «в Таиланд, Вьетнам» is two countries
         head = t[: m.start()]
         for country, rx in COUNTRY_RES:
             if any(c.end() == len(head) for c in rx.finditer(head)):
