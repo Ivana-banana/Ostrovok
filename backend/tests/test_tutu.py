@@ -171,6 +171,42 @@ def test_trap6_refusal_bad_page_and_robots_fall_back(tmp_path):
     closed = Fake(**{"/robots.txt": "User-Agent: *\nDisallow: /poezda/\n"})
     assert run(closed, s, tmp_path / "closed") == base(s)
     assert closed.calls == ["/robots.txt"]  # the page itself is not fetched
+    captcha = Fake(**{"/poezda/Moskva/Ekaterinburg/": "<html>Подтвердите, что вы не робот</html>"})
+    assert [x for x in run(captcha, s, tmp_path / "captcha") if x.origin == s.origin] == [
+        x for x in base(s) if x.origin == s.origin
+    ]
+
+
+class Answer:
+    """What urllib.request.urlopen gives: status 200, the body, no gzip."""
+
+    status, headers = 200, {}
+
+    def __init__(self, body: str):
+        self.body = body.encode()
+
+    def read(self) -> bytes:
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_trap6_the_real_robots_txt_is_obeyed_though_it_names_captcha(tmp_path, monkeypatch):
+    """tutu robots.txt has «Disallow: /captcha»: it is the rules, not a refusal page (#569)."""
+    robots = (PAGES / "robots.txt").read_text(encoding="utf-8")  # the file of 2026-10-28
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: Answer(robots))
+    tutu = TutuTrains(SyntheticTransport(), cache_dir=tmp_path)  # the real _get, no network
+    assert not tutu._allowed("/poezda/Moskva/Kazan/?date=05.11.2026")  # «Disallow: /*date=»
+    assert tutu.robots == robots
+    fake = Fake(**{"/robots.txt": robots + "Disallow: /poezda/Ekaterinburg/\n"})
+    got = run(fake, spec(), tmp_path)
+    assert "/poezda/Ekaterinburg/Moskva/" not in fake.calls  # disallowed: not fetched
+    assert "/poezda/Moskva/Ekaterinburg/" in fake.calls  # the route page is allowed
+    assert any(not x.synthetic for x in got if x.origin == "Москва")
 
 
 def test_trap6_no_train_that_day_keeps_synthetic(tmp_path):
