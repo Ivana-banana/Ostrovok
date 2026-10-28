@@ -52,11 +52,25 @@ def test_c12_an_existing_time_picks_that_flight(store):
 @pytest.mark.parametrize(
     "text, want",
     [
-        ("возьми рейс в 06:15", [("time", "06:15", None)]),
-        ("давай обратно вылет в 9:40", [("time", "09:40", "back")]),
+        ("возьми рейс в 06:15", [("time", ("06:15", None), None)]),
+        ("давай обратно вылет в 9:40", [("time", ("09:40", None), "back")]),
+        ("возьми поезд в 07:50", [("time", ("07:50", "train"), None)]),
+        ("давай перелёт с вылетом в 8:00", [("time", ("08:00", "flight"), None)]),
         ("рейс в 06:15 есть?", []),  # a question without a verb picks nothing
         ("возьми рейс 2", [("row", 1, None)]),
+        # A time not right after the noun is no departure: the mode pick stays
+        ("давай поезд чтобы прибыть к 18:00", [("mode", "train", None)]),
+        ("давай перелёт заселение в 14:00", [("mode", "flight", None)]),
+        ("возьми поезд ехать 7.30 часов", [("mode", "train", None)]),
     ],
 )
 def test_c12_time_command(text, want):
     assert leg_commands(text) == want
+
+
+def test_c12_a_train_time_at_a_flight_plan_re_plans_by_train(store):
+    """«возьми поезд в 07:50» at a plan by plane is a new mode, as «возьми поезд» is: no list
+    of flight times."""
+    r = say(store, C12)
+    again = say(store, "возьми поезд в 07:50", r.session_id)
+    assert "Рейса в" not in again.reply and "Перелёта в" not in again.reply
