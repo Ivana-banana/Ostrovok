@@ -65,11 +65,12 @@ export function guestsText(spec: Pick<TripSpec, "adults" | "children_ages" | "pe
   return parts.join(", ");
 }
 
-// Chat line after a cart edit: the real count and total (TRAP-7: the sums are mock).
+// Chat line after a cart edit: the real count and total (TRAP-7: a mock or mixed sum says so).
 export function cartLine(cart: Cart): string {
   if (!cart.items.length) return "Корзина пуста.";
-  const mock = cart.items.some((o) => o.synthetic);
-  return `Теперь в корзине ${cart.items.length} поз. на ${rub(cart.total_rub)}${mock ? " (синтетика)" : ""}.`;
+  const mock = cart.items.filter((o) => o.synthetic).length;
+  const mark = mock === cart.items.length ? " (синтетика)" : mock ? " (часть цен — синтетика)" : "";
+  return `Теперь в корзине ${cart.items.length} поз. на ${rub(cart.total_rub)}${mark}.`;
 }
 
 // Times are shown as written in the ISO string: local to the place of the event, never
@@ -260,7 +261,7 @@ export type Point =
   | { kind: "included"; facts: string[] };
 
 const ITEM = /^(Отель|Туда|Обратно|Трансферы|Доп\. услуга|Включено): (.+)$/;
-const MORE = /^(Почему|Риск|Климат): |^Цены — синтетика\.$/;
+const MORE = /^(Почему|Риск|Климат): |^Цены( —|:) .+\.$/; // «Цены — синтетика.» or the sources (#567)
 
 export function offerParts(text: string): OfferParts | null {
   const lines = text.split("\n").filter((l) => l.trim());
@@ -298,10 +299,14 @@ function ride(route: string, facts: string[]): Ride | null {
   return ends.length === 2 ? { from: ends[0], to: ends[1], facts } : null;
 }
 
-// «text — 7 900 ₽»: the text and the price; null without a price at the end.
+// «text — 7 900 ₽»: the text and the price; null without a price at the end. The price keeps the
+// label of the backend after it, «7 900 ₽ (101hotels)» (#567): the chat shows it as its chip.
+const LABEL = / \([^()]+\)$/;
 function priced(text: string): [string, string] | null {
-  const at = text.lastIndexOf(" — ");
-  return at > 0 && /₽$/.test(text) ? [text.slice(0, at), text.slice(at + 3)] : null;
+  const label = /₽ \([^()]+\)$/.test(text) ? LABEL.exec(text)![0] : "";
+  const bare = text.slice(0, text.length - label.length);
+  const at = bare.lastIndexOf(" — ");
+  return at > 0 && /₽$/.test(bare) ? [bare.slice(0, at), bare.slice(at + 3) + label] : null;
 }
 
 // One item line of the backend (api/model.py _offer_lines) as a block; null when it does not parse.

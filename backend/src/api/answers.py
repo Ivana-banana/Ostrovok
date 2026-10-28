@@ -87,8 +87,24 @@ MODES = {
 NO_DATA = "нет данных"
 
 
-def _rub(n: int) -> str:
-    return f"{n:,} ₽ (синтетика)".replace(",", " ")
+# TRAP-7 (#567): the source of a real price by kind and mode (web/src/Board.tsx PRICE_SOURCES).
+PRICE_SOURCES = {"hotel": "101hotels", "flight": "Авиасейлс", "train": "tutu"}
+
+
+def price_mark(offers) -> str:
+    """The label of a sum of these offers: «синтетика» when all are synthetic or there are none,
+    the real sources when none is, «часть цен — синтетика» for a mix (TRAP-7)."""
+    if all(o.synthetic for o in offers):
+        return "синтетика"
+    if any(o.synthetic for o in offers):
+        return "часть цен — синтетика"
+    names = (PRICE_SOURCES.get(getattr(o, "mode", o.kind), "реальные данные") for o in offers)
+    return " + ".join(dict.fromkeys(names))
+
+
+def _rub(n: int, *offers) -> str:
+    """A price with the label of the offers it comes from; no offers: «синтетика»."""
+    return f"{n:,} ₽ ({price_mark(offers)})".replace(",", " ")
 
 
 def _span(delta: timedelta) -> str:
@@ -179,7 +195,7 @@ def _free_line(plan: Plan, *hotels: HotelOffer) -> str:
             parts.append(f"«{_name_of(h)}» — в данных нет")
             continue
         meal = f", питание {alt.meal}" if alt.meal != h.meal else ""
-        parts.append(f"«{_name_of(h)}» — {_rub(alt.price_rub)}{meal}")
+        parts.append(f"«{_name_of(h)}» — {_rub(alt.price_rub, alt)}{meal}")
     return "Тариф с бесплатной отменой: " + "; ".join(parts) + "."
 
 
@@ -208,11 +224,11 @@ def _versus(plan: Plan, chosen: HotelOffer, named: HotelOffer, where: str) -> st
     if named.offer_id == chosen.offer_id:
         free = _free_line(plan, chosen)
         return (
-            f"{chosen.title} уже в плане: {_rub(chosen.price_rub)}, {_cancel(chosen)}.\n"
+            f"{chosen.title} уже в плане: {_rub(chosen.price_rub, chosen)}, {_cancel(chosen)}.\n"
             + (free + "\n" if free else "")
             + why_chosen(plan, chosen, hotel_rows(plan.offers, plan.selected))
         )
-    facts = [f"цена {_rub(named.price_rub)} против {_rub(chosen.price_rub)}{where}"]
+    facts = [f"цена {_rub(named.price_rub, named)} против {_rub(chosen.price_rub, chosen)}{where}"]
     ours, theirs = [], []
     if named.price_rub > chosen.price_rub:
         ours.append("дешевле")
@@ -291,7 +307,7 @@ def _line(h: HotelOffer) -> str:
     facts += [h.meal, _cancel(h)]
     if h.distance_center_km is not None:
         facts.append(f"{h.distance_center_km:g} км от центра")
-    return f"{h.title}: {', '.join(facts)}, {_rub(h.price_rub)}"
+    return f"{h.title}: {', '.join(facts)}, {_rub(h.price_rub, h)}"
 
 
 def mode_fact(plan: Plan, low: str) -> str:
@@ -305,7 +321,7 @@ def mode_fact(plan: Plan, low: str) -> str:
     legs = [o for o in plan.offers if o.offer_id in plan.selected and isinstance(o, TransportOffer)]
 
     def text(o: TransportOffer) -> str:
-        return f"{o.title} — {_rub(o.price_rub)}, в пути {span(o)}"
+        return f"{o.title} — {_rub(o.price_rub, o)}, в пути {span(o)}"
 
     rows = []
     for leg in legs:

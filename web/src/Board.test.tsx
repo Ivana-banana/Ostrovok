@@ -252,6 +252,18 @@ suite("доска поездки", () => {
     expect(cart).toContain("Подтвердить бронь на 600 ₽ (синтетика) · оплата имитируется");
   });
 
+  it("TRAP-7 (#567): итог корзины из реальных и синтетических цен — «часть цен — синтетика»", () => {
+    const r = structuredClone(hotelBought);
+    r.stage = "checkout";
+    r.voucher = null;
+    r.cart.items = r.cart.items.map((o) => (o.kind === "hotel" ? { ...o, synthetic: false } : o));
+    const cart = render(r).querySelector("[aria-label='Корзина']");
+    expect(cart?.querySelector("[data-testid='cart-total'] .synth")?.textContent).toBe("часть цен — синтетика");
+    expect(cart?.textContent).toContain("часть цен — синтетика · оплата имитируется");
+    expect(cart?.textContent).not.toContain("все цены — синтетика");
+    expect(cart?.textContent).toContain("(часть цен — синтетика) · оплата имитируется");
+  });
+
   it("#41: бюджет отеля — своя строка в параметрах, не «Бюджет» на поездку", () => {
     const r = structuredClone(base);
     r.plan.spec.budget_rub = null;
@@ -295,8 +307,9 @@ suite("доска поездки", () => {
   it("TRAP-7: реальная цена получает пометку источника, синтетическая остаётся «синтетика» (#547)", () => {
     const r = structuredClone(hotelBought);
     r.stage = "compare";
+    // a real flight is Авиасейлс; a real train would be tutu (#567)
     r.plan.offers = r.plan.offers.map((o) =>
-      o.kind === "hotel" || o.kind === "transport" ? { ...o, synthetic: false } : o,
+      o.kind === "hotel" ? { ...o, synthetic: false } : o.kind === "transport" ? { ...o, mode: "flight", synthetic: false } : o,
     );
     const doc = render(r);
     const chips = (label: string) =>

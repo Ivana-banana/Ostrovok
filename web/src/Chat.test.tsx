@@ -115,6 +115,29 @@ suite("чат", () => {
     act(() => root.unmount());
   });
 
+  it("TRAP-7 (#567): у реальной цены — чип источника, у синтетической — «синтетика», у смешанного итога — «часть цен»", async () => {
+    const box = document.createElement("div");
+    const root = createRoot(box);
+    const text = [
+      "Цены: отели — 101hotels; остальные — синтетика.",
+      "Предлагаю:",
+      "Отель: Казантель, Казань, 2★, без питания, невозвратный — 7 900 ₽ (101hotels)",
+      "Туда: поезд Москва → Казань, 10.12 18:50 → 11.12 07:10 (UTC+3) — 7 800 ₽ (синтетика)",
+      "Итого 15 700 ₽ (часть цен — синтетика).",
+      "В корзине 2 поз. на 15 700 ₽ (часть цен — синтетика), оплата имитируется.",
+    ].join("\n");
+    await act(async () => root.render(<AgentText text={text} synthetic />));
+    const marks = [...box.querySelectorAll(".price")].map((x) => [x.textContent, x.querySelector(".synth-real") !== null]);
+    expect(marks).toEqual([
+      ["7 900 ₽101hotels", true],
+      ["7 800 ₽синтетика", false],
+      ["15 700 ₽часть цен — синтетика", false],
+      ["15 700 ₽часть цен — синтетика", false],
+    ]);
+    expect(box.textContent).not.toContain("(");  // the label is the chip, not a second text
+    act(() => root.unmount());
+  });
+
   it("#508: название отеля уже с «Отель» — подпись не повторяется; без «Отель» подпись есть", async () => {
     const box = document.createElement("div");
     const root = createRoot(box);
