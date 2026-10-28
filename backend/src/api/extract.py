@@ -375,8 +375,9 @@ CURRENCIES = [
     ("тенге", "₸", r"тенге|kzt"),
     ("дирхамах", "", r"дирхам\w*|aed"),
     ("йенах", "", r"йен\w*|jpy"),
+    ("у.е.", "", r"у\.\s?е\.?|уе|условн\w+\s+единиц\w*"),  # #167: no rate, no rubles
 ]
-AMOUNT_UNIT = r"\d(?:[.,]\d+)?\s?(?:[кk]|тыс\w*\.?|млн|миллион\w*)?\s*"
+AMOUNT_UNIT = r"\d+(?:[ \u00a0]\d{3})*(?:[.,]\d+)?\s?(?:[кk]|тыс\w*\.?|млн|миллион\w*)?\s*"
 # #158: «полмиллиона», «потолок миллион»: a word sum. «Миллион» needs a budget word before it.
 MILLION_CUE = (
     r"\b(?:бюджет\w*|потол\w+|лимит\w*|максимум\w*|до|около|порядка|не\s+(?:больше|более|дороже))"
@@ -2399,11 +2400,14 @@ def _rub(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 
 
+GROUP_TAIL = rf"(?:на|для)\s+(?:{'|'.join(GROUP)})\b"
+
+
 def _currency_of(before: str, after: str) -> str | None:
     """The foreign currency written right after a sum («1000 евро») or before it («$1500»)."""
     for label, symbol, words in CURRENCIES:
         sym = re.escape(symbol) if symbol else "(?!)"
-        if re.match(rf"\s*(?:{sym}|(?:{words})\b)", after) or (
+        if re.match(rf"\s*(?:{sym}|(?:{words})(?!\w))", after) or (
             symbol and before.rstrip().endswith(symbol)
         ):
             return label
@@ -2416,8 +2420,11 @@ def _standalone_currency(t: str) -> str | None:
     for label, symbol, words in CURRENCIES:
         sym = re.escape(symbol) if symbol else "(?!)"
         by_symbol = rf"{sym}\s*\d|\d\s*{sym}"
-        by_word = rf"(?:\A\s*|{cue}\s+(?:\w+\s+)?){AMOUNT_UNIT}(?:{words})\b"
-        if re.search(by_symbol, t) or re.search(by_word, t):
+        by_word = rf"(?:\A\s*|{cue}\s+(?:\w+\s+)?){AMOUNT_UNIT}(?:{words})(?!\w)"
+        # #167: «за 2000 евро», «по 500 евро на каждого», «1000 евро в сутки», «1000 евро на двоих»
+        by_prep = rf"\b(?:за|на|по)\s+{AMOUNT_UNIT}(?:{words})(?!\w)"
+        by_tail = rf"{AMOUNT_UNIT}(?:{words})(?!\w)\s*(?:{PER_PERSON}|{PER_NIGHT}|{GROUP_TAIL})"
+        if any(re.search(q, t) for q in (by_symbol, by_word, by_prep, by_tail)):
             return label
     return None
 
