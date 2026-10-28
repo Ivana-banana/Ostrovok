@@ -233,6 +233,8 @@ const LABELS = { hotel: "Отель", transfer: "Трансферы", extra: "Д
 function PointRow({ point: p, synthetic, choice }: { point: Point; synthetic: boolean; choice?: Choice }) {
   const icon = p.kind === "leg" ? p.mode : p.kind;
   const label = p.kind === "leg" ? p.label : LABELS[p.kind];
+  // #508: the name «Отель «Панорама»» already says it: no second label
+  const named = p.kind === "hotel" && p.name.toLowerCase().startsWith(label.toLowerCase());
   const [open, setOpen] = useState(false);
   const altId = useId();
   const more = choice ? optionsOf(label, choice.reply).length : 0;
@@ -254,8 +256,8 @@ function PointRow({ point: p, synthetic, choice }: { point: Point; synthetic: bo
       <div className="pt-body" {...toggle}>
         <div className="pt-row">
           <span className="pt-name">
-            <b>{label}</b>
-            {p.kind === "hotel" && <> {p.name}</>}
+            {!named && <b>{label}</b>}
+            {p.kind === "hotel" && <>{named ? "" : " "}{p.name}</>}
             {p.kind === "leg" && <span className="pt-mode"> · {MODES[p.mode]}</span>}
           </span>
           {"price" in p && (

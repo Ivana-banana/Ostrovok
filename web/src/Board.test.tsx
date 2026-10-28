@@ -165,6 +165,16 @@ suite("доска поездки", () => {
     expect(t).toContain("поезд");
   });
 
+  it("сравнение транспорта: колонка «Питомцы» как у отелей (#475)", () => {
+    const sec = (doc: Document) => doc.querySelector("[aria-label='Сравнение транспорта']");
+    expect(sec(render(base))?.querySelector("thead")?.textContent).toContain("Питомцы");
+    const rows = (s: typeof base) => [...(sec(render(s))?.querySelectorAll("tbody tr") ?? [])];
+    expect(rows(base)[0].textContent).toContain("нет отметки");
+    const offers = base.plan.offers.map((o) => (o.kind === "transport" ? { ...o, pets_allowed: true } : o));
+    const pets = { ...base, plan: { ...base.plan, offers } };
+    expect(rows(pets)[0].textContent).toContain("можно");
+  });
+
   it("пересборка: «было → стало»", () => {
     const t = render(base).querySelector("[aria-label='Что изменилось']")?.textContent ?? "";
     expect(t).toContain("было 11–13 декабря → стало 13–15 декабря");
@@ -228,11 +238,12 @@ suite("доска поездки", () => {
     const r = structuredClone(base);
     r.plan.spec.budget_rub = null;
     r.plan.spec.hotel_budget_rub = 40000;
-    const rows = [...render(r).querySelectorAll("[aria-label='Параметры поездки'] dl > div")].map(
-      (d) => d.textContent ?? "",
-    );
-    expect(rows.some((t) => t.startsWith("Бюджет отеля") && t.includes("40 000 ₽"))).toBe(true);
-    expect(rows.some((t) => t.startsWith("Бюджет") && !t.startsWith("Бюджет отеля"))).toBe(false);
+    const doc = render(r);
+    // #431: the hotel budget is the chip of the hotel filters (per night), not a read-only row
+    const chips = [...doc.querySelectorAll("[aria-label='Фильтры отелей'] button")].map((b) => (b.textContent ?? "").replace(/\s/g, " "));
+    expect(chips.some((t) => t.startsWith("Бюджет отеля") && t.includes("20 000 ₽ за ночь"))).toBe(true);
+    const rows = [...doc.querySelectorAll("[aria-label='Параметры поездки'] dl > div")].map((d) => d.textContent ?? "");
+    expect(rows.some((t) => t.startsWith("Бюджет"))).toBe(false);
   });
 
   it("#41: корзина с отелем дороже бюджета отеля — предупреждение до подтверждения", () => {

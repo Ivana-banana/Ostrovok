@@ -101,7 +101,8 @@ def _checkout(client, r, total):
 
 
 def test_remove_hotel_removes_its_transfers_from_cart_total_and_voucher(client, at_checkout):
-    """Review of #42: no transfer without a hotel in the total and in the voucher."""
+    """Review of #42: no transfer without a hotel in the total and in the voucher. #532: a cart
+    without a hotel books nothing at all (409), so no voucher holds the legs alone."""
     r = at_checkout
     hotel = next(o for o in r.cart.items if o.kind == "hotel")
     transfers = [o for o in r.cart.items if o.kind == "transfer"]
@@ -113,10 +114,8 @@ def test_remove_hotel_removes_its_transfers_from_cart_total_and_voucher(client, 
     stale = _checkout(client, r, r.cart.total_rub)  # the total the user saw before is refused
     assert stale.status_code == 409
     done = _checkout(client, r, cart["total_rub"])
-    assert done.status_code == 200, done.text
-    voucher = done.json()
-    assert not {"hotel", "transfer"} & {o["kind"] for o in voucher["items"]}
-    assert voucher["total_rub"] == cart["total_rub"]
+    assert done.status_code == 409, done.text
+    assert "нет отеля" in done.json()["detail"]
 
 
 def test_returned_hotel_brings_its_transfers_back(client, at_checkout):
@@ -142,9 +141,9 @@ def test_transfer_without_its_hotel_cannot_be_added_and_never_reaches_the_vouche
     res = cart_post(client, r, "add", transfer.offer_id)
     assert res.status_code == 409
     assert "корзине" in res.json()["detail"]
+    assert not {"hotel", "transfer"} & {o["kind"] for o in less["items"]}
     done = _checkout(client, r, less["total_rub"])
-    assert done.status_code == 200, done.text
-    assert not {"hotel", "transfer"} & {o["kind"] for o in done.json()["items"]}
+    assert done.status_code == 409, done.text  # #532: no booking without a hotel
 
 
 def test_returned_hotel_does_not_bring_back_a_transfer_removed_on_its_own(client, at_checkout):
