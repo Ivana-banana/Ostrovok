@@ -15,7 +15,7 @@ import {
   saveChats,
   touchChat,
 } from "./history";
-import { Mascot } from "./Mascot";
+import { Mascot, moodOf } from "./Mascot";
 
 // stage: the stage after an agent message; the roadmap links a done step to it (#434).
 type Msg = { role: "user" | "agent"; text: string; stage?: Stage };
@@ -589,7 +589,7 @@ export function App() {
                     role={i === lastAgent ? "status" : undefined}
                     aria-busy={typing === i || undefined}
                   >
-                    <Mascot size={30} state={i === lastAgent && reply?.stage === "booked" ? "happy" : "idle"} />
+                    <Mascot size={30} state={i === lastAgent ? moodOf(reply, !!error) : "idle"} />
                     <div className="b">
                       <AgentText
                         text={badgeNoAi ? withoutNoAi(brief(m.text, i === lastAgent)) : brief(m.text, i === lastAgent)}

@@ -3,7 +3,9 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe as suite, expect, it, vi } from "vitest";
 import { ROUTES, Thinking } from "./Chat";
-import { Mascot } from "./Mascot";
+import fixture from "../../tests/fixtures/chat_reply.json";
+import type { ChatReply } from "./contracts";
+import { Mascot, moodOf } from "./Mascot";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -56,5 +58,28 @@ suite("маскот", () => {
     expect(frames.at(-1)?.offset).toBe(1);
     await act(async () => root.unmount());
     Element.prototype.animate = had;
+  });
+
+  it("эмоция по ответу: вопрос — любопытство, варианты — доволен, «не нашёл» и сбой — озадачен, бронь — радость", () => {
+    const base = fixture as unknown as ChatReply;
+    const r = (over: Partial<ChatReply>): ChatReply => ({ ...base, ...over });
+    expect(moodOf(null, false)).toBe("idle");
+    expect(moodOf(r({ stage: "booked" }), false)).toBe("happy");
+    expect(moodOf(r({ stage: "clarify", questions: [{ text: "Откуда вы поедете?", options: ["Из Москвы"] }] }), false)).toBe("curious");
+    expect(moodOf(r({ stage: "compare", questions: [], reply: "Нашёл 5 отелей." }), false)).toBe("glad");
+    const empty = { ...base.plan, offers: [], destinations: [] };
+    // the real backend texts (model.py): nothing found → puzzled; a replacement city was found → glad
+    const lost = "Направления «Атлантида» пока нет в каталоге, и геокодер его не нашёл (или нет сети). Где это место, не знаю.";
+    expect(moodOf(r({ stage: "select", questions: [], reply: lost, plan: empty }), false)).toBe("puzzled");
+    const swapped = "«Атлантида» нет в каталоге. По вашему выбору — Сочи.";
+    expect(moodOf(r({ stage: "compare", questions: [], reply: swapped }), false)).toBe("glad");
+    expect(moodOf(r({ stage: "compare", questions: [] }), true)).toBe("puzzled");
+  });
+
+  it("у эмоций есть что показать: брови и глаза-дуги в рисунке", () => {
+    const b = html(<Mascot state="curious" />);
+    expect(b.querySelectorAll("svg .brow")).toHaveLength(2);
+    expect(b.querySelector("svg .joy")).not.toBeNull();
+    expect(b.querySelector(".mascot")?.classList.contains("curious")).toBe(true);
   });
 });
