@@ -1822,7 +1822,7 @@ def _pet_dead_cities(spec: TripSpec) -> list[str]:
     return [
         d.name
         for d in suggest_destinations(spec, len(CATALOG))
-        if not pets_possible(spec, find_offers(spec, d.name))
+        if not pets_possible(spec, find_offers(spec, d.name, estimate=True))
     ]
 
 

@@ -1525,7 +1525,7 @@ def _s10_items(r: ChatReply, tag: str, dog: bool) -> dict[str, str | None]:
     spec = r.plan.spec.model_copy(update={"pets": True})
 
     def dog_goes(name: str) -> bool:  # strict: no trips is no place for the dog
-        return any(pets_ok(t) for t in enumerate_trips(find_offers(spec, name)))
+        return any(pets_ok(t) for t in enumerate_trips(find_offers(spec, name, estimate=True)))
 
     no_pets = [d.name for d in top if dog and not dog_goes(d.name)]
     return {

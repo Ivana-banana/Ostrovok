@@ -95,8 +95,9 @@ def edit_cart(plan: Plan, cart: Cart, action: str, offer_id: str) -> Cart:
 
 
 def _pair_ids(items: list[Offer]) -> set[str]:
-    """Ids of the transfers whose hotel and leg are both in `items`. A transfer has no field
-    for them, so the pair is found by the id hash (`transfer_id`)."""
+    """Ids of the transfers whose hotel and leg are both in `items`. The id of a transfer is
+    the key of its pair (`transfer_id`): offers.offers_for_place sets it from the fields
+    hotel_offer_id and leg_offer_id (ADR-0002, #307)."""
     hotels = [o for o in items if o.kind == "hotel"]
     legs = [o for o in items if o.kind == "transport"]
     return {transfer_id(h.offer_id, x.offer_id) for h in hotels for x in legs}
