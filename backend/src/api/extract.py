@@ -375,8 +375,9 @@ CURRENCIES = [
     ("тенге", "₸", r"тенге|kzt"),
     ("дирхамах", "", r"дирхам\w*|aed"),
     ("йенах", "", r"йен\w*|jpy"),
+    ("у.е.", "", r"у\.\s?е\.?|уе|условн\w+\s+единиц\w*"),  # #167: no rate, no rubles
 ]
-AMOUNT_UNIT = r"\d(?:[.,]\d+)?\s?(?:[кk]|тыс\w*\.?|млн|миллион\w*)?\s*"
+AMOUNT_UNIT = r"\d+(?:[ \u00a0]\d{3})*(?:[.,]\d+)?\s?(?:[кk]|тыс\w*\.?|млн|миллион\w*)?\s*"
 # #158: «полмиллиона», «потолок миллион»: a word sum. «Миллион» needs a budget word before it.
 MILLION_CUE = (
     r"\b(?:бюджет\w*|потол\w+|лимит\w*|максимум\w*|до|около|порядка|не\s+(?:больше|более|дороже))"
@@ -2423,11 +2424,20 @@ def _rub(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 
 
+# #167: a price of a thing, not the budget of the trip: «виза за 80 евро», «кофе по 3 евро».
+ITEM_RE = re.compile(
+    r"\b(?:виз|кофе|капучино|чай|билет|такси|экскурс|обед|ужин|завтрак|вход|музе|трансфер|страховк"
+    r"|сувенир|напит|пиво|вино|еда|еду|аренд|прокат|отел|гостиниц|номер|хостел|метро|проезд"
+    r"|парковк|чаев|симк|пицц|шашлык|обмен|стои|цен|услуг|налог|сбор|депозит|залог)\w*"
+)
+GROUP_TAIL = rf"(?:на|для)\s+(?:{'|'.join(GROUP)})\b"
+
+
 def _currency_of(before: str, after: str) -> str | None:
     """The foreign currency written right after a sum («1000 евро») or before it («$1500»)."""
     for label, symbol, words in CURRENCIES:
         sym = re.escape(symbol) if symbol else "(?!)"
-        if re.match(rf"\s*(?:{sym}|(?:{words})\b)", after) or (
+        if re.match(rf"\s*(?:{sym}|(?:{words})(?!\w))", after) or (
             symbol and before.rstrip().endswith(symbol)
         ):
             return label
@@ -2440,8 +2450,15 @@ def _standalone_currency(t: str) -> str | None:
     for label, symbol, words in CURRENCIES:
         sym = re.escape(symbol) if symbol else "(?!)"
         by_symbol = rf"{sym}\s*\d|\d\s*{sym}"
-        by_word = rf"(?:\A\s*|{cue}\s+(?:\w+\s+)?){AMOUNT_UNIT}(?:{words})\b"
-        if re.search(by_symbol, t) or re.search(by_word, t):
+        by_word = rf"(?:\A\s*|{cue}\s+(?:\w+\s+)?){AMOUNT_UNIT}(?:{words})(?!\w)"
+        # #167: «за 2000 евро», «по 500 евро на каждого», «1000 евро в сутки», «1000 евро на двоих»
+        by_prep = rf"\b(?:за|на|по)\s+{AMOUNT_UNIT}(?:{words})(?!\w)"
+        by_tail = rf"{AMOUNT_UNIT}(?:{words})(?!\w)\s*(?:{PER_PERSON}|{PER_NIGHT}|{GROUP_TAIL})"
+        if re.search(by_symbol, t) or any(
+            not ITEM_RE.search(_fragment(t, m.start(), m.end())[0])
+            for q in (by_word, by_prep, by_tail)
+            for m in re.finditer(q, t)
+        ):
             return label
     return None
 
@@ -2529,7 +2546,7 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
                 notes.append(line)  # nights unknown: the total comes when they are
             continue
         stay = found.get("nights", nights)
-        if per_night and stay > 1:
+        if per_night:  # 1 night too: a later «на 5 ночей» recounts it (#167)
             total *= stay
             plan = "" if "nights" in found else " (длительность из плана)"
             factors.append(f"{stay} {_night_word(stay)}{plan}")

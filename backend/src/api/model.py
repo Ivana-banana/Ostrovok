@@ -87,6 +87,7 @@ from api.extract import (
     PLACE_RES,
     SEASONS,
     _known,
+    _night_word,
     asks_booking,
     asks_stay,
     children_uncounted,
@@ -373,6 +374,24 @@ def resolve_hotel_budget(data: dict) -> None:
             )
 
 
+# #167: «бюджет: 3 000 ₽ × 2 взрослых × 4 ночи»: a budget «в сутки» keeps its factors in the note.
+PER_NIGHT_BUDGET_RE = re.compile(
+    r"^бюджет: (\d[\d ]*) ₽ ×(?: (\d+) взросл\w*(?: \(дети не считаются\))? ×)? (\d+) ноч\w*"
+)
+
+
+def resolve_trip_budget(data: dict) -> None:
+    """The trip budget stated «в сутки» is a total of the nights the plan has now (#167)."""
+    for i, a in enumerate(data["assumptions"]):
+        m = PER_NIGHT_BUDGET_RE.match(a)
+        if not m or not data["nights"] or data["nights"] == int(m.group(3)):
+            continue
+        day, people, n = int(m.group(1).replace(" ", "")), int(m.group(2) or 1), data["nights"]
+        data["budget_rub"] = day * people * n
+        party = f" {people} взрослых ×" if m.group(2) else ""
+        data["assumptions"][i] = f"бюджет: {_rub(day)} ×{party} {n} {_night_word(n)}"
+
+
 def _noted(spec: TripSpec, label: str) -> bool:
     return any(_label(a) == label for a in spec.assumptions)
 
@@ -507,6 +526,8 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     for k, v in found.items():
         data[k] = data[k] + [w for w in v if w not in data[k]] if k == "wishes" else v
     resolve_hotel_budget(data)
+    if "budget_rub" not in found:  # a budget stated now is not recounted
+        resolve_trip_budget(data)
     return TripSpec.model_validate(data)
 
 
