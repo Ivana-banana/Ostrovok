@@ -1696,7 +1696,7 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         if m := re.search(r"\b(сегодня|завтра|послезавтра)\b", t):
             days = {"сегодня": 0, "завтра": 1, "послезавтра": 2}[m.group(1)]
             found["date_from"] = today + timedelta(days=days)
-        elif (m := WEEKDAY_RANGE.search(t)) and not _busy_days(t, m):
+        elif m := next((r for r in WEEKDAY_RANGE.finditer(t) if not _busy_days(t, r)), None):
             wd1, wd2 = (WEEKDAY_STEMS.index(g) for g in m.groups())
             month, tomorrow = found.get("month"), today + timedelta(days=1)
             if via := IN_DAYS.search(t):
@@ -2669,6 +2669,13 @@ def extract(
 DATE_KEYS = {"date_from", "date_to", "month", "nights"}
 
 
+def _whole_month(llm_found: dict) -> bool:
+    start, end = llm_found.get("date_from"), llm_found.get("date_to")
+    if not (start and end) or start.day != 1:
+        return False
+    return end.month == start.month and (end + timedelta(days=1)).month != end.month
+
+
 def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = None) -> dict:
     """The model's fields win over the rules' fields; the rules keep what it did not say (#258).
 
@@ -2684,6 +2691,11 @@ def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = N
         llm_found = {**llm_found, "destinations": kept}
         if not kept:
             del llm_found["destinations"]
+    if _whole_month(llm_found) and "date_from" not in found:
+        # «в ноябре» is a month, not 1..30 Nov: the rules read no days, so the model's range goes (#574).
+        llm_found = {
+            k: v for k, v in llm_found.items() if k not in ("date_from", "date_to", "nights")
+        }
     full_dates = "date_from" in llm_found and bool({"date_to", "nights"} & llm_found.keys())
     if full_dates:
         for d in DATE_KEYS:
