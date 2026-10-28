@@ -507,6 +507,11 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     for k, v in found.items():
         data[k] = data[k] + [w for w in v if w not in data[k]] if k == "wishes" else v
     resolve_hotel_budget(data)
+    # #347: a typo note «город: X → Y» lives while Y is the origin or a destination (TRAP-3)
+    now = {data["origin"], *data["destinations"]}
+    data["assumptions"] = [
+        a for a in data["assumptions"] if _label(a) != "город" or a.split(" → ")[-1] in now
+    ]
     return TripSpec.model_validate(data)
 
 

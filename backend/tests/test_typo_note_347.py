@@ -5,7 +5,10 @@ alias («Ебург», «Питер») are no typos: no note."""
 
 import pytest
 
+from api.contracts import ChatRequest
 from api.extract import extract
+from api.model import chat
+from api.store import SessionStore
 
 
 def city_notes(text):
@@ -42,4 +45,38 @@ def test_trap3_case_form_and_alias_make_no_note(text):
 
 def test_trap3_note_is_not_repeated():
     notes = extract("Хочу в Калининрад, в Калининрад на неделю")[1]
-    assert notes.count("город: Калининрад → Калининград") <= 1
+    assert notes.count("город: Калининрад → Калининград") == 1
+
+
+NOTE = "город: Калининрад → Калининград"
+
+
+@pytest.fixture
+def store(tmp_path):
+    return SessionStore(tmp_path / "sessions.db")
+
+
+def say(store, text, sid=None):
+    return chat(ChatRequest(session_id=sid, message=text), store)
+
+
+def test_trap3_typo_note_goes_when_destination_changes(store):
+    r = say(store, "Хочу в Калининрад на неделю в ноябре из Москвы, двое")
+    assert NOTE in r.plan.spec.assumptions
+    r = say(store, "давай лучше в Сочи", r.session_id)
+    assert r.plan.spec.destinations == ["Сочи"]
+    assert not [a for a in r.plan.spec.assumptions if a.startswith("город:")]
+
+
+def test_trap3_typo_note_goes_when_origin_changes(store):
+    r = say(store, "Хочу в Сочи на неделю в ноябре из Калининрад, двое")
+    assert NOTE in r.plan.spec.assumptions
+    r = say(store, "давай из Москвы", r.session_id)
+    assert r.plan.spec.origin == "Москва"
+    assert not [a for a in r.plan.spec.assumptions if a.startswith("город:")]
+
+
+def test_trap3_typo_note_stays_while_the_city_stays(store):
+    r = say(store, "Хочу в Калининрад на неделю в ноябре из Москвы, двое")
+    r = say(store, "бюджет 90 тысяч", r.session_id)
+    assert r.plan.spec.assumptions.count(NOTE) == 1
