@@ -11,6 +11,7 @@ import type {
   Plan,
   Priority,
   Stage,
+  TimelineEvent,
   TransportOffer,
   TripSpec,
   Voucher,
@@ -28,6 +29,7 @@ import {
   localDate,
   localTime,
   movePriority,
+  nightsText,
   ordinal,
   PRIORITIES,
   priorityMessage,
@@ -619,6 +621,78 @@ function Changes({ plan }: { plan: Plan }) {
   );
 }
 
+type TripLeg = {
+  key: string; // stable across rebuilds: the role of a road, the hotel of a stay
+  title: string;
+  note: string;
+  events: { e: TimelineEvent; i: number }[];
+  ids: Set<string>;
+};
+
+// #597: the events grouped by the stage of the trip: the road there, a stay per hotel, the road
+// back. The kind comes from the offer of the event; an event without an offer (own tickets,
+// «добираетесь сами») joins by its words or the stay around it.
+function tripLegs(plan: Plan): TripLeg[] {
+  const offer = (id: string | null) => (id ? plan.offers.find((o) => o.offer_id === id) : undefined);
+  const hotelOf = (e: TimelineEvent): string | null => {
+    const o = offer(e.offer_id);
+    if (o?.kind === "hotel") return o.offer_id;
+    if (o?.kind === "extra") return o.for_offer_id;
+    if (o?.kind === "transfer") return o.hotel_offer_id ?? null;
+    return null;
+  };
+  const isRoad = (e: TimelineEvent) => {
+    const o = offer(e.offer_id);
+    return o ? o.kind === "transport" : /свои билеты/.test(e.title);
+  };
+  const raw: { road: boolean; hotel: string | null; events: { e: TimelineEvent; i: number }[] }[] = [];
+  plan.timeline.forEach((e, i) => {
+    const road = isRoad(e);
+    const hotel = road ? null : hotelOf(e);
+    const last = raw.at(-1);
+    if (last && last.road === road && (road || !hotel || !last.hotel || hotel === last.hotel)) {
+      last.events.push({ e, i });
+      last.hotel ??= hotel;
+    } else raw.push({ road, hotel, events: [{ e, i }] });
+  });
+  const stays = raw.flatMap((g, n) => (g.road ? [] : [n]));
+  return raw.map((g, n) => {
+    const ids = new Set(g.events.flatMap(({ e }) => (e.offer_id ? [e.offer_id] : [])));
+    if (!g.road) {
+      const h = offer(g.hotel);
+      const nights = h?.kind === "hotel" ? Math.round((Date.parse(h.date_out) - Date.parse(h.date_in)) / 86400000) : 0;
+      const note = h ? [h.title, nights > 0 ? nightsText(nights) : ""].filter(Boolean).join(", ") : "";
+      return { key: `stay:${g.hotel ?? n}`, title: "Проживание", note, events: g.events, ids };
+    }
+    const role = !stays.length
+      ? ["Дорога", "road"]
+      : n < stays[0]
+        ? ["Дорога туда", "there"]
+        : n > stays[stays.length - 1]
+          ? ["Дорога обратно", "back"]
+          : ["Переезд", `move:${n}`];
+    const legs = [...ids].map(offer).filter((o): o is TransportOffer => o?.kind === "transport");
+    const parts: string[] = [];
+    if (legs.length) {
+      parts.push(`${legs[0].origin} → ${legs[legs.length - 1].destination}`);
+      parts.push([...new Set(legs.map((l) => MODES[l.mode]))].join(" + "));
+      const changes = legs.length - 1 + legs.reduce((a, l) => a + l.changes, 0);
+      if (changes > 0) parts.push(`пересадок: ${changes}`);
+    } else parts.push("свои билеты");
+    const [first, last] = [g.events[0].e, g.events[g.events.length - 1].e];
+    if (first !== last) parts.push(duration(first.at, last.at));
+    return { key: role[1], title: role[0], note: parts.join(", "), events: g.events, ids };
+  });
+}
+
+// «25.11 07:40 → 30.11 15:25 (UTC+3)»: the zone once when both ends share it.
+function span(from: string, to: string): string {
+  if (from === to) return zonedTime(from);
+  return zoneLabel(from) === zoneLabel(to)
+    ? `${localTime(from)} → ${zonedTime(to)}`
+    : `${zonedTime(from)} → ${zonedTime(to)}`;
+}
+
 function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
   plan: Plan;
   cart: Cart;
@@ -638,20 +712,62 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
     const o = offer(id);
     return marked && o?.kind === "extra" && o.for_offer_id !== null && gone(o.for_offer_id);
   };
+  const legs = tripLegs(plan);
+  // A stage with a problem is open and marked: the issue names its offers or their add-ons.
+  // A road alternative points at the road with the same ends. An error without such a link
+  // opens every stage.
+  const touches = (leg: TripLeg, id: string) => {
+    const o = offer(id);
+    const near = [id, o?.kind === "extra" ? o.for_offer_id : null];
+    if (o?.kind === "transfer") near.push(o.hotel_offer_id ?? null, o.leg_offer_id ?? null);
+    if (near.some((n) => n !== null && leg.ids.has(n))) return true;
+    return o?.kind === "transport" && [...leg.ids].some((n) => {
+      const l = offer(n);
+      return l?.kind === "transport" && (l.origin === o.origin || l.destination === o.destination);
+    });
+  };
+  const hot = (leg: TripLeg) =>
+    plan.issues.some((issue) =>
+      issue.fixes.some((id) => !dead(id) && touches(leg, id)) ||
+      (issue.severity === "error" && !legs.some((l) => issue.fixes.some((id) => touches(l, id)))),
+    );
   return (
     <section className="sec" aria-label="Таймлайн">
       <h2>Стыковки</h2>
-      <p className="muted">Время местное для места события.</p>
-      <ol className="timeline">
-        {plan.timeline.map((e, i) => (
-          <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined} style={{ "--i": i } as CSSProperties}>
-            <time>{zonedTime(e.at)}</time> <span className="gone-title">
-              <Money text={e.title} synthetic={isSynthetic(plan.offers)} />
-            </span>
-            {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}
-          </li>
-        ))}
-      </ol>
+      <p className="muted">Время местное для места события. Нажмите на этап, чтобы раскрыть.</p>
+      <div className="legs">
+        {legs.map((leg) => {
+          const [first, last] = [leg.events[0].e, leg.events[leg.events.length - 1].e];
+          const own = leg.events.filter(({ e }) => e.offer_id !== null);
+          const out = own.filter(({ e }) => gone(e.offer_id)).length;
+          const warn = hot(leg);
+          return (
+            <details key={leg.key} className="leg" open={warn || undefined}>
+              <summary>
+                <span className="leg-head">
+                  <b>{leg.title}</b>
+                  <time>{span(first.at, last.at)}</time>
+                  {warn && <span className="leg-warn">есть замечание</span>}
+                  {out > 0 && (
+                    <span className="gone-note">{out === own.length ? "убрано из корзины" : "часть убрана из корзины"}</span>
+                  )}
+                </span>
+                {leg.note && <span className="leg-note">{leg.note}</span>}
+              </summary>
+              <ol className="timeline">
+                {leg.events.map(({ e, i }) => (
+                  <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined} style={{ "--i": i } as CSSProperties}>
+                    <time>{zonedTime(e.at)}</time> <span className="gone-title">
+                      <Money text={e.title} synthetic={isSynthetic(plan.offers)} />
+                    </span>
+                    {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          );
+        })}
+      </div>
       {plan.issues.map((issue, i) => {
         const fixes = issue.fixes.filter((id) => !dead(id));
         if (issue.fixes.length > 0 && fixes.length === 0) return null; // only for a removed item
