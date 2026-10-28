@@ -18,7 +18,9 @@ import {
 import { Mascot, moodOf } from "./Mascot";
 
 // stage: the stage after an agent message; the roadmap links a done step to it (#434).
-type Msg = { role: "user" | "agent"; text: string; stage?: Stage };
+// An agent message keeps its reply: the choices under it stay after «ещё», a reload or a chat switch.
+type Msg = { role: "user" | "agent"; text: string; stage?: Stage; reply?: ChatReply };
+const KEEP_REPLIES = 6; // the last agent replies stored with the chat; older ones keep only their text
 type Ui = { messages: Msg[]; removed: Offer[] };
 
 const STALE_PLAN = "Не удалось обновить план — перезагрузите страницу";
@@ -69,6 +71,20 @@ const isOffer = (o: unknown): o is Offer =>
   typeof (o as Offer).title === "string" &&
   typeof (o as Offer).price_rub === "number";
 
+// A stored reply is used to draw old choices: a broken one is dropped, the text stays.
+function withValidReply(m: Msg): Msg {
+  const r = m.reply as Partial<ChatReply> | undefined;
+  const ok =
+    typeof r === "object" &&
+    r !== null &&
+    typeof r.stage === "string" &&
+    typeof r.plan === "object" &&
+    r.plan !== null &&
+    Array.isArray(r.plan.destinations) &&
+    Array.isArray(r.plan.offers);
+  return ok ? m : { ...m, reply: undefined };
+}
+
 // Saved chat of a session; broken or foreign data falls back to an empty chat.
 function loadUi(sid: string): Ui {
   try {
@@ -77,7 +93,7 @@ function loadUi(sid: string): Ui {
     if (typeof data === "object" && data !== null) {
       const { messages, removed } = data as Record<string, unknown>;
       return {
-        messages: Array.isArray(messages) ? messages.filter(isMsg) : [],
+        messages: Array.isArray(messages) ? messages.filter(isMsg).map(withValidReply) : [],
         removed: Array.isArray(removed) ? removed.filter(isOffer) : [],
       };
     }
@@ -96,8 +112,13 @@ function dropUi(sid: string) {
 }
 
 function saveUi(sid: string, ui: Ui) {
+  let keep = KEEP_REPLIES;
+  const messages = [...ui.messages]
+    .reverse()
+    .map((m) => (m.reply && keep-- > 0 ? m : { ...m, reply: undefined }))
+    .reverse();
   try {
-    localStorage.setItem(uiKey(sid), JSON.stringify(ui));
+    localStorage.setItem(uiKey(sid), JSON.stringify({ ...ui, messages }));
   } catch {
     // storage full or blocked: the session still lives on the server
   }
@@ -121,8 +142,6 @@ export function App() {
   const [road, setRoad] = useState(false); // the roadmap sheet below 1100 px
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [query, setQuery] = useState("");
-  // Replies of the earlier agent messages, by "session:index" (in memory): their choices stay clickable.
-  const [earlier, setEarlier] = useState<Record<string, ChatReply>>({});
   const [thinking, setThinking] = useState(false);
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
   const [healthNoAi, setHealthNoAi] = useState(false); // /api/mode says no model: known before the first reply
@@ -246,10 +265,9 @@ export function App() {
       if (no !== loadNo.current) return; // the user switched the chat while the agent thought
       writeSid(r.session_id);
       setReply(r);
-      setEarlier((e) => ({ ...e, [`${r.session_id}:${withUser.messages.length}`]: r }));
       setNoAi(!r.llm);
       update(
-        { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage }] },
+        { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage, reply: r }] },
         r.session_id,
       );
       const first = withUser.messages.find((x) => x.role === "user")?.text ?? m;
@@ -610,7 +628,7 @@ export function App() {
                   </div>
                 );
               // One key for the block: it moves under a new last answer without losing its state.
-              const old = m.role === "agent" && i !== lastAgent ? earlier[`${sid}:${i}`] : undefined;
+              const old = m.role === "agent" && i !== lastAgent ? m.reply : undefined;
               if (old && reply) return [msg, <EarlierChoices key={`earlier-${i}`} reply={old} current={reply} busy={busy} onSend={send} />];
               return i === lastAgent && block ? [msg, block] : [msg];
             })}
