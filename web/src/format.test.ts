@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 import type { ChatReply } from "./contracts";
-import { brief, browserTime, describe, withoutNoAi, fieldLabel, guestsText, movePriority, priorityMessage, yearsText } from "./format";
+import { brief, browserTime, describe, withoutNoAi, fieldLabel, guestsText, movePriority, priorityMessage, yearsText, zoneLabel, zonedTime } from "./format";
 
 const reply = (llm: boolean): ChatReply => ({
   session_id: "s",
@@ -192,5 +192,23 @@ suite("короткий текст агента: списки показаны �
   it("строки после списка снова видны; пустой итог — исходный текст", () => {
     expect(brief("Отели:\n1. А — 3★, рейтинг 8, BB, невозвратный — 1 ₽\n1. Свой пункт")).toBe("1. Свой пункт");
     expect(brief("Отели:")).toBe("Отели:");
+  });
+});
+
+suite("#439: старые ответы и пояс времени", () => {
+  it("в старом ответе строка о направлениях и плане без «ниже»", () => {
+    expect(brief(INSPIRE, false).split("\n")[0]).toBe("Нашёл 2 направления.");
+    expect(brief(INSPIRE).split("\n")[0]).toContain("ниже");
+    const old = brief(ASSEMBLE, false);
+    expect(old).toContain("План поездки был собран.");
+    expect(old).not.toContain("ниже");
+  });
+
+  it("TRAP-5: zoneLabel и zonedTime пишут пояс как бэкенд", () => {
+    expect(zoneLabel("2026-12-11T07:10:00+03:00")).toBe("UTC+3");
+    expect(zoneLabel("2026-11-15T00:40:00+05:30")).toBe("UTC+5:30");
+    expect(zoneLabel("2026-11-15T00:40:00-04:00")).toBe("UTC-4");
+    expect(zoneLabel("2026-11-15T00:40:00Z")).toBe("UTC");
+    expect(zonedTime("2026-12-11T07:10:00+03:00")).toBe("11.12 07:10 (UTC+3)");
   });
 });

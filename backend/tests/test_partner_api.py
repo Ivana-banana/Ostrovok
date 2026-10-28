@@ -1,7 +1,6 @@
 """Partner API (#435): plan in one call, partner keys, booking webhook, Idempotency-Key, CORS,
 the embed widget and the OpenAPI a partner reads."""
 
-import importlib
 import json
 import logging
 import threading
@@ -11,12 +10,14 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
 import api.main
 from api import cart
 from api.cart import SimulatedBooking
 from api.main import app, get_store
+from api.partner import cors_options
 from api.store import SessionStore
 
 KAZAN = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."
@@ -225,6 +226,17 @@ def test_webhook_failure_keeps_the_booking_and_is_logged(
     assert not any("secret" in w for w in warnings)  # the query token stays out of the log
 
 
+def test_webhook_log_has_no_url_even_when_urllib_puts_it_in_the_error(client, monkeypatch, caplog):
+    """urllib's ValueError for a URL without a scheme quotes the whole URL, token included."""
+    monkeypatch.setenv("BOOKING_WEBHOOK_URL", "hooks.example.com/x?token=SECRET")
+    reply = _planned(client)
+    with caplog.at_level(logging.WARNING, logger="api.webhook"):
+        assert _checkout(client, reply).status_code == 200
+    warnings = [r.getMessage() for r in caplog.records if r.name == "api.webhook"]
+    assert warnings and not any("SECRET" in w or "token" in w for w in warnings), warnings
+    assert any("ValueError" in w for w in warnings), warnings
+
+
 # --- Idempotency-Key --------------------------------------------------------------------------
 
 
@@ -280,19 +292,18 @@ def test_idempotency_key_after_a_refusal_can_retry(client):
 
 @pytest.fixture
 def cors_app(monkeypatch, tmp_path):
-    """api.main reads ALLOWED_ORIGINS at import: reload it with the variable set."""
+    """The same CORS options api.main reads at import, around the app: no module reload."""
     for key in ENV:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ALLOWED_ORIGINS", "https://shop.example, https://b2b.example")
-    module = importlib.reload(api.main)
+    options = cors_options()
+    assert options is not None
     store = SessionStore(tmp_path / "sessions.db")
-    module.app.dependency_overrides[module.get_store] = lambda: store
+    api.main.app.dependency_overrides[get_store] = lambda: store
     try:
-        with TestClient(module.app) as client:
-            yield client
+        yield TestClient(CORSMiddleware(api.main.app, **options))
     finally:
-        monkeypatch.delenv("ALLOWED_ORIGINS")
-        importlib.reload(api.main)
+        api.main.app.dependency_overrides.pop(get_store, None)
 
 
 def test_cors_allows_listed_origins_only(cors_app):

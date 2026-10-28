@@ -40,6 +40,18 @@ def allowed_origins() -> list[str]:
     return _list("ALLOWED_ORIGINS")
 
 
+def cors_options() -> dict | None:
+    """Keyword arguments of CORSMiddleware, None without ALLOWED_ORIGINS (no CORS headers)."""
+    origins = allowed_origins()
+    if not origins:
+        return None
+    return {
+        "allow_origins": origins,
+        "allow_methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "X-API-Key", "Idempotency-Key"],
+    }
+
+
 def require_key(key: Annotated[str | None, Security(API_KEY)] = None) -> None:
     """401 without a valid X-API-Key when PARTNER_API_KEYS is set; open access when it is empty."""
     keys = _list("PARTNER_API_KEYS")

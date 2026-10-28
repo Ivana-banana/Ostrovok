@@ -79,6 +79,20 @@ export function localTime(iso: string): string {
   return m ? `${m[3]}.${m[2]} ${m[4]}:${m[5]}` : iso;
 }
 
+// The zone of the event as the backend writes it in the chat: «UTC+3», «UTC+5:30» (TRAP-5, #364).
+export function zoneLabel(iso: string): string {
+  const m = /([+-])(\d{2}):?(\d{2})$/.exec(iso);
+  if (!m) return /Z$/.test(iso) ? "UTC" : "";
+  const minutes = m[3] === "00" ? "" : `:${m[3]}`;
+  return `UTC${m[1]}${Number(m[2])}${minutes}`;
+}
+
+// Local time with its zone: «11.12 07:10 (UTC+3)».
+export function zonedTime(iso: string): string {
+  const zone = zoneLabel(iso);
+  return zone ? `${localTime(iso)} (${zone})` : localTime(iso);
+}
+
 // A moment of the service itself (voucher time, written in UTC): shown in the browser zone.
 export function browserTime(iso: string): string {
   const d = new Date(iso);
@@ -163,18 +177,19 @@ export const SOURCES: { name: string; text: string; url: string; licence: string
 // _text_assemble, _text_inspire). A row is dropped only right after its header. The header of
 // the destinations and of the plan becomes one short lead line. Every other line (summary, climate,
 // «Предлагаю», «Почему», assumptions, questions, hints) stays as it is.
-const LISTS: { head: RegExp; row: RegExp; lead?: (rows: number) => string }[] = [
+const LISTS: { head: RegExp; row: RegExp; lead?: (rows: number, last: boolean) => string }[] = [
   { head: /^Отели:$/, row: /^\d+\. .+ — \S*★, рейтинг / },
   { head: /^Транспорт:$/, row: /^Рейс \d+\. / },
   {
     head: /^План поездки:$/,
     row: /^\d{2}\.\d{2} \d{2}:\d{2} \(UTC[+-][\d:]+\) — /,
-    lead: () => "План поездки собран — таймлайн ниже.",
+    lead: (_n, last) => (last ? "План поездки собран — таймлайн ниже." : "План поездки был собран."),
   },
   {
     head: /^Подходящие направления.*:$/,
     row: /^\d+\. .+ \(.+\) — от .+ на \d+ чел\./,
-    lead: (n) => `Нашёл ${n} ${countWord(n, "направление", "направления", "направлений")} — выберите карточку ниже.`,
+    lead: (n, last) =>
+      `Нашёл ${n} ${countWord(n, "направление", "направления", "направлений")}${last ? " — выберите карточку ниже." : "."}`,
   },
 ];
 
@@ -185,7 +200,9 @@ function countWord(n: number, one: string, few: string, many: string): string {
   return m10 === 1 ? one : m10 > 1 && m10 < 5 ? few : many;
 }
 
-export function brief(text: string): string {
+// `last`: the cards sit under this answer. In an older answer they sit under a newer one, so
+// the lead line must not point «ниже» (#439).
+export function brief(text: string, last = true): string {
   const out: string[] = [];
   let list: (typeof LISTS)[number] | null = null;
   let head = -1; // index in out of the lead line of the open list
@@ -194,7 +211,7 @@ export function brief(text: string): string {
     const t = line.trim();
     if (list && list.row.test(t)) {
       rows++;
-      if (list.lead) out[head] = list.lead(rows);
+      if (list.lead) out[head] = list.lead(rows, last);
       continue;
     }
     list = LISTS.find((l) => l.head.test(t)) ?? null;
