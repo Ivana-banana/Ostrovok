@@ -88,12 +88,15 @@ suite("чат", () => {
       "Напишите «беру» или номер отеля.",
     ].join("\n");
     await act(async () => root.render(<AgentText text={text} synthetic />));
-    const items = [...box.querySelectorAll("ul.offer li")].map((li) => li.textContent);
-    expect(items).toEqual([
-      "Отель: Казантель, Казань, 2★, без питания, невозвратный — 7 900 ₽",
-      "Туда: поезд Москва → Казань, 10.12 18:50 → 11.12 07:10 (UTC+3) — 7 800 ₽",
-      "Итого 15 700 ₽синтетика",
+    const items = [...box.querySelectorAll("ul.offer li")];
+    expect(items.map((li) => [...li.querySelectorAll(".pt-row, .pt-sub")].map((x) => x.textContent))).toEqual([
+      ["Отель Казантель, Казань7 900 ₽", "2★ · без питания · невозвратный"],
+      ["Туда · поезд7 800 ₽", "Москва → Казань", "10.12 18:50 → 11.12 07:10 · UTC+3"],
+      ["Итого15 700 ₽синтетика"],
     ]);
+    expect(items.map((li) => li.querySelector("svg.pt-ic") !== null)).toEqual([true, true, false]);
+    // the arrow is a drawing; the text «→» stays for a screen reader and a copy
+    expect(items[1].querySelectorAll("svg.arrow[aria-hidden='true']")).toHaveLength(2);
     expect(box.querySelectorAll("ul.offer .synth")).toHaveLength(1);
     const more = box.querySelector("details.more") as HTMLDetailsElement;
     expect(more.open).toBe(false);

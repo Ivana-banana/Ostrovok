@@ -997,6 +997,72 @@ button.icon {
   margin: 0 14px 10px;
 }
 
+/* #468: an item of the proposed trip: icon, label and price, the facts below in a muted line */
+.msg.agent ul.points li.pt {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.pt-ic {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pt-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.pt-row {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.pt-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.pt-mode {
+  color: var(--muted);
+}
+
+.pt-price {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.pt-sub {
+  color: var(--muted);
+  font-size: var(--fs-s);
+}
+
+.msg.agent ul.points li.sum {
+  font-weight: 700;
+}
+
+.arrow {
+  width: 18px;
+  height: 8px;
+  vertical-align: middle;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 mark {
   background: var(--acc);
   color: var(--acc-ink);
