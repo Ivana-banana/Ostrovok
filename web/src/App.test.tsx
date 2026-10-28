@@ -97,23 +97,71 @@ suite("приложение", () => {
     expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
   });
 
+  it("#434: справа путь поездки вместо панели плана; подпись шага открывает его листом", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const road = box.querySelector("aside#roadmap[aria-label='Путь поездки']");
+    expect(road?.querySelector("[aria-current='step'] .label")?.textContent).toBe("Корзина");
+    expect(road?.querySelector("[aria-label='Сравнение отелей']")).toBeNull(); // no plan data on the right
+    expect(box.querySelector("header.top .road, header.top .stage")).toBeNull();
+    await click("Шаг 4 из 5 · Корзина");
+    expect(box.querySelector(".app")?.classList.contains("road-open")).toBe(true);
+    await click("Закрыть путь поездки");
+    expect(box.querySelector(".app")?.classList.contains("road-open")).toBe(false);
+  });
+
+  it("индикатор «думает» чередуется между ответами: банан, потом самолётик", async () => {
+    let answer: (v: Response) => void = () => {};
+    vi.stubGlobal("fetch", () => new Promise<Response>((r) => (answer = r)));
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    expect(box.querySelector(".think.banana .mascot.thinking")).not.toBeNull();
+    await act(async () => answer(json(200, checkoutStage)));
+    await flush();
+    const area = box.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "Ещё вариант");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("Отправить");
+    expect(box.querySelector(".think.plane .route")).not.toBeNull();
+    await act(async () => answer(json(200, checkoutStage)));
+    await flush();
+  });
+
   it("неизвестная сессия: начинаем заново без ошибки", async () => {
     localStorage.setItem(SESSION_KEY, "gone");
     await mount();
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     expect(box.querySelector("[role='alert']")).toBeNull();
-    expect(box.textContent).toContain("Здесь появится доска поездки");
+    expect(box.textContent).toContain("Куда поедем?");
   });
 
-  it("TRAP-1: ответ без модели помечен «без ИИ» в чате и на доске", async () => {
+  it("TRAP-1: ответ без модели помечен «без ИИ» значком и в блоке этапа, текст ответа — без хвоста", async () => {
     routes["POST /api/chat"] = () => ({ status: 200, body: { ...booked, llm: false } });
     await mount();
     await click("Выходные в Казани");
     await click("Отправить");
     expect(calls.at(-1)?.body).toMatchObject({ session_id: null });
     expect(localStorage.getItem(SESSION_KEY)).toBe("s1");
-    expect(box.querySelector("[role='status']")?.textContent).toContain("без ИИ");
+    // #434: the badge says it once; the label after every answer is not repeated in the bubble.
+    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
     expect(box.querySelector(".board")?.textContent).toContain("без ИИ");
+    expect(box.querySelector("[role='status'] .b")?.textContent).toBe("Бронь оформлена.");
+  });
+
+  it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/mode сообщает llm=false", async () => {
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false } });
+    await mount();
+    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
+  });
+
+  it("с моделью пометки до первого сообщения нет", async () => {
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true } });
+    await mount();
+    expect(box.querySelector(".badge-noai")).toBeNull();
   });
 
   it("ошибка сервера: понятный текст без трассировки", async () => {
@@ -191,6 +239,26 @@ suite("приложение", () => {
     const sum = String(total).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     const last = [...box.querySelectorAll(".msg.agent")].at(-1)?.textContent;
     expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
+  });
+
+  it("#161: корзина изменилась, а план не обновился — ошибка вместо тихого устаревшего плана", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    let reads = 0;
+    routes["GET /api/session/s1"] = () => (++reads === 1 ? { status: 200, body: checkoutStage } : { status: 500 });
+    routes["POST /api/cart"] = () => ({ status: 200, body: { items: [], total_rub: 0 } });
+    await mount();
+    await click("Убрать");
+    expect(box.querySelector("[role='alert']")?.textContent).toContain("Не удалось обновить план");
+  });
+
+  it("#161: бронь оформлена, а план не обновился — ошибка про перезагрузку", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    let reads = 0;
+    routes["GET /api/session/s1"] = () => (++reads === 1 ? { status: 200, body: checkoutStage } : { status: 500 });
+    routes["POST /api/checkout"] = () => ({ status: 200, body: booked.voucher });
+    await mount();
+    await click("Подтвердить бронь");
+    expect(box.querySelector("[role='alert']")?.textContent).toContain("перезагрузите страницу");
   });
 
   it("подтверждение: отправляет итог, который видел пользователь, и показывает ваучер", async () => {
@@ -299,7 +367,8 @@ suite("приложение", () => {
       expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
       expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
       await click("＋ Новый чат");
-      expect(box.textContent).toContain("Здесь появится доска поездки");
+      expect(box.textContent).toContain("Куда поедем?");
+      expect(box.querySelector("[aria-label='Корзина']")).toBeNull();
     } finally {
       vi.restoreAllMocks();
     }
@@ -335,7 +404,20 @@ suite("приложение", () => {
     expect(chips).toEqual(["1. отмена", "2. цена"]);
   });
 
-  it("подвал: атрибуция OpenStreetMap (ODbL) видна и без поездки", async () => {
+  it("подписи про хранение чатов и синтетику спрятаны под «?» и есть в разметке", async () => {
+    await mount();
+    const hints = [...box.querySelectorAll("details.hint")] as HTMLDetailsElement[];
+    expect(hints.map((h) => h.open)).toEqual([false, false]);
+    expect(hints.map((h) => h.textContent)).toEqual([
+      "?Список чатов хранится только в этом браузере.",
+      "?Цены и рейсы — синтетика. Оплата имитирована.",
+    ]);
+    // one click opens a note
+    await act(async () => hints[1].querySelector("summary")!.click());
+    expect(hints[1].open).toBe(true);
+  });
+
+  it("подвал: атрибуция OpenStreetMap (ODbL) есть и без поездки, под «Данные ?» в один клик", async () => {
     await mount();
     const foot = box.querySelector("footer[aria-label='Источники данных']");
     expect(foot?.textContent).toContain("© участники OpenStreetMap");
@@ -343,6 +425,10 @@ suite("приложение", () => {
     expect(link.textContent).toBe("ODbL");
     expect(link.href).toBe("https://www.openstreetmap.org/copyright");
     expect(foot?.textContent).toContain("синтетика");
+    // hidden under «Данные ?» until opened, one click away
+    const more = foot?.querySelector("details");
+    expect(more?.open).toBe(false);
+    expect(more?.querySelector("summary")?.textContent).toContain("Данные");
   });
 
   it("TRAP-7: подвал называет всю синтетику и оценки команды", async () => {
@@ -395,7 +481,7 @@ suite("список чатов слева", () => {
     await say("Казань на выходные");
     await click("＋ Новый чат");
     expect(userMsgs()).toEqual([]);
-    expect(box.textContent).toContain("Здесь появится доска поездки");
+    expect(box.textContent).toContain("Куда поедем?");
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     await say("Сочи с детьми");
     expect(calls.filter((c) => c.key === "POST /api/chat").map((c) => c.body)).toEqual([
@@ -533,7 +619,7 @@ suite("чат как в мессенджере", () => {
     r.plan.destinations = [d, { ...d, name: "Сочи", est_total_rub: d.est_total_rub + 1000, travel_hours: d.travel_hours + 1 }];
     r.plan.spec.budget_rub = d.est_total_rub + 500;
     routes["POST /api/chat"] = (b) =>
-      (b as { message: string }).message.startsWith("первый")
+      (b as { message: string }).message === d.name
         ? { status: 200, body: checkoutStage }
         : { status: 200, body: r };
     await mount();
@@ -541,14 +627,75 @@ suite("чат как в мессенджере", () => {
     await click("Отправить");
     const cards = [...box.querySelectorAll(".feed [aria-label='Направления'] .dest")];
     expect(cards).toHaveLength(2);
-    expect(box.querySelector(".plan [aria-label='Направления']")).toBeNull();
+    // #434: one window — the cards stand under the answer, there is no plan panel.
+    expect(box.querySelectorAll("[aria-label='Направления']")).toHaveLength(1);
+    expect(box.querySelector("#plan, .plan-toggle, .plan-sheet-open")).toBeNull();
     expect(cards[0].querySelector(".tag.best")?.textContent).toBe("лучшая цена");
     expect(cards[1].querySelector(".tag.warn")?.textContent).toBe("дороже бюджета");
     expect(cards[0].querySelector(".tag.warn")).toBeNull();
     for (const c of cards) expect(c.querySelector(".price .synth")?.textContent).toBe("синтетика");
     await act(async () => (cards[0].querySelector("button") as HTMLButtonElement).click());
     await flush();
-    expect(calls.at(-1)?.body).toMatchObject({ message: `первый: ${d.name}` });
+    expect(calls.at(-1)?.body).toMatchObject({ message: d.name });
+  });
+
+  it("#458: вопрос-чипы, что повторяют имена карточек, скрыты; другие вопросы остаются", async () => {
+    const r = { ...structuredClone(checkoutStage), stage: "inspire" as const };
+    const [d] = r.plan.destinations;
+    r.plan.destinations = [d, { ...d, name: "Сочи" }];
+    r.questions = [
+      { text: "Куда поедем?", options: [d.name, "Сочи"] },
+      { text: "Сколько вас?", options: ["двое", "трое"] },
+    ];
+    routes["POST /api/chat"] = () => ({ status: 200, body: r });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const q = [...box.querySelectorAll(".questions p")].map((p) => p.textContent);
+    expect(q).toEqual(["Сколько вас?"]);
+  });
+
+  it("#464: варианты прошлой подборки остаются под своим ответом и после перезагрузки", async () => {
+    const first = { ...structuredClone(checkoutStage), stage: "inspire" as const };
+    const [d] = first.plan.destinations;
+    first.plan.destinations = [d, { ...d, name: "Кировск" }];
+    const second = structuredClone(first);
+    second.plan.destinations = [{ ...d, name: "Теберда" }, { ...d, name: "Губа" }];
+    let n = 0;
+    routes["POST /api/chat"] = () => ({ status: 200, body: n++ ? second : first });
+    routes[`GET /api/session/${first.session_id}`] = () => ({ status: 200, body: second });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const area = box.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "ещё");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("Отправить");
+    const names = () => [...box.querySelectorAll(".feed .dest h3, .feed .dest b")].map((e) => e.textContent ?? "");
+    const before = names().join(" ");
+    expect(before).toContain("Кировск");
+    expect(before).toContain("Теберда");
+    // reload: a new app on the same storage
+    act(() => root.unmount());
+    root = createRoot(box);
+    await mount();
+    const after = names().join(" ");
+    expect(after).toContain("Кировск");
+    expect(after).toContain("Теберда");
+  });
+
+  it("#458: на select чипы-вопросы остаются: у карточек там нет «Выбрать»", async () => {
+    const r = { ...structuredClone(checkoutStage), stage: "select" as const };
+    const [d] = r.plan.destinations;
+    r.plan.destinations = [d, { ...d, name: "Сочи" }];
+    r.questions = [{ text: "Какой город берём?", options: [d.name, "Сочи"] }];
+    routes["POST /api/chat"] = () => ({ status: 200, body: r });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    expect([...box.querySelectorAll(".questions p")].map((p) => p.textContent)).toEqual(["Какой город берём?"]);
   });
 
   it("строки «Допущения» и «Не проверяю» ответа — приглушённой строкой", async () => {

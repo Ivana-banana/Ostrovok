@@ -5,7 +5,22 @@ T12 inspiration, T14 eval.
 
 Routes: POST /api/chat (ChatRequest -> ChatReply), GET /api/session/{session_id} -> ChatReply,
 POST /api/cart (CartAction -> Cart), POST /api/checkout (CheckoutRequest -> Voucher;
-409 when the total differs from the cart or the booking provider refuses).
+409 when the total differs from the cart or the booking provider refuses),
+GET /api/mode -> LlmMode (known before the first reply; consumers: web/src/api.ts getMode,
+web/src/App.tsx, web/e2e/noai-badge.spec.ts, backend/tests/test_api.py). GET /health stays
+exactly {"status": "ok"} (task/rules.md): the LLM mode lives only in /api/mode.
+
+Partner API (#289, #435): every route above also lives under /api/v1 with the same models.
+POST /api/v1/plan (ChatRequest -> ChatReply): the chat driven to a filled cart (stage
+"checkout") or to a blocking question; it books nothing. With PARTNER_API_KEYS set, /api/v1
+routes but health and mode need the header X-API-Key, else 401; /api/* (the web) needs none.
+POST /api/checkout and /api/v1/checkout take the optional header Idempotency-Key: a repeat of
+the key returns the first Voucher, the key with another body is 422. A new booking is POSTed as
+Voucher JSON to BOOKING_WEBHOOK_URL. CORS: ALLOWED_ORIGINS. No new models: the web mirror does
+not change. Consumers: api/main.py, api/partner.py, api/webhook.py, api/cart.py (webhook),
+api/store.py (idempotency_keys), backend/src/api/embed.js and examples/embed.html (the widget
+loads the web app), README «Как встроить», backend/tests/test_partner_api.py,
+backend/tests/test_api_v1.py.
 
 Money: whole roubles for everything (all guests, all nights, taxes included). Time: ISO 8601
 with a time zone, local to the place of the event. Only providers write prices and times
@@ -236,6 +251,15 @@ class Voucher(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"message": "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч"},
+                {"session_id": "<session_id из ответа>", "message": "а подешевле?"},
+            ]
+        }
+    )
+
     session_id: str | None = None  # None: new session
     message: str = Field(min_length=1)
 
@@ -251,6 +275,10 @@ class ChatReply(BaseModel):
     llm: bool  # False: rule-based mode without a model (TRAP-1)
 
 
+class LlmMode(BaseModel):
+    llm: bool  # False: rule-based mode without a model (TRAP-1); GET /api/mode
+
+
 class CartAction(BaseModel):
     session_id: str
     action: Literal["add", "remove"]
@@ -258,6 +286,18 @@ class CartAction(BaseModel):
 
 
 class CheckoutRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "session_id": "<session_id из ответа>",
+                    "confirm_total_rub": 24100,
+                    "guest": {"name": "Анна Петрова", "contact": "+7 900 000-00-00"},
+                }
+            ]
+        }
+    )
+
     session_id: str
     confirm_total_rub: int  # total the user saw when confirming
     guest: Guest | None = None  # to be copied to Voucher.guest by checkout (#367)

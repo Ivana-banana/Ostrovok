@@ -3,10 +3,10 @@
 from datetime import date, timedelta
 
 import pytest
+from talk import say
 
 from api import dag, llm
-from api.contracts import Cart, ChatRequest, Plan, TripSpec
-from api.model import chat
+from api.contracts import Cart, Plan, TripSpec
 from api.optimizer import enumerate_trips, hotel_rows
 from api.store import SessionStore
 
@@ -16,10 +16,6 @@ SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, о�
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 @pytest.fixture

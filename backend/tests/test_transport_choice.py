@@ -5,9 +5,8 @@ LLM key (TRAP-1): `chat` runs on rules when no model is configured.
 """
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.offers import transfer_id
 from api.store import SessionStore
 
@@ -17,10 +16,6 @@ SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def legs(r):
@@ -329,3 +324,27 @@ def test_hotel_in_the_message_on_assemble_changes_only_the_transport_and_says_so
     r = say(store, "беру второй отель и поезд", r.session_id)
     assert r.stage == "assemble" and hotel_ids(r) == hotels
     assert "Отель уже выбран, сменить его можно на шаге сравнения." in r.reply
+
+
+@pytest.mark.parametrize(
+    ("text", "row"),
+    [
+        ("поезд и третий отель", 2),
+        ("второй отель поездом", 1),
+        ("отель 1 и поезд", 0),
+        ("отель 7, поезд", 6),
+    ],
+)
+def test_hotel_and_train_without_a_verb_pick_both(store, text, row):
+    """#388: no «беру»: the hotel row is kept and no rebuild runs."""
+    from api.optimizer import hotel_rows
+
+    r = say(store, SOCHI)
+    rows = hotel_rows(r.plan.offers, r.plan.selected)
+    r = say(store, text, r.session_id)
+    assert "Было → стало" not in r.reply
+    if row < len(rows):
+        assert hotel_ids(r) == [rows[row].offer_id]
+        assert [x.mode for x in legs(r)] == ["train", "train"]
+    else:
+        assert f"Отеля {row + 1} нет" in r.reply

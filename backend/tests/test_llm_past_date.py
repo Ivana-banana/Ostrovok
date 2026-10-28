@@ -4,11 +4,10 @@ import json
 from datetime import date
 
 import pytest
+from talk import say
 
 from api import llm
-from api.contracts import ChatRequest
 from api.extract import extract, llm_past_dates
-from api.model import chat
 from api.store import SessionStore
 
 # No rule reads these words as a place or a date: the model alone brings both.
@@ -73,10 +72,6 @@ class Resp:
 
     def __exit__(self, *exc):
         return False
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def past_notes(spec):

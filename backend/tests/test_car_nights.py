@@ -12,10 +12,10 @@ Offline, without an LLM key (TRAP-1); dates, times and ids only from offers (TRA
 from datetime import date, timedelta
 
 import pytest
+from talk import say
 
 from api import offers
-from api.contracts import ChatRequest, TransportOffer, TripSpec
-from api.model import chat
+from api.contracts import TransportOffer, TripSpec
 from api.offers import MAX_DRIVE, drive_time, resolve_place, road_nights, transport_offers
 from api.store import SessionStore
 
@@ -28,10 +28,6 @@ def store(tmp_path, monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("GIGACHAT_AUTH_KEY", raising=False)
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def car(origin: str, place: str) -> list[TransportOffer]:

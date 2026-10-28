@@ -36,6 +36,7 @@ from api.contracts import (
 from api.offers import transfer_id
 from api.store import SessionStore
 from api.timeline import build_timeline
+from api.webhook import send_booking
 
 log = logging.getLogger(__name__)
 
@@ -107,16 +108,30 @@ def _drop_orphan_transfers(items: list[Offer]) -> list[Offer]:
     return [o for o in items if o.kind != "transfer" or o.offer_id in valid]
 
 
+TRANSFER_NOTES = {
+    "out": "трансфер туда: добираетесь сами",
+    "back": "трансфер обратно: добираетесь сами",
+}
+
+
+def remember_refusal(plan: Plan, slots: set[str] | None = None) -> Plan:
+    """Keep the preference when a car or a new offer set has no transfer pair (#211)."""
+    slots = refused(plan) if slots is None else slots
+    notes = [a for a in plan.spec.assumptions if a not in TRANSFER_NOTES.values()]
+    notes += [note for slot, note in TRANSFER_NOTES.items() if slot in slots]
+    return plan.model_copy(update={"spec": plan.spec.model_copy(update={"assumptions": notes})})
+
+
 def refused(plan: Plan) -> set[str]:
     """Slots ("out", "back") whose transfer the user refused (#200): the selected hotel and leg
     have a transfer offer, and it is not selected. The plan selects the transfer of every pair
-    (pick_hotel); only the user takes it out («без трансфера», the cart). The refusal so lives
-    in `plan.selected`; the contract has no field for it. Same rule as api/timeline.py."""
+    (pick_hotel); only the user takes it out («без трансфера», the cart). Read that selection
+    and the saved preference, which survives a car with no transfer offer (#211)."""
     by_id = {o.offer_id: o for o in plan.offers}
     chosen = [by_id[i] for i in plan.selected if i in by_id]
     hotels = [o for o in chosen if o.kind == "hotel"]
     legs = [o for o in chosen if o.kind == "transport"]
-    return {
+    return {slot for slot, note in TRANSFER_NOTES.items() if note in plan.spec.assumptions} | {
         _slot(x, plan.spec)
         for h in hotels
         for x in legs
@@ -189,6 +204,17 @@ def sync_plan(plan: Plan, old: Cart, new: Cart) -> Plan:
         if by_id.get(i)
         and (by_id[i].kind == "extra" or (by_id[i].kind == "transfer" and i in pairs))
     }
+    no = refused(plan)
+    hotels = [o for o in plan.offers if o.kind == "hotel"]
+    legs = [o for o in plan.offers if o.kind == "transport"]
+    for h in hotels:
+        for x in legs:
+            pair = transfer_id(h.offer_id, x.offer_id)
+            if pair in gone:
+                no.add(_slot(x, plan.spec))
+            if pair in after - before:
+                no.discard(_slot(x, plan.spec))
+    plan = remember_refusal(plan, no)
     for i in plan.selected:
         o = by_id.get(i)
         if o and o.kind != "extra" and _slot(o, plan.spec) in slots:
@@ -458,7 +484,10 @@ def checkout_reply(
     nothing new.
 
     `guest` (#367) goes into the voucher of a new booking; the provider does not get it. A
-    repeat returns the first booking with its first guest."""
+    repeat returns the first booking with its first guest.
+
+    A booking new to the session goes to BOOKING_WEBHOOK_URL (api/webhook.py, #435) after it
+    is stored; a failed webhook is logged and the booking stays."""
     sid = session_id
     seen = _known(store.get(sid))
     if _repeat(seen, confirm_total_rub):
@@ -483,6 +512,7 @@ def checkout_reply(
         store.save_voucher(sid, n, e.voucher)  # closes attempt n: the next one has a new key
         raise
     voucher = store.save_voucher(sid, n, voucher)
+    stored = []  # set by keep(): this call put the booking into the session
 
     def keep(prev: ChatReply | None) -> ChatReply:
         cur = _known(prev)
@@ -492,9 +522,13 @@ def checkout_reply(
         if cur.cart != seen.cart:  # edited during the payment: the booking is the confirmed cart
             note = " Корзину изменили во время оплаты: бронь оформлена на подтверждённую корзину."
             out = out.model_copy(update={"reply": out.reply + note})
+        stored.append(True)
         return out
 
-    return store.update(sid, keep)
+    out = store.update(sid, keep)
+    if stored and out.voucher is not None:  # one webhook per booking of the session (#435)
+        send_booking(out.voucher)
+    return out
 
 
 def checkout_route(req: CheckoutRequest, store: SessionStore) -> Voucher:
