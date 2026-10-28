@@ -136,6 +136,18 @@ suite("приложение", () => {
     expect(box.querySelector(".board")?.textContent).toContain("без ИИ");
   });
 
+  it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/mode сообщает llm=false", async () => {
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false } });
+    await mount();
+    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
+  });
+
+  it("с моделью пометки до первого сообщения нет", async () => {
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true } });
+    await mount();
+    expect(box.querySelector(".badge-noai")).toBeNull();
+  });
+
   it("ошибка сервера: понятный текст без трассировки", async () => {
     routes["POST /api/chat"] = () => ({ status: 500, body: { detail: "Traceback ..." } });
     await mount();

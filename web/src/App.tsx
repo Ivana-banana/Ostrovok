@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, cartAction, chat, checkout, getSession } from "./api";
+import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
 import { Board, Destinations, destinationsInChat } from "./Board";
 import { PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, StagePills, Thinking } from "./Chat";
@@ -132,6 +132,7 @@ export function App() {
   const [thinking, setThinking] = useState(false);
   const [typing, setTyping] = useState<number | null>(null); // index of the message being typed
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
+  const [healthNoAi, setHealthNoAi] = useState(false); // /api/mode says no model: known before the first reply
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   // Every chat load gets a number: an answer of an older load is dropped.
@@ -200,6 +201,13 @@ export function App() {
       if (no === loadNo.current) setRestoring(false);
     }
   }
+
+  // The mode badge must not wait for the first reply.
+  useEffect(() => {
+    getMode()
+      .then((m) => setHealthNoAi(m.llm === false))
+      .catch((e) => console.warn("GET /api/mode failed; the badge waits for the first reply", e));
+  }, []);
 
   // Reload restores the last open chat.
   useEffect(() => {
@@ -479,7 +487,7 @@ export function App() {
           {chats.length > 0 && !groups.length && <p className="side-empty">Не нашёл чатов по запросу.</p>}
         </nav>
         <div className="foot">
-          {noAi && (
+          {(reply ? noAi : healthNoAi) && (
             <span className="badge-noai">
               <i />
               Без ИИ — упрощённый режим
