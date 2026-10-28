@@ -721,7 +721,8 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     party = party_question(spec) if spec.destinations else []
     if spec.destinations:
         return [*origin, *(children_question(message, spec) or party)[:1]]
-    if spec.wishes:
+    if spec.wishes or spec.max_travel_hours is not None:
+        # #365 (C21): «недалеко» is a wish of the road: the agent shows the near places at once
         return [*origin, *party]
     out = [*origin]
     if not spec.month and not spec.date_from:

@@ -1355,47 +1355,64 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
 
 
 _EN_MONTH = "|".join(sorted(MONTHS_EN, key=len, reverse=True))
-EN_DAY_MONTH_RE = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({_EN_MONTH})\b")
+_EN_DAY = r"(\d{1,2})(?:st|nd|rd|th)?"
+_EN_TO = r"\s*(?:[-–—]|to|till|until)\s*"
+# «20 November», «20th of November», «20-23 November», «from 20 to 23 November»
+EN_DAY_MONTH_RE = re.compile(
+    rf"\b{_EN_DAY}(?:{_EN_TO}{_EN_DAY})?\s+(?:of\s+)?({_EN_MONTH})\b"
+)
+# «November 20», «November 20 - 23»; a number of nights or guests is no day: «may 5 nights»
 EN_MONTH_DAY_RE = re.compile(
-    rf"\b({_EN_MONTH})\s+(\d{{1,2}})(?:st|nd|rd|th)?\b"
-    r"(?!\s*(?:nights?|days?|weeks?|adults?|people|persons?|guests?|kids?|child|children|\d|[:.]\d))"
+    rf"\b({_EN_MONTH})\s+(?:the\s+)?{_EN_DAY}(?:{_EN_TO}{_EN_DAY})?\b"
+    r"(?!\s*(?:nights?|days?|weeks?|adults?|people|persons?|guests?|kids?|child|children|[:.]\d))"
 )
 
 
 def _dates_en(t: str, found: dict, notes: list[str]) -> None:
-    """#365 (C20): «from 20 November», «20th of November», «November 20»: the start day.
+    """#365 (C20): «from 20 November», «20th of November», «November 20», «20-23 November».
 
-    The month word is read by _dates; a day it did not find is set here (TRAP-3). «may» counts
-    after a number or a month-first day only; «I may 5 nights» is no date."""
+    _dates reads the month word only; the day is read here (TRAP-3). «may» is a month after a
+    day or before a day that is no count: «I may 5 nights» is no date."""
     if "date_from" in found:
         return
     if m := EN_DAY_MONTH_RE.search(t):
-        day, month = int(m.group(1)), MONTHS_EN[m.group(2)]
+        d1, d2, month = m.group(1), m.group(2), MONTHS_EN[m.group(3)]
     elif m := EN_MONTH_DAY_RE.search(t):
-        month, day = MONTHS_EN[m.group(1)], int(m.group(2))
+        month, d1, d2 = MONTHS_EN[m.group(1)], m.group(2), m.group(3)
     else:
         return
     today = date.today()
     try:
-        start = future_date(month, day, today)
+        start = future_date(month, int(d1), today)
     except ValueError:
         notes.append(f"даты: «{m.group(0)}» нет в календаре, даты подобраны")
         return
     if start.year > today.year and date(today.year, start.month, start.day) >= today - PAST_WINDOW:
         notes.append(past_year_note(start, start.year))
     found["date_from"], found["month"] = start, start.month
+    if d2 is None:
+        return
+    try:
+        end = date(start.year, month, int(d2))
+    except ValueError:
+        end = start
+    if end <= start or (end - start).days > MAX_NIGHTS:
+        notes.append(f"даты: «{m.group(0)}» — такого периода нет, конец по длительности")
+        return
+    found["date_to"], found["nights"] = end, (end - start).days
 
 
 # «на ноябрьские»: 4 November is the day of national unity, a fixed public holiday (Labour Code
-# of Russia, art. 112). Nothing else in the calendar is fixed: the weekend around it is taken.
-NOVEMBER_RE = re.compile(r"\bноябрьск\w*")
+# of Russia, art. 112). The transfers of days off change by year: the weekend around it is taken.
+# The plural only: «ноябрьский снег» names the month, not the holidays.
+NOVEMBER_RE = re.compile(r"\bноябрьск(?:ие|их|им|ими)\b")
 
 
-def _november_holidays(t: str, found: dict, notes: list[str]) -> date | None:
-    """#365 (C21): «на ноябрьские» sets the start; returns the end, set by _november_end.
+def _november_holidays(t: str, found: dict) -> tuple[str, date] | None:
+    """#365 (C21): «на ноябрьские» sets the start; returns the words and the end of the days off.
 
-    The Saturday before 4 November (Mon–Wed) or 4 November itself (Thu–Sun) to the holiday or the
-    Sunday after it. A year with a transfer of days off is an assumption, named in the note."""
+    The Saturday before 4 November (Mon–Wed) to the holiday, or 4 November (Thu–Sun) to the
+    Sunday after it (Monday for a Sunday). _november_end sets the end after the length is read."""
     m = NOVEMBER_RE.search(t)
     if not m or "date_from" in found or NOT_NEW_YEAR_BEFORE.search(t[: m.start()]):
         return None
@@ -1403,18 +1420,26 @@ def _november_holidays(t: str, found: dict, notes: list[str]) -> date | None:
     for year in (today.year, today.year + 1):
         holiday = date(year, 11, 4)
         if holiday.weekday() <= 2:
-            start, end = holiday - timedelta(days=(holiday.weekday() - 5) % 7), holiday
+            start, end = holiday - timedelta(days=holiday.weekday() + 2), holiday
         else:
             start, end = holiday, holiday + timedelta(days=(6 - holiday.weekday()) or 1)
         start = max(start, today + timedelta(days=1))
         if end > start:
             break
-    found["date_from"], found["month"] = start, 11
+    found["date_from"], found["month"] = start, start.month
+    return m.group(0), end
+
+
+def _november_end(said: str, end: date, found: dict, notes: list[str]) -> None:
+    """The days off end the stay unless the user named the length."""
+    start = found["date_from"]
+    if "nights" not in found:
+        found["nights"] = (end - start).days
+    found["date_to"] = start + timedelta(days=found["nights"])
     notes.append(
-        f"даты: {start:%d.%m}–{end:%d.%m} («{m.group(0)}»: 4 ноября — выходной по ТК РФ ст. 112, "
-        "перенос выходных в календаре года — допущение)"
+        f"даты: {start:%d.%m}–{found['date_to']:%d.%m} («{said}»: 4 ноября — выходной по ТК РФ "
+        "ст. 112; переносы выходных года не проверены — допущение)"
     )
-    return end
 
 
 # «дней 10 августа», «дней 5 тысяч»: the number after «дней» is a date or a sum, not a length.
@@ -2052,6 +2077,8 @@ def extract(
     _places(text, t, found, notes, has_destination)
     _english_places(t, found)
     _dates(t, found, notes, nights)
+    _dates_en(t, found, notes)
+    november = _november_holidays(t, found)
     holiday = _holiday(t, found, notes)
     range_notes = [i for i, n in enumerate(notes) if is_too_long_note(n)]
     _nights(t, found, notes, nights)
@@ -2060,6 +2087,8 @@ def extract(
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     if holiday:
         _holiday_end(holiday, found, notes)
+    if november:
+        _november_end(*november, found, notes)
     _own_tickets(t, found)
     _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
