@@ -115,6 +115,7 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
+from api.timeline import NO_ROAD
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
@@ -278,6 +279,12 @@ LEG_NONE = {
 LEG_THERE_RE = re.compile(r"\bтуда\b|\bв\s+одну\s+сторону\b")
 LEG_BACK_RE = re.compile(r"\bобратно\b|\bназад\b|\bобратн\w+")
 LEG_CLAUSE_RE = re.compile(r"[,;]|\bа\b|\bи\b")
+# C12 (#366): «возьми рейс в 06:15» picks the leg by its local departure time. The time stands
+# right after the noun: «давай поезд чтобы прибыть к 18:00» names no departure.
+LEG_TIME_RE = re.compile(
+    r"\b(рейс\w*|перел[её]т\w*|поезд\w*|вылет\w*|самол[её]т\w*)\s+"
+    r"(?:(?:с\s+)?(?:вылет\w*|отправлени\w*)\s+)?(?:в|на)\s+([01]?\d|2[0-3])[:.]([0-5]\d)\b"
+)
 # #316: the mark in the note of a budget the agent set after «подешевле».
 AGENT_BUDGET = "задан агентом"
 # A new date, length or party ends that budget: it was fitted to the old trip.
@@ -909,7 +916,8 @@ def named_in(text: str, names: list[str]) -> str | None:
     return min(hits)[2] if hits else None
 
 
-LegCommand = tuple[str, str | int, str | None]
+# A «time» command holds (HH:MM, mode of the noun or None) as its second item.
+LegCommand = tuple[str, str | int | tuple[str, str | None], str | None]
 # «второй отель и поезд»: the hotel row named in a pick of transport (same rows as «беру 2»).
 HOTEL_ROW_RES = (
     re.compile(rf"\b({LEG_ORDINAL})\s+отел\w*"),
@@ -961,6 +969,14 @@ def leg_commands(text: str) -> list[LegCommand]:
     verb = bool(LEG_PICK_RE.search(t)) or hotel_row(t) is not None  # #388: «отель 1 и поезд»
     out: list[LegCommand] = []
     for clause in LEG_CLAUSE_RE.split(t):
+        if verb and (m := LEG_TIME_RE.search(clause)):
+            direction = "there" if LEG_THERE_RE.search(clause) else None
+            direction = "back" if LEG_BACK_RE.search(clause) else direction
+            noun = m.group(1)
+            mode = "train" if noun.startswith("поезд") else None
+            mode = "flight" if noun.startswith(("перел", "самол")) else mode
+            out.append(("time", (f"{int(m.group(2)):02d}:{m.group(3)}", mode), direction))
+            continue
         if row := _leg_row(clause):
             out.append(("row", row[0], row[1]))
             continue
@@ -976,6 +992,25 @@ def leg_commands(text: str) -> list[LegCommand]:
 
 def _cheapest(legs: list[TransportOffer]) -> TransportOffer | None:
     return min(legs, key=lambda x: (x.price_rub, x.offer_id), default=None)
+
+
+def _no_time(
+    table: list[TransportOffer], dirs: dict, ways: list[str], hhmm: str, mode: str | None
+) -> str:
+    """C12: «Рейса в 06:15 нет. Туда: 08:00 (рейс 1), 15:10 (рейс 2).» The times and rows are
+    those of the plan offers (TRAP-4); the row is the one «рейс N» takes."""
+    lines = []
+    for d in ways:
+        have = [
+            f"{x.depart_at:%H:%M} (рейс {table.index(x) + 1})"
+            for x in dirs[d]
+            if x.mode != "car" and mode in (None, x.mode)
+        ]
+        if have:
+            lines.append(f"{'Туда' if d == 'there' else 'Обратно'}: {', '.join(have)}.")
+    tail = " ".join(lines) if lines else "Других рейсов в данных нет."
+    what = {"train": "Поезда", "flight": "Перелёта"}.get(mode or "", "Рейса")
+    return f"{what} в {hhmm} нет. {tail}"
 
 
 def switch_transport(
@@ -1017,9 +1052,25 @@ def switch_transport(
     for kind, what, direction in commands:
         # The spec filtered this mode out of the offers (offers.py): «возьми поезд» then
         # is a new constraint, and the caller re-plans the trip instead.
-        want = direction if kind == "row" else what  # the mode asked for, if any
+        hhmm, mode = what if isinstance(what, tuple) else ("", None)
+        want = (
+            direction if kind == "row" else mode if kind == "time" else what
+        )  # the mode asked for
         if want and plan.spec.modes and want not in plan.spec.modes:
             return None, ""
+        if kind == "time":
+            ways = [direction] if direction else ["there", "back"]
+            hit = [
+                (d, x)
+                for d in ways
+                for x in dirs[d]
+                if x.mode != "car" and mode in (None, x.mode) and f"{x.depart_at:%H:%M}" == hhmm
+            ]
+            if not hit:
+                return None, _no_time(table, dirs, ways, hhmm, mode)
+            d, new[d] = hit[0]
+            touched.add(d)
+            continue
         if kind == "row":
             rows = [x for x in table if direction in (None, x.mode)]
             if not 0 <= what < len(rows):
@@ -1802,6 +1853,11 @@ def _selected_total(plan: Plan) -> int:
 # #114: the mode the user asked for, when the data has none: «Поезда … в данных нет».
 NO_MODE = {"train": "поезда", "flight": "перелёта", "car": "поездки на машине"}
 OFFER_MODE = {"train": "поезд", "flight": "перелёт", "car": "машину"}
+# #532: «беру» on a plan without a hotel (the hotel source failed): no cart of the road alone.
+NO_HOTEL = (
+    "В корзину пока не кладу: отеля в плане нет — источник отелей не ответил или ни один "
+    "отель не подошёл. Можно повторить запрос, выбрать другие даты или другое направление."
+)
 
 
 def missing_mode(plan: Plan) -> str:
@@ -1934,7 +1990,9 @@ def _text_blocked(plan: Plan) -> str:
     the plan (TRAP-4): a leg is named by its row in the compare table («рейс N»)."""
     by_id = {o.offer_id: o for o in plan.offers}
     rows = [o.offer_id for o in plan.offers if o.kind == "transport"]
-    lines = ["В корзину пока не кладу: в расписании ошибка стыковки."]
+    road = all(i.text.startswith(NO_ROAD) for i in plan.issues if i.severity == "error")
+    why = "в плане нет дороги." if road else "в расписании ошибка стыковки."
+    lines = [f"В корзину пока не кладу: {why}"]  # #532: no leg there or back is no docking
     for i in plan.issues:
         if i.severity != "error":
             continue
@@ -1968,7 +2026,7 @@ def _pet_dead_cities(spec: TripSpec) -> list[str]:
     return [
         d.name
         for d in suggest_destinations(spec, len(CATALOG))
-        if not pets_possible(spec, find_offers(spec, d.name))
+        if not pets_possible(spec, find_offers(spec, d.name, estimate=True))
     ]
 
 
@@ -2814,6 +2872,8 @@ def step(
         plan.timeline, plan.issues = build_timeline(plan)
         if any(i.severity == "error" for i in plan.issues):
             return reply("compare", plan, _text_blocked(plan))  # #276: no cart with an error
+        if not _hotel_selected(plan):  # #532: a failed hotel source leaves nothing to stay in
+            return reply("compare", plan, f"{NO_HOTEL} {HINTS['compare']}")
         return reply("assemble", plan, _with_tail(_text_assemble(plan), plan, low, message, found))
     if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
