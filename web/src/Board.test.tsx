@@ -325,6 +325,17 @@ suite("доска поездки", () => {
     expect([...(cart?.querySelectorAll(".synth") ?? [])].every((c) => c.textContent === "синтетика")).toBe(true);
   });
 
+  it("TRAP-7: реальный поезд tutu.ru — чип «tutu», не «Авиасейлс» (#569)", () => {
+    const r = structuredClone(hotelBought);
+    r.stage = "compare";
+    r.plan.offers = r.plan.offers.map((o) =>
+      o.kind === "transport" ? { ...o, offer_id: `${o.offer_id}-tutu`, synthetic: false } : o,
+    );
+    const chip = render(r).querySelector("[aria-label='Сравнение транспорта'] td.cost .synth");
+    expect(chip?.textContent).toBe("tutu");
+    expect(chip?.getAttribute("title")).toContain("tutu.ru");
+  });
+
   it("TRAP-7: ваучер с реальным отелем называет источник у цены (#547)", () => {
     const r = structuredClone(base);
     r.voucher!.items = r.plan.offers.filter((o) => o.kind === "hotel").map((o) => ({ ...o, synthetic: false }));
