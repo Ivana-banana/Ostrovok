@@ -505,7 +505,10 @@ function Transport({ plan, stage, busy, onSend }: {
                   <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
                   <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
                   {/* #475: the pet mark of a leg, as for the hotels */}
-                  <td data-label="Питомцы">{t.pets_allowed ? "можно" : "нет отметки"}</td>
+                  <td data-label="Питомцы">
+                    {/* #575: a flight has no confirmed pet rule; the mark means "ask the airline" */}
+                    {t.pets_allowed ? (t.mode === "flight" ? "уточнить у авиакомпании" : "можно") : "нет отметки"}
+                  </td>
                   <td className="num cost">
                     <Price value={t.price_rub} synthetic={t.synthetic} source={sourceOf([t])} />
                   </td>

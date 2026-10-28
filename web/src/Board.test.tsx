@@ -176,6 +176,19 @@ suite("доска поездки", () => {
     expect(rows(pets)[0].textContent).toContain("можно");
   });
 
+  it("сравнение транспорта: у рейса отметка питомца — «уточнить у авиакомпании» (#575)", () => {
+    const sec = (doc: Document) => doc.querySelector("[aria-label='Сравнение транспорта']");
+    const rows = (s: typeof base) => [...(sec(render(s))?.querySelectorAll("tbody tr") ?? [])];
+    const withMode = (mode: "flight" | "train") => {
+      const offers = base.plan.offers.map((o) => (o.kind === "transport" ? { ...o, mode, pets_allowed: true } : o));
+      return { ...base, plan: { ...base.plan, offers } };
+    };
+    const flight = rows(withMode("flight"))[0].textContent ?? "";
+    expect(flight).toContain("уточнить у авиакомпании");
+    expect(flight).not.toContain("можно");
+    expect(rows(withMode("train"))[0].textContent).toContain("можно");
+  });
+
   it("пересборка: «было → стало»", () => {
     const t = render(base).querySelector("[aria-label='Что изменилось']")?.textContent ?? "";
     expect(t).toContain("было 11–13 декабря → стало 13–15 декабря");

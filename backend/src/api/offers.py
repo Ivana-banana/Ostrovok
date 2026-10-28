@@ -489,6 +489,11 @@ def _via_airport(mode: Mode, a: dict, b: dict) -> str:
     return ""
 
 
+# #575: an airline takes a small pet in the cabin or the hold on its own terms. A synthetic
+# flight takes it as a condition to confirm, not a refusal; no fee is named (TRAP-4).
+PET_FLIGHT = "питомец — уточнить у авиакомпании"
+
+
 def _leg(
     spec: TripSpec,
     mode: Mode,
@@ -517,6 +522,8 @@ def _leg(
         title += f", {seats}"
     if mode == "car":
         title += " (бензин и платные дороги, оценка)"
+    if mode == "flight" and spec.pets:
+        title += f", {PET_FLIGHT}"
     return TransportOffer(
         offer_id=f"t-{a['slug']}-{b['slug']}-{mode}-{depart:%Y%m%d%H%M}-{_guests_tag(spec)}",
         title=title,
@@ -527,7 +534,7 @@ def _leg(
         arrive_at=arrive,
         changes=changes,
         price_rub=_rub(price),
-        pets_allowed=mode != "flight",
+        pets_allowed=True,  # a plane: a condition of the airline (#575, PET_FLIGHT)
     )
 
 
