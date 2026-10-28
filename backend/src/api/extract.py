@@ -1494,7 +1494,8 @@ def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
             return name_candidates(f"{word} {tail}")[0], second.end()
     if low in NOT_PLACES:
         return None  # «Новый год»: «новый» alone is no place (#538)
-    if re.search(r"ск(?:ий|ая|ое|ие|ого|ой|ую|их|им|ими|ому)$", low):
+    # «Петропавловска-Камчатского» is a name: an adjective after a hyphen stays
+    if "-" not in low and re.search(r"ск(?:ий|ая|ое|ие|ого|ой|ую|их|им|ими|ому)$", low):
         return None  # «в Петербургский музей»: an unknown adjective is no place (#372)
     return _nominative(word), end
 
