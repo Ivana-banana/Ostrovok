@@ -475,16 +475,30 @@ suite("доска поездки", () => {
     expect(o.main).toBe(o.at("Корзина"));
   });
 
-  it("#556: на сравнении без отеля в плане «Беру этот план» недоступна, с подсказкой", () => {
+  it("#556: на сравнении без отеля в плане «Беру этот план» недоступна, подсказка — по фактам плана", () => {
     const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
     const buy = (x: ChatReply) => render(x).querySelector(".board > .next button.buy") as HTMLButtonElement;
+    const hint = (x: ChatReply) => render(x).querySelector(".no-hotel")?.textContent;
     expect(buy(r).disabled).toBe(false);
-    expect(render(r).querySelector(".no-hotel")).toBeNull();
+    expect(hint(r)).toBeUndefined();
     r.plan.selected = r.plan.selected.filter((id) => id !== "h1");
+    // no pet, hotels in the list, none picked
+    r.plan.spec.pets = false;
     expect(buy(r).disabled).toBe(true);
     expect(buy(r).textContent).toBe("Беру этот план");
-    expect(buy(r).getAttribute("title")).toContain("В плане нет отеля");
-    expect(render(r).querySelector(".no-hotel")?.textContent).toContain("Без питомца");
+    expect(buy(r).getAttribute("title")).toBe(hint(r));
+    expect(hint(r)).toBe("Выберите отель из списка");
+    // pet, the hotels are filtered out
+    r.plan.spec.pets = true;
+    expect(hint(r)).toContain("Без питомца");
+    // no pet, the hotel source gave no offer
+    const dry = structuredClone(r);
+    dry.plan.spec.pets = false;
+    dry.plan.offers = dry.plan.offers.filter((o) => o.kind !== "hotel");
+    expect(buy(dry).disabled).toBe(true);
+    expect(hint(dry)).toContain("источник отелей не ответил");
+    expect(hint(dry)).not.toContain("питомц");
+    expect(buy(dry).getAttribute("title")).not.toContain("питомц");
     // another stage is not touched: «Положить в корзину» stays live
     expect((render({ ...r, stage: "assemble" }).querySelector(".board > .next button.buy") as HTMLButtonElement).disabled).toBe(false);
   });
