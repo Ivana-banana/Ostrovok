@@ -247,3 +247,24 @@ def test_three_friends_reach_the_plan(store):
 def test_demo_phrase_is_unchanged(today):
     found, _ = extract("Тёплое море в ноябре, недорого, с ребёнком")
     assert found["month"] == 11 and "date_from" not in found and "adults" not in found
+
+
+def test_we_far_from_number_means_all_travellers(today):
+    """#196: «мы» is not next to «трое друзей»: still three adults."""
+    assert extract("Мы едем в Сочи, трое друзей")[0]["adults"] == 3
+    assert extract("Мы едем в Сочи, я и трое друзей")[0]["adults"] == 4
+
+
+def test_bare_holidays_in_december_are_new_year(today):
+    """#196: «каникулы» said in December is the New Year window, not plain January."""
+    today(2026, 12, 5)
+    found, notes = extract("Сочи на каникулы")
+    assert found["date_from"] == date(2026, 12, 30) and found["date_to"] == date(2027, 1, 8)
+    assert notes[0].startswith("даты: 30.12–08.01")
+
+
+def test_to_new_year_without_return_names_dates_in_note(today):
+    """#196: «к новому году» keeps 30.12–08.01 and the note names the dates."""
+    found, notes = extract("Сочи к новому году")
+    assert found["date_from"] == date(2026, 12, 30) and found["date_to"] == date(2027, 1, 8)
+    assert notes[0].startswith("даты: 30.12–08.01") and "допущение" in notes[0]
