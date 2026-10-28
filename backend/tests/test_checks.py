@@ -63,6 +63,21 @@ def test_trap_1_checks_run_in_rule_mode_and_leave_the_env_as_it_was(monkeypatch)
     assert "LLM_BASE_URL" not in os.environ and "LLM_MODEL" not in os.environ
 
 
+def test_trap_1_s3_a2_really_asks_the_model_and_gets_401(monkeypatch):
+    """TRAP-1, #490: eval asks for the model (ChatRequest.llm), so A2 goes through the 401 path."""
+    calls = []
+    real = checks._unauthorized
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(checks, "_unauthorized", counted)
+    ok, note = checks.check_S3(BY_ID["S3"])
+    assert ok, note
+    assert calls, "A2 never called the model: the check of an invalid key is empty"
+
+
 def test_s9_fails_when_the_priority_is_ignored(monkeypatch):
     deaf(monkeypatch, "отмен")
     ok, note = checks.check_S9(BY_ID["S9"])
