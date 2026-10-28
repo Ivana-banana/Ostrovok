@@ -122,4 +122,27 @@ suite("#489: другие варианты пункта", () => {
     expect(sent).toEqual(["возьми рейс 2"]);
     act(() => root.unmount());
   });
+
+  it("TRAP-7: реальный отель в вариантах — чип «101hotels», не голое число (#547)", async () => {
+    const box = document.createElement("div");
+    const root = createRoot(box);
+    const real: ChatReply = {
+      ...reply,
+      plan: { ...reply.plan, offers: offers.map((o) => (o.kind === "hotel" ? { ...o, synthetic: false } : o)) },
+    };
+    const text = [
+      "Предлагаю:",
+      "Отель: Казантель, Казань, 2★, без питания, невозвратный — 7 900 ₽",
+      "Туда: поезд Москва → Казань, 10.12 18:50 → 11.12 07:10 (UTC+3) — 7 800 ₽",
+      "Итого 15 700 ₽.",
+    ].join("\n");
+    const choice = { reply: real, busy: false, onSend: () => {} };
+    await act(async () => root.render(<AgentText text={text} synthetic choice={choice} />));
+    const pt = box.querySelector<HTMLElement>("li.pt [role='button']")!;
+    await act(async () => pt.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    const rows = [...box.querySelectorAll(`[id="${pt.getAttribute("aria-controls")}"] li.alt`)];
+    expect(rows.length).toBeGreaterThan(1);
+    expect(rows.map((r) => r.querySelector(".price .synth")?.textContent)).toEqual(rows.map(() => "101hotels"));
+    act(() => root.unmount());
+  });
 });

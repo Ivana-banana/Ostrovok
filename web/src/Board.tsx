@@ -51,7 +51,7 @@ export type BoardProps = {
 // The source of a real price (#547). The contract has no source field: derive it from the kind.
 // The chip and its tooltip tell where a non-synthetic number comes from.
 const PRICE_SOURCES: Record<string, { chip: string; hint: string }> = {
-  hotel: { chip: "101hotels", hint: "цена «от» на сегодня с 101hotels.ru" },
+  hotel: { chip: "101hotels", hint: "итог по цене «от» 101hotels; питание и тариф — оценка" },
   transport: { chip: "Авиасейлс", hint: "самый дешёвый билет из кэша поиска Авиасейлс, не цена брони" },
 };
 const OTHER_SOURCE = { chip: "реальные данные", hint: "цена не синтетическая" };
@@ -70,9 +70,9 @@ export function Price({ value, synthetic = true, source }: { value: number; synt
     <span className="price">
       {rub(value)}
       {synthetic && <span className="synth">синтетика</span>}
-      {!synthetic && source && (
-        <span className="synth synth-real" title={source.hint}>
-          {source.chip}
+      {!synthetic && (
+        <span className="synth synth-real" title={(source ?? OTHER_SOURCE).hint}>
+          {(source ?? OTHER_SOURCE).chip}
         </span>
       )}
     </span>
@@ -783,7 +783,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
       {over && (
         <p className="warn" role="note">
           Итог больше бюджета {rub(spec.budget_rub!)} на{" "}
-          <Price value={cart.total_rub - spec.budget_rub!} synthetic={synthetic} />.
+          <Price value={cart.total_rub - spec.budget_rub!} synthetic={synthetic} source={sourceOf(cart.items)} />.
         </p>
       )}
       {hotelOver > 0 && (

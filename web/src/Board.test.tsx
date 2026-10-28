@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { Board, EarlierChoices, TripParams } from "./Board";
+import { Board, EarlierChoices, Price, TripParams } from "./Board";
 import type { ChatReply } from "./contracts";
 import { changeValue, localTime } from "./format";
 
@@ -287,7 +287,7 @@ suite("доска поездки", () => {
     const hotelChip = doc.querySelector("[aria-label='Сравнение отелей'] td.cost .synth");
     expect(hotelChip?.textContent).toBe("101hotels");
     expect(hotelChip?.classList.contains("synth-real")).toBe(true);
-    expect(hotelChip?.getAttribute("title")).toBe("цена «от» на сегодня с 101hotels.ru");
+    expect(hotelChip?.getAttribute("title")).toBe("итог по цене «от» 101hotels; питание и тариф — оценка");
     expect(chips("Сравнение транспорта")).toEqual(["Авиасейлс"]);
     // the transfer stays synthetic; its price keeps «синтетика»
     r.plan.offers = r.plan.offers.map((o) => ({ ...o, synthetic: o.kind !== "hotel" && o.kind !== "transport" }));
@@ -557,5 +557,13 @@ suite("доска поездки", () => {
     expect(html.querySelectorAll("details.earlier button[aria-label^='Выбрать направление']").length).toBe(old.plan.destinations.length);
     act(() => root.unmount());
     box.remove();
+  });
+});
+
+suite("#547: безопасный запасной чип", () => {
+  it("TRAP-7: Price без synthetic и без источника показывает «реальные данные», не голое число", () => {
+    const html = renderToStaticMarkup(<Price value={1000} synthetic={false} />);
+    expect(html).toContain("реальные данные");
+    expect(renderToStaticMarkup(<Price value={1000} />)).toContain("синтетика");
   });
 });
