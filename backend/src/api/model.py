@@ -251,8 +251,9 @@ RESTART_CHIP = "Начать заново"
 # only state of the session, and the user sees what will be applied.
 CHANGE_CHIP = "Изменить бронь"
 CHANGE_RE = re.compile(rf"^\s*{CHANGE_CHIP}\s*[.!]*\s*$", re.IGNORECASE)
-EDIT_NOTE = "Правка для новой поездки: «"
-EDIT_NOTE_RE = re.compile(rf"{EDIT_NOTE}(.*)»\.$", re.DOTALL)
+EDIT_NOTE = "Правка для новой поездки: "
+EDIT_NOTE_RE = re.compile(rf"{EDIT_NOTE}(.*)\.$", re.DOTALL)
+EDIT_ITEM_RE = re.compile(r"«([^«»]*)»")
 AFTER_BOOKING = (
     "Другое направление, другие даты или состав — это новая поездка. Нажмите "
     f"«{CHANGE_CHIP}»: возьму те же условия и вашу правку. Или нажмите «{RESTART_CHIP}» "
@@ -2496,32 +2497,43 @@ def same_place_question(old: ChatReply, name: str, found: dict) -> list[Question
     return [Question(text=text, options=[here, *(o for o in chips if o != here)])]
 
 
-def _booking_edit(prev: ChatReply, message: str) -> str:
-    """#503: the edits of the trip the user wrote after the voucher: the earlier ones from the
-    chip question of prev, then this message when it edits the trip."""
-    old = next((m.group(1) for q in prev.questions if (m := EDIT_NOTE_RE.search(q.text))), "")
+def _booking_edits(prev: ChatReply, message: str) -> list[str]:
+    """#503: the edits of the trip the user wrote after the voucher, in order: the earlier ones
+    from the chip question of prev, then this message when it edits the trip. Each is applied
+    by its own step(): a later date or number replaces the earlier one."""
+    edits = [
+        e
+        for q in prev.questions
+        if (m := EDIT_NOTE_RE.search(q.text))
+        for e in EDIT_ITEM_RE.findall(m.group(1))
+    ]
     low = message.lower().replace("ё", "е")
     found, _ = extract(message, True)
-    if EDIT_KEYS & set(found) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low):
-        return f"{old}. {message}" if old else message
-    return old
+    spec = prev.plan.spec
+    # A field the booked trip already has is a remark («отличные 3 ночи были»), not an edit.
+    # After an earlier edit it may undo that edit («трое взрослых» -> «нет, двое»): it counts.
+    changed = {k for k in EDIT_KEYS & set(found) if edits or getattr(spec, k, None) != found[k]}
+    if changed or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low):
+        edits.append(re.sub(r"[«»]", '"', message).strip())
+    return edits
 
 
 def _change_booking(prev: ChatReply, sid: str, use_llm: bool, origin: str | None) -> ChatReply:
     """#503: a new trip from the booked one: the same spec and plan, no cart, no voucher, plus
-    the edit written before the press. The first booking stays: nothing is cancelled or rebooked."""
-    edit = _booking_edit(prev, "")
+    the edits written before the press. The first booking stays: nothing is cancelled or rebooked."""
+    edits = _booking_edits(prev, "")
     kept = (
         f"Бронь {prev.voucher.booking_id} остаётся оформленной: она не отменена и не переоформлена."
     )
-    trip = prev.model_copy(
+    done = prev.model_copy(
         update={"voucher": None, "cart": Cart(), "stage": "compare", "questions": []}
     )
-    if edit:
-        done = step(trip, sid, edit, use_llm, origin)
+    for edit in edits:
+        done = step(done, sid, edit, use_llm, origin)
+    if edits:
         head = "Новая поездка на тех же условиях с вашей правкой — отдельная покупка."
     else:
-        done = trip.model_copy(update={"reply": _text_compare(trip.plan), "llm": False})
+        done = done.model_copy(update={"reply": _text_compare(done.plan), "llm": False})
         head = "Новая поездка на тех же условиях — отдельная покупка. Правки пока нет."
     return done.model_copy(update={"reply": f"{head} {kept}\n{done.reply}"})
 
@@ -2559,8 +2571,9 @@ def step(
                 text += " Бронь имитирована."
         # #98: no dead end — another city or other dates mean a new trip; the booking stays
         text += f" {AFTER_BOOKING}"
-        edit = _booking_edit(prev, message)
-        ask = f"Что дальше? {EDIT_NOTE}{edit}»." if edit else "Что дальше?"
+        edits = _booking_edits(prev, message)
+        notes = "; ".join(f"«{e}»" for e in edits)
+        ask = f"Что дальше? {EDIT_NOTE}{notes}." if edits else "Что дальше?"
         chip = Question(text=ask, options=[CHANGE_CHIP, RESTART_CHIP])
         return prev.model_copy(update={"reply": text, "questions": [chip], "llm": False})
     old = prev or ChatReply(
