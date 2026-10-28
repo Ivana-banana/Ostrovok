@@ -16,7 +16,14 @@ import {
   touchChat,
 } from "./history";
 import { Mascot, moodOf } from "./Mascot";
-import { SourceSwitches, type Switches, loadSwitches, requested, saveSwitches } from "./Sources";
+import {
+  type ModeState,
+  SourceSwitches,
+  type Switches,
+  loadSwitches,
+  requested,
+  saveSwitches,
+} from "./Sources";
 
 // stage: the stage after an agent message; the roadmap links a done step to it (#434).
 // An agent message keeps its reply: the choices under it stay after «ещё», a reload or a chat switch.
@@ -149,7 +156,7 @@ export function App() {
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
   const [switches, setSwitches] = useState<Switches>(loadSwitches); // #490: both off by default
   const [can, setCan] = useState<LlmMode>({ llm: false, real_data: false }); // /api/mode: keys in .env
-  const [modeFailed, setModeFailed] = useState(false); // /api/mode failed twice (#534)
+  const [mode, setMode] = useState<ModeState>("loading"); // /api/mode: failed after a retry (#534)
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const lastMsg = useRef<HTMLDivElement>(null); // the last agent message: its block sits under it
@@ -226,12 +233,16 @@ export function App() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const ask = (retry: boolean) =>
       getMode()
-        .then((m) => live && setCan({ llm: m.llm === true, real_data: m.real_data === true }))
+        .then((m) => {
+          if (!live) return;
+          setCan({ llm: m.llm === true, real_data: m.real_data === true });
+          setMode("ok");
+        })
         .catch((e) => {
           console.warn("GET /api/mode failed", retry ? "; retrying" : "; the switches stay off", e);
           if (!live) return;
           if (retry) timer = setTimeout(() => ask(false), MODE_RETRY_MS);
-          else setModeFailed(true);
+          else setMode("failed");
         });
     ask(true);
     return () => {
@@ -584,7 +595,7 @@ export function App() {
               Без ИИ — упрощённый режим
             </span>
           )}
-          <SourceSwitches on={switches} can={can} failed={modeFailed} onChange={switchSources} />
+          <SourceSwitches on={switches} can={can} mode={mode} onChange={switchSources} />
           <details className="hint">
             <summary aria-label="Где хранятся чаты">
               <span className="qmark" aria-hidden="true">?</span>

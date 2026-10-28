@@ -34,3 +34,20 @@ def test_trap_6_flaky_place_is_asked_again_after_failed_s(geo, monkeypatch):
     assert catalog.lookup_online("Блед", up) is again  # a full place stays
     now[0] += 10 * catalog.FAILED_S
     assert catalog.lookup_online("Блед", down) is again
+
+
+def test_trap_6_flaky_place_stays_when_the_retry_has_no_network(geo, monkeypatch):
+    """The retry of a flaky place fails: the place found before stays, not None (#534 review)."""
+    now = [1000.0]
+    monkeypatch.setattr(catalog.time, "monotonic", lambda: now[0])
+    down, _ = _bled_with_roads(geo, None)
+    first = catalog.lookup_online("Блед", down)
+    now[0] += catalog.FAILED_S
+
+    def offline(url: str, params: dict) -> dict:
+        raise OSError("no network")
+
+    assert catalog.lookup_online("Блед", offline) is first
+    assert catalog.lookup_online("Блед", offline) is first  # the next turn, inside FAILED_S
+    now[0] += catalog.FAILED_S
+    assert catalog.lookup_online("Блед", offline) is first

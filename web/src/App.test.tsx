@@ -5,7 +5,7 @@ import fixture from "../../tests/fixtures/chat_reply.json";
 import { App, MODE_RETRY_MS, SESSION_KEY } from "./App";
 import { VERBS } from "./brand";
 import { HISTORY_KEY } from "./history";
-import { NO_KEY_NOTE, NO_MODE_NOTE, SWITCHES_KEY } from "./Sources";
+import { LOADING_NOTE, NO_MODE_NOTE, SWITCHES_KEY } from "./Sources";
 import type { ChatReply } from "./contracts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -182,7 +182,7 @@ suite("приложение", () => {
     try {
       routes["GET /api/mode"] = () => ({ status: 503 });
       await act(async () => root.render(<App />));
-      expect(box.querySelector(".switches-note")?.textContent).toBe(NO_KEY_NOTE); // not known yet
+      expect(box.querySelector(".switches-note")?.textContent).toBe(LOADING_NOTE); // not «нет ключа»
       await act(async () => vi.advanceTimersByTimeAsync(MODE_RETRY_MS + 10));
       expect(calls.filter((c) => c.key === "GET /api/mode")).toHaveLength(2);
       expect(box.querySelector(".switches-note")?.textContent).toBe(NO_MODE_NOTE);

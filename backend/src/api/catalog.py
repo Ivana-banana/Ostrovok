@@ -474,6 +474,9 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
     except Exception as e:  # noqa: BLE001  TRAP-6: no network, a timeout or a strange answer
         log.warning("geocoder failed for %r: %s: %s", name.strip(), type(e).__name__, e)
         _failed[key] = time.monotonic()
+        if (old := _online.get(key)) is not None:  # a flaky place asked again: keep it (#534)
+            _flaky_at[key] = time.monotonic()
+            return old
         return None  # not in _online: after FAILED_S the geocoder is asked again
     flaky = place is not None and place.pop("_flaky", False)  # OSRM failed: not frozen on disk
     _online[key] = place
