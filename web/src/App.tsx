@@ -371,6 +371,7 @@ export function App() {
   }
 
   const lastAgent = ui.messages.map((m) => m.role).lastIndexOf("agent");
+  const asked = ui.messages.filter((m) => m.role === "user").length; // the thinking banana and plane take turns
   const cls = ["app", planOpen && "plan-open", drawer && "drawer-open"].filter(Boolean).join(" ");
   const synthetic = !reply || !reply.plan.offers.length || reply.plan.offers.some((o) => o.synthetic);
   const groups = groupChats(filterChats(chats, query));
@@ -529,7 +530,7 @@ export function App() {
             )}
             {!ui.messages.length && !restoring && (
               <div className="hello">
-                <Mascot size={56} />
+                <Mascot size={84} state="hello" />
                 <h2>Куда поедем?</h2>
               </div>
             )}
@@ -546,7 +547,7 @@ export function App() {
                   role={i === lastAgent ? "status" : undefined}
                   aria-busy={typing === i || undefined}
                 >
-                  <Mascot size={30} />
+                  <Mascot size={30} state={i === lastAgent && reply?.stage === "booked" ? "happy" : "idle"} />
                   <div className="b">
                     <AgentText
                       text={m.text}
@@ -582,7 +583,7 @@ export function App() {
                 )}
               </div>
             )}
-            {thinking && <Thinking />}
+            {thinking && <Thinking variant={asked % 2 ? "banana" : "plane"} />}
             {error && (
               <p className="error" role="alert">
                 {error}
