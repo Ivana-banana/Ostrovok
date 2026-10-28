@@ -75,7 +75,10 @@ def test_plan_one_call_fills_the_cart_without_llm_trap1_trap4(client):
 
 
 def test_plan_picks_a_destination_from_inspiration(client):
-    reply = _planned(client, "тёплое море в ноябре, недорого, 2 взрослых и ребёнок 5 лет")
+    # the origin is named: an unnamed one is a blocking question (#436)
+    reply = _planned(
+        client, "тёплое море в ноябре, недорого, 2 взрослых и ребёнок 5 лет, из Москвы"
+    )
     assert reply["stage"] == "checkout"
     assert len(reply["plan"]["spec"]["destinations"]) == 1
     assert reply["cart"]["items"]

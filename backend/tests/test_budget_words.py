@@ -5,20 +5,15 @@ assumption says so. «Полмиллиона» and «миллион» are number
 """
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import chat
 from api.store import SessionStore
 
 
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def budget_notes(notes):

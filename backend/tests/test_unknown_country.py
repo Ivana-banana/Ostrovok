@@ -6,10 +6,10 @@ cities of that country, never «Воронеж, Нижний Новгород, �
 """
 
 import pytest
+from talk import say
 
 from api import catalog
-from api.contracts import ChatRequest
-from api.model import NOT_IN_CATALOG, chat
+from api.model import NOT_IN_CATALOG
 from api.store import SessionStore
 
 UNRELATED = ("Воронеж", "Нижний Новгород", "Минск")
@@ -19,10 +19,6 @@ ASK = "Ушуайя на 10 дней в январе, из Москвы"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def test_trap_2_unknown_city_without_country_asks_the_country(store):

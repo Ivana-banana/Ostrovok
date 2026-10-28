@@ -6,11 +6,10 @@ assumption «исключено: …» (no TripSpec field), so it holds for the 
 """
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
 from api.extract import excluded_places, extract, is_excluded
 from api.inspire import suggest_destinations
-from api.model import chat
 from api.store import SessionStore
 
 REPRO_1 = "Едем с ребёнком в ноябре, хотим к морю. В Турции и Египте уже были, не хочется."
@@ -22,10 +21,6 @@ REPRO_2 = (
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def names(reply):

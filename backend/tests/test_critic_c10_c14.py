@@ -9,9 +9,8 @@ C14: every time in the reply carries its zone (TRAP-5); a leg shows its duration
 import re
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.store import SessionStore
 
 C10 = "На Ольхон в августе вдвоём на 5 ночей из Москвы"
@@ -24,10 +23,6 @@ def store(tmp_path, monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("GIGACHAT_AUTH_KEY", raising=False)
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def chosen(r, kind):

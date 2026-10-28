@@ -3,6 +3,7 @@
 from urllib.error import HTTPError
 
 import pytest
+from talk import say
 
 from api import answers, catalog, checks
 from api.contracts import ChatRequest, Plan, TripSpec
@@ -49,7 +50,7 @@ def test_trap_6_archive_rate_limit_keeps_city_and_marine(geo, monkeypatch, tmp_p
     assert "температура воздуха и осадки неизвестны" in reply
     monkeypatch.setattr(catalog, "_get", fetch)
     store = SessionStore(tmp_path / "sessions.db")
-    start = chat(ChatRequest(session_id=None, message="Хочу в Блед в июле"), store)
+    start = say(store, "Хочу в Блед в июле")
     answer = chat(ChatRequest(session_id=start.session_id, message="какая вода в июле?"), store)
     assert "вода 24 °C" in answer.reply
     assert "днём" not in answer.reply
@@ -67,7 +68,7 @@ def test_trap_6_partial_city_reaches_purchase_with_unknown_sea(geo, monkeypatch,
 
     monkeypatch.setattr(catalog, "_get", fetch)
     store = SessionStore(tmp_path / "sessions.db")
-    reply = chat(ChatRequest(session_id=None, message="Хочу в Тихвин в марте"), store)
+    reply = say(store, "Хочу в Тихвин в марте")
     assert "Данные о море не загрузились" in reply.reply
     answers = {"inspire": "1", "compare": "беру", "assemble": "да", "checkout": "подтверждаю"}
     for _ in range(8):
