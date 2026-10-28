@@ -1,8 +1,9 @@
 """Timeline checker (T8, #14): arrival -> transfer -> check-in -> check-out -> transfer -> return.
 
 Deterministic, no network, no LLM. Reads only plan.selected and plan.offers, and of the spec
-only the own tickets (C5, #408: offers.own_legs); an edit of them re-runs the offers node of
-api/dag.py, so the timeline still follows its inputs. Every time is computed in UTC and shown in the local zone of the
+only the own tickets (C5, #408: offers.own_legs) and the origin (#532: a trip without a leg
+there or back is an error, not a silent cart of a hotel alone); an edit of them re-runs the
+offers node of api/dag.py, so the timeline still follows its inputs. Every time is computed in UTC and shown in the local zone of the
 event place (TRAP-5): the same ZoneInfo on both sides would subtract wall clocks and lose or
 gain an hour at a DST change. Texts are Russian; numbers come from offers or from the
 constants below. `fixes` hold offer_id from plan.offers only (TRAP-4): add-ons of the hotel
@@ -35,8 +36,17 @@ from api.contracts import (
     TimelineIssue,
     TransferOffer,
     TransportOffer,
+    TripSpec,
 )
-from api.offers import MAX_DRIVE, drive_time, own_legs, resolve_place, road_nights, transfer_id
+from api.offers import (
+    MAX_DRIVE,
+    drive_time,
+    km_between,
+    own_legs,
+    resolve_place,
+    road_nights,
+    transfer_id,
+)
 
 EARLY_WAIT = timedelta(hours=3)  # arrival earlier than this before check-in is an issue
 LATE_WAIT = timedelta(hours=3)  # time between check-out and leaving for the station or airport
@@ -63,6 +73,9 @@ HUBS = {"flight": "в аэропорт", "train": "на вокзал"}  # with t
 DEPARTURE_OF = {"flight": "вылета", "train": "отправления", "car": "старта"}
 TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
 KM_RE = re.compile(r"≈\s*(\d+(?:[.,]\d+)?)\s*км")  # the distance in a transfer title (offers.py)
+# #532: offers.transport_offers finds no legs closer than this: such a trip has no road to buy.
+NEAR_KM = 30
+NO_ROAD = "Транспорта в плане нет"  # the start of the issue text; model.py names the block by it
 
 
 def _utc(dt: datetime) -> datetime:
@@ -510,6 +523,64 @@ def _events(t: _Trip) -> list[TimelineEvent]:
     return sorted(events, key=lambda e: (_utc(e.at), starts_back(e)))
 
 
+def road_needed(spec: TripSpec, city: str) -> bool:
+    """#532: the trip needs a leg there and a leg back. Not with own tickets (C5), not without
+    an origin, not when the origin is the destination or closer than NEAR_KM."""
+    if spec.own_transport or not spec.origin or spec.origin == city:
+        return False
+    home, place = resolve_place(spec.origin), resolve_place(city)
+    return not (home and place and km_between(home, place) < NEAR_KM)
+
+
+def road_gaps(spec: TripSpec, city: str, legs: list[TransportOffer]) -> list[tuple[str, str]]:
+    """The directions (from, to) of the road that `legs` lack; [] when no road is needed."""
+    if not road_needed(spec, city):
+        return []
+    origin = spec.origin or ""
+    gaps = []
+    if not any(x.destination == city for x in legs):
+        gaps.append((origin, city))
+    if not any(x.origin == city for x in legs):
+        gaps.append((city, origin))
+    return gaps
+
+
+def ways(gaps: list[tuple[str, str]]) -> str:
+    """«Москва → Сочи и Сочи → Москва»."""
+    return " и ".join(f"{a} → {b}" for a, b in gaps)
+
+
+def _road_issues(t: _Trip, spec: TripSpec) -> list[TimelineIssue]:
+    """#532 (TRAP-5): no leg there or back in a trip that needs them. A failed transport
+    source or a mode the data lacks leaves the hotel alone; the cart must not take it so.
+    Fixes: the cheapest offered legs of the missing directions (TRAP-4: offers of the plan)."""
+    if not t.hotel:
+        return []
+    city = t.hotel.city
+    gaps = road_gaps(spec, city, t.legs + t.own)
+    if not gaps:
+        return []
+    fixes = []
+    for a, b in gaps:
+        there = b == city
+        offered = [
+            o
+            for o in t.by_id.values()
+            if isinstance(o, TransportOffer)
+            and (o.destination == city if there else o.origin == city)
+        ]
+        fixes += [o.offer_id for o in sorted(offered, key=lambda o: o.price_rub)[:MAX_ALTERNATIVES]]
+    text = (
+        f"{NO_ROAD}: нет дороги {ways(gaps)}."
+        + ("" if fixes else " Предложений транспорта нет.")
+        + " Бронь без дороги не оформляю. Можно выбрать "
+        + ("рейс из предложенных, " if fixes else "")
+        + "другие даты, другой транспорт («возьми поезд») или свои билеты — напишите "
+        "«билеты у нас есть»."
+    )
+    return [TimelineIssue(severity="error", text=text, fixes=fixes)]
+
+
 def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]]:
     """Events of the selected items in local time, and the docking issues with their fixes.
 
@@ -517,7 +588,7 @@ def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]
     times, so a bought add-on removes the issue it fixes.
     """
     t = _Trip(plan)
-    issues = _leg_issues(t)
+    issues = _road_issues(t, plan.spec) + _leg_issues(t)
     for leg in t.legs:
         issues += _drive_issues(t, leg)
     if t.hotel:
