@@ -2281,41 +2281,47 @@ button.primary:hover:not(:disabled),
   letter-spacing: 0;
 }
 
-/* priorities */
+/* priorities: «Что для вас важнее», one row under the trip parameters (#577) */
 
-ol.chips {
-  list-style: none;
-  margin: 0 0 8px;
-  padding: 0;
-}
-
-li.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px 2px 12px;
-  border-color: var(--ink);
-  background: var(--chip);
-}
-
-li.chip button {
-  min-width: 30px;
-  min-height: 30px;
-  padding: 0;
-  border-radius: 50%;
-}
-
-.chips-add {
+.priorities {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin: 0 0 8px;
+  gap: 6px 10px;
+  flex: none;
+  padding: 8px max(20px, calc((100% - var(--thread-w)) / 2 + 20px));
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.chips-add button {
-  border-radius: var(--r-pill);
+.priorities h2 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.priorities ul {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.priorities .chip {
+  min-height: 30px;
+  padding: 5px 12px;
   font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.priorities .chip[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 700;
 }
 
 .sources {
@@ -2662,6 +2668,10 @@ button.param.chosen {
     overflow-x: auto;
     padding: 6px 12px;
     scrollbar-width: none;
+  }
+
+  .priorities {
+    padding: 6px 12px;
   }
 
   .strip:has(.editor) {

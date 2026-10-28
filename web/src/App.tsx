@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
-import { Board, EarlierChoices, TripParams } from "./Board";
+import { Board, EarlierChoices, PriorityRow, TripParams } from "./Board";
 import { MIN_THINK_MS, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
 import type { ChatReply, Guest, LlmMode, Offer, Stage } from "./contracts";
@@ -648,6 +648,7 @@ export function App() {
             onSend={send}
           />
         )}
+        {reply && <PriorityRow order={reply.plan.spec.priorities} stage={reply.stage} busy={busy} onSend={send} />}
         <div className="feed" role="log" aria-live="polite">
           <div className="thread">
             {note && (

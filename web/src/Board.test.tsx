@@ -3,8 +3,8 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { Board, EarlierChoices, Price, TripParams } from "./Board";
-import type { ChatReply } from "./contracts";
+import { Board, EarlierChoices, Price, PriorityRow, TripParams } from "./Board";
+import type { ChatReply, Priority } from "./contracts";
 import { changeValue, localTime } from "./format";
 
 const base = fixture as unknown as ChatReply;
@@ -381,45 +381,46 @@ suite("доска поездки", () => {
     expect(issue()?.querySelector("button")?.textContent).toBe("В корзину");
   });
 
-  it("S9: приоритеты чипами по порядку; на сравнении есть кнопки правки", () => {
-    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
-    r.plan.spec.priorities = ["price", "cancellation"];
-    const sec = render(r).querySelector("[aria-label='Приоритеты']");
-    const chips = [...(sec?.querySelectorAll(".chip") ?? [])].map((c) => c.querySelector("span")?.textContent);
-    expect(chips).toEqual(["1. цена", "2. отмена"]);
-    const up = sec?.querySelector("button[aria-label='Поднять приоритет цена']") as HTMLButtonElement;
-    expect(up.disabled).toBe(true); // the first one cannot go up
-    expect(sec?.querySelector("button[aria-label='Опустить приоритет цена']")).not.toBeNull();
-    expect(sec?.querySelector("button[aria-label='Добавить приоритет рейтинг']")).not.toBeNull();
-    expect(sec?.querySelector("button[aria-label='Добавить приоритет цена']")).toBeNull();
+  // Live DOM (clicks are needed); the box is removed by the next call.
+  let box: HTMLDivElement | null = null;
+  const row = (stage: "compare" | "assemble" | "booked", order: Priority[], onSend: (t: string) => void = noop) => {
+    box?.remove();
+    box = document.createElement("div");
+    document.body.append(box);
+    act(() => createRoot(box!).render(<PriorityRow order={order} stage={stage} busy={false} onSend={onSend} />));
+    return box.querySelector<HTMLElement>("[aria-label='Приоритеты']");
+  };
+  const pressed = (sec: HTMLElement | null) =>
+    [...(sec?.querySelectorAll("button[aria-pressed='true']") ?? [])].map((c) => c.textContent);
+
+  it("#577: пустой порядок на сравнении — выбрана цена", () => {
+    const sec = row("compare", []);
+    expect(sec?.querySelector("h2")?.textContent).toBe("Что для вас важнее");
+    expect(pressed(sec)).toEqual(["цена"]);
+    expect(sec?.querySelectorAll("button").length).toBe(6);
   });
 
-  it("S9: после брони чипы видны, но порядок не правится; пустой список скрыт", () => {
-    const r = structuredClone(base); // stage booked
-    r.plan.spec.priorities = ["price", "cancellation"];
-    const sec = render(r).querySelector("[aria-label='Приоритеты']");
-    expect(sec?.textContent).toContain("отмена");
-    expect(sec?.querySelectorAll("button").length).toBe(0);
-    r.plan.spec.priorities = [];
-    expect(render(r).querySelector("[aria-label='Приоритеты']")).toBeNull();
+  it("#577: клик по приоритету делает его главным и шлёт полный порядок", () => {
+    const sent: string[] = [];
+    const sec = row("compare", ["price", "cancellation"], (t) => sent.push(t));
+    expect(pressed(sec)).toEqual(["цена"]);
+    const btn = (name: string) => [...sec!.querySelectorAll("button")].find((b) => b.textContent === name)!;
+    act(() => btn("цена").click()); // already the main one: nothing
+    expect(sent).toEqual([]);
+    act(() => btn("отмена").click());
+    expect(sent).toEqual(["Мои приоритеты по важности: отмена, цена."]);
   });
 
-  it("S9: приоритеты не заданы на сравнении — подсказка и добавление", () => {
-    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
-    r.plan.spec.priorities = [];
-    const sec = render(r).querySelector("[aria-label='Приоритеты']");
-    expect(sec?.textContent).toContain("Порядок не задан");
-    expect(sec?.querySelectorAll("button[aria-label^='Добавить']").length).toBe(6);
+  it("#577: после брони порядок виден, но не правится; пустой список скрыт", () => {
+    const sec = row("booked", ["price", "cancellation"]);
+    expect(pressed(sec)).toEqual(["цена"]);
+    expect([...sec!.querySelectorAll("button")].every((b) => b.disabled)).toBe(true);
+    expect(row("booked", [])).toBeNull();
   });
 
-  it("S9: на сборке подсказка честно говорит, что сдвиг вернёт к сравнению", () => {
-    const hint = (stage: "compare" | "assemble") => {
-      const r = { ...structuredClone(base), stage, voucher: null };
-      r.plan.spec.priorities = ["price", "cancellation"];
-      return render(r).querySelector("[aria-label='Приоритеты']")?.textContent ?? "";
-    };
-    expect(hint("assemble")).toContain("вернёт вас к сравнению");
-    expect(hint("compare")).not.toContain("вернёт");
+  it("S9: на сборке подсказка честно говорит, что смена вернёт к сравнению", () => {
+    expect(row("assemble", ["price"])?.title).toContain("вернёт вас к сравнению");
+    expect(row("compare", ["price"])?.title).toBe("");
   });
 
   it("#434: блок этапа — карточки этапа открыты, уже выбранное свёрнуто в «Варианты»", () => {
@@ -443,7 +444,7 @@ suite("доска поездки", () => {
     const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
     const more = render(r).querySelector("details.more:not(.options)");
     expect(more?.querySelector("summary")?.textContent).toContain("важнее: цена → отмена");
-    for (const label of ["Приоритеты", "Что изменилось"]) expect(more?.querySelector(`[aria-label='${label}']`)).not.toBeNull();
+    for (const label of ["Что изменилось"]) expect(more?.querySelector(`[aria-label='${label}']`)).not.toBeNull();
     // A replanned trip opens the block: the user sees what changed without a click.
     expect(more?.hasAttribute("open")).toBe(r.plan.changes.length > 0);
     r.plan.changes = [];

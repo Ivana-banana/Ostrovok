@@ -437,7 +437,7 @@ suite("приложение", () => {
     expect(box.querySelector("[aria-label='Корзина']")?.textContent).not.toContain("Вернуть");
   });
 
-  it("S9: сдвиг чипа отправляет агенту сообщение с полным порядком приоритетов", async () => {
+  it("S9: клик по чипу отправляет агенту сообщение с полным порядком приоритетов", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };
     compare.plan.spec.priorities = ["price", "cancellation"];
@@ -446,15 +446,15 @@ suite("приложение", () => {
     after.plan.spec.priorities = ["cancellation", "price"];
     routes["POST /api/chat"] = () => ({ status: 200, body: after });
     await mount();
-    const down = box.querySelector("button[aria-label='Опустить приоритет цена']") as HTMLButtonElement;
-    await act(async () => down.click());
+    const other = [...box.querySelectorAll("[aria-label='Приоритеты'] button")].find((b) => b.textContent === "отмена") as HTMLButtonElement;
+    await act(async () => other.click());
     await flush();
     expect(calls.at(-1)).toMatchObject({
       key: "POST /api/chat",
       body: { session_id: "s1", message: "Мои приоритеты по важности: отмена, цена." },
     });
-    const chips = [...box.querySelectorAll("[aria-label='Приоритеты'] .chip span")].map((c) => c.textContent);
-    expect(chips).toEqual(["1. отмена", "2. цена"]);
+    const on = [...box.querySelectorAll("[aria-label='Приоритеты'] [aria-pressed='true']")].map((c) => c.textContent);
+    expect(on).toEqual(["отмена"]);
   });
 
   it("подписи про хранение чатов и синтетику спрятаны под «?» и есть в разметке", async () => {
