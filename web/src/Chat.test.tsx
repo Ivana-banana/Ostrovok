@@ -91,10 +91,14 @@ suite("чат", () => {
     const items = [...box.querySelectorAll("ul.offer li")];
     expect(items.map((li) => [...li.querySelectorAll(".pt-row, .pt-sub")].map((x) => x.textContent))).toEqual([
       ["Отель Казантель, Казань7 900 ₽синтетика", "2★ · без питания · невозвратный"],
-      ["Туда · поезд7 800 ₽синтетика", "Москва → Казань", "10.12 18:50 → 11.12 07:10 · UTC+3"],
+      ["Туда · поезд7 800 ₽синтетика", "Москва → Казань 10.12 18:50 → 11.12 07:10 · UTC+3"],
       ["Итого15 700 ₽синтетика"],
     ]);
     expect(items.map((li) => li.querySelector("svg.pt-ic") !== null)).toEqual([true, true, false]);
+    // #478: route and time are one grid of 2 rows × 3 columns, the lines stand in one column
+    const grid = items[1].querySelectorAll(".pt-route");
+    expect(grid).toHaveLength(1);
+    expect([...grid[0].children].map((c) => c.className || "cell")).toEqual(["cell", "pt-line", "cell", "pt-time", "pt-line", "pt-time"]);
     // the arrow is a drawing; the text «→» stays for a screen reader and a copy
     expect(items[1].querySelectorAll("svg.arrow[aria-hidden='true']")).toHaveLength(2);
     // TRAP-7: one chip at each price of the list, none at the facts

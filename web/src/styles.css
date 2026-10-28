@@ -20,6 +20,9 @@
   --text: #141414;
   --text-2: #3d3d39;
   --muted: #6b6b66;
+  --text-sub: #2b2b28; /* facts under an item of the answer (#476) */
+  --route-hi: #ffe866; /* the route line between places (#476) */
+  --route-lo: #f0c400;
   --side-text: #eeeeee;
   --side-muted: #9a9a92;
   --side-group: #8a8a84;
@@ -38,6 +41,9 @@
   --fs: 15px;
   --fs-s: 13px;
   --fs-xs: 11.5px;
+  --fs-sub: 17px;
+  --fs-title: 18px;
+  --fs-sum: 19px;
 
   --r: 14px;
   --r-sm: 10px;
@@ -1008,8 +1014,8 @@ button.icon {
 
 .pt-ic {
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   margin-top: 1px;
   fill: none;
   stroke: currentColor;
@@ -1033,6 +1039,11 @@ button.icon {
 .pt-name {
   flex: 1;
   min-width: 0;
+  font-size: var(--fs-title);
+}
+
+.pt-name b {
+  font-size: var(--fs-title);
 }
 
 .pt-mode {
@@ -1041,16 +1052,20 @@ button.icon {
 
 .pt-price {
   flex: none;
+  font-size: var(--fs-title);
   margin-left: auto;
   white-space: nowrap;
 }
 
 .pt-sub {
-  color: var(--muted);
-  font-size: var(--fs-s);
+  color: var(--text-sub);
+  font-size: var(--fs-sub);
+  font-weight: 500;
+  line-height: 1.55;
 }
 
 .msg.agent ul.points li.sum {
+  font-size: var(--fs-sum);
   font-weight: 700;
 }
 
@@ -1063,15 +1078,70 @@ button.icon {
   line-height: 1.4;
 }
 
+/* #478: route and time of a leg are two rows of one grid: both lines stand in one column */
+.pt-route {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) auto minmax(0, max-content);
+  justify-content: start;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-route .pt-line {
+  display: flex;
+}
+
 .arrow {
-  width: 18px;
-  height: 8px;
-  vertical-align: middle;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  width: 52px;
+  height: 14px;
+  margin: 0 8px;
+  vertical-align: -1px;
+}
+
+.arrow .route-hi {
+  stop-color: var(--route-hi);
+}
+
+.arrow .route-lo {
+  stop-color: var(--route-lo);
+}
+
+.arrow .route-from {
+  fill: var(--ink);
+}
+
+.arrow .route-to {
+  fill: var(--card);
+  stroke: var(--ink);
+  stroke-width: 1.6;
+}
+
+@media (max-width: 480px) {
+  .pt-row {
+    flex-wrap: wrap;
+  }
+
+  .pt-name {
+    flex: 1 1 0;
+    min-width: 9em;
+    font-size: 16px;
+  }
+
+  .pt-name b,
+  .pt-mode {
+    font-size: 16px;
+    white-space: nowrap;
+  }
+
+  .pt-sub {
+    font-size: 15px;
+  }
+
+  .arrow {
+    width: 40px;
+    height: 12px;
+    margin: 0 5px;
+  }
 }
 
 mark {

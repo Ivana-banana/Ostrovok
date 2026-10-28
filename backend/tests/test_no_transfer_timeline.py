@@ -5,9 +5,8 @@ them back by the pair «hotel + leg»: no transfer event, no check-in time from 
 arrival. The guest gets to the hotel on their own; the check-in is not earlier than the
 arrival plus the road by data: the time of the pair's transfer offer, which offers.py derives
 from the distance to the hub, never under OWN_WAY. The text names the road and the distance.
-The refusal lives in `plan.selected` itself:
-a selected hotel and leg whose transfer is offered but not selected. So it survives
-/api/cart (an upsell, a new flight or hotel) and a page reload.
+The refusal is read from `plan.selected` and saved as a readable preference in assumptions.
+It survives /api/cart, spec edits, a car without transfer offers and a page reload.
 """
 
 import re
@@ -199,6 +198,70 @@ def test_trap_5_refusal_survives_a_train_in_the_chat(client):
     assert "Транспорт заменён" in r3.reply
     assert all(x.mode == "train" for x in selected(r3, "transport"))
     assert_no_transfer(r3)
+
+
+@pytest.mark.parametrize("edit", ["на неделю позже", "бюджет до 60 тысяч", "без завтрака"])
+def test_trap_5_refusal_survives_spec_edits(client, edit):
+    _, store = client
+    r = at(store, "assemble")
+    r = say(store, "без трансфера", r.session_id)
+    r = say(store, edit, r.session_id)
+    assert r.plan.changes
+    assert_no_transfer(r)
+    assert_no_transfer(session(client[0], r))
+    r = say(store, "беру первый", r.session_id)
+    assert_no_transfer(r)
+
+
+def test_trap_5_refusal_survives_car_then_flight(client):
+    http, store = client
+    r = at(store, "assemble")
+    r = say(store, "без трансфера", r.session_id)
+    r = say(store, "на машине", r.session_id)
+    assert all(x.mode == "car" for x in selected(r, "transport"))
+    r = session(http, r)
+    r = say(store, "самолётом", r.session_id)
+    assert all(x.mode == "flight" for x in selected(r, "transport"))
+    assert_no_transfer(r)
+
+
+def test_trap_5_refusal_with_removed_hotel_matches_plan_and_restored_cart(client):
+    http, store = client
+    r = at(store, "checkout")
+    hotel = selected(r, "hotel")[0]
+    r = cart(http, r, "remove", hotel.offer_id)
+    r = say(store, "без трансфера", r.session_id)
+    assert "Убираю трансфер из плана" in r.reply
+    assert_no_transfer(r)
+    r = cart(http, session(http, r), "add", hotel.offer_id)
+    assert hotel.offer_id in {o.offer_id for o in r.cart.items}
+    assert_no_transfer(r)
+
+
+def test_trap_5_one_refusal_survives_car_and_explicit_transfer_restore(client):
+    http, store = client
+    r = at(store, "checkout", KAZAN)
+    hotel = selected(r, "hotel")[0]
+    out = next(x for x in selected(r, "transport") if x.destination == hotel.city)
+    transfer = transfer_id(hotel.offer_id, out.offer_id)
+    r = cart(http, r, "remove", transfer)
+    r = say(store, "на машине", r.session_id)
+    assert all(x.mode == "car" for x in selected(r, "transport"))
+    r = say(store, "самолётом", session(http, r).session_id)
+    hotel = selected(r, "hotel")[0]
+    out = next(x for x in selected(r, "transport") if x.destination == hotel.city)
+    back = next(x for x in selected(r, "transport") if x.origin == hotel.city)
+    transfer = transfer_id(hotel.offer_id, out.offer_id)
+    assert transfer not in r.plan.selected
+    assert transfer_id(hotel.offer_id, back.offer_id) in r.plan.selected
+    for text in ("беру", "да"):
+        r = say(store, text, r.session_id)
+    assert r.stage == "checkout"
+    r = cart(http, r, "add", transfer)
+    assert transfer in r.plan.selected
+    assert "трансфер туда: добираетесь сами" not in r.plan.spec.assumptions
+    r = say(store, "на неделю позже", r.session_id)
+    assert len(selected(r, "transfer")) == 2
 
 
 def test_trap_5_refusal_survives_a_better_hotel_in_the_chat(client):
