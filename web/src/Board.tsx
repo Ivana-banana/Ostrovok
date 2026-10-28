@@ -232,6 +232,14 @@ function destTags(d: Destination, all: Destination[], budget: number | null) {
   return tags;
 }
 
+// #458: the places of the earlier «ещё» batches (the note «уже показаны» of the spec) that the
+// current cards do not show. The note is internal state: it never goes to the text.
+export function earlierNames(plan: Plan): string[] {
+  const note = plan.spec.assumptions.find((a) => a.startsWith("уже показаны:"));
+  const now = plan.destinations.map((d) => d.name);
+  return note ? note.split(": ", 2)[1].split(", ").filter((n) => !now.includes(n)) : [];
+}
+
 export function Destinations({ plan, stage, busy, onSend, more = true }: {
   plan: Plan;
   stage: Stage;
@@ -239,6 +247,7 @@ export function Destinations({ plan, stage, busy, onSend, more = true }: {
   onSend: (t: string) => void;
   more?: boolean; // false in an older answer: «ещё» is understood only in the current block
 }) {
+  const before = more && stage === "inspire" ? earlierNames(plan) : [];
   return (
     <section className="dests" aria-label="Направления">
       <h2>Направления</h2>
@@ -290,7 +299,7 @@ export function Destinations({ plan, stage, busy, onSend, more = true }: {
                   type="button"
                   disabled={busy}
                   aria-label={`Выбрать направление ${d.name}`}
-                  onClick={() => onSend(`${word}: ${d.name}`)}
+                  onClick={() => onSend(d.name)}
                 >
                   Выбрать
                 </button>
@@ -299,6 +308,16 @@ export function Destinations({ plan, stage, busy, onSend, more = true }: {
           );
         })}
       </div>
+      {before.length > 0 && (
+        <p className="earlier-names muted">
+          Ранее предлагал:{" "}
+          {before.map((n) => (
+            <button key={n} type="button" className="chip" disabled={busy} onClick={() => onSend(n)}>
+              {n}
+            </button>
+          ))}
+        </p>
+      )}
       {/* #451: the next places of the same pool, without the shown ones (api/model.py MORE_RE) */}
       {stage === "inspire" && more && (
         <button type="button" className="more-dests" disabled={busy} onClick={() => onSend("ещё")}>
@@ -893,12 +912,13 @@ export function EarlierChoices({ reply, current, busy, onSend }: {
   if (!n || stage === "checkout" || stage === "booked") return null;
   // «беру второй» and «третий: Сочи» are parsed against the CURRENT list by the row number: a button
   // is live only while the stage and the rows (the destination names) are the same as in the current plan.
-  const names = (r: ChatReply) => r.plan.destinations.map((d) => d.name).join();
   const rowsLive = stage === current.stage && rows(reply) === rows(current);
-  const destLive = stage === "inspire" && current.stage === "inspire" && names(reply) === names(current);
+  // #458: a destination is sent by its NAME, which the agent finds in the whole pool shown in the
+  // session: an old batch stays live while the trip is still at the choice of a place.
+  const destLive = stage === "inspire" && (current.stage === "inspire" || current.stage === "select");
   const stale = (!rowsLive && rows(reply) !== "") || (!destLive && plan.destinations.length > 0 && stage === "inspire");
   return (
-    <details className="more options earlier">
+    <details className="more options earlier" open={destLive && plan.destinations.length > 0 ? true : undefined}>
       <summary>
         <b>Варианты</b>
         <span>выбор из прошлого ответа</span>

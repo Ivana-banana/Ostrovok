@@ -80,3 +80,42 @@ def test_exhausted_pool_is_said_honestly(store, monkeypatch):
     assert "Других направлений под эти условия нет" in r.reply
     assert "бюджет" in r.reply
     assert names(r) == first  # «номер» still picks from the shown cards
+
+
+def hotel_cities(r) -> set[str]:
+    return {o.city for o in r.plan.offers if o.kind == "hotel"}
+
+
+def test_458_name_beats_number_after_more(store):
+    """#458, TRAP-1: «третий: X» with X from the first batch, after «ещё», picks X (sim4)."""
+    r = say(store, "тёплое море в ноябре, недорого, из Москвы, двое взрослых, 7 ночей")
+    first = names(r)
+    r = say(store, "ещё", r.session_id)
+    assert names(r)[2] != first[2]
+    r = say(store, f"третий: {first[2]}", r.session_id)
+    assert r.plan.spec.destinations == [first[2]] and not r.llm
+    assert hotel_cities(r) == {first[2]}
+
+
+def test_458_number_with_matching_name_and_unknown_name(store):
+    r = say(store, "тёплое море в ноябре, двое взрослых")
+    cur = names(r)
+    ask = say(store, "второй: Сочи", r.session_id)
+    assert ask.stage == "inspire" and not ask.plan.spec.destinations and ask.questions
+    assert [q.options for q in ask.questions] == [cur]
+    ok = say(store, f"второй: {cur[1]}", r.session_id)
+    assert ok.plan.spec.destinations == [cur[1]]
+
+
+def test_458_bare_name_from_old_batch_and_no_state_in_text(store):
+    """#458, TRAP-1: after two «ещё» any shown place is picked by its bare name; the internal
+    note «уже показаны» is not in the reply text."""
+    r = say(store, "тёплое море в ноябре, двое взрослых")
+    first = names(r)
+    r = say(store, "ещё", r.session_id)
+    r = say(store, "ещё", r.session_id)
+    assert "уже показаны" not in r.reply
+    r = say(store, first[0], r.session_id)
+    assert r.plan.spec.destinations == [first[0]] and r.stage == "compare"
+    assert hotel_cities(r) == {first[0]}
+    assert "уже показаны" not in r.reply
