@@ -560,9 +560,26 @@ def _pick_third(store):
     return r, _hotel(r)
 
 
+ORDINAL_WORDS = ["первый", "второй", "третий", "четвёртый", "пятый"]
+
+
+def _pick_nonrefundable(store):
+    """The user picked a row of the table that is not ranked first and is shown non-refundable;
+    the row comes from the table, not from fixed prices (#280: fares move the shown tariffs)."""
+    r = say(store, SOCHI)
+    ranked = dag.rank(r.plan.spec, r.plan.offers)[0]
+    rows = hotel_rows(r.plan.offers, r.plan.selected)
+    n = next(
+        i for i, h in enumerate(rows) if h.offer_id not in ranked and not h.cancellation.refundable
+    )
+    r = say(store, ORDINAL_WORDS[n], r.session_id)
+    assert r.stage == "assemble" and _hotel(r).title == rows[n].title
+    return r, _hotel(r), n
+
+
 def test_picked_hotel_gets_the_tariff_of_the_new_spec(store):
     """#39: the user picked a hotel, not a tariff; a refund wish re-picks its tariff."""
-    r, pick = _pick_third(store)
+    r, pick, n = _pick_nonrefundable(store)
     assert not pick.cancellation.refundable
     ranked = dag.rank(r.plan.spec, r.plan.offers)[0][0]
     r = say(store, "а нужна бесплатная отмена", r.session_id)
@@ -571,7 +588,7 @@ def test_picked_hotel_gets_the_tariff_of_the_new_spec(store):
     assert hotel.cancellation.refundable and hotel.meal == pick.meal
     assert hotel.offer_id != ranked and r.plan.explanations[0].why == dag.MANUAL_WHY
     # the row of the table is the tariff of the plan
-    assert hotel_rows(r.plan.offers, r.plan.selected)[2].offer_id == hotel.offer_id
+    assert hotel_rows(r.plan.offers, r.plan.selected)[n].offer_id == hotel.offer_id
 
 
 def test_date_shift_keeps_the_tariff_terms_of_the_picked_hotel(store):
