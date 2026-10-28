@@ -4,10 +4,9 @@ Without a model (TRAP-1). A wrong guest count is a wrong price and a wrong booki
 """
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import chat
 from api.store import SessionStore
 
 NOT_NAMED = "взрослых: 2 (состав не назван)"
@@ -16,10 +15,6 @@ NOT_NAMED = "взрослых: 2 (состав не назван)"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 # (text, adults, children): the repro of the task and every form of the party.
@@ -116,14 +111,16 @@ def test_the_mother_alone_keeps_her_child(store):
 def test_child_without_a_party_gets_a_question_not_an_assumption(store):
     r = say(store, "С 6 июня в Турцию с дочкой 7 лет")
     assert r.stage == "clarify" and len(r.questions) <= 2
-    assert any("едет" in q.text for q in r.questions)
+    assert any(" едет " in q.text for q in r.questions)
     spec = r.plan.spec
     assert spec.children_ages == [7] and spec.destinations == ["Турция"]
 
 
 def test_the_answer_to_the_party_question_moves_on(store):
     first = say(store, "С 6 июня в Турцию с дочкой 7 лет")
-    option = next(q.options for q in first.questions if "едет" in q.text)[1]
+    option = next(q.options for q in first.questions if " едет " in q.text)[
+        1
+    ]  # «поедете» is no match (#436)
     second = say(store, option, first.session_id)
     assert second.stage != "clarify"
     spec = second.plan.spec
@@ -145,13 +142,13 @@ def test_the_answer_to_the_party_question_moves_on(store):
 )
 def test_child_with_a_signal_of_two_adults_is_not_asked(store, text):
     r = say(store, text)
-    assert not any("едет" in q.text for q in r.questions)
+    assert not any(" едет " in q.text for q in r.questions)
     assert r.plan.spec.adults == 2
 
 
 def test_no_child_no_party_question(store):
     r = say(store, "Сочи в ноябре, бюджет 50 тысяч")
-    assert not any("едет" in q.text for q in r.questions)
+    assert not any(" едет " in q.text for q in r.questions)
     assert NOT_NAMED in r.plan.spec.assumptions
 
 
@@ -179,17 +176,17 @@ def test_child_without_a_place_still_gets_destinations(store, text):
     r = say(store, text)
     assert r.stage == "inspire" and len(r.plan.destinations) > 0
     assert NOT_NAMED in r.plan.spec.assumptions  # the default stays visible
-    assert any("едет" in q.text for q in r.questions)  # asked next to the options
+    assert any(" едет " in q.text for q in r.questions)  # asked next to the options
 
 
 def test_party_question_follows_to_the_comparison(store):
     first = say(store, "Тёплое море в ноябре, недорого, с ребёнком")
     second = say(store, first.plan.destinations[0].name, first.session_id)
     assert second.stage == "compare"
-    assert any("едет" in q.text for q in second.questions)
+    assert any(" едет " in q.text for q in second.questions)
     third = say(store, "Двое взрослых", first.session_id)
     assert third.plan.spec.adults == 2 and third.plan.spec.children_ages == [7]
-    assert not any("едет" in q.text for q in third.questions)
+    assert not any(" едет " in q.text for q in third.questions)
 
 
 # #179: a question about children at a built plan adds nobody and keeps the cart.

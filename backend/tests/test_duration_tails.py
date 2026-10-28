@@ -4,19 +4,14 @@ Rules only, no model (TRAP-1).
 """
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.store import SessionStore
 
 
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def length_notes(r):

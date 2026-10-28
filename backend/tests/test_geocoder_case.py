@@ -9,12 +9,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from talk import say
 
 from api import catalog
-from api.contracts import ChatRequest
 from api.extract import extract
 from api.guards import name_candidates
-from api.model import chat
 from api.store import SessionStore
 
 ANSWERS = Path(__file__).resolve().parents[2] / "eval" / "geocoder_answers.json"
@@ -160,7 +159,7 @@ def test_trap_3_gender_must_agree_in_a_two_word_name():
 def test_trap_3_chat_books_the_place_asked_in_a_case_form(tmp_path, spy):
     asked = spy("Старая Ладога")
     store = SessionStore(tmp_path / "s.db")
-    r = chat(ChatRequest(session_id=None, message="Хочу в Старую Ладогу в августе"), store)
+    r = say(store, "Хочу в Старую Ладогу в августе")
     assert r.plan.spec.destinations == ["Старая Ладога"]
     assert "нет в каталоге" not in r.reply and "Старую" not in r.reply
     assert asked[0] == "Старая Ладога"  # the name is already the nominative: one question
@@ -168,7 +167,7 @@ def test_trap_3_chat_books_the_place_asked_in_a_case_form(tmp_path, spy):
 
 def test_trap_3_chat_says_the_nominative_when_the_geocoder_is_off(tmp_path):
     store = SessionStore(tmp_path / "s.db")
-    r = chat(ChatRequest(session_id=None, message="Хочу в Старую Ладогу в августе"), store)
+    r = say(store, "Хочу в Старую Ладогу в августе")
     assert "«Старая Ладога» пока нет в каталоге" in r.reply
 
 

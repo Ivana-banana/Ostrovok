@@ -5,10 +5,10 @@ changes nothing, a request re-plans.
 """
 
 import pytest
+from talk import say
 
 from api import llm
-from api.contracts import ChatRequest
-from api.model import CHOICE_RE, chat
+from api.model import CHOICE_RE
 from api.store import SessionStore
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч, нужен завтрак"
@@ -26,10 +26,6 @@ REQUESTS = ["а с бассейном есть?", "есть с бассейно�
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def at(store, stage):
