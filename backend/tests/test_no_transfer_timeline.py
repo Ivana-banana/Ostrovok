@@ -15,11 +15,11 @@ from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from talk import say
 
-from api.contracts import ChatReply, ChatRequest, Plan, TripSpec
+from api.contracts import ChatReply, Plan, TripSpec
 from api.fixtures import rank
 from api.main import app, get_store
-from api.model import chat
 from api.offers import find_offers, transfer_id
 from api.store import SessionStore
 from api.timeline import OWN_WAY, build_timeline
@@ -37,10 +37,6 @@ def client(tmp_path):
     app.dependency_overrides[get_store] = lambda: store
     yield TestClient(app), store
     app.dependency_overrides.clear()
-
-
-def say(store, text, sid=None) -> ChatReply:
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def at(store, stage: str, request: str = SOCHI) -> ChatReply:

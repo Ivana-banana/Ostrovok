@@ -8,11 +8,11 @@ changes neither the plan, nor the cart, nor the stage, and is never a consent.
 import re
 
 import pytest
+from talk import say
 
 from api import llm
-from api.contracts import ChatRequest, HotelOffer
+from api.contracts import HotelOffer
 from api.guards import unknown_prices
-from api.model import chat
 from api.store import SessionStore
 
 SOCHI = "Сочи из Москвы с 3 по 8 декабря, двое взрослых"
@@ -33,10 +33,6 @@ PRICE_RE = re.compile(r"\d[\d  ]*\s?₽")
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def at(store, stage):

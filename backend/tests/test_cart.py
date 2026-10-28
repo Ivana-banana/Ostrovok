@@ -4,11 +4,12 @@ import threading
 
 import pytest
 from fastapi.testclient import TestClient
+from talk import say
 
 from api.cart import CartRefusal, edit_cart
-from api.contracts import Cart, ChatReply, ChatRequest, ExtraOffer
+from api.contracts import Cart, ChatReply, ExtraOffer
 from api.main import app, get_store
-from api.model import GUEST_DATA_RE, chat
+from api.model import GUEST_DATA_RE
 from api.store import SessionStore
 
 KAZAN = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."
@@ -24,10 +25,6 @@ def client(store):
     app.dependency_overrides[get_store] = lambda: store
     yield TestClient(app)
     app.dependency_overrides.clear()
-
-
-def say(store, text, sid=None) -> ChatReply:
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 @pytest.fixture

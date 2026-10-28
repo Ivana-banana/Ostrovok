@@ -1,8 +1,15 @@
 import type { Cart, ChatReply, Meal, Mode, Priority, TripSpec } from "./contracts";
 
 // One reply line for the user; the no-model mode is labelled honestly (TRAP-1).
+const NO_AI = " — упрощённый режим без ИИ";
 export function describe(r: ChatReply): string {
-  return r.llm ? r.reply : `${r.reply} — упрощённый режим без ИИ`;
+  return r.llm ? r.reply : `${r.reply}${NO_AI}`;
+}
+
+// The bubble text without the no-model label: only while the «Без ИИ» badge is on the screen
+// (TRAP-1 stays honest by the badge, the label after every answer is noise, #434).
+export function withoutNoAi(text: string): string {
+  return text.endsWith(NO_AI) ? text.slice(0, -NO_AI.length) : text;
 }
 
 export const MEALS: Record<Meal, string> = {
@@ -70,6 +77,28 @@ export function cartLine(cart: Cart): string {
 export function localTime(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
   return m ? `${m[3]}.${m[2]} ${m[4]}:${m[5]}` : iso;
+}
+
+// The zone of the event as the backend writes it in the chat: «UTC+3», «UTC+5:30» (TRAP-5, #364).
+export function zoneLabel(iso: string): string {
+  const m = /([+-])(\d{2}):?(\d{2})$/.exec(iso);
+  if (!m) return /Z$/.test(iso) ? "UTC" : "";
+  const minutes = m[3] === "00" ? "" : `:${m[3]}`;
+  return `UTC${m[1]}${Number(m[2])}${minutes}`;
+}
+
+// Local time with its zone: «11.12 07:10 (UTC+3)».
+export function zonedTime(iso: string): string {
+  const zone = zoneLabel(iso);
+  return zone ? `${localTime(iso)} (${zone})` : localTime(iso);
+}
+
+// A moment of the service itself (voucher time, written in UTC): shown in the browser zone.
+export function browserTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 export function localDate(iso: string | null): string {
@@ -141,3 +170,60 @@ export const SOURCES: { name: string; text: string; url: string; licence: string
     licence: "ODbL",
   },
 ];
+
+// The cards under the last answer already show these lists (#434), so the chat bubble drops
+// them: the hotel rows after «Отели:», the «Рейс N.» rows after «Транспорт:», the timeline rows
+// after «План поездки:» and the destination rows (backend api/model.py _text_compare,
+// _text_assemble, _text_inspire). A row is dropped only right after its header. The header of
+// the destinations and of the plan becomes one short lead line. Every other line (summary, climate,
+// «Предлагаю», «Почему», assumptions, questions, hints) stays as it is.
+const LISTS: { head: RegExp; row: RegExp; lead?: (rows: number, last: boolean) => string }[] = [
+  { head: /^Отели:$/, row: /^\d+\. .+ — \S*★, рейтинг / },
+  { head: /^Транспорт:$/, row: /^Рейс \d+\. / },
+  {
+    head: /^План поездки:$/,
+    row: /^\d{2}\.\d{2} \d{2}:\d{2} \(UTC[+-][\d:]+\) — /,
+    lead: (_n, last) => (last ? "План поездки собран — таймлайн ниже." : "План поездки был собран."),
+  },
+  {
+    head: /^Подходящие направления.*:$/,
+    row: /^\d+\. .+ \(.+\) — от .+ на \d+ чел\./,
+    lead: (n, last) =>
+      `Нашёл ${n} ${countWord(n, "направление", "направления", "направлений")}${last ? " — выберите карточку ниже." : "."}`,
+  },
+];
+
+function countWord(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m100 > 10 && m100 < 15) return many;
+  return m10 === 1 ? one : m10 > 1 && m10 < 5 ? few : many;
+}
+
+// `last`: the cards sit under this answer. In an older answer they sit under a newer one, so
+// the lead line must not point «ниже» (#439).
+export function brief(text: string, last = true): string {
+  const out: string[] = [];
+  let list: (typeof LISTS)[number] | null = null;
+  let head = -1; // index in out of the lead line of the open list
+  let rows = 0;
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (list && list.row.test(t)) {
+      rows++;
+      if (list.lead) out[head] = list.lead(rows, last);
+      continue;
+    }
+    list = LISTS.find((l) => l.head.test(t)) ?? null;
+    if (list) {
+      rows = 0;
+      if (list.lead) {
+        head = out.length;
+        out.push(line); // no rows after it: the header stays as it is
+      }
+      continue;
+    }
+    out.push(line);
+  }
+  return out.some((l) => l.trim()) ? out.join("\n") : text;
+}
