@@ -67,8 +67,22 @@ export type TransportOffer = Priced & {
   pets_allowed: boolean;
 };
 
-export type TransferOffer = Priced & { kind: "transfer"; depart_at: string; arrive_at: string };
-export type ExtraOffer = Priced & { kind: "extra"; for_offer_id: string };
+// Pair of the ride and the provider id (ADR-0002, #307); the web does not read them yet.
+export type TransferOffer = Priced & {
+  kind: "transfer";
+  depart_at: string;
+  arrive_at: string;
+  hotel_offer_id?: string | null;
+  leg_offer_id?: string | null;
+  ref?: string | null;
+};
+// tag: "early" | "late" | "prev" or another add-on; at: local time "HH:MM:SS" (#307).
+export type ExtraOffer = Priced & {
+  kind: "extra";
+  for_offer_id: string;
+  tag?: string | null;
+  at?: string | null;
+};
 export type Offer = HotelOffer | TransportOffer | TransferOffer | ExtraOffer;
 
 export type Destination = {
@@ -134,7 +148,13 @@ export type Voucher = {
 // Lead guest typed at checkout (#367); simulated, stored with the session, not sent to the provider.
 export type Guest = { name: string; contact: string };
 
-export type ChatRequest = { session_id: string | null; message: string };
+// #490: real_data — flights from Travelpayouts (Aviasales), llm — the model; both false by default.
+export type ChatRequest = {
+  session_id: string | null;
+  message: string;
+  real_data?: boolean;
+  llm?: boolean;
+};
 
 export type ChatReply = {
   session_id: string;
@@ -147,8 +167,9 @@ export type ChatReply = {
   llm: boolean;
 };
 
-// GET /api/mode: false means the agent answers by rules, without a model (TRAP-1).
-export type LlmMode = { llm: boolean };
+// GET /api/mode: what the switches can turn on (#490). llm false: no model in .env, rules only
+// (TRAP-1); real_data false: no TRAVELPAYOUTS_TOKEN, every price is synthetic.
+export type LlmMode = { llm: boolean; real_data: boolean };
 
 export type CartAction = { session_id: string; action: "add" | "remove"; offer_id: string };
 export type CheckoutRequest = {

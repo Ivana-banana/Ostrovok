@@ -118,6 +118,7 @@ from api.store import SessionStore
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
+NO_PET_MARK = "Нет отметки о животных:"  # the count line of the compare reply (#475)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
@@ -1655,7 +1656,14 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
 
 # #311: «дешевле, чем в Турции?», «это дешевле, чем в среднем?» ask for a comparison. They name no
 # new place and no «недорого» wish; the plan stays. A request («хочу дешевле, чем сейчас») is an edit.
-PRICE_VERSUS_RE = re.compile(r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?")
+# #390: «а в Турции дешевле?» asks the same without «чем». Only the whole message «[а] в <place in
+# the prepositional case> дешевле?»: «поехали в Египет, там дешевле?» and «в Турцию, там дешевле?»
+# move the trip, as on main.
+PRICE_VERSUS_RE = re.compile(
+    r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?"
+    r"|^\s*(?:а\s+)?(?:в|на)\s+(?:\w+\s+)?\w*[^\Wую]\s+(?:будет\s+|вс[её]\s+же\s+)?"
+    r"(?:дешевле|дороже|выгоднее)\s*\?\s*$"
+)
 VERSUS_ORDER_RE = re.compile(
     r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
 )
@@ -1877,7 +1885,7 @@ def _text_compare(plan: Plan) -> str:
         ),
     ]
     if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
-        lines.append(f"Нет отметки о животных: у {n} из {len(rows)} отелей.")
+        lines.append(f"{NO_PET_MARK} у {n} из {len(rows)} отелей.")
     # C14 (#364, TRAP-5): the chosen legs keep local times with zones (_offer_lines, #468).
     lines += _offer_lines(plan)
     for e in plan.explanations[:1]:
@@ -1960,7 +1968,7 @@ def _pet_dead_cities(spec: TripSpec) -> list[str]:
     return [
         d.name
         for d in suggest_destinations(spec, len(CATALOG))
-        if not pets_possible(spec, find_offers(spec, d.name))
+        if not pets_possible(spec, find_offers(spec, d.name, estimate=True))
     ]
 
 
@@ -1971,7 +1979,10 @@ def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
     spec = plan.spec
     text = dead_end_text(spec, plan.offers)
     if plan.selected:  # the hotels, as the user must see them to pick one
-        text = _text_compare(plan).split("\nПредлагаю:")[0] + "\n" + text
+        head = _text_compare(plan).split("\nПредлагаю:")[0].split("\n")
+        # #475: the dead end paragraph says it about the pets; no count line before it
+        head = [x for x in head if not x.startswith(NO_PET_MARK)]
+        text = "\n".join(head) + "\n" + text
     text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
     return ("compare" if plan.selected else "select"), plan, text, questions
 
@@ -2136,6 +2147,7 @@ def _said_origin(old: ChatReply, message: str, found: dict) -> str | None:
 
 
 SAME_PLACE = "— это и место поездки."
+ORIGIN_DEFAULT_LINE = "Город вылета не назван — беру Москву."  # #453, DEFAULT_ORIGIN
 
 
 def _trip_places(old: ChatReply, found: dict) -> set[str]:
@@ -2367,6 +2379,13 @@ def step(
     if asking and ASKING_NOTE in notes and not found:
         return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
     said_origin = _said_origin(old, message, found)  # #436, TRAP-3
+    # #453: the place abroad named again on «Откуда?» is no origin either: Москва, said aloud
+    origin_default = (
+        not said_origin
+        and old.stage == "clarify"
+        and any(SAME_PLACE in q.text for q in old.questions)
+        and not found.get("origin")
+    )
     if said_origin and (again := same_place_question(old, said_origin, found)):
         # The other fields of the answer («Казань, трое взрослых») stay in the trip.
         rest = {k: v for k, v in found.items() if k != "origin" and k in TripSpec.model_fields}
@@ -2574,6 +2593,8 @@ def step(
         return f"{text}\n{line}", [*chips, *questions]
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
+        if origin_default and plan.spec.origin == DEFAULT_ORIGIN:
+            text = f"{ORIGIN_DEFAULT_LINE}\n{text}"
         text, kw["questions"] = with_month(plan.spec, text, kw.get("questions", []))
         return ChatReply(
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw

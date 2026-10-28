@@ -1,4 +1,4 @@
-import type { TripSpec } from "./contracts";
+import type { Meal, TripSpec } from "./contracts";
 import { rub } from "./format";
 
 export type ParamId = "origin" | "dates" | "party" | "budget";
@@ -96,3 +96,25 @@ export const partyMessage = (adults: number, ages: number[]) =>
   `Едем ${partyText(adults, ages)}${ages.length ? "" : ", без детей"}`;
 
 export const budgetMessage = (rubles: number) => `Бюджет до ${Math.round(rubles)} ₽ на всю поездку`;
+
+// Hotel filter chips (#431). The phrases are verified against backend/src/api/extract.py by
+// backend/tests/test_hotel_chip_phrases.py; the stay stays as it is, only the hotel set is re-ranked.
+export const MEAL_MESSAGES: Record<Meal, string> = {
+  BB: "С завтраком",
+  HB: "С полупансионом",
+  FB: "С полным пансионом",
+  AI: "Всё включено",
+  RO: "Без питания",
+};
+
+export const REFUNDABLE_MESSAGE = "С бесплатной отменой";
+
+// «за ночь» needs the nights of the plan: with no nights the sum is for the whole stay.
+export const hotelBudgetMessage = (rubles: number, perNight: boolean) =>
+  `Отель до ${Math.round(rubles)} ₽ ${perNight ? "за ночь" : "за все ночи"}`;
+
+// The price of one night as the chip shows it; null when the spec has no nights or no budget.
+export function nightBudget(spec: TripSpec): number | null {
+  if (spec.hotel_budget_rub === null || !spec.nights) return null;
+  return Math.round(spec.hotel_budget_rub / spec.nights);
+}
