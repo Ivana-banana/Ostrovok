@@ -412,6 +412,9 @@ suite("приложение", () => {
       "?Список чатов хранится только в этом браузере.",
       "?Цены и рейсы — синтетика. Оплата имитирована.",
     ]);
+    // one click opens a note
+    await act(async () => hints[1].querySelector("summary")!.click());
+    expect(hints[1].open).toBe(true);
   });
 
   it("подвал: атрибуция OpenStreetMap (ODbL) есть и без поездки, под «Данные ?» в один клик", async () => {

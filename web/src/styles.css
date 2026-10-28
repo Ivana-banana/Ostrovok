@@ -1377,13 +1377,21 @@ mark {
   color: var(--muted);
 }
 
-/* a quiet «?»: the note opens above it on click (details/summary, keyboard works) */
+/* a quiet «?»: on click the note opens inline next to it, covering nothing (details/summary) */
 .hint {
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-hint.hint {
+  flex-direction: row-reverse;
+  justify-content: flex-start;
 }
 
 .hint summary {
   display: inline-flex;
+  flex: none;
   cursor: pointer;
   list-style: none;
 }
@@ -1393,26 +1401,8 @@ mark {
 }
 
 .hint p {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  right: 0;
-  z-index: 5;
-  width: max-content;
-  max-width: 260px;
   margin: 0;
-  padding: 8px 10px;
-  border-radius: var(--r-sm);
-  background: var(--ink);
-  color: #fff;
   font-size: 12px;
-  text-align: left;
-  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
-}
-
-.foot .hint p {
-  left: 0;
-  right: auto;
-  border: 1px solid var(--ink-3);
 }
 
 .foot .hint {
