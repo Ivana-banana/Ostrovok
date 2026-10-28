@@ -395,6 +395,13 @@ NO_FLIGHT = re.compile(
     r"\b(?:без|не)\s+(?:на\s+)?(?!долг|длинн)(?:перелет\w*|самолет\w*|авиа(?!билет|компани|линии|перевоз)\w*)"
     r"|\bне\s+(?:хочу\s+|будем\s+|надо\s+)?(?:лететь|летим|полетим|летать)\b"
     r"(?!\s+(?:долг|дольше|больше|более|\d|с\s+пересад))"  # a long flight, not every flight
+    # #314: «не летаем» bans only at the end of its clause: «не летаем лоукостерами» does not
+    r"|\bне\s+лета(?:ем|ю)\b(?:\s+(?:вообще|совсем))?(?=[ \t]*(?:[.,;!?)—–\n-]|$)|\s+(?:и|а|но)\b)"
+)
+# #314: «в январе, не летаем» refuses the month, not the flight
+MONTH_CLAUSE_RE = re.compile(
+    r"\b(?:январ|феврал|март|апрел|ма[йея]|июн|июл|август|сентябр|октябр|ноябр|декабр)\w*"
+    r"\s*[,—–-]\s*$"
 )
 # #302: a meal or a mode refused after its name: «all inclusive не надо», «самолёт ни за что».
 # «не надо» refuses only at the end of its clause: «поезд, не надо пересадок» keeps the train.
@@ -464,7 +471,7 @@ WISHES = [
     ("вегетарианское питание", r"вегетариан"),
     (
         "поздний заезд",
-        r"засел\w*(?:\s+\w+)?\s+(?:ночью|поздно|сразу)|засел\w*\s+после\s+(?:2[23]|0?[0-5])(?::\d\d|\s*(?:ч\b|час\w*|ночи|утра))|поздн\w*\s+(?:заезд|заселен)|ночн\w*\s+заезд",
+        r"засел\w*(?:\s+\w+)?\s+(?:ночью|поздно|сразу)|засел\w*\s+после\s+(?:2[23]|0?[0-5])(?::\d\d|\s*(?:ч\b|час\w*|ночи|утра))(?!\w*\s+дня)|поздн\w*\s+(?:заезд|заселен)|ночн\w*\s+заезд",
     ),
     ("детская кроватка", r"кроватк|колыбел"),
     ("вино и еда", r"\bвин[оа]\b|\bвинн|гастро|\bеда\b|\bкухн"),
@@ -517,9 +524,39 @@ LANDMARK_RE = re.compile(
     r"(?i:\b(?:(?:отел\w*|гостиниц\w*|жиль[её]|жить|остановиться)\s+(?:\w+\s+)?у|возле|около|рядом\s+с))"
     r"\s+([А-ЯЁ][\w-]+)\b(?!\s+(?:мор|озер))"
 )
+# «Красной площадью», «Невского проспекта»: after an adjective the noun is part of the name (#466)
+LANDMARK_NOUN_RE = re.compile(r"\s+(?!(?:для|на|в|во|и|с|со|по|за|или|недорог\w*)\b)[а-яё][\w-]+")
+# «-ом» is a noun after «рядом с»: «Арбатом»; «-ым», «-им» are adjectives: «Большим театром»
+ADJ_ENDINGS = (
+    "ой",
+    "ей",
+    "ого",
+    "его",
+    "ому",
+    "ая",
+    "ую",
+    "ий",
+    "ый",
+    "ое",
+    "ые",
+    "ых",
+    "ым",
+    "им",
+)
 BREAKFAST_FROM_RE = re.compile(
     r"завтрак\w*\s+с\s+(\d{1,2})(?::(\d\d)|\s*(?:утра|ч\b|час(?:а|ов)?\b))"
 )
+
+
+def _is_destination(word: str, found: dict) -> bool:
+    """«жить у Байкала» with Байкал in the destinations: the place itself, no landmark (#466)."""
+    w = word.lower().replace("ё", "е")
+    for d in found.get("destinations", []):
+        n = d.lower().replace("ё", "е")
+        stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
+        if len(stem) >= 4 and w.startswith(stem) and len(w) - len(stem) <= 2:  # not «Москворецкого»
+            return True
+    return False
 
 
 def is_unchecked(wish: str) -> bool:
@@ -1494,6 +1531,92 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
     found["date_to"], found["nights"] = end, (end - start).days
 
 
+_EN_MONTH = "|".join(sorted(MONTHS_EN, key=len, reverse=True))
+_EN_DAY = r"(\d{1,2})(?:st|nd|rd|th)?"
+_EN_TO = r"\s*(?:[-–—]|to|till|until)\s*"
+# «20 November», «20th of November», «20-23 November», «from 20 to 23 November»
+EN_DAY_MONTH_RE = re.compile(rf"\b{_EN_DAY}(?:{_EN_TO}{_EN_DAY})?\s+(?:of\s+)?({_EN_MONTH})\b")
+# «November 20», «November 20 - 23»; a number of nights or guests is no day: «may 5 nights»
+EN_MONTH_DAY_RE = re.compile(
+    rf"\b({_EN_MONTH})\s+(?:the\s+)?{_EN_DAY}(?:{_EN_TO}{_EN_DAY})?\b"
+    r"(?!\s*(?:nights?|days?|weeks?|adults?|people|persons?|guests?|kids?|child|children|[:.]\d))"
+)
+
+
+def _dates_en(t: str, found: dict, notes: list[str]) -> None:
+    """#365 (C20): «from 20 November», «20th of November», «November 20», «20-23 November».
+
+    _dates reads the month word only; the day is read here (TRAP-3). «may» is a month after a
+    day or before a day that is no count: «I may 5 nights» is no date."""
+    if "date_from" in found:
+        return
+    if m := EN_DAY_MONTH_RE.search(t):
+        d1, d2, month = m.group(1), m.group(2), MONTHS_EN[m.group(3)]
+    elif m := EN_MONTH_DAY_RE.search(t):
+        month, d1, d2 = MONTHS_EN[m.group(1)], m.group(2), m.group(3)
+    else:
+        return
+    today = date.today()
+    try:
+        start = future_date(month, int(d1), today)
+    except ValueError:
+        notes.append(f"даты: «{m.group(0)}» нет в календаре, даты подобраны")
+        return
+    if start.year > today.year and date(today.year, start.month, start.day) >= today - PAST_WINDOW:
+        notes.append(past_year_note(start, start.year))
+    found["date_from"], found["month"] = start, start.month
+    if d2 is None:
+        return
+    try:
+        end = date(start.year, month, int(d2))
+    except ValueError:
+        end = start
+    if end <= start or (end - start).days > MAX_NIGHTS:
+        notes.append(f"даты: «{m.group(0)}» — такого периода нет, конец по длительности")
+        return
+    found["date_to"], found["nights"] = end, (end - start).days
+
+
+# «на ноябрьские»: 4 November is the day of national unity, a fixed public holiday (Labour Code
+# of Russia, art. 112). The transfers of days off change by year: the weekend around it is taken.
+# The plural only: «ноябрьский снег» names the month, not the holidays.
+NOVEMBER_RE = re.compile(r"\bноябрьск(?:ие|их|им|ими)\b")
+
+
+def _november_holidays(t: str, found: dict) -> tuple[str, date] | None:
+    """#365 (C21): «на ноябрьские» sets the start; returns the words and the end of the days off.
+
+    The Saturday before 4 November (Mon–Wed) to the holiday, or 4 November (Thu–Sun) to the
+    Sunday after it (Monday for a Sunday). _november_end sets the end after the length is read."""
+    m = NOVEMBER_RE.search(t)
+    if not m or "date_from" in found or NOT_NEW_YEAR_BEFORE.search(t[: m.start()]):
+        return None
+    today = date.today()
+    for year in (today.year, today.year + 1):
+        holiday = date(year, 11, 4)
+        if holiday.weekday() <= 2:
+            start, end = holiday - timedelta(days=holiday.weekday() + 2), holiday
+        else:
+            start, end = holiday, holiday + timedelta(days=(6 - holiday.weekday()) or 1)
+        start = max(start, today + timedelta(days=1))
+        if end > start:
+            break
+    found["date_from"], found["month"] = start, start.month
+    return m.group(0), end
+
+
+def _november_end(said: str, end: date, found: dict, notes: list[str]) -> None:
+    """The days off end the stay unless the user named the length."""
+    start = found["date_from"]
+    if "nights" not in found:
+        found["nights"] = (end - start).days
+    found["date_to"] = start + timedelta(days=found["nights"])
+    notes.append(
+        f"даты: {start:%d.%m}–{found['date_to']:%d.%m} («{said}»: 4 ноября — выходной по ТК РФ "
+        "ст. 112; переносы выходных года не проверены — допущение)"
+    )
+
+
 # «дней 10 августа», «дней 5 тысяч»: the number after «дней» is a date or a sum, not a length.
 NOT_LENGTH_AFTER = rf"(?!\s*(?:{MONTH}|[-–—:.]\d|тыс|к\b|₽|руб|час|ч\b|чел|%))"
 
@@ -1607,6 +1730,9 @@ def _holiday_end(said: str, found: dict, notes: list[str]) -> None:
     )
 
 
+EACH_STAY_RE = re.compile(rf"\bпо\s+{NUM}\s*(ноч\w*|дн(?:я|ей)|день)")
+
+
 # C5 (#408): «билеты у нас уже куплены», «свои билеты», «уже купили билеты».
 OWN_TICKETS_RE = re.compile(
     r"\bбилет\w*\s+(?:у\s+(?:нас|меня)\s+)?(?:уже\s+)?(?:есть|куплен\w*|взят\w*)"
@@ -1647,6 +1773,13 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(r"\bна\s+(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
         found["nights"] = MAX_NIGHTS + 1  # too long, the 3 digits are no number the rules read
+    elif (m := EACH_STAY_RE.search(t)) and len(found.get("destinations", [])) >= 2:
+        # #365 (C19): «Питер и Москву, по 3 дня» is 3 days in each city: the trip, not one stay
+        per, cities = _num(m.group(1)), len(found["destinations"])
+        found["nights"] = per * cities - (1 if m.group(2).startswith(("дн", "ден")) else 0)
+        notes.append(
+            f"длительность: {found['nights']} ноч. на поездку («{m.group(0)}», городов: {cities})"
+        )
     elif m := re.search(rf"(?<![:.])\b{NUM}\s*ноч\w*", t):  # «в 01:30 ночи» is a time (C5)
         n = _num(m.group(1))
         if n >= 1:
@@ -2207,6 +2340,8 @@ def extract(
     _places(text, t, found, notes, has_destination)
     _english_places(t, found)
     _dates(t, found, notes, nights)
+    _dates_en(t, found, notes)
+    november = _november_holidays(t, found)
     holiday = _holiday(t, found, notes)
     range_notes = [i for i, n in enumerate(notes) if is_too_long_note(n)]
     _nights(t, found, notes, nights)
@@ -2215,6 +2350,8 @@ def extract(
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     if holiday:
         _holiday_end(holiday, found, notes)
+    if november:
+        _november_end(*november, found, notes)
     _own_tickets(t, found)
     _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
@@ -2229,7 +2366,13 @@ def extract(
     # лететь долго» bans a long flight only (#277).
     refused_after = any(REFUSED_AFTER_RE.match(t, x.end()) for x in hits["flight"])
     # «без перелёта не поеду»: two refusals want the flight (#351)
-    no_flight = [bool(REFUSED_AFTER_RE.match(t, x.end())) for x in NO_FLIGHT.finditer(t)]
+    no_flight = [
+        bool(REFUSED_AFTER_RE.match(t, x.end()))
+        for x in NO_FLIGHT.finditer(t)
+        if not (
+            re.search(r"\bлета(?:ем|ю)\b", x.group(0)) and MONTH_CLAUSE_RE.search(t, 0, x.start())
+        )
+    ]
     if any(no_flight) and "flight" not in modes:
         modes.append("flight")
     fear = _fears_flight(t)
@@ -2243,8 +2386,10 @@ def extract(
         found["modes"] = modes
     wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
     for m in LANDMARK_RE.finditer(text):  # #338: «отель у Технопарка»; cities are no landmark
-        if not _known(m.group(1)):
-            wishes.append(f"рядом: {m.group(1)}")
+        if not _known(m.group(1)) and not _is_destination(m.group(1), found):
+            adjective = m.group(1).lower().endswith(ADJ_ENDINGS)
+            noun = adjective and LANDMARK_NOUN_RE.match(text, m.end(1))
+            wishes.append(f"рядом: {m.group(1)}{noun.group(0) if noun else ''}")
     if m := BREAKFAST_FROM_RE.search(t):
         wishes.append(f"завтрак с {int(m.group(1)):02d}:{m.group(2) or '00'}")
     # #330: «20 ч в дороге», «в дороге до 10 часов», «дорога не дольше суток»

@@ -299,6 +299,22 @@ def test_place_abroad_named_twice_is_no_origin(store, again):
     s = r.plan.spec
     assert r.stage == "compare" and s.destinations == ["Анталия"]
     assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
+    # #453: the reply says it aloud, not only in the notes at the end
+    assert r.reply.startswith("Город вылета не назван — беру Москву.")
+
+
+def test_a_named_origin_after_the_same_place_question_gets_no_default_line(store):
+    """#453: «из Питера» answers the question: no «беру Москву»."""
+    first = say(store, ANTALYA_TRIP)
+    asked = say(store, "Анталья", first.session_id)
+    r = say(store, "из Питера", asked.session_id)
+    assert r.plan.spec.origin == "Санкт-Петербург"
+    assert "беру Москву" not in r.reply
+
+
+def test_a_plain_trip_with_moscow_named_gets_no_default_line(store):
+    r = say(store, "Анталья на 5 ночей в июле, двое, из Москвы")
+    assert "беру Москву" not in r.reply
 
 
 def test_place_abroad_reasked_then_a_city_goes_on(store):
