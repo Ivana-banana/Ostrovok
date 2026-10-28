@@ -1715,6 +1715,11 @@ tr .tag {
     white-space: nowrap;
   }
 
+  .grid-table .zone {
+    font-size: 0.8em;
+    color: var(--muted, inherit);
+  }
+
   .grid-table td[data-label="Отправление"]::before,
   .grid-table td[data-label="Прибытие"]::before {
     content: none;
