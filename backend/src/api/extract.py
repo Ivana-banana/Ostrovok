@@ -144,7 +144,8 @@ NOT_SHORT_FORMS = {"мала", "малы", "бака"}
 # A city that is also a person name (checked against all places.json; update it when the
 # catalogue grows): «Владимир, хочу на море» is an address, not the city.
 # Only a request verb after the comma makes it an address: «Владимир, 3 ночи» is the city.
-PERSON_CITIES = {"Владимир"}
+# At the end of a message or after «ради» such a name is never a place (#381).
+PERSON_CITIES = {"Владимир", "София", "Виктория"}
 ADDRESS_NEXT = re.compile(
     r"\s*,\s*(?:хоч|хот|подскаж|помог|подбер|найд|посовет|скаж|слуш|мне\b|нам\b|мы\b|ищ|нуж"
     r"|добр|привет|здравств)"
@@ -1031,9 +1032,11 @@ def _transit_dropped(t: str, hits: list) -> list:
 
 
 # #381: a bare place closes a clause after a comma («Не боюсь летать, Бали») or follows «ради»
-# («но ради Бали готов»). Only a place of the catalogue counts (_catalog_word).
+# («но ради Бали готов»). Only a place of the catalogue counts (_catalog_word). The tail word
+# is a name as written, not a case form: «…, Милана» is a person, not «Милан». «не ради Турции»
+# names no place.
 TAIL_PLACE = re.compile(r",\s*([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)(?=\s*(?:[.!?;)\n]|$))")
-FOR_PLACE = re.compile(r"\bради\s+([а-яе]+(?:-[а-яе]+)*)")
+FOR_PLACE = re.compile(r"(?<!\bне )\bради\s+([а-яе]+(?:-[а-яе]+)*)")
 
 
 def _catalog_word(word: str) -> str | None:
@@ -1097,10 +1100,12 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n, m.end(1)))
-    for m in [*TAIL_PLACE.finditer(text), *FOR_PLACE.finditer(t)]:  # «…, Бали», «ради Бали»
-        s, e = m.span(1)
+    tails = [m.span(1) for m in TAIL_PLACE.finditer(text)]
+    for s, e in [*tails, *(m.span(1) for m in FOR_PLACE.finditer(t))]:  # «…, Бали», «ради Бали»
         taken = t[s] == " " or any(hs <= s < he for hs, _, he in hits)  # " ": the origin span
-        if not taken and (name := _catalog_word(text[s:e])):
+        name = None if taken else _catalog_word(text[s:e])
+        as_written = bool(name) and name.lower().replace("ё", "е") == t[s:e]
+        if name and name not in PERSON_CITIES and (as_written or (s, e) not in tails):
             hits.append((s, name, e))
     # The leading country is a destination only alone and with a main place: «Россия, хочу в Сочи»
     # is Сочи; «Россия, море» has no main place and stays an inspiration request.

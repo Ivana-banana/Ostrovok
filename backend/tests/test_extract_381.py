@@ -18,11 +18,11 @@ from api.extract import extract
         "боюсь летать, но ради бали готов",
     ],
 )
-def test_trap3_bali_alias_at_tail_and_after_radi(text):
+def test_bali_alias_at_tail_and_after_radi(text):
     assert extract(text)[0].get("destinations") == ["Бали"]
 
 
-def test_trap3_known_city_in_any_case_after_radi():
+def test_known_city_in_any_case_after_radi():
     assert extract("Боюсь летать, но ради Иркутска готов")[0]["destinations"] == ["Иркутск"]
 
 
@@ -45,6 +45,13 @@ def test_tail_place_after_origin_is_the_destination():
         "ради моря готовы лететь",
         "Хочу тепло, Россия",  # no main place: no destination by a bare country
         "Отель у моря, бар",  # a lower case word is no place at the tail
+        # a person name that is also a city: an address, not a place
+        "Помогите спланировать поездку на море, Владимир",
+        "Подберите отдых на море в ноябре, спасибо, София",
+        "Хочу на море с ребёнком, Виктория",
+        "Хочу на море, Милана",  # a case form of «Милан» at the tail is a person
+        "ради Владимира готов лететь",
+        "не ради Турции, а ради моря",
     ],
 )
 def test_ordinary_word_at_tail_or_after_radi_is_no_place(text):
