@@ -311,6 +311,17 @@ def test_api_context_removes_only_its_own_override_and_its_directory():
     assert main.get_store not in main.app.dependency_overrides
 
 
+def test_api_context_follows_api_main_after_a_reload(monkeypatch):
+    """#442: a test before this one reloads api.main (cors_app of test_partner_api.py). The app
+    and get_store are new objects then: checks._api must override the store of the new app,
+    not of the old names it imported, or the test above fails by the run order."""
+    from fastapi import FastAPI
+
+    monkeypatch.setattr(main, "app", FastAPI())
+    monkeypatch.setattr(main, "get_store", lambda: None)
+    test_api_context_removes_only_its_own_override_and_its_directory()
+
+
 def test_s9_precondition_needs_the_cheapest_non_refundable_first_option():
     with checks._api() as (client, _):
         first = checks._walk(

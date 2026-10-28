@@ -143,7 +143,7 @@ def test_city_off_the_catalogue_answers_by_the_geocoder(geo, monkeypatch, store)
     """TRAP-3, TRAP-6: «Орск» is no hub; the geocoder finds it, the nearest hub is said aloud."""
     from api import catalog
 
-    monkeypatch.setattr(catalog, "_get", geo("Орск"))
+    monkeypatch.setattr(catalog, "_get", geo("Орск", country="Россия"))
     first = say(store, "Сочи на 4 ночи в июле, двое взрослых")
     r = say(store, "Орск", first.session_id)
     assert r.stage == "compare" and r.plan.spec.destinations == ["Сочи"]
@@ -155,3 +155,73 @@ def test_city_off_the_catalogue_offline_is_no_destination(store):
     first = say(store, "Сочи на 4 ночи в июле, двое взрослых")
     r = say(store, "Орск", first.session_id)
     assert r.plan.spec.destinations == ["Сочи"] and ORIGIN_NOTE in r.plan.spec.assumptions
+
+
+# ------------------------------------------------------------- #442: unexpected answers
+
+
+@pytest.mark.parametrize("answer", ["Турция", "Анталья", "Анталия"])
+def test_place_abroad_answers_where_to_go_not_where_from(store, answer):
+    """#442: «Турция» or «Анталья» to «Откуда?» named the origin; the nearest hub (Сочи) became
+    the departure city and the trip lost its place. A place abroad is where the user goes."""
+    from api import catalog
+
+    r = say(store, "Хочу отдохнуть")
+    after = say(store, answer, r.session_id)
+    s = after.plan.spec
+    assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
+    assert s.destinations and catalog.resolve(s.destinations[0])["country"] == "Турция"
+
+
+def test_country_off_the_snapshot_from_the_geocoder_is_no_origin(geo, monkeypatch, store):
+    """#442, TRAP-6: the geocoder finds «Бодрум» in Турция: abroad, so it is not the origin."""
+    from api import catalog
+
+    monkeypatch.setattr(catalog, "_get", geo("Бодрум", country="Турция"))
+    first = say(store, "Сочи на 4 ночи в июле, двое взрослых")
+    r = say(store, "Бодрум", first.session_id)
+    assert r.plan.spec.origin == "Москва" and ORIGIN_NOTE in r.plan.spec.assumptions
+
+
+KAZAN_TRIP = "Казань на 3 ночи в декабре, двое, бюджет 50 тысяч"
+
+
+def test_origin_equal_to_the_place_is_asked_again(store):
+    """#442: «Казань на 3 ночи» + «Казань» set origin = destination and went to compare."""
+    first = say(store, KAZAN_TRIP)
+    r = say(store, "Казань", first.session_id)
+    assert r.stage == "clarify" and r.plan.spec.origin is None
+    q = origin_q(r)
+    assert q and "Казань" in q.text and "место поездки" in q.text
+    assert q.options[0] == "Из Казани" and "Из Москвы" in q.options
+    assert r.questions[0].text == q.text  # the origin goes first again
+
+
+@pytest.mark.parametrize("answer", ["Казань", "Из Казани"])
+def test_origin_equal_to_the_place_confirmed_goes_on(store, answer):
+    """The second answer is the user's choice: the trip goes on without a road."""
+    first = say(store, KAZAN_TRIP)
+    asked = say(store, "Казань", first.session_id)
+    r = say(store, answer, asked.session_id)
+    assert r.stage == "compare" and r.plan.spec.origin == "Казань"
+    assert r.plan.spec.destinations == ["Казань"]
+
+
+def test_origin_equal_to_the_place_other_city_goes_on(store):
+    first = say(store, KAZAN_TRIP)
+    asked = say(store, "Казань", first.session_id)
+    r = say(store, "Питер", asked.session_id)
+    assert r.stage == "compare" and r.plan.spec.origin == "Санкт-Петербург"
+    assert r.plan.spec.destinations == ["Казань"]
+
+
+def test_far_origin_chips_keep_the_five_in_a_row(monkeypatch):
+    """#442: the cheapest big hub went second («Из Омска»): the five chips of #436 broke."""
+    from api import model
+    from api.contracts import TripSpec
+
+    sums = {"Москва": 60_000, "Омск": 10_000}
+    monkeypatch.setattr(model, "_round_trip", lambda probe, origin: sums.get(origin))
+    spec = TripSpec(destinations=["Сочи"], month=7, adults=2, budget_rub=100_000)
+    (q,) = model.far_origin_question(spec)
+    assert q.options == [*CHIPS, "Из Омска"]
