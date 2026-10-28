@@ -114,4 +114,19 @@ suite("чат", () => {
     expect(box.lastElementChild?.textContent).toBe("Напишите «беру» или номер отеля.");
     act(() => root.unmount());
   });
+
+  it("#473: трансфер без «≈… км» — маршрут без висящей точки, блок остаётся списком", async () => {
+    const box = document.createElement("div");
+    const root = createRoot(box);
+    const text = [
+      "Предлагаю:",
+      "Трансферы: вокзал → Казантель, Казань; Казантель, Казань → вокзал — 1 000 ₽",
+      "Итого 1 000 ₽.",
+    ].join("\n");
+    await act(async () => root.render(<AgentText text={text} synthetic />));
+    expect(box.querySelectorAll("ul.offer li")).toHaveLength(2);
+    expect(box.querySelector(".pt-route")?.textContent).toBe("вокзал → Казантель, Казань Казантель, Казань → вокзал ");
+    expect(box.querySelector(".pt-route")?.textContent).not.toContain("·");
+    act(() => root.unmount());
+  });
 });
