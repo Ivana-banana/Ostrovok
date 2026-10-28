@@ -623,6 +623,7 @@ export function App() {
                       <AgentText
                         text={badgeNoAi ? withoutNoAi(brief(m.text, i === lastAgent)) : brief(m.text, i === lastAgent)}
                         synthetic={synthetic}
+                        choice={i === lastAgent && reply ? { reply, busy, onSend: send } : undefined}
                       />
                     </div>
                   </div>

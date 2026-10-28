@@ -147,3 +147,110 @@ def test_c310_not_a_cheaper_request_questions():
 
     assert not asks_cheaper("дешевле не бывает?")
     assert not asks_cheaper("дешевле, чем в среднем?")
+
+
+# #316: «подешевле» at the minimum, and the questions «дешевле не бывает?», «не надо дешевле».
+AT_MIN = "Сочи на 5 ночей с 10 ноября вдвоём, самолётом из Москвы, недорого"
+
+
+def rub(n: int) -> str:
+    return f"{n:,}".replace(",", " ") + " ₽"
+
+
+@pytest.mark.parametrize("text", ["подешевле", "бюджет поменьше"])
+def test_c316_cheaper_at_the_minimum_changes_nothing(store, text):
+    first = say(store, AT_MIN)
+    second = say(store, text, first.session_id)
+    assert "Дешевле в предложениях нет" in second.reply
+    assert "минимум под ваши условия" in second.reply and rub(total_of(first)) in second.reply
+    assert "было" not in second.reply and "Было → стало" not in second.reply
+    assert "С вашими условиями" not in second.reply
+    assert total_of(second) == total_of(first)
+    assert second.plan.spec.wishes == first.plan.spec.wishes  # «недорого» is no new condition
+    again = say(store, text, second.session_id)
+    assert "Дешевле в предложениях нет" in again.reply
+    assert total_of(again) == total_of(first)
+
+
+def test_c316_cheaper_word_at_the_minimum_adds_no_wish(store):
+    first = say(store, "Сочи на 5 ночей с 10 ноября вдвоём, самолётом из Москвы")
+    low = say(store, "подешевле", first.session_id)
+    assert "недорого" in low.plan.spec.wishes  # a real step: the word is the wish
+    again = say(store, "подешевле", low.session_id)
+    assert "Дешевле в предложениях нет" in again.reply
+    assert "С вашими условиями" not in again.reply
+    assert again.plan.spec.wishes == low.plan.spec.wishes
+
+
+def test_c316_how_cheaper_is_not_a_condition_edit(store):
+    from api.model import _other_edits
+
+    assert not _other_edits({"budget_rub": 1000, "wishes": ["недорого"]})
+    assert _other_edits({"budget_rub": 1000, "wishes": ["недорого", "море"]})
+    assert _other_edits({"budget_rub": 1000, "meal": "BB"})
+
+
+@pytest.mark.parametrize("text", ["дешевле не бывает?", "а дешевле не бывает?"])
+def test_c316_cheaper_never_happens_names_the_minimum(store, text):
+    first = say(store, START)
+    ans = say(store, text, first.session_id)
+    floor = total_of(say(store, "подешевле", first.session_id))
+    assert f"минимум в предложениях — {rub(floor)}" in ans.reply  # from the offers (TRAP-4)
+    assert rub(total_of(first)) in ans.reply  # the plan is not the minimum: «Бывает»
+    assert ans.reply != HINT and not ans.reply.startswith(HINT)
+    assert total_of(ans) == total_of(first) and ans.plan.spec.budget_rub is None
+    assert "Было → стало" not in ans.reply
+    assert ans.plan.spec.wishes == first.plan.spec.wishes
+
+
+def test_c316_cheaper_never_happens_at_the_minimum(store):
+    first = say(store, AT_MIN)
+    ans = say(store, "дешевле не бывает?", first.session_id)
+    assert f"минимум в предложениях — {rub(total_of(first))}" in ans.reply
+    assert "уже в плане" in ans.reply
+    assert total_of(ans) == total_of(first)
+
+
+@pytest.mark.parametrize("text", ["не надо дешевле", "дешевле не надо", "не хочу подешевле"])
+def test_c316_refusal_says_the_budget_stays(store, text):
+    first = say(store, START)
+    ans = say(store, text, first.session_id)
+    assert "бюджет не меняю" in ans.reply and rub(total_of(first)) in ans.reply
+    assert not ans.reply.startswith(HINT)
+    assert ans.plan.spec.budget_rub is None
+    assert ans.plan.spec.wishes == first.plan.spec.wishes  # the refused word is no wish
+    assert total_of(ans) == total_of(first)
+    assert "Было → стало" not in ans.reply
+
+
+def test_c316_c18_eval_case_still_lowers(store):
+    first = say(store, START)
+    second = say(store, "бюджет поменьше", first.session_id)
+    assert total_of(second) < total_of(first) and "Было → стало" in second.reply
+
+
+def test_c316_why_not_cheaper_is_no_refusal():
+    from api.model import talks_cheaper
+
+    assert not talks_cheaper("почему не дешевле?")  # stays the wish «недорого»
+    assert talks_cheaper("не надо дешевле") and talks_cheaper("дешевле не бывает?")
+
+
+@pytest.mark.parametrize("edit", ["на 2 дня позже", "на 7 ночей", "нас трое", "на 3 дня дольше"])
+def test_c316_agent_budget_is_marked_and_ends_with_the_next_edit(store, edit):
+    first = say(store, START)
+    second = say(store, "подешевле", first.session_id)
+    spec = second.plan.spec
+    if spec.budget_rub is None:  # nothing cheaper: no budget set, nothing to mark
+        return
+    assert any("задан агентом" in a for a in spec.assumptions)
+    third = say(store, edit, second.session_id)
+    assert third.plan.spec.budget_rub is None
+    assert not any(a.startswith("бюджет") for a in third.plan.spec.assumptions)
+
+
+def test_c316_user_budget_survives_the_date_edit(store):
+    first = say(store, START)
+    second = say(store, "бюджет 60000", first.session_id)
+    third = say(store, "на 2 дня позже", second.session_id)
+    assert third.plan.spec.budget_rub == 60000

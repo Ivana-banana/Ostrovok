@@ -16,6 +16,7 @@ from api import offers, ops
 from api.cart import cart_route, checkout_route
 from api.contracts import Cart, CartAction, ChatReply, ChatRequest, CheckoutRequest, Voucher
 from api.guards import llm_available
+from api.live_hotels import Live101Hotels
 from api.model import chat
 from api.partner import checkout_once, cors_options, plan_reply, require_key
 from api.store import SessionStore, db_path
@@ -42,6 +43,11 @@ DESCRIPTION = """\
 # Real flights (#261) only with a token in .env; without it synthetic transport (TRAP-1).
 if token := os.environ.get("TRAVELPAYOUTS_TOKEN", "").strip():
     offers.TRANSPORT = TravelpayoutsTransport(token)
+
+# Live hotel price level from 101hotels (#511), on by default; LIVE_HOTELS=0 forces synthetic.
+# The adapter falls back to the base provider on any miss or network failure (TRAP-1, TRAP-6).
+if os.environ.get("LIVE_HOTELS", "1").strip().lower() not in ("0", "false", "no", ""):
+    offers.HOTELS = Live101Hotels(offers.HOTELS)
 
 ops.setup_logging()
 log = logging.getLogger(__name__)
