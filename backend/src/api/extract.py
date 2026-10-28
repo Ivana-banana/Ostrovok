@@ -2147,9 +2147,17 @@ def extract(
             wishes.append(f"рядом: {m.group(1)}")
     if m := BREAKFAST_FROM_RE.search(t):
         wishes.append(f"завтрак с {int(m.group(1)):02d}:{m.group(2) or '00'}")
-    hours = r"\s*(?:ч\b|час\w*)\s+(?:в\s+пути|лет\w*|перел\w*|езд\w*|дорог\w*)"
-    if m := re.search(rf"\b(?:до|не\s+(?:больше|дольше|более))\s+(\d{{1,2}}){hours}", t):
-        found["max_travel_hours"] = float(m.group(1))
+    # #330: «20 ч в дороге», «в дороге до 10 часов», «дорога не дольше суток»
+    limit = r"\b(?:до|не\s+(?:больше|дольше|более))\s+"
+    nums = NUMS | {w[:-1] + "и": n for w, n in NUMS.items() if w.endswith("ть")}  # «пяти»
+    amount = rf"(?:(\d{{1,2}}|{'|'.join(nums)})\s*)?(ч\b|час\w*\b|сут(?:ок|ки)\b)"
+    road = r"(?:в\s+пути|перел\w*|переезд\w*|езд\w*|(?:в\s+)?дорог(?:а|е|и|у|ой)\b)"
+    m = re.search(rf"{limit}{amount}\s+(?:лет\w*|{road})", t) or re.search(
+        rf"\b{road}\s+{limit}{amount}(?!\s+(?:утра|дня|вечера|ночи))", t
+    )
+    if m:
+        n = m.group(1) or "1"
+        found["max_travel_hours"] = float(nums.get(n) or n) * (24 if m.group(2)[0] == "с" else 1)
     elif re.search(r"без\s+(?:долг|длинн)\w*\s+перел|недолг\w*\s+перел", t):
         found["max_travel_hours"] = 5.0
         wishes.append("без долгих перелётов")
