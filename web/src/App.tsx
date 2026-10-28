@@ -142,9 +142,13 @@ export const MODE_RETRY_MS = 2000; // #534: the second GET /api/mode
 // The help texts name the real sources found in the offers of the plan (#547, TRAP-7).
 const HOTELS_REAL = "Отели — 101hotels (цена «от» на сегодня)";
 const FLIGHTS_REAL = "перелёты — Авиасейлс (цены из кэша поиска)";
+const TRAINS_REAL = "поезда — tutu";
 const realParts = (offers: Offer[]) => {
-  const real = (kind: Offer["kind"]) => offers.some((o) => o.kind === kind && !o.synthetic);
-  return [real("hotel") && HOTELS_REAL, real("transport") && FLIGHTS_REAL].filter(Boolean) as string[];
+  const real = (kind: string) =>
+    offers.some((o) => !o.synthetic && (o.kind === kind || (o.kind === "transport" && o.mode === kind)));
+  return [real("hotel") && HOTELS_REAL, real("flight") && FLIGHTS_REAL, real("train") && TRAINS_REAL].filter(
+    Boolean,
+  ) as string[];
 };
 const priceSources = (offers: Offer[]) => {
   const parts = realParts(offers);
@@ -174,7 +178,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [thinking, setThinking] = useState(false);
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
-  const [switches, setSwitches] = useState<Switches>(loadSwitches); // #490: both off by default
+  const [switches, setSwitches] = useState<Switches>(loadSwitches); // #566: «Синтетика» off — real data
   const [can, setCan] = useState<LlmMode>({ llm: false, real_data: false }); // /api/mode: keys in .env
   const [mode, setMode] = useState<ModeState>("loading"); // /api/mode: failed after a retry (#534)
   const box = useRef<HTMLTextAreaElement>(null);
@@ -313,7 +317,7 @@ export function App() {
     const no = loadNo.current;
     try {
       const t0 = Date.now();
-      const r = await chat({ session_id: sid, message: m, ...requested(switches, can) });
+      const r = await chat({ session_id: sid, message: m, ...requested(switches) });
       // A fast offline reply still shows the thinking indicator for a moment (not with reduced motion).
       const rest = MIN_THINK_MS - (Date.now() - t0);
       if (motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
@@ -447,9 +451,8 @@ export function App() {
 
   const lastAgent = ui.messages.map((m) => m.role).lastIndexOf("agent");
   const asked = ui.messages.filter((m) => m.role === "user").length; // the thinking banana and plane take turns
-  const on = requested(switches, can);
-  // The «Без ИИ» badge of the sidebar (TRAP-1): GigaChat is off, or the last reply was rule-based.
-  const badgeNoAi = !on.llm || (!!reply && noAi);
+  // The «Без ИИ» badge of the sidebar (TRAP-1): no model key, or the last reply was rule-based.
+  const badgeNoAi = !can.llm || (!!reply && noAi);
   // A done step links to the first answer after which the trip was past it.
   const doneAt = STEPS.map((_, i) => {
     const n = ui.messages.findIndex(

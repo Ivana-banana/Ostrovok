@@ -11,6 +11,7 @@ import type {
   Plan,
   Priority,
   Stage,
+  TimelineEvent,
   TransportOffer,
   TripSpec,
   Voucher,
@@ -27,6 +28,7 @@ import {
   hours,
   localDate,
   localTime,
+  nightsText,
   ordinal,
   PRIORITIES,
   priorityMessage,
@@ -47,30 +49,40 @@ export type BoardProps = {
   onCheckout: (guest: Guest | null) => void;
 };
 
-// The source of a real price (#547). The contract has no source field: derive it from the kind.
+// The source of a real price (#547). The contract has no source field: derive it from the kind,
+// for transport from the mode (backend api/answers.py PRICE_SOURCES, #567).
 // The chip and its tooltip tell where a non-synthetic number comes from.
 const PRICE_SOURCES: Record<string, { chip: string; hint: string }> = {
   hotel: { chip: "101hotels", hint: "итог по цене «от» 101hotels; питание и тариф — оценка" },
-  transport: { chip: "Авиасейлс", hint: "самый дешёвый билет из кэша поиска Авиасейлс, не цена брони" },
+  flight: { chip: "Авиасейлс", hint: "самый дешёвый билет из кэша поиска Авиасейлс, не цена брони" },
+  train: { chip: "tutu", hint: "расписание и цена «от» поезда со страницы маршрута tutu.ru, не цена на дату" },
 };
 const OTHER_SOURCE = { chip: "реальные данные", hint: "цена не синтетическая" };
+// A sum of real and synthetic prices (TRAP-7, #567): neither «синтетика» nor a source alone.
+const MIXED = "часть цен — синтетика";
 export type PriceSource = { chip: string; hint: string };
-export const sourceOf = (items: { kind: string }[]): PriceSource => {
-  const kinds = [...new Set(items.map((o) => o.kind))];
+type Priced = { kind: string; mode?: string; synthetic?: boolean };
+const keyOf = (o: Priced) => (o.kind === "transport" ? (o.mode ?? "flight") : o.kind);
+export const sourceOf = (items: Priced[]): PriceSource => {
+  const real = items.filter((o) => !o.synthetic);
+  if (real.length && real.length < items.length) {
+    return { chip: MIXED, hint: `реальные цены: ${sourceOf(real).chip}; остальные — синтетика` };
+  }
+  const kinds = [...new Set(items.map(keyOf))];
   if (kinds.length === 1) return PRICE_SOURCES[kinds[0]] ?? OTHER_SOURCE;
   const known = kinds.map((k) => PRICE_SOURCES[k] ?? OTHER_SOURCE);
   return { chip: known.map((x) => x.chip).join(" + "), hint: known.map((x) => x.hint).join("; ") };
 };
 
 // Every price carries the "синтетика" label when the data is mock (TRAP-7); a real price carries
-// the chip of its source instead of nothing (#547).
+// the chip of its source instead of nothing (#547); a sum of both carries MIXED (#567).
 export function Price({ value, synthetic = true, source }: { value: number; synthetic?: boolean; source?: PriceSource }) {
   return (
     <span className="price">
       {rub(value)}
       {synthetic && <span className="synth">синтетика</span>}
       {!synthetic && (
-        <span className="synth synth-real" title={(source ?? OTHER_SOURCE).hint}>
+        <span className={source?.chip === MIXED ? "synth" : "synth synth-real"} title={(source ?? OTHER_SOURCE).hint}>
           {(source ?? OTHER_SOURCE).chip}
         </span>
       )}
@@ -81,18 +93,42 @@ export function Price({ value, synthetic = true, source }: { value: number; synt
 // Free text from the backend ("дороже на 3 300 ₽", "было 6 400 ₽"): every price in it gets the
 // same label as a price (TRAP-7). The text holds prices of the offers, so the label follows them.
 // Not marked: a budget (the number the user typed) and a sum that already has the label.
+// #567: a label of the backend after the sum («7 900 ₽ (101hotels)», api/answers.py price_mark)
+// becomes the chip of that price, so a real price in a mixed message is not marked «синтетика».
 const AMOUNT = /\d[\d\s\u00a0]*\s?₽/g;
+const SOURCE = "(?:101hotels|Авиасейлс|tutu|реальные данные)";
+// The hint of a backend mark of real sources, as at the board chip: «101hotels + tutu».
+const hintOf = (mark: string) =>
+  mark
+    .split(" + ")
+    .map((chip) => Object.values(PRICE_SOURCES).find((x) => x.chip === chip)?.hint ?? OTHER_SOURCE.hint)
+    .join("; ");
+const MARK = new RegExp(`^ \\((синтетика|${MIXED}|${SOURCE}(?: \\+ ${SOURCE})*)\\)`);
 const AFTER_BUDGET = /бюджет[а-яё]*(\s+отеля)?\s*$/i;
 const LABELLED = /^\s*\(?синтетика/;
 // A destination tradeoff of a car with nights on the road starts with it (api/inspire.py, #321).
 const ROAD_LINE = "за рулём ";
 export function Money({ text, synthetic = true }: { text: string; synthetic?: boolean }) {
-  if (!synthetic) return <>{text}</>;
   const out: ReactNode[] = [];
   let at = 0;
   for (const m of text.matchAll(AMOUNT)) {
     const end = m.index + m[0].length;
-    if (AFTER_BUDGET.test(text.slice(0, m.index)) || LABELLED.test(text.slice(end))) continue;
+    const mark = MARK.exec(text.slice(end));
+    if (mark) {
+      const real = mark[1] !== "синтетика" && mark[1] !== MIXED;
+      out.push(
+        text.slice(at, m.index),
+        <span key={m.index} className="price">
+          {m[0]}
+          <span className={real ? "synth synth-real" : "synth"} title={real ? hintOf(mark[1]) : undefined}>
+            {mark[1]}
+          </span>
+        </span>,
+      );
+      at = end + mark[0].length;
+      continue;
+    }
+    if (!synthetic || AFTER_BUDGET.test(text.slice(0, m.index)) || LABELLED.test(text.slice(end))) continue;
     out.push(text.slice(at, m.index));
     out.push(
       <span key={m.index} className="price">
@@ -109,7 +145,10 @@ export function Money({ text, synthetic = true }: { text: string; synthetic?: bo
 // plan.changes rows "бюджет" and "бюджет отеля" hold the number of the user.
 const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 
+// The text of these items has no label per price: one synthetic item marks every sum (TRAP-7).
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
+// A sum of these items: «синтетика» only when all are synthetic; a mix gets MIXED (sourceOf).
+export const allSynthetic = (items: Offer[]) => items.every((o) => o.synthetic);
 
 // The strip of trip parameters above the chat (#434). Origin, dates, guests and budget are the
 // editable chips of ParamsBar, then the hotel filters (#431); the other fields of the spec are read-only chips after them.
@@ -474,7 +513,10 @@ function Transport({ plan, stage, busy, onSend }: {
                   <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
                   <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
                   {/* #475: the pet mark of a leg, as for the hotels */}
-                  <td data-label="Питомцы">{t.pets_allowed ? "можно" : "нет отметки"}</td>
+                  <td data-label="Питомцы">
+                    {/* #575: a flight has no confirmed pet rule; the mark means "ask the airline" */}
+                    {t.pets_allowed ? (t.mode === "flight" ? "уточнить у авиакомпании" : "можно") : "нет отметки"}
+                  </td>
                   <td className="num cost">
                     <Price value={t.price_rub} synthetic={t.synthetic} source={sourceOf([t])} />
                   </td>
@@ -505,7 +547,8 @@ function Bundles({ plan }: { plan: Plan }) {
   if (!plan.bundles.length) return null;
   const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title;
   const of = (b: Bundle) => plan.offers.filter((o) => b.offer_ids.includes(o.offer_id));
-  const synthetic = (b: Bundle) => isSynthetic(of(b));
+  // The total chip: «синтетика» only when all items are; the text of the minus marks every sum (TRAP-7).
+  const synthetic = (b: Bundle) => allSynthetic(of(b));
   const kind = (id: string) => plan.offers.find((o) => o.offer_id === id)?.kind;
   const heading = plan.bundles.every((b) => b.offer_ids.some((id) => kind(id) === "transport"))
     ? "Варианты поездки целиком"
@@ -528,7 +571,7 @@ function Bundles({ plan }: { plan: Plan }) {
             </ul>
             {b.tradeoffs.length > 0 && (
               <p className="muted">
-                Минусы: <Money text={b.tradeoffs.join("; ")} synthetic={synthetic(b)} />
+                Минусы: <Money text={b.tradeoffs.join("; ")} synthetic={isSynthetic(of(b))} />
               </p>
             )}
           </article>
@@ -590,6 +633,78 @@ function Changes({ plan }: { plan: Plan }) {
   );
 }
 
+type TripLeg = {
+  key: string; // stable across rebuilds: the role of a road, the hotel of a stay
+  title: string;
+  note: string;
+  events: { e: TimelineEvent; i: number }[];
+  ids: Set<string>;
+};
+
+// #597: the events grouped by the stage of the trip: the road there, a stay per hotel, the road
+// back. The kind comes from the offer of the event; an event without an offer (own tickets,
+// «добираетесь сами») joins by its words or the stay around it.
+function tripLegs(plan: Plan): TripLeg[] {
+  const offer = (id: string | null) => (id ? plan.offers.find((o) => o.offer_id === id) : undefined);
+  const hotelOf = (e: TimelineEvent): string | null => {
+    const o = offer(e.offer_id);
+    if (o?.kind === "hotel") return o.offer_id;
+    if (o?.kind === "extra") return o.for_offer_id;
+    if (o?.kind === "transfer") return o.hotel_offer_id ?? null;
+    return null;
+  };
+  const isRoad = (e: TimelineEvent) => {
+    const o = offer(e.offer_id);
+    return o ? o.kind === "transport" : /свои билеты/.test(e.title);
+  };
+  const raw: { road: boolean; hotel: string | null; events: { e: TimelineEvent; i: number }[] }[] = [];
+  plan.timeline.forEach((e, i) => {
+    const road = isRoad(e);
+    const hotel = road ? null : hotelOf(e);
+    const last = raw.at(-1);
+    if (last && last.road === road && (road || !hotel || !last.hotel || hotel === last.hotel)) {
+      last.events.push({ e, i });
+      last.hotel ??= hotel;
+    } else raw.push({ road, hotel, events: [{ e, i }] });
+  });
+  const stays = raw.flatMap((g, n) => (g.road ? [] : [n]));
+  return raw.map((g, n) => {
+    const ids = new Set(g.events.flatMap(({ e }) => (e.offer_id ? [e.offer_id] : [])));
+    if (!g.road) {
+      const h = offer(g.hotel);
+      const nights = h?.kind === "hotel" ? Math.round((Date.parse(h.date_out) - Date.parse(h.date_in)) / 86400000) : 0;
+      const note = h ? [h.title, nights > 0 ? nightsText(nights) : ""].filter(Boolean).join(", ") : "";
+      return { key: `stay:${g.hotel ?? n}`, title: "Проживание", note, events: g.events, ids };
+    }
+    const role = !stays.length
+      ? ["Дорога", "road"]
+      : n < stays[0]
+        ? ["Дорога туда", "there"]
+        : n > stays[stays.length - 1]
+          ? ["Дорога обратно", "back"]
+          : ["Переезд", `move:${n}`];
+    const legs = [...ids].map(offer).filter((o): o is TransportOffer => o?.kind === "transport");
+    const parts: string[] = [];
+    if (legs.length) {
+      parts.push(`${legs[0].origin} → ${legs[legs.length - 1].destination}`);
+      parts.push([...new Set(legs.map((l) => MODES[l.mode]))].join(" + "));
+      const changes = legs.length - 1 + legs.reduce((a, l) => a + l.changes, 0);
+      if (changes > 0) parts.push(`пересадок: ${changes}`);
+    } else parts.push("свои билеты");
+    const [first, last] = [g.events[0].e, g.events[g.events.length - 1].e];
+    if (first !== last) parts.push(duration(first.at, last.at));
+    return { key: role[1], title: role[0], note: parts.join(", "), events: g.events, ids };
+  });
+}
+
+// «25.11 07:40 → 30.11 15:25 (UTC+3)»: the zone once when both ends share it.
+function span(from: string, to: string): string {
+  if (from === to) return zonedTime(from);
+  return zoneLabel(from) === zoneLabel(to)
+    ? `${localTime(from)} → ${zonedTime(to)}`
+    : `${zonedTime(from)} → ${zonedTime(to)}`;
+}
+
 function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
   plan: Plan;
   cart: Cart;
@@ -609,20 +724,62 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
     const o = offer(id);
     return marked && o?.kind === "extra" && o.for_offer_id !== null && gone(o.for_offer_id);
   };
+  const legs = tripLegs(plan);
+  // A stage with a problem is open and marked: the issue names its offers or their add-ons.
+  // A road alternative points at the road with the same ends. An error without such a link
+  // opens every stage.
+  const touches = (leg: TripLeg, id: string) => {
+    const o = offer(id);
+    const near = [id, o?.kind === "extra" ? o.for_offer_id : null];
+    if (o?.kind === "transfer") near.push(o.hotel_offer_id ?? null, o.leg_offer_id ?? null);
+    if (near.some((n) => n !== null && leg.ids.has(n))) return true;
+    return o?.kind === "transport" && [...leg.ids].some((n) => {
+      const l = offer(n);
+      return l?.kind === "transport" && (l.origin === o.origin || l.destination === o.destination);
+    });
+  };
+  const hot = (leg: TripLeg) =>
+    plan.issues.some((issue) =>
+      issue.fixes.some((id) => !dead(id) && touches(leg, id)) ||
+      (issue.severity === "error" && !legs.some((l) => issue.fixes.some((id) => touches(l, id)))),
+    );
   return (
     <section className="sec" aria-label="Таймлайн">
       <h2>Стыковки</h2>
-      <p className="muted">Время местное для места события.</p>
-      <ol className="timeline">
-        {plan.timeline.map((e, i) => (
-          <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined} style={{ "--i": i } as CSSProperties}>
-            <time>{zonedTime(e.at)}</time> <span className="gone-title">
-              <Money text={e.title} synthetic={isSynthetic(plan.offers)} />
-            </span>
-            {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}
-          </li>
-        ))}
-      </ol>
+      <p className="muted">Время местное для места события. Нажмите на этап, чтобы раскрыть.</p>
+      <div className="legs">
+        {legs.map((leg) => {
+          const [first, last] = [leg.events[0].e, leg.events[leg.events.length - 1].e];
+          const own = leg.events.filter(({ e }) => e.offer_id !== null);
+          const out = own.filter(({ e }) => gone(e.offer_id)).length;
+          const warn = hot(leg);
+          return (
+            <details key={leg.key} className="leg" open={warn || undefined}>
+              <summary>
+                <span className="leg-head">
+                  <b>{leg.title}</b>
+                  <time>{span(first.at, last.at)}</time>
+                  {warn && <span className="leg-warn">есть замечание</span>}
+                  {out > 0 && (
+                    <span className="gone-note">{out === own.length ? "убрано из корзины" : "часть убрана из корзины"}</span>
+                  )}
+                </span>
+                {leg.note && <span className="leg-note">{leg.note}</span>}
+              </summary>
+              <ol className="timeline">
+                {leg.events.map(({ e, i }) => (
+                  <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined} style={{ "--i": i } as CSSProperties}>
+                    <time>{zonedTime(e.at)}</time> <span className="gone-title">
+                      <Money text={e.title} synthetic={isSynthetic(plan.offers)} />
+                    </span>
+                    {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          );
+        })}
+      </div>
       {plan.issues.map((issue, i) => {
         const fixes = issue.fixes.filter((id) => !dead(id));
         if (issue.fixes.length > 0 && fixes.length === 0) return null; // only for a removed item
@@ -702,7 +859,8 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
     hotel && spec.hotel_budget_rub !== null && hotel.price_rub > spec.hotel_budget_rub
       ? hotel.price_rub - spec.hotel_budget_rub
       : 0;
-  const synthetic = isSynthetic(cart.items);
+  const synthetic = allSynthetic(cart.items);
+  const mark = synthetic ? "синтетика" : cart.items.some((o) => o.synthetic) ? MIXED : "";
   return (
     <section className="sec" aria-label="Корзина">
       <h2>Корзина</h2>
@@ -748,7 +906,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
           <Price value={shownTotal} synthetic={synthetic} source={sourceOf(cart.items)} />
         </b>
       </p>
-      {synthetic && <span className="sub">все цены — синтетика · оплата имитируется</span>}
+      {mark && <span className="sub">{synthetic ? "все цены" : "часть цен"} — синтетика · оплата имитируется</span>}
       {over && (
         <p className="warn" role="note">
           Итог больше бюджета {rub(spec.budget_rub!)} на{" "}
@@ -806,7 +964,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
           }}
         >
           Подтвердить бронь на {rub(cart.total_rub)}
-          {synthetic && " (синтетика)"} · оплата имитируется
+          {mark && ` (${mark})`} · оплата имитируется
         </button>
       )}
     </section>
@@ -864,7 +1022,7 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
         ))}
       </ul>
       <p className="total">
-        Итого: <Price value={voucher.total_rub} synthetic={isSynthetic(voucher.items)} source={sourceOf(voucher.items)} />
+        Итого: <Price value={voucher.total_rub} synthetic={allSynthetic(voucher.items)} source={sourceOf(voucher.items)} />
       </p>
     </section>
   );
@@ -992,7 +1150,7 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
         {stage === "assemble" && picked.length > 0 && (
           <>
             {" · "}
-            <Price value={picked.reduce((t, o) => t + o.price_rub, 0)} synthetic={isSynthetic(picked)} source={sourceOf(picked)} />
+            <Price value={picked.reduce((t, o) => t + o.price_rub, 0)} synthetic={allSynthetic(picked)} source={sourceOf(picked)} />
           </>
         )}
       </button>

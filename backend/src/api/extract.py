@@ -88,9 +88,13 @@ def _word_re(word: str, first: str | None = None) -> str:
     return (first or rest[0]) + rest[1:]
 
 
+# An adjective of a name is no place: «в Петербургский музей» (TRAP-3, #372). «Иркутском» is a
+# case of «Иркутск», so «-ском» stays out of the list.
+NOT_ADJECTIVE = r"(?!\w*?ск(?:ий|ая|ое|ие|ого|ой|ую|их|им|ими|ому)\b)"
 PLACE_RES = [
-    (name, re.compile(rf"\b(?:{'|'.join(c['stems'])})\w*")) for name, c in CATALOG.items()
-] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
+    (name, re.compile(rf"\b(?:{'|'.join(c['stems'])}){NOT_ADJECTIVE}\w*"))
+    for name, c in CATALOG.items()
+] + [(name, re.compile(rf"\b(?:{stem}){NOT_ADJECTIVE}\w*")) for name, stem in PLACES.items()]
 # Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not. A capitalized
 # word after it that is no «Новгород» makes another name: «Нижний Тагил» (#97, TRAP-3).
 CAPITAL_PLACES = [
@@ -225,6 +229,17 @@ NO_CHILD_BEFORE = re.compile(r"\bбез\s+(?:\w+\s+и\s+|\w+[иы]х\s+)?$")
 # later in the clause is a double negation («без детей не поедем»): the children stay.
 NO_CHILD_AFTER = re.compile(r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)|[^,.;!?]*\b(?:не|ни\w*)\b")
 NO_CHILD_FORM = ("детей", "ребенка", "сына", "дочери", "малыша")
+# #202: «отель без детей» is a wish for the hotel (adults only), not the party.
+HOTEL_NO_KIDS_BEFORE = re.compile(
+    r"\b(?:отел\w*|гостиниц\w*|хостел\w*|апарт\w*)\s+без\s+(?:\w+[иы]х\s+)?$"
+)
+# #202: «детей нет», «дети не едут», «детей у нас нет»: the party has no children. Before the
+# child: «у нас нет детей».
+NO_CHILD_SAID_AFTER = re.compile(
+    r"\s*(?:у\s+нас\s+|с\s+нами\s+)?(?:нет\b|не\s+(?:едут|поедут|едет|поедет|будут\s+ехать)\b)"
+)
+NO_CHILD_SAID_BEFORE = re.compile(r"\bнет\s+(?:\w+[иы]х\s+)?$")
+HOTEL_NO_KIDS_NOTE = "отель без детей: пожелание к отелю не учитываю, состав не меняю"
 # #112: the party. A number word names a person only in a few forms; «одна ночь», «один из
 # вариантов», «один и тот же отель» are not a party. A solo word needs a stop, a preposition
 # or a verb of the trip after it (or a verb of the trip before it).
@@ -307,9 +322,9 @@ def _friends(t: str, m: re.Match) -> tuple[int, str]:
 # #322: «трое детей 3, 5 и 8» (no «лет»): a list of two or more numbers right after the child
 # noun. A unit after it («5 ночей», «2 и 3 класса», «100 тысяч») says the numbers are not ages.
 AGES_BARE_RE = re.compile(
-    r"\s*\(?((?>(?:\d{1,2}\s*(?:,|и)\s*(?=\d))+)\d{1,2})\)?(?![\d.,]*\d)"
+    r"\s*\(?((?>(?:\d{1,2}\s*(?:,|и)\s*(?=\d))+)\d{1,2})\)?(?![\d.,]*\d)(?![*/])"
     r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
-    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек|млн|млрд|т\.?\s?р\b|\$|€|eur|usd|раз|вариант|лини))"
 )
 # #337: every number may carry its own unit: «1 год и 4 года», «6 месяцев и 3 года».
 AGES_RE = re.compile(
@@ -317,16 +332,16 @@ AGES_RE = re.compile(
 )
 # «с детьми 5 лет и 8»: the first number has a unit, the last has none.
 AGES_TAIL_RE = re.compile(
-    r"\D{0,12}?(\d{1,2}\s*(лет|год|мес)\w*\s*(?:,|и)\s*\d{1,2})(?![\d.,]*\d)(?!\s*(?:лет|год|мес))(?=\s*(?:[.,;!?)]|$))"
+    r"\D{0,12}?(\d{1,2}\s*(лет|год|мес)\w*\s*(?:,|и)\s*\d{1,2})(?![\d.,]*\d)(?![*/])(?!\s*(?:лет|год|мес))(?=\s*(?:[.,;!?)]|$))"
     r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
-    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек|млн|млрд|т\.?\s?р\b|\$|€|eur|usd|раз|вариант|лини))"
 )
 # «сын 10.» / «дочь 3,»: one bare number closing the clause is the age of a single child.
 # #359: «сын 4 и дочь 9»: «и» and the next child word close it too.
 AGE_ONE_RE = re.compile(
     r"\s*(\d{1,2})(?![\d.,]*\d)(?=\s*(?:[.,;!?)]|$)|\s+и\s+(?:реб|сын|доч|малыш|внук|внуч))"
     r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
-    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек|млн|млрд|т\.?\s?р\b|\$|€|eur|usd|раз|вариант|лини))"
 )
 AGE_ITEM_RE = re.compile(r"(\d{1,2})(?:\s*(лет|год|мес))?")
 
@@ -375,8 +390,9 @@ CURRENCIES = [
     ("тенге", "₸", r"тенге|kzt"),
     ("дирхамах", "", r"дирхам\w*|aed"),
     ("йенах", "", r"йен\w*|jpy"),
+    ("у.е.", "", r"у\.\s?е\.?|уе|условн\w+\s+единиц\w*"),  # #167: no rate, no rubles
 ]
-AMOUNT_UNIT = r"\d(?:[.,]\d+)?\s?(?:[кk]|тыс\w*\.?|млн|миллион\w*)?\s*"
+AMOUNT_UNIT = r"\d+(?:[ \u00a0]\d{3})*(?:[.,]\d+)?\s?(?:[кk]|тыс\w*\.?|млн|миллион\w*)?\s*"
 # #158: «полмиллиона», «потолок миллион»: a word sum. «Миллион» needs a budget word before it.
 MILLION_CUE = (
     r"\b(?:бюджет\w*|потол\w+|лимит\w*|максимум\w*|до|около|порядка|не\s+(?:больше|более|дороже))"
@@ -455,13 +471,17 @@ WARM = (
 # The warm is refused or only asked about: «не люблю жару», «жару не люблю», «жарко не надо»,
 # «будет ли тепло?».
 WARM_REFUSED_BEFORE = re.compile(r"\b(?:не|без|ли)\s+(?:\w+\s+)?$")
+# #163: the refusal is in the clause of «тепло»: «где тепло, но не хочу далеко лететь» wants warmth
 WARM_REFUSED_AFTER = re.compile(
-    r"\s*(?:[,—–-]\s*)?(?:\w+\s+)?не\s+(?:люблю|любим|надо|нужн\w*|хочу|хотим|хочется|выношу"
+    r"\s*(?:[—–-]\s*)?(?:(?!но\b|а\b|однако\b|зато\b)\w+\s+)?не\s+(?:люблю|любим|надо|нужн\w*|хочу|хотим|хочется|выношу"
     r"|переношу|перевариваю|подходит|нравится|нравятся|годится)"
 )
 WISHES = [
     ("море", r"\bмор[еяю]\b|\bморск|пляж|купат|\bsea\b|\bbeach"),
-    ("недорого", r"недорог|деш[её]в|бюджетн|эконом|\bcheap"),
+    (
+        "недорого",
+        r"недорог|(?<!\bэто\s)(?<!\bнам\s)(?<!\bмне\s)\bне\s+(?:очень\s+)?дорог(?:о|ой|ая|ое|ие|ую)\b|деш[её]в|бюджетн|эконом|\bcheap",
+    ),
     ("горы", r"\bгор(?:ы|ах|ам|ами|у)\b|\bгорн|\bmountains?\b"),
     ("лыжи", r"лыж|сноуборд|\bski"),
     # #277: quiet and green words are the nature tag of the catalogue (api/inspire.py)
@@ -814,10 +834,13 @@ NEG_VERBS = (
 # Right before a place; «не дорого, в Турцию» is no match: only these words may stand between.
 NEG_BEFORE = re.compile(
     rf"(?:\b(?:без|ни)\s+|\bне\s+(?:{NEG_VERBS}\s+)*"
-    r"|\b(?:надоел\w*|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|избега\w+|устал\w*\s+от)\s+)"
+    r"|\b(?:надоел\w*|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|избега\w+|устал\w*\s+от)\s+"
+    r"|\bвместо\s+)"  # «вместо Казани Нижний Новгород»: Казань goes, Нижний Новгород comes (#576)
     r"(?:(?:в|во|на)\s+)?$"
 )
 # «кроме X» refuses X, but «кроме Сочи хотим ещё в Казань» adds Казань to Сочи.
+# «вместо X, Y»: the refusal is for X only, Y is the new place (#576).
+INSTEAD_BEFORE = re.compile(r"\bвместо\s+(?:(?:в|во|на)\s+)?$")
 EXCEPT_BEFORE = re.compile(r"\bкроме\s+(?:(?:в|во|на)\s+)?$")
 ADDITION = re.compile(r"\b(?:еще|тоже|также|заодно)\b")
 WANT_AFTER = re.compile(r"\b(?:хотим|хочу|хотел\w*|заедем|заехать|поедем|поехать|съездить)\b")
@@ -984,6 +1007,7 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
             own[i].append((w0 + before.start(), w0 + before.end()))
             anchor[i] = spans[i][1]
     exc = [bool(EXCEPT_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
+    instead = [bool(INSTEAD_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     weak = [bool(WEAK_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     for i in reversed(range(n)):
         e = spans[i][1]
@@ -1011,7 +1035,7 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
     neg = [False] * n
     for i in range(n):
         in_list = i > 0 and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : spans[i][0]]))
-        in_list = in_list and not _wanted_pair(t, spans, i)
+        in_list = in_list and not _wanted_pair(t, spans, i) and not instead[i - 1]
         neg[i] = (
             strong[i]
             or (exc[i] and not _adds_place(t, spans, i, strong))
@@ -1463,6 +1487,36 @@ ADJ_CASE = re.compile(r"(?:ую|юю|ой|ей|ого|его|ом|ем|ым|им
 REGION_NEXT = re.compile(r" (?:кра[йяюе]|област[ьи]|побережь[еюя]|берег[ау]?)(?![а-яё])")
 
 
+ADJ_SUFFIX = re.compile(r"(.+?)ск(?:ий|ая|ое|ие|ого|ой|ую|их|им|ими|ому)$")
+# Adjectives that are no town: «Советскую площадь», «Российской империи».
+NOT_PLACE_ADJECTIVES = {"совет", "росси", "европей"}
+
+
+@functools.cache
+def _place_stems() -> frozenset[str]:
+    """Stems of the places we know: «петербург», and the base of «Иркутск» -> «иркут»."""
+    names = [n for n in PLACES] + [p["name"] for p in places()] + list(CATALOG)
+    stems = {s for c in CATALOG.values() for s in c["stems"]} | set(PLACES.values())
+    for name in names:
+        for part in re.split(r"[\s-]+", name.lower().replace("ё", "е")):
+            stems |= {part, part[:-1], part.removesuffix("ск")}
+    return frozenset(s for s in stems if len(s) >= 4 and s.isalpha())
+
+
+def _place_adjective(low: str, region_next: bool) -> bool:
+    """«петербургский», «московский»: an adjective of a known place, or of a region («побережье»).
+
+    An unknown adjective-shaped word stays a name for the geocoder: «Раменское», «Жуковский»,
+    «Дивноморское» are towns (TRAP-2)."""
+    m = ADJ_SUFFIX.fullmatch(low)
+    if not m:
+        return False
+    base = m.group(1)
+    if region_next or base in NOT_PLACE_ADJECTIVES:
+        return True
+    return base in _place_stems() or re.sub(r"ов$", "в", base) in _place_stems()
+
+
 def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
     """A capitalized name: kept as written, «Грузию» -> «Грузия»; and where it ends in the text.
 
@@ -1490,6 +1544,9 @@ def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
             return name_candidates(f"{word} {tail}")[0], second.end()
     if low in NOT_PLACES:
         return None  # «Новый год»: «новый» alone is no place (#538)
+    # «Петропавловска-Камчатского» is a name: an adjective after a hyphen stays
+    if "-" not in low and _place_adjective(low, REGION_NEXT.match(text, end) is not None):
+        return None  # «в Петербургский музей»: an adjective of a place is no place (#372)
     return _nominative(word), end
 
 
@@ -1725,15 +1782,17 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         ):
             which, wd, month = m.group(1) or "", WEEKDAYS.index(m.group(2)), found.get("month")
             ahead = (wd - today.weekday()) % 7
-            if month and month != (today + timedelta(days=1)).month:
-                base = future_date(month, 1)  # first such weekday of the named month
-                found["date_from"] = base + timedelta(days=(wd - base.weekday()) % 7)
-            elif which.startswith("эт"):  # #351: «на эту пятницу» on a Friday is today
-                found["date_from"] = today + timedelta(days=ahead)
+            if which.startswith("эт"):  # #351: «на эту пятницу» on a Friday is today
+                near = today + timedelta(days=ahead)
             elif which.startswith("следующ"):  # the same weekday of the next week
-                found["date_from"] = today + timedelta(days=ahead + 7)
+                near = today + timedelta(days=ahead + 7)
             else:
-                found["date_from"] = today + timedelta(days=ahead or 7)
+                near = today + timedelta(days=ahead or 7)
+            if month and (month != (today + timedelta(days=1)).month or near.month != month):
+                base = future_date(month, 1, today)  # #152: first such weekday of the named month
+                found["date_from"] = base + timedelta(days=(wd - base.weekday()) % 7)
+            else:
+                found["date_from"] = near
             notes.append(f"даты: {found['date_from']:%d.%m} («{m.group(0)}», ближайший)")
         elif re.search(r"\bследующ\w*\s+недел", t):
             found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
@@ -2012,7 +2071,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     starts = rf"\bчерез\s+(?:{NUM}\s*)?(?:дн\w*|день|недел\w*)|\bследующ\w*\s+недел\w*"
     # «Сдвинь на 3 дня», «Продли на 2 дня»: an edit of the current trip, not a new length (#36)
     # «Сократить расходы на 3 дня» names a cost, not the trip: the object word is no edit
-    starts += rf"|\b{EDIT_VERB}\w*(?:\s+(?!расход|бюджет|затрат|цен)\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*|месяц\w*)"
+    starts += rf"|\b{EDIT_VERB}\w*(?:\s+(?!расход|бюджет|затрат|трат|цен)\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*|месяц\w*)"
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(r"\bна\s+(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
         found["nights"] = MAX_NIGHTS + 1  # too long, the 3 digits are no number the rules read
@@ -2039,7 +2098,11 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     elif m := re.search(r"\bна\s+сутки\b", t):
         found["nights"] = 1
         notes.append(f"длительность: 1 ноч. («{m.group(0)}»)")
-    elif m := re.search(r"\bна\s+пар[уы]\s+(?:дн\w*|день|суток)", t):
+    # #146 (D-038): «пара» is a short trip of 2 nights; a number of days is N−1 nights.
+    # «на пару дней позже» is a shift, not a length.
+    elif m := re.search(
+        r"\bна\s+пар[уы]\s+(?:ноч\w*|суток|(?:дн\w*|день)\b(?!\s*(?:позже|раньше|спустя)))", t
+    ):
         found["nights"] = 2
         notes.append(f"длительность: 2 ноч. («{m.group(0)}»)")
     elif m := re.search(rf"\bна\s+пол\s?года\b{NOT_A_MOVE}", t):
@@ -2054,8 +2117,11 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
             notes.append(f"длительность: «{m.group(0)}» — {found['nights']} ночей")
     elif m := re.search(rf"\b(?:{NUM}\s+)?недел\w*", t):
         found["nights"] = 7 * (_num(m.group(1)) if m.group(1) else 1)
-    elif m := re.search(rf"\bдн(?:я|ей)\s+(\d{{1,2}})\b{NOT_LENGTH_AFTER}", t):
-        # «дней 10» (#114): after every named length; «день 3» is a day of a programme
+    elif m := re.search(
+        rf"\bдн(?:я|ей)\s+(?:на\s+)?(\d{{1,2}})\b{NOT_LENGTH_AFTER}(?!\s*(?:взр|дет|реб|персон|гост))",
+        t,
+    ):
+        # «дней 10» (#114), «дней на 5» (#302): after every named length; «день 3» is a day of a programme
         found["nights"] = max(int(m.group(1)) - 1, 1)
         notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
     elif m := re.search(rf"(?<!\bin )\b{NUM_EN}[\s-]*nights?\b", t):
@@ -2069,11 +2135,28 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
         found["nights"] = 2
         if "date_from" not in found:
             month, tomorrow = found.get("month"), date.today() + timedelta(days=1)
-            base = future_date(month, 1) if month and month != tomorrow.month else tomorrow
+            base = (
+                future_date(month, 1, date.today())
+                if month and month != tomorrow.month
+                else tomorrow
+            )
             start = base + timedelta(days=(4 - base.weekday()) % 7)  # Friday
             end = start + timedelta(days=2)
+            if (
+                base == tomorrow
+                and date.today().weekday() in (5, 6)
+                and re.search(r"\bэт(?:и|их|им)\s+выходн", t)
+                and (not month or month == date.today().month)
+            ):
+                # #152: on Saturday or Sunday the weekend is under way: it starts today
+                start, end = date.today(), tomorrow
+                found["nights"] = 1
+                notes.append(
+                    f"даты: {start:%d.%m}–{end:%d.%m} (выходные уже идут, осталась 1 ночь)"
+                )
+            else:
+                notes.append(f"даты: выходные {start:%d.%m}–{end:%d.%m} (ближайшие)")
             found["date_from"], found["date_to"], found["month"] = start, end, start.month
-            notes.append(f"даты: выходные {start:%d.%m}–{end:%d.%m} (ближайшие)")
     if found.get("nights", 0) > MAX_NIGHTS:
         found.pop("nights")
         notes.append(too_long_note(m.group(0), kept))
@@ -2206,6 +2289,9 @@ def _people_count(t: str, kids: int) -> tuple[int, str] | None:
 
 # #369: «по 50 тысяч на 1 человека», «сколько на человека?»: the price per head, no party.
 PER_PERSON_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
+PARTY_EDIT_RE = re.compile(
+    r"\b(?:давай\w*|можно|хочу|хотим|сделай\w*|переделай\w*|пересобер\w*|поменяй\w*)\b"
+)
 PRICE_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж\w*\s+цен")
 MONEY_PER_PERSON_RE = re.compile(
     r"((?:тыс\w*|руб\w*|₽|\d\s*к|\bр)\.?)\s+на\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b"
@@ -2257,12 +2343,23 @@ def _people(
     seen: list[tuple[str, list[int], int]] = []  # (kind, ages said, position in ages) (#359)
     last: int | None = None  # the end of the previous child word (#359)
     no_kids = False
-    if built and (PRICE_CUE_RE.search(t) or asking):  # only at a built plan
+    # #385: «давай на 1 человека?» asks for a party edit, not for a price
+    edit = asking and not PRICE_CUE_RE.search(t) and PARTY_EDIT_RE.search(t) and "номер" not in t
+    if built and (PRICE_CUE_RE.search(t) or asking) and not edit:  # only at a built plan
         t = PER_PERSON_RE.sub(" ", t)  # #369: «на 1 человека» is a unit of price, not a party
     t = MONEY_PER_PERSON_RE.sub(r"\1", t)
     for m in CHILD_RE.finditer(t):
         if ADULT_KIN_RE.match(t, m.end()):
             continue  # «сын с женой»: a grown-up son is no child (#275)
+        if m.group(0).endswith(NO_CHILD_FORM) and HOTEL_NO_KIDS_BEFORE.search(t[: m.start()]):
+            if HOTEL_NO_KIDS_NOTE not in notes:
+                notes.append(HOTEL_NO_KIDS_NOTE)  # #202: a wish for the hotel, the party stays
+            continue
+        if not m.group(1) and (
+            NO_CHILD_SAID_AFTER.match(t, m.end()) or NO_CHILD_SAID_BEFORE.search(t[: m.start()])
+        ):
+            no_kids = True  # #202: «детей нет», «у нас нет детей», «дети не едут»
+            continue
         if (
             m.group(0).endswith(NO_CHILD_FORM)
             and NO_CHILD_BEFORE.search(t[: m.start()])
@@ -2281,7 +2378,9 @@ def _people(
         said = _ages_of(a, not plural_word) if a else []
         if not a and not asking and (b := AGES_BARE_RE.match(t, m.end())):
             bare = [int(x) for x in re.findall(r"\d+", b.group(1))]
-            if max(bare) <= 17 and (not m.group(1) or _num(m.group(1)) == len(bare)):
+            # a singular noun without a count («с сыном 5 и 8») is one child, not a list (#332)
+            listed = m.group(1) or plural_word or m.group("twin")
+            if max(bare) <= 17 and listed and (not m.group(1) or _num(m.group(1)) == len(bare)):
                 said = bare
         single = (
             not m.group(1) and not m.group("twin") and not m.group(0).split()[-1].startswith("дет")
@@ -2337,7 +2436,7 @@ def _people(
     elif m := re.search(rf"\bнас\s+(?:будет\s+)?{NUM}\b|\b({'|'.join(TOGETHER)})\b", t):
         total = _num(m.group(1)) if m.group(1) else TOGETHER[m.group(2)]
         found["adults"] = max(total - len(ages), 1)
-    elif not asking and not _family_adults(t) and (head := _people_count(t, len(ages))):
+    elif (not asking or edit) and not _family_adults(t) and (head := _people_count(t, len(ages))):
         found["adults"] = head[0]
         notes.append(head[1])
     elif (m := FRIENDS_RE.search(t)) and _num(m.group(1)) >= 1:
@@ -2399,11 +2498,20 @@ def _rub(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 
 
+# #167: a price of a thing, not the budget of the trip: «виза за 80 евро», «кофе по 3 евро».
+ITEM_RE = re.compile(
+    r"\b(?:виз|кофе|капучино|чай|билет|такси|экскурс|обед|ужин|завтрак|вход|музе|трансфер|страховк"
+    r"|сувенир|напит|пиво|вино|еда|еду|аренд|прокат|отел|гостиниц|номер|хостел|метро|проезд"
+    r"|парковк|чаев|симк|пицц|шашлык|обмен|стои|цен|услуг|налог|сбор|депозит|залог)\w*"
+)
+GROUP_TAIL = rf"(?:на|для)\s+(?:{'|'.join(GROUP)})\b"
+
+
 def _currency_of(before: str, after: str) -> str | None:
     """The foreign currency written right after a sum («1000 евро») or before it («$1500»)."""
     for label, symbol, words in CURRENCIES:
         sym = re.escape(symbol) if symbol else "(?!)"
-        if re.match(rf"\s*(?:{sym}|(?:{words})\b)", after) or (
+        if re.match(rf"\s*(?:{sym}|(?:{words})(?!\w))", after) or (
             symbol and before.rstrip().endswith(symbol)
         ):
             return label
@@ -2416,8 +2524,15 @@ def _standalone_currency(t: str) -> str | None:
     for label, symbol, words in CURRENCIES:
         sym = re.escape(symbol) if symbol else "(?!)"
         by_symbol = rf"{sym}\s*\d|\d\s*{sym}"
-        by_word = rf"(?:\A\s*|{cue}\s+(?:\w+\s+)?){AMOUNT_UNIT}(?:{words})\b"
-        if re.search(by_symbol, t) or re.search(by_word, t):
+        by_word = rf"(?:\A\s*|{cue}\s+(?:\w+\s+)?){AMOUNT_UNIT}(?:{words})(?!\w)"
+        # #167: «за 2000 евро», «по 500 евро на каждого», «1000 евро в сутки», «1000 евро на двоих»
+        by_prep = rf"\b(?:за|на|по)\s+{AMOUNT_UNIT}(?:{words})(?!\w)"
+        by_tail = rf"{AMOUNT_UNIT}(?:{words})(?!\w)\s*(?:{PER_PERSON}|{PER_NIGHT}|{GROUP_TAIL})"
+        if re.search(by_symbol, t) or any(
+            not ITEM_RE.search(_fragment(t, m.start(), m.end())[0])
+            for q in (by_word, by_prep, by_tail)
+            for m in re.finditer(q, t)
+        ):
             return label
     return None
 
@@ -2505,7 +2620,7 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
                 notes.append(line)  # nights unknown: the total comes when they are
             continue
         stay = found.get("nights", nights)
-        if per_night and stay > 1:
+        if per_night:  # 1 night too: a later «на 5 ночей» recounts it (#167)
             total *= stay
             plan = "" if "nights" in found else " (длительность из плана)"
             factors.append(f"{stay} {_night_word(stay)}{plan}")
@@ -2669,6 +2784,13 @@ def extract(
 DATE_KEYS = {"date_from", "date_to", "month", "nights"}
 
 
+def _whole_month(llm_found: dict) -> bool:
+    start, end = llm_found.get("date_from"), llm_found.get("date_to")
+    if not (start and end) or start.day != 1:
+        return False
+    return end.month == start.month and (end + timedelta(days=1)).month != end.month
+
+
 def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = None) -> dict:
     """The model's fields win over the rules' fields; the rules keep what it did not say (#258).
 
@@ -2684,6 +2806,11 @@ def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = N
         llm_found = {**llm_found, "destinations": kept}
         if not kept:
             del llm_found["destinations"]
+    if _whole_month(llm_found) and "date_from" not in found:
+        # «в ноябре» is a month, not 1..30 Nov: the rules read no days, so the model's range goes (#574).
+        llm_found = {
+            k: v for k, v in llm_found.items() if k not in ("date_from", "date_to", "nights")
+        }
     full_dates = "date_from" in llm_found and bool({"date_to", "nights"} & llm_found.keys())
     if full_dates:
         for d in DATE_KEYS:

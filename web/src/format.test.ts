@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 import type { ChatReply } from "./contracts";
-import { brief, browserTime, offerParts, describe, withoutNoAi, fieldLabel, guestsText, priorityMessage, yearsText, zoneLabel, zonedTime } from "./format";
+import { brief, browserTime, offerParts, describe, withoutNoAi, fieldLabel, guestsText, nightsText, priorityMessage, yearsText, zoneLabel, zonedTime } from "./format";
 
 const reply = (llm: boolean): ChatReply => ({
   session_id: "s",
@@ -86,6 +86,12 @@ suite("browserTime", () => {
 });
 
 suite("гости в корзине и ваучере (#348)", () => {
+  it("#597: ночи: ночь, ночи, ночей", () => {
+    expect([1, 2, 4, 5, 11, 12, 21, 22, 25].map(nightsText)).toEqual([
+      "1 ночь", "2 ночи", "4 ночи", "5 ночей", "11 ночей", "12 ночей", "21 ночь", "22 ночи", "25 ночей",
+    ]);
+  });
+
   it("возраст ребёнка: год, года, лет", () => {
     const words = (ns: number[]) => ns.map(yearsText);
     expect(words([1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 0])).toEqual([
@@ -255,6 +261,17 @@ suite("#468: пункты предложения — блоки с полями"
       price: "7 900 ₽",
     });
     expect(one("Отель: Хостел, Сочи, завтраки, бесплатная отмена — 1 ₽")).toMatchObject({ name: "Хостел, Сочи", facts: ["завтраки", "бесплатная отмена"] });
+  });
+
+  it("TRAP-7 (#567): пометка бэкенда после цены остаётся у цены, и с «—» внутри", () => {
+    expect(one("Отель: Казантель, Казань, 2★, без питания, невозвратный — 7 900 ₽ (101hotels)")).toMatchObject({
+      name: "Казантель, Казань",
+      price: "7 900 ₽ (101hotels)",
+    });
+    expect(one("Трансферы: вокзал → Казантель — 900 ₽ (часть цен — синтетика)")).toMatchObject({
+      kind: "transfer",
+      price: "900 ₽ (часть цен — синтетика)",
+    });
   });
 
   it("рейс: вид, маршрут, время с одним поясом, места", () => {

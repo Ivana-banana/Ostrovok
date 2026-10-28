@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
 import { Board, EarlierChoices, Price, PriorityRow, TripParams } from "./Board";
-import type { ChatReply, Priority } from "./contracts";
+import type { ChatReply, HotelOffer, Priority, TransportOffer } from "./contracts";
 import { changeValue, localTime } from "./format";
 
 const base = fixture as unknown as ChatReply;
@@ -176,6 +176,19 @@ suite("доска поездки", () => {
     expect(rows(pets)[0].textContent).toContain("можно");
   });
 
+  it("сравнение транспорта: у рейса отметка питомца — «уточнить у авиакомпании» (#575)", () => {
+    const sec = (doc: Document) => doc.querySelector("[aria-label='Сравнение транспорта']");
+    const rows = (s: typeof base) => [...(sec(render(s))?.querySelectorAll("tbody tr") ?? [])];
+    const withMode = (mode: "flight" | "train") => {
+      const offers = base.plan.offers.map((o) => (o.kind === "transport" ? { ...o, mode, pets_allowed: true } : o));
+      return { ...base, plan: { ...base.plan, offers } };
+    };
+    const flight = rows(withMode("flight"))[0].textContent ?? "";
+    expect(flight).toContain("уточнить у авиакомпании");
+    expect(flight).not.toContain("можно");
+    expect(rows(withMode("train"))[0].textContent).toContain("можно");
+  });
+
   it("пересборка: «было → стало»", () => {
     const t = render(base).querySelector("[aria-label='Что изменилось']")?.textContent ?? "";
     expect(t).toContain("было 11–13 декабря → стало 13–15 декабря");
@@ -252,6 +265,27 @@ suite("доска поездки", () => {
     expect(cart).toContain("Подтвердить бронь на 600 ₽ (синтетика) · оплата имитируется");
   });
 
+  it("TRAP-7 (#567): итог корзины из реальных и синтетических цен — «часть цен — синтетика»", () => {
+    const r = structuredClone(hotelBought);
+    r.stage = "checkout";
+    r.voucher = null;
+    r.cart.items = r.cart.items.map((o) => (o.kind === "hotel" ? { ...o, synthetic: false } : o));
+    const cart = render(r).querySelector("[aria-label='Корзина']");
+    expect(cart?.querySelector("[data-testid='cart-total'] .synth")?.textContent).toBe("часть цен — синтетика");
+    expect(cart?.textContent).toContain("часть цен — синтетика · оплата имитируется");
+    expect(cart?.textContent).not.toContain("все цены — синтетика");
+    expect(cart?.textContent).toContain("(часть цен — синтетика) · оплата имитируется");
+  });
+
+  it("TRAP-7 (#567): смешанный вариант поездки — итог «часть цен», у каждой суммы в минусах своя пометка бэкенда", () => {
+    const r = structuredClone(base);
+    r.plan.offers = r.plan.offers.map((o) => (o.kind === "hotel" ? { ...o, synthetic: false } : o));
+    r.plan.bundles = r.plan.bundles.map((b) => ({ ...b, tradeoffs: ["дороже на 2 000 ₽ (часть цен — синтетика) (отель, 9 000 ₽ (101hotels))"] }));
+    const card = render(r).querySelector("[aria-label='Варианты поездки целиком'] .card");
+    const marks = [...(card?.querySelectorAll(".price") ?? [])].map((p) => p.querySelector(".synth")?.textContent);
+    expect(marks).toEqual(["часть цен — синтетика", "часть цен — синтетика", "101hotels"]);
+  });
+
   it("#41: бюджет отеля — своя строка в параметрах, не «Бюджет» на поездку", () => {
     const r = structuredClone(base);
     r.plan.spec.budget_rub = null;
@@ -295,8 +329,9 @@ suite("доска поездки", () => {
   it("TRAP-7: реальная цена получает пометку источника, синтетическая остаётся «синтетика» (#547)", () => {
     const r = structuredClone(hotelBought);
     r.stage = "compare";
+    // a real flight is Авиасейлс; a real train would be tutu (#567)
     r.plan.offers = r.plan.offers.map((o) =>
-      o.kind === "hotel" || o.kind === "transport" ? { ...o, synthetic: false } : o,
+      o.kind === "hotel" ? { ...o, synthetic: false } : o.kind === "transport" ? { ...o, mode: "flight", synthetic: false } : o,
     );
     const doc = render(r);
     const chips = (label: string) =>
@@ -310,6 +345,17 @@ suite("доска поездки", () => {
     r.plan.offers = r.plan.offers.map((o) => ({ ...o, synthetic: o.kind !== "hotel" && o.kind !== "transport" }));
     const cart = render({ ...r, stage: "checkout", voucher: null }).querySelector("[aria-label='Корзина']");
     expect([...(cart?.querySelectorAll(".synth") ?? [])].every((c) => c.textContent === "синтетика")).toBe(true);
+  });
+
+  it("TRAP-7: реальный поезд tutu.ru — чип «tutu», не «Авиасейлс» (#569)", () => {
+    const r = structuredClone(hotelBought);
+    r.stage = "compare";
+    r.plan.offers = r.plan.offers.map((o) =>
+      o.kind === "transport" ? { ...o, offer_id: `${o.offer_id}-tutu`, synthetic: false } : o,
+    );
+    const chip = render(r).querySelector("[aria-label='Сравнение транспорта'] td.cost .synth");
+    expect(chip?.textContent).toBe("tutu");
+    expect(chip?.getAttribute("title")).toContain("tutu.ru");
   });
 
   it("TRAP-7: ваучер с реальным отелем называет источник у цены (#547)", () => {
@@ -379,6 +425,93 @@ suite("доска поездки", () => {
     r.cart.items = r.plan.offers.filter((o) => o.offer_id === "t1" || o.offer_id === "h1");
     expect(issue()?.textContent).toContain("Ранний заезд");
     expect(issue()?.querySelector("button")?.textContent).toBe("В корзину");
+  });
+
+  // #597: the trip as in the issue screenshot: the road there, the stay, the road back.
+  function roundTrip(): ChatReply {
+    const r = structuredClone(base);
+    r.stage = "assemble";
+    r.voucher = null;
+    r.cart.items = [];
+    r.plan.issues = [];
+    r.plan.offers.push(
+      { kind: "transfer", offer_id: "tr2", title: "Такси на вокзал", depart_at: "2026-12-13T15:25:00+03:00", arrive_at: "2026-12-13T15:45:00+03:00", price_rub: 600, synthetic: true, hotel_offer_id: "h1", leg_offer_id: "t2" },
+      { kind: "transport", offer_id: "t2", title: "Поезд 001", mode: "train", origin: "Казань", destination: "Москва", depart_at: "2026-12-13T16:20:00+03:00", arrive_at: "2026-12-14T05:05:00+03:00", changes: 0, price_rub: 9800, synthetic: true, pets_allowed: false },
+    );
+    r.plan.timeline = [
+      { at: "2026-12-10T19:30:00+03:00", title: "Отправление: Москва → Казань", offer_id: "t1" },
+      { at: "2026-12-11T07:10:00+03:00", title: "Прибытие: Казань", offer_id: "t1" },
+      { at: "2026-12-11T07:30:00+03:00", title: "Такси с вокзала", offer_id: "tr1" },
+      { at: "2026-12-11T07:50:00+03:00", title: "Приезд в отель, ждём заселения: Отель у Кремля", offer_id: "h1" },
+      { at: "2026-12-11T14:00:00+03:00", title: "Заселение: Отель у Кремля", offer_id: "h1" },
+      { at: "2026-12-13T12:00:00+03:00", title: "Выезд из отеля: Отель у Кремля", offer_id: "h1" },
+      { at: "2026-12-13T15:25:00+03:00", title: "Такси на вокзал", offer_id: "tr2" },
+      { at: "2026-12-13T16:20:00+03:00", title: "Отправление: Казань → Москва", offer_id: "t2" },
+      { at: "2026-12-14T05:05:00+03:00", title: "Прибытие: Москва", offer_id: "t2" },
+    ];
+    return r;
+  }
+  const legs = (r: ChatReply) => [...render(r).querySelectorAll("[aria-label='Таймлайн'] details.leg")];
+  const head = (d: Element) => d.querySelector("summary")?.textContent ?? "";
+
+  it("#597: стыковки свёрнуты в этапы — дорога туда, проживание, дорога обратно", () => {
+    const [there, stay, back, ...rest] = legs(roundTrip());
+    expect(rest).toHaveLength(0);
+    expect(head(there)).toContain("Дорога туда");
+    expect(head(there)).toContain("10.12 19:30 → 11.12 07:10 (UTC+3)");
+    expect(head(there)).toContain("Москва → Казань, поезд, 11 ч 40 мин");
+    expect(head(stay)).toContain("Проживание");
+    expect(head(stay)).toContain("11.12 07:30 → 13.12 15:25 (UTC+3)");
+    expect(head(stay)).toContain("Отель у Кремля, 2 ночи");
+    expect(stay.querySelectorAll(".timeline li")).toHaveLength(5);
+    expect(head(back)).toContain("Дорога обратно");
+    expect(head(back)).toContain("Казань → Москва");
+    for (const d of [there, stay, back]) expect(d.hasAttribute("open")).toBe(false);
+  });
+
+  it("#597: этап с замечанием открыт и помечен, остальные свёрнуты", () => {
+    const r = roundTrip();
+    r.plan.issues = [{ severity: "warn", text: "прибытие 07:10 раньше заезда 14:00", fixes: ["x1"] }];
+    const [there, stay, back] = legs(r);
+    expect(stay.hasAttribute("open")).toBe(true);
+    expect(head(stay)).toContain("есть замечание");
+    expect(there.hasAttribute("open")).toBe(false);
+    expect(back.hasAttribute("open")).toBe(false);
+    // the issue itself stays visible under the stages
+    expect(render(r).querySelector("[aria-label='Таймлайн'] .issue")?.textContent).toContain("раньше заезда");
+  });
+
+  it("#597: замена рейса открывает свою дорогу; ошибка без связи открывает все этапы", () => {
+    const r = roundTrip();
+    r.plan.offers.push({ ...(r.plan.offers.find((o) => o.offer_id === "t2") as TransportOffer), offer_id: "t3" });
+    r.plan.issues = [{ severity: "warn", text: "поздний поезд", fixes: ["t3"] }];
+    expect(legs(r).map((d) => d.hasAttribute("open"))).toEqual([false, false, true]);
+    r.plan.issues = [{ severity: "error", text: "Обратный рейс отправляется раньше прибытия туда.", fixes: [] }];
+    expect(legs(r).map((d) => d.hasAttribute("open"))).toEqual([true, true, true]);
+  });
+
+  it("#597: два отеля — два этапа проживания и переезд между ними", () => {
+    const r = roundTrip();
+    const h2 = { ...(r.plan.offers.find((o) => o.offer_id === "h1") as HotelOffer), offer_id: "h2", title: "Отель на Волге" };
+    r.plan.offers.push(h2);
+    r.plan.timeline.splice(
+      7, 0,
+      { at: "2026-12-13T13:00:00+03:00", title: "Отправление: Казань → Свияжск", offer_id: "t1" },
+      { at: "2026-12-13T14:00:00+03:00", title: "Заселение: Отель на Волге", offer_id: "h2" },
+    );
+    const titles = legs(r).map((d) => d.querySelector("summary b")?.textContent);
+    expect(titles).toEqual(["Дорога туда", "Проживание", "Переезд", "Проживание", "Дорога обратно"]);
+  });
+
+  it("#597: убранная позиция помечена в строке этапа", () => {
+    const r = roundTrip();
+    r.stage = "checkout";
+    r.cart.items = r.plan.offers.filter((o) => ["t1", "t2", "h1", "tr2"].includes(o.offer_id)); // tr1 removed
+    const [there, stay] = legs(r);
+    expect(head(stay)).toContain("часть убрана из корзины");
+    expect(head(there)).not.toContain("убран");
+    r.cart.items = r.plan.offers.filter((o) => ["h1", "tr1", "tr2"].includes(o.offer_id)); // both roads removed
+    expect(head(legs(r)[0])).toContain("убрано из корзины");
   });
 
   // Live DOM (clicks are needed); the box is removed by the next call.
