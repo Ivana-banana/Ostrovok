@@ -45,7 +45,18 @@ def test_a_dash_before_a_neighbouring_negation_is_no_refusal(store, text):
 
 @pytest.mark.parametrize(
     "text",
-    ["в январе — не", "январь — не вариант", "в январе — не поедем", "в январе — не получится"],
+    [
+        "в январе — не",
+        "январь — не вариант",
+        "в январе — не поедем",
+        "в январе — не получится",
+        "январь — не пойдёт",
+        "в январе — не успеем",
+        "январь — не сезон",
+        "январь - не наш вариант",
+        "январь — не лучшая идея",
+        "в январе — не работаем",
+    ],
 )
 def test_a_dash_before_a_refusal_stays_a_refusal(store, text):
     first = named(store)
@@ -70,7 +81,10 @@ def test_not_expensive_with_a_refused_month_is_still_the_wish(store):
     assert r.plan.spec.wishes == ["недорого"] and r.plan.spec.date_from.month == 12
 
 
-@pytest.mark.parametrize("text", ["не дороже 100 тысяч", "не в январе"])
+@pytest.mark.parametrize(
+    "text",
+    ["не дороже 100 тысяч", "не в январе", "это не дорого", "нам не дорого, хотим люкс"],
+)
 def test_other_negations_are_no_wish_cheap(store, text):
     first = named(store)
     r = say(store, text, first.session_id)

@@ -433,8 +433,10 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     # Without a comma a «не» after the month is a refusal («в январе не поедем»). After a comma,
     # «но», «и» or «а» it may belong to a neighbour («в январе, не дорого»): only a verb of
     # refusing makes it one (#198).
-    # A dash before «не» ends the part too: «в январе — не дорого» (#220); «в январе — не» stays.
-    parts = re.split(r",|\s[—–-]\s+(?=не\b)|\s(?:но|и|а)\s", clause, maxsplit=1)
+    # A dash before «не» + a neighbour wish ends the part too: «в январе — не дорого» (#220).
+    # Any other «— не X» stays a refusal: «январь — не пойдёт», «в январе — не»
+    neighbour = r"(?=не\s+(?:очень\s+)?(?:дорог|дешев|жарк|шумн|далек)\w*)"
+    parts = re.split(rf",|\s[—–-]\s+{neighbour}|\s(?:но|и|а)\s", clause, maxsplit=1)
     near, after = parts[0], parts[1] if len(parts) > 1 else ""
     strong = r"нельзя|отпадает|отпадают|исключен|невозможн"  # a refusal anywhere near the month
     weak = r"отменя|неудобн"  # a refusal only as the whole part (#215)
