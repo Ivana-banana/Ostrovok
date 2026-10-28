@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 from api import catalog, llm, ops
 from api.answers import (
     closed_line,
+    consent_fact,
     destination_line,
     is_hotel_compare,
     plan_fact,
@@ -73,6 +74,7 @@ from api.extract import (
     CAPITAL_PLACES,
     DATE_KEYS,
     DEFAULT_NIGHTS,
+    EACH_STAY_RE,
     HOTEL_NOTE,
     MAX_NIGHTS,
     MONTH,
@@ -200,10 +202,17 @@ EDIT_KEYS = {
 RESTART_RE = re.compile(
     r"\bнач(?:ать|ни|ните|н[её]м|инаем)\s+"
     r"(?:(?:вс[её]|поиск|план|диалог|поездку)\s+)?(?:заново|сначала|с\s+нуля)\b"
-    r"|\b(?:давай(?:те)?|хочу|попробу\w+|поехали)\s+(?:вс[её]\s+)?(?:заново|с\s+нуля)\b"
+    # #98: «давай заново» resets at the end of a phrase or before a mark, like «сбрось»:
+    # «давай заново посчитаем цену» edits the plan. A bare «заново» is a reset too.
+    r"|\b(?:давай(?:те)?|хочу|попробу\w+|поехали)\s+(?:вс[её]\s+)?"
+    r"(?:заново|сначала|с\s+нуля|по\s+нов(?:ой|ому))(?=\s*(?:[.!,;:]|$))"
     r"|\bвс[её]\s+заново\b"
     r"|\bсбрось(?:те)?(?:\s+(?:вс[её]|план|поиск|поездку|диалог))?\s*(?:[.!,;]|$)"
-    r"|\bнов(?:ый|ую)\s+(?:поиск|запрос|поездк\w*)\b",
+    r"|^\s*(?:заново|по\s+нов(?:ой|ому)|с\s+нуля)\s*[.!]*\s*$"
+    # «новая поездка» as a command; «сколько стоит новая поездка» and «это не новая поездка» ask
+    r"|(?:^\s*|[.!,;:]\s*|\b(?:давай(?:те)?|хочу|начн\w+|начать|начинаем)\s+)"
+    r"нов(?:ая|ую)\s+поездк\w*(?=\s*(?:[.!,;:]|$))"
+    r"|\bнов(?:ый|ую)\s+(?:поиск|запрос)(?=\s*(?:[.!,;:?]|$))",
     re.IGNORECASE,
 )
 # A negation before the phrase («не хочу с нуля») or after it («с нуля не надо»).
@@ -211,6 +220,11 @@ NOT_RESTART_RE = re.compile(
     r"\bне\s+(?:\w+\s+)?(?:начин\w+|начат\w*|сбрас\w+|с\s+нуля|заново|сначала)"
     r"|\b(?:с\s+нуля|заново|сначала|поиск\w*|запрос\w*|поездк\w*)\s+(?:\w+\s+)?"
     r"не\s+(?:надо|нужн\w*|хочу|будем)"
+)
+RESTART_CHIP = "Начать заново"
+AFTER_BOOKING = (
+    "Другое направление, другие даты или состав — это новая поездка: нажмите "
+    f"«{RESTART_CHIP}» или напишите «новая поездка»."
 )
 OTHER_RE = re.compile(
     r"\b(?:друг(?:ое|ой|ую|ие|их)|ино[ейю])\s+(?:направлен\w*|город\w*|мест\w*|стран\w*|курорт\w*)"
@@ -735,7 +749,8 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     party = party_question(spec) if spec.destinations else []
     if spec.destinations:
         return [*origin, *(children_question(message, spec) or party)[:1]]
-    if spec.wishes:
+    if spec.wishes or spec.max_travel_hours is not None:
+        # #365 (C21): «недалеко» is a wish of the road: the agent shows the near places at once
         return [*origin, *party]
     out = [*origin]
     if not spec.month and not spec.date_from:
@@ -827,7 +842,8 @@ def is_route(message: str, destinations: list[str]) -> bool:
         return False
     stays = STAY_RE.findall(AHEAD_RE.sub(" ", low))
     linked = any(_city_in_clause(message, low, m, destinations[1:]) for m in LINK_RE.finditer(low))
-    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1
+    # #365: «по 3 дня» with two cities is a stay in each: a route
+    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1 or bool(EACH_STAY_RE.search(low))
 
 
 def severals(message: str, destinations: list[str]) -> str | None:
@@ -1701,6 +1717,12 @@ def _question_answer(
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
 
 
+def _with_tail(text: str, plan: Plan, low: str, message: str, found: dict) -> str:
+    """#212: a consent with a question («беру, а что с визой?») gets the fact line before the text."""
+    fact = consent_fact(plan, low, message, found)
+    return f"{fact}\n{text}" if fact else text
+
+
 def _tail(spec: TripSpec, hint: str, extra: list[str] | None = None) -> list[str]:
     # #458: the note «уже показаны» is internal state, not text for the user
     said = [*(a for a in spec.assumptions if _label(a) != SHOWN), *(extra or [])]
@@ -2171,7 +2193,10 @@ def step(
             text += " Контакт из сообщения в неё не добавлен."
             if prev.voucher.simulated:
                 text += " Бронь имитирована."
-        return prev.model_copy(update={"reply": text, "questions": [], "llm": False})
+        # #98: no dead end — another city or other dates mean a new trip; the booking stays
+        text += f" {AFTER_BOOKING}"
+        chip = Question(text="Что дальше?", options=[RESTART_CHIP])
+        return prev.model_copy(update={"reply": text, "questions": [chip], "llm": False})
     old = prev or ChatReply(
         session_id=sid,
         stage="clarify",
@@ -2770,14 +2795,14 @@ def step(
         plan.timeline, plan.issues = build_timeline(plan)
         if any(i.severity == "error" for i in plan.issues):
             return reply("compare", plan, _text_blocked(plan))  # #276: no cart with an error
-        return reply("assemble", plan, _text_assemble(plan))
+        return reply("assemble", plan, _with_tail(_text_assemble(plan), plan, low, message, found))
     if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
         text = (
             f"В корзине {len(cart.items)} поз. на {_rub(cart.total_rub)} "
             f"(синтетика, оплата имитируется). {HINTS['checkout']}"
         )
-        return reply("checkout", plan, text, cart)
+        return reply("checkout", plan, _with_tail(text, plan, low, message, found), cart)
     if booking:  # chat() books outside the session lock; the user saw the stored cart total
         raise _Confirm(old.cart.total_rub)
     text = HINTS.get(old.stage, "Уточните запрос.")
