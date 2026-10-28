@@ -246,9 +246,18 @@ NOT_RESTART_RE = re.compile(
     r"не\s+(?:надо|нужн\w*|хочу|будем)"
 )
 RESTART_CHIP = "Начать заново"
+# #503: after the voucher «Изменить бронь» opens a new trip with the same terms and the edit the
+# user wrote before the press. The edit lives in the text of the chip question: the reply is the
+# only state of the session, and the user sees what will be applied.
+CHANGE_CHIP = "Изменить бронь"
+CHANGE_RE = re.compile(rf"^\s*{CHANGE_CHIP}\s*[.!]*\s*$", re.IGNORECASE)
+EDIT_NOTE = "Правка для новой поездки: "
+EDIT_NOTE_RE = re.compile(rf"{EDIT_NOTE}(.*)\.$", re.DOTALL)
+EDIT_ITEM_RE = re.compile(r"«([^«»]*)»")
 AFTER_BOOKING = (
-    "Другое направление, другие даты или состав — это новая поездка: нажмите "
-    f"«{RESTART_CHIP}» или напишите «новая поездка»."
+    "Другое направление, другие даты или состав — это новая поездка. Нажмите "
+    f"«{CHANGE_CHIP}»: возьму те же условия и вашу правку. Или нажмите «{RESTART_CHIP}» "
+    "или напишите «новая поездка»: начнём с нуля."
 )
 OTHER_RE = re.compile(
     r"\b(?:друг(?:ое|ой|ую|ие|их)|ино[ейю])\s+(?:направлен\w*|город\w*|мест\w*|стран\w*|курорт\w*)"
@@ -1916,6 +1925,12 @@ def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
     )
 
 
+def _own_answer(text: str, message: str, use_llm: bool) -> tuple[str, bool]:
+    """#617: with a key the model words the answer; checked against the template (TRAP-4)."""
+    own = llm.answer_question(message, text) if use_llm and message else None
+    return (own, True) if own else (text, False)
+
+
 def _question_answer(
     old: ChatReply, low: str = "", message: str = "", found: dict | None = None
 ) -> str:
@@ -2510,6 +2525,47 @@ def same_place_question(old: ChatReply, name: str, found: dict) -> list[Question
     return [Question(text=text, options=[here, *(o for o in chips if o != here)])]
 
 
+def _booking_edits(prev: ChatReply, message: str) -> list[str]:
+    """#503: the edits of the trip the user wrote after the voucher, in order: the earlier ones
+    from the chip question of prev, then this message when it edits the trip. Each is applied
+    by its own step(): a later date or number replaces the earlier one."""
+    edits = [
+        e
+        for q in prev.questions
+        if (m := EDIT_NOTE_RE.search(q.text))
+        for e in EDIT_ITEM_RE.findall(m.group(1))
+    ]
+    low = message.lower().replace("ё", "е")
+    found, _ = extract(message, True)
+    spec = prev.plan.spec
+    # A field the booked trip already has is a remark («отличные 3 ночи были»), not an edit.
+    # After an earlier edit it may undo that edit («трое взрослых» -> «нет, двое»): it counts.
+    changed = {k for k in EDIT_KEYS & set(found) if edits or getattr(spec, k, None) != found[k]}
+    if changed or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low):
+        edits.append(re.sub(r"[«»]", '"', message).strip())
+    return edits
+
+
+def _change_booking(prev: ChatReply, sid: str, use_llm: bool, origin: str | None) -> ChatReply:
+    """#503: a new trip from the booked one: the same spec and plan, no cart, no voucher, plus
+    the edits written before the press. The first booking stays: nothing is cancelled or rebooked."""
+    edits = _booking_edits(prev, "")
+    kept = (
+        f"Бронь {prev.voucher.booking_id} остаётся оформленной: она не отменена и не переоформлена."
+    )
+    done = prev.model_copy(
+        update={"voucher": None, "cart": Cart(), "stage": "compare", "questions": []}
+    )
+    for edit in edits:
+        done = step(done, sid, edit, use_llm, origin)
+    if edits:
+        head = "Новая поездка на тех же условиях с вашей правкой — отдельная покупка."
+    else:
+        done = done.model_copy(update={"reply": _text_compare(done.plan), "llm": False})
+        head = "Новая поездка на тех же условиях — отдельная покупка. Правки пока нет."
+    return done.model_copy(update={"reply": f"{head} {kept}\n{done.reply}"})
+
+
 def step(
     prev: ChatReply | None, sid: str, message: str, use_llm: bool = False, origin: str | None = None
 ) -> ChatReply:
@@ -2534,6 +2590,8 @@ def step(
         fresh = step(None, sid, rest, use_llm, origin=named)
         kept = f" Бронь {prev.voucher.booking_id} остаётся оформленной." if prev.voucher else ""
         return fresh.model_copy(update={"reply": f"Начинаем заново.{kept} {fresh.reply}"})
+    if prev and prev.voucher and CHANGE_RE.match(message):
+        return _change_booking(prev, sid, use_llm, origin)
     if prev and prev.voucher:
         text = f"Бронь {prev.voucher.booking_id} уже оформлена."
         if GUEST_DATA_RE.search(message):  # #367: an e-mail or a phone after the booking
@@ -2542,7 +2600,10 @@ def step(
                 text += " Бронь имитирована."
         # #98: no dead end — another city or other dates mean a new trip; the booking stays
         text += f" {AFTER_BOOKING}"
-        chip = Question(text="Что дальше?", options=[RESTART_CHIP])
+        edits = _booking_edits(prev, message)
+        notes = "; ".join(f"«{e}»" for e in edits)
+        ask = f"Что дальше? {EDIT_NOTE}{notes}." if edits else "Что дальше?"
+        chip = Question(text=ask, options=[CHANGE_CHIP, RESTART_CHIP])
         return prev.model_copy(update={"reply": text, "questions": [chip], "llm": False})
     old = prev or ChatReply(
         session_id=sid,
@@ -2586,9 +2647,8 @@ def step(
         )
     ):
         # #193: a question about the transfer is answered from the plan and changes nothing.
-        return old.model_copy(
-            update={"reply": _question_answer(old, low), "questions": [], "llm": False}
-        )
+        text, used = _own_answer(_question_answer(old, low), message, use_llm)
+        return old.model_copy(update={"reply": text, "questions": [], "llm": used})
     if (
         prev
         and old.stage in PLAN3
@@ -2634,13 +2694,8 @@ def step(
             or (is_hotel_compare(old.plan, low) and not EDIT_KEYS & set(asked))
         )
     ):
-        return old.model_copy(
-            update={
-                "reply": _question_answer(old, low, message, rules_found),
-                "questions": [],
-                "llm": False,
-            }
-        )
+        text, used = _own_answer(_question_answer(old, low, message, rules_found), message, use_llm)
+        return old.model_copy(update={"reply": text, "questions": [], "llm": used})
     pure = (
         set(rules_found) <= {"modes"}
         and not SHIFT_RE.search(low)
@@ -2676,15 +2731,15 @@ def step(
     ):
         # #186: a question at compare with a fact to give («сколько стоит трансфер?») goes to
         # no model and changes nothing; other questions go on as before.
-        return old.model_copy(
-            update={"reply": _question_answer(old, low, message), "questions": [], "llm": False}
-        )
+        text, used = _own_answer(_question_answer(old, low, message), message, use_llm)
+        return old.model_copy(update={"reply": text, "questions": [], "llm": used})
     if prev and old.stage in ("assemble", "checkout") and is_question(low, asked):
         # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
         kids_only = asking and ASKING_NOTE in rules_notes and no_change(rules_found, old)
         text = _text_kids_question(old) if kids_only else _question_answer(old, low, message)
+        text, used = _own_answer(text, message, use_llm)
         ask = [] if old.plan.spec.children_ages or not kids_only else kids_ask()  # #182
-        return old.model_copy(update={"reply": text, "questions": ask, "llm": False})
+        return old.model_copy(update={"reply": text, "questions": ask, "llm": used})
     # A month after dates the user named (#190): a clear request moves them below (merge);
     # a refusal or a doubt moves nothing and is never a consent («давай в январе?»).
     month_verdict, target, now = "", None, old.plan.spec
