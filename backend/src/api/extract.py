@@ -1287,23 +1287,28 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
 
     A place after a negation is no destination (#113). Returns the refused places and countries."""
     not_from: list[tuple[int, int]] = []  # the spans of «не из X»: X is no destination
-    for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
-        w = re.match(r"[а-яе-]+", t[m.end() :])
-        if re.search(r"устал\w*\s+$", t[: m.start()]):
+    # «Санкт Петербурга» without the hyphen is one name; the length stays (#544)
+    text = re.sub(r"(?<![а-яёА-ЯЁ])([Сс]анкт) (?=[Пп]етербург)", r"\1-", text)
+    t = re.sub(r"(?<![а-яе])(санкт) (?=петербург)", r"\1-", t)
+    m = name = None  # the first «из/от» that names the origin
+    for mm in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
+        w = re.match(r"[а-яе-]+", t[mm.end() :])
+        if re.search(r"устал\w*\s+$", t[: mm.start()]):
             continue  # «устали от Турции» is a refusal, not an origin
-        if neg := re.search(r"\bне\s+$", t[: m.start()]):  # «не из Москвы, а из Кинешмы» (#504)
+        if neg := re.search(r"\bне\s+$", t[: mm.start()]):  # «не из Москвы, а из Кинешмы» (#504)
             # #509 review: a refused city of two words («не из Нижнего Новгорода») is no destination
-            gone = _place_at(text, t, m.end()) or _capital(text, m.end()) or (w and _known(w[0]))
-            end = _origin_end(text, t, m.end(), gone)[0] if gone else t.find(" ", m.end())
+            gone = _place_at(text, t, mm.end()) or _capital(text, mm.end()) or (w and _known(w[0]))
+            end = _origin_end(text, t, mm.end(), gone)[0] if gone else t.find(" ", mm.end())
             end = len(t) if end < 0 else end
             not_from.append((neg.start(), end))
             # no origin, no destination; «не» goes too, else it negates the next place
             t = t[: neg.start()] + " " * (end - neg.start()) + t[end:]
             continue
-        if name := _place_at(text, t, m.end()) or _capital(text, m.end()) or (w and _known(w[0])):
-            break
-    else:
-        m = None
+        # The origin is the first «из X»; «Из Москвы, а не из Питера» (#544) refuses a later one.
+        if m is None and (
+            n := _place_at(text, t, mm.end()) or _capital(text, mm.end()) or (w and _known(w[0]))
+        ):
+            m, name = mm, n
     if m:
         if home := catalog.respelled(name):
             name = home["name"]  # «Ебург» -> Екатеринбург (#274)
@@ -1464,21 +1469,35 @@ def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
 
 
 def _genitive_name(name: str) -> str:
-    """«Нижнего Тагила» -> «Нижний Тагил», «Нового Уренгоя» -> «Новый Уренгой» (#538, TRAP-3).
+    """«Нижнего Тагила» -> «Нижний Тагил», «Кинешмы» -> «Кинешма», «Сызрани» -> «Сызрань» (TRAP-3).
 
-    After «из» a name outside the catalogue is in the genitive: the geocoder asks the nominative.
-    Only a masculine name of an adjective and a noun; any other name stays as written."""
+    After «из» a name outside the catalogue is in the genitive: the geocoder asks the nominative
+    and the reply says it (#538, #544). A masculine name of an adjective and a noun, or a feminine
+    name of one word; any other name stays as written («Алматы» is in the catalogue)."""
     lead, _, noun = name.partition(" ")
     base = lead[:-3] if lead.endswith(("ого", "его")) else ""
     nominative = {"нов": "ый", "стар": "ый", "нижн": "ий", "верхн": "ий", "велик": "ий"}.get(
         base.lower()
     )
-    if not nominative or not noun or " " in noun or not _name_tail_ok(noun):
+    if not noun:
+        return _feminine_nominative(name)
+    if not nominative or " " in noun or not _name_tail_ok(noun):
         return name
     if re.search(r"[аеоуэ]я$", noun):
         return f"{base}{nominative} {noun[:-1]}й"  # «Уренгоя» -> «Уренгой»
     if re.search(r"[бвгджзклмнпрстфхцчшщ]а$", noun):
         return f"{base}{nominative} {noun[:-1]}"  # «Тагила» -> «Тагил»
+    return name
+
+
+def _feminine_nominative(name: str) -> str:
+    """«Кинешмы» -> «Кинешма», «Ухты» -> «Ухта», «Сызрани» -> «Сызрань»; a known name stays."""
+    if catalog.resolve(name) or not _name_tail_ok(name):
+        return name  # «Алматы», «Хельсинки»: the catalogue spells it so
+    if re.search(r"[бвгджзклмнпрстфхцчшщ]ы$", name):
+        return name[:-1] + "а"
+    if re.search(r"[нр]и$", name) and len(name) > 4:
+        return name[:-1] + "ь"  # «Рязани» -> «Рязань»; «Дели», «Тбилиси», «Хельсинки» stay
     return name
 
 
