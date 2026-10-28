@@ -116,14 +116,14 @@ suite("приложение", () => {
     expect(box.querySelector(".board")?.textContent).toContain("без ИИ");
   });
 
-  it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/health сообщает llm=false", async () => {
-    routes["GET /api/health"] = () => ({ status: 200, body: { status: "ok", llm: false } });
+  it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/mode сообщает llm=false", async () => {
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false } });
     await mount();
     expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
   });
 
   it("с моделью пометки до первого сообщения нет", async () => {
-    routes["GET /api/health"] = () => ({ status: 200, body: { status: "ok", llm: true } });
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true } });
     await mount();
     expect(box.querySelector(".badge-noai")).toBeNull();
   });
@@ -203,6 +203,26 @@ suite("приложение", () => {
     const sum = String(total).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     const last = [...box.querySelectorAll(".msg.agent")].at(-1)?.textContent;
     expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
+  });
+
+  it("#161: корзина изменилась, а план не обновился — ошибка вместо тихого устаревшего плана", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    let reads = 0;
+    routes["GET /api/session/s1"] = () => (++reads === 1 ? { status: 200, body: checkoutStage } : { status: 500 });
+    routes["POST /api/cart"] = () => ({ status: 200, body: { items: [], total_rub: 0 } });
+    await mount();
+    await click("Убрать");
+    expect(box.querySelector("[role='alert']")?.textContent).toContain("Не удалось обновить план");
+  });
+
+  it("#161: бронь оформлена, а план не обновился — ошибка про перезагрузку", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    let reads = 0;
+    routes["GET /api/session/s1"] = () => (++reads === 1 ? { status: 200, body: checkoutStage } : { status: 500 });
+    routes["POST /api/checkout"] = () => ({ status: 200, body: booked.voucher });
+    await mount();
+    await click("Подтвердить бронь");
+    expect(box.querySelector("[role='alert']")?.textContent).toContain("перезагрузите страницу");
   });
 
   it("подтверждение: отправляет итог, который видел пользователь, и показывает ваучер", async () => {

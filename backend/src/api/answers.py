@@ -25,6 +25,7 @@ from api.optimizer import hotel_rows
 
 WEATHER_RE = re.compile(
     r"погод|климат|температур|градус|дожд|осадк|снег|ливн|холодн|тепл|жарк|купа|вода\s+в\s+мор"
+    r"|какая\s+вода\b"
 )
 RAIN_RE = re.compile(r"дожд|осадк|снег|ливн")
 # «какой ближайший аэропорт?», «аэропорт далеко?»: the airport is asked about. «Сколько стоит
@@ -458,13 +459,20 @@ def weather_fact(plan: Plan, low: str = "", cities: list[str] | None = None, mon
             continue
         city = place["name"]
         air, water = catalog.month_climate(place, month) if month else (None, None)
-        if air is None:
+        if air is None and water is None:
             lines.append(f"Климата {city} {when or 'вашего месяца'} в данных нет — {NO_DATA}.")
             continue
-        fact = f"днём {air:g} °C" + (f", вода {water:g} °C" if water is not None else "")
+        parts = []
+        if air is not None:
+            parts.append(f"днём {air:g} °C")
+        if water is not None:
+            parts.append(f"вода {water:g} °C")
+        fact = ", ".join(parts)
         if RAIN_RE.search(low):
             fact += _rain(place, month)
-        lines.append(f"{city} {when}: {fact} — оценка по каталогу, не прогноз.")
+        line = f"{city} {when}: {fact} — оценка по каталогу, не прогноз."
+        notes = " ".join(place.get("climate_notes", []))
+        lines.append(line + (" " + notes if notes else ""))
     if not lines:
         return f"Направление не выбрано — климата {NO_DATA}."
     return "\n".join(lines) + "\nПрогноза погоды в данных нет."
@@ -494,9 +502,11 @@ def destination_line(plan: Plan) -> str:
         )
     if port := place.get("airport"):
         parts.append(f"ближайший аэропорт {port['iata']}, {port['km']} км {_how(port)}")
+    notes = " ".join(place.get("climate_notes", []))
     if not parts:
-        return ""
-    return "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
+        return notes
+    line = "Климат: " + "; ".join(parts) + " (оценка по каталогу, не прогноз)."
+    return line + (" " + notes if notes else "")
 
 
 def closed_line(plan: Plan) -> str:

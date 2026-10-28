@@ -1,4 +1,4 @@
-import type { Cart, ChatReply, Meal, Mode, Priority } from "./contracts";
+import type { Cart, ChatReply, Meal, Mode, Priority, TripSpec } from "./contracts";
 
 // One reply line for the user; the no-model mode is labelled honestly (TRAP-1).
 export function describe(r: ChatReply): string {
@@ -41,6 +41,23 @@ export function rub(n: number): string {
   return `${String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} ₽`;
 }
 
+// «1 год», «2 года», «5 лет», «11 лет», «21 год»; age 0 (the backend turns months into 0): «до 1 года».
+export function yearsText(n: number): string {
+  if (n === 0) return "до 1 года";
+  const m100 = n % 100;
+  const m10 = n % 10;
+  const word = m100 > 10 && m100 < 15 ? "лет" : m10 === 1 ? "год" : m10 > 1 && m10 < 5 ? "года" : "лет";
+  return `${n} ${word}`;
+}
+
+// «Гости» of the cart and the voucher: «2 взр., дети: 1 год, 5 лет, с питомцем».
+export function guestsText(spec: Pick<TripSpec, "adults" | "children_ages" | "pets">): string {
+  const parts = [`${spec.adults} взр.`];
+  if (spec.children_ages.length) parts.push(`дети: ${spec.children_ages.map(yearsText).join(", ")}`);
+  if (spec.pets) parts.push("с питомцем");
+  return parts.join(", ");
+}
+
 // Chat line after a cart edit: the real count and total (TRAP-7: the sums are mock).
 export function cartLine(cart: Cart): string {
   if (!cart.items.length) return "Корзина пуста.";
@@ -53,6 +70,14 @@ export function cartLine(cart: Cart): string {
 export function localTime(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
   return m ? `${m[3]}.${m[2]} ${m[4]}:${m[5]}` : iso;
+}
+
+// A moment of the service itself (voucher time, written in UTC): shown in the browser zone.
+export function browserTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 export function localDate(iso: string | null): string {

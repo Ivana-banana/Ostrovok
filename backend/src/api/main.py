@@ -26,17 +26,27 @@ Store = Annotated[SessionStore, Depends(get_store)]
 
 @app.get("/health")
 @app.get("/api/health")
-def health() -> dict[str, object]:
+@app.get("/api/v1/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/mode")
+@app.get("/api/v1/mode")
+def mode() -> dict[str, bool]:
     # llm: false — агент отвечает по правилам (TRAP-1); фронт показывает «Без ИИ» до первого ответа.
-    return {"status": "ok", "llm": llm_available()}
+    # /health остаётся ровно {"status":"ok"}: так требуют правила хакатона.
+    return {"llm": llm_available()}
 
 
 @app.post("/api/chat")
+@app.post("/api/v1/chat")
 def chat_route(req: ChatRequest, store: Store) -> ChatReply:
     return chat(req, store)
 
 
 @app.get("/api/session/{session_id}")
+@app.get("/api/v1/session/{session_id}")
 def session_route(session_id: str, store: Store) -> ChatReply:
     reply = store.get(session_id)
     if reply is None:
@@ -45,11 +55,13 @@ def session_route(session_id: str, store: Store) -> ChatReply:
 
 
 @app.post("/api/cart")
+@app.post("/api/v1/cart")
 def cart_edit_route(req: CartAction, store: Store) -> Cart:
     return cart_route(req, store)
 
 
 @app.post("/api/checkout")
+@app.post("/api/v1/checkout")
 def checkout_post_route(req: CheckoutRequest, store: Store) -> Voucher:
     return checkout_route(req, store)
 

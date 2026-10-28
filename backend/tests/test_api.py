@@ -12,9 +12,15 @@ client = TestClient(app)
 def test_health():
     # /health требуют правила по технике (task/rules.md); /api/health — e2e пресета.
     for path in ("/health", "/api/health"):
-        body = client.get(path).json()
-        assert body["status"] == "ok"
-        assert isinstance(body["llm"], bool)  # TRAP-1: режим известен до первого ответа
+        assert client.get(path).json() == {"status": "ok"}
+
+
+def test_mode_known_before_first_reply(monkeypatch):
+    # TRAP-1: режим «Без ИИ» известен до первого сообщения (#350).
+    for path in ("/api/mode", "/api/v1/mode"):
+        assert isinstance(client.get(path).json()["llm"], bool)
+    monkeypatch.setattr("api.main.llm_available", lambda: False)
+    assert client.get("/api/mode").json() == {"llm": False}
 
 
 def test_chat_follows_contract():
