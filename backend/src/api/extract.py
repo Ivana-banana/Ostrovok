@@ -834,10 +834,13 @@ NEG_VERBS = (
 # Right before a place; «не дорого, в Турцию» is no match: only these words may stand between.
 NEG_BEFORE = re.compile(
     rf"(?:\b(?:без|ни)\s+|\bне\s+(?:{NEG_VERBS}\s+)*"
-    r"|\b(?:надоел\w*|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|избега\w+|устал\w*\s+от)\s+)"
+    r"|\b(?:надоел\w*|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|избега\w+|устал\w*\s+от)\s+"
+    r"|\bвместо\s+)"  # «вместо Казани Нижний Новгород»: Казань goes, Нижний Новгород comes (#576)
     r"(?:(?:в|во|на)\s+)?$"
 )
 # «кроме X» refuses X, but «кроме Сочи хотим ещё в Казань» adds Казань to Сочи.
+# «вместо X, Y»: the refusal is for X only, Y is the new place (#576).
+INSTEAD_BEFORE = re.compile(r"\bвместо\s+(?:(?:в|во|на)\s+)?$")
 EXCEPT_BEFORE = re.compile(r"\bкроме\s+(?:(?:в|во|на)\s+)?$")
 ADDITION = re.compile(r"\b(?:еще|тоже|также|заодно)\b")
 WANT_AFTER = re.compile(r"\b(?:хотим|хочу|хотел\w*|заедем|заехать|поедем|поехать|съездить)\b")
@@ -1004,6 +1007,7 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
             own[i].append((w0 + before.start(), w0 + before.end()))
             anchor[i] = spans[i][1]
     exc = [bool(EXCEPT_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
+    instead = [bool(INSTEAD_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     weak = [bool(WEAK_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     for i in reversed(range(n)):
         e = spans[i][1]
@@ -1031,7 +1035,7 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
     neg = [False] * n
     for i in range(n):
         in_list = i > 0 and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : spans[i][0]]))
-        in_list = in_list and not _wanted_pair(t, spans, i)
+        in_list = in_list and not _wanted_pair(t, spans, i) and not instead[i - 1]
         neg[i] = (
             strong[i]
             or (exc[i] and not _adds_place(t, spans, i, strong))
