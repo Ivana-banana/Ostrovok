@@ -1750,6 +1750,9 @@ MARKET_RE = re.compile(r"\bв\s+среднем\b|рынк|\bобычно\b")  # 
 VERSUS_CLAUSE_RE = re.compile(
     r"(?i)\b(?:а\s+)?(?:это\s+)?(?:(?:на\s+)?(?:поезд|самол[её]т|машин)\w*\s+)?"
     r"(?:дешевле|дороже|выгоднее),?\s+чем\s+(?:в\s+|на\s+)?[\w-]+"
+    # no «чем»: «поезд дешевле самолёта»
+    r"|\b(?:поезд|самол[её]т|машин)\w*\s+(?:будет\s+)?(?:дешевле|дороже|выгоднее)\s+"
+    r"(?:поезд|самол[её]т|машин)\w*"
 )
 
 
@@ -2435,7 +2438,10 @@ def step(
         if (
             set(rules_found.get("wishes", [])) - {"недорого"}
             or len(rules_found.get("modes", [])) == 1
-        ) and (rest := VERSUS_CLAUSE_RE.sub(" ", message).strip(" ,?")):
+        ) and (
+            (rest := VERSUS_CLAUSE_RE.sub(" ", message).strip(" ,?"))
+            and rest != message.strip(" ,?")  # a clause the regex does not cut would loop
+        ):
             done = step(prev, sid, rest, use_llm, origin)
             head = reply.removesuffix(f" {HINTS[old.stage]}").split(" Чтобы")[0]
             head = head.removeprefix("Это вопрос: план не меняю. ")

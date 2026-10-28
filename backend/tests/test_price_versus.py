@@ -164,3 +164,22 @@ def test_mode_next_to_a_versus_question_is_applied(store):
     after = say(store, "а дешевле, чем в Турции, поездом?", before.session_id)
     assert after.plan.spec.destinations == before.plan.spec.destinations
     assert after.plan.spec.modes == ["train"]
+
+
+@pytest.mark.parametrize("stage", ["compare", "checkout"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "поезд дешевле самолёта? с санаторием",
+        "с санаторием, поезд дешевле самолёта?",
+        "с санаторием. самолёт дороже поезда?",
+    ],
+)
+def test_mode_versus_without_chem_next_to_a_wish(store, stage, text):
+    """#483 review: no recursion (HTTP 500); the wish is applied, the question edits nothing."""
+    before = at(store, stage)
+    after = say(store, text, before.session_id)
+    spec = after.plan.spec
+    assert spec.modes == before.plan.spec.modes
+    assert "санаторий" in spec.wishes and "недорого" not in spec.wishes
+    assert spec.budget_rub == before.plan.spec.budget_rub
