@@ -148,7 +148,13 @@ export type Voucher = {
 // Lead guest typed at checkout (#367); simulated, stored with the session, not sent to the provider.
 export type Guest = { name: string; contact: string };
 
-export type ChatRequest = { session_id: string | null; message: string };
+// #490: real_data — flights from Travelpayouts (Aviasales), llm — the model; both false by default.
+export type ChatRequest = {
+  session_id: string | null;
+  message: string;
+  real_data?: boolean;
+  llm?: boolean;
+};
 
 export type ChatReply = {
   session_id: string;
@@ -161,8 +167,9 @@ export type ChatReply = {
   llm: boolean;
 };
 
-// GET /api/mode: false means the agent answers by rules, without a model (TRAP-1).
-export type LlmMode = { llm: boolean };
+// GET /api/mode: what the switches can turn on (#490). llm false: no model in .env, rules only
+// (TRAP-1); real_data false: no TRAVELPAYOUTS_TOKEN, every price is synthetic.
+export type LlmMode = { llm: boolean; real_data: boolean };
 
 export type CartAction = { session_id: string; action: "add" | "remove"; offer_id: string };
 export type CheckoutRequest = {
