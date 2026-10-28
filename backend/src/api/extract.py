@@ -1141,6 +1141,10 @@ def excluded_places(text: str) -> list[str]:
 ADJ_CASE = re.compile(r"(?:ую|юю|ой|ей|ого|его|ом|ем|ым|им|ая|яя|ый|ий|ое|ее)$")
 
 
+# «Краснодарский край», «Калининградской области»: the region of a known city (#306, TRAP-3)
+REGION_NEXT = re.compile(r" (?:кра[йяюе]|област[ьи]|побережь[еюя]|берег[ау]?)(?![а-яё])")
+
+
 def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
     """A capitalized name: kept as written, «Грузию» -> «Грузия»; and where it ends in the text.
 
@@ -1155,6 +1159,10 @@ def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
     country = next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None)
     if known := _known(word) or country:  # «Египте» is Египет, not a new city
         return known, end
+    region = REGION_NEXT.match(text, end)
+    adj = region and re.match(r"(.+?)ск(?:ий|ая|ое|ом|ого|ой|ую)$", word)
+    if adj and (city := _known(adj.group(1))):  # «Краснодарский край» -> Краснодар (#306)
+        return city, region.end()
     second = re.compile(rf" ({NAME_WORD})(?![а-яё-])").match(text, end)
     if second and (ADJ_CASE.search(low) and len(low) > 3 or low in NAME_LEADS):
         tail, tail_low = second.group(1), second.group(1).lower().replace("ё", "е")

@@ -1,5 +1,7 @@
 """TRAP-3 (#306): a capitalised ordinary word after «из/в» is not a place."""
 
+import pytest
+
 from api.extract import extract
 
 
@@ -53,3 +55,19 @@ def test_trap_3_adjective_of_krasnodar_is_not_krasnoyarsk():
     for text in ("Хочу на Краснодарский берег в июле", "Из Краснодарский в Сочи"):
         found = extract(text)[0]
         assert "Красноярск" not in [*found.get("destinations", []), found.get("origin")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Хочу на море в Краснодарский край в июле, двое взрослых, 7 ночей",
+        "отдых в Краснодарском крае",
+        "Хочу на Краснодарский берег в июле",
+    ],
+)
+def test_trap_3_region_of_a_city_is_the_city(text):
+    assert extract(text)[0]["destinations"] == ["Краснодар"]
+
+
+def test_trap_3_kaliningrad_region_is_kaliningrad():
+    assert extract("в Калининградскую область на 5 ночей")[0]["destinations"] == ["Калининград"]
