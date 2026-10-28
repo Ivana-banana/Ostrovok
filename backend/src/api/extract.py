@@ -1467,6 +1467,36 @@ ADJ_CASE = re.compile(r"(?:ую|юю|ой|ей|ого|его|ом|ем|ым|им
 REGION_NEXT = re.compile(r" (?:кра[йяюе]|област[ьи]|побережь[еюя]|берег[ау]?)(?![а-яё])")
 
 
+ADJ_SUFFIX = re.compile(r"(.+?)ск(?:ий|ая|ое|ие|ого|ой|ую|их|им|ими|ому)$")
+# Adjectives that are no town: «Советскую площадь», «Российской империи».
+NOT_PLACE_ADJECTIVES = {"совет", "росси", "европей"}
+
+
+@functools.cache
+def _place_stems() -> frozenset[str]:
+    """Stems of the places we know: «петербург», and the base of «Иркутск» -> «иркут»."""
+    names = [n for n in PLACES] + [p["name"] for p in places()] + list(CATALOG)
+    stems = {s for c in CATALOG.values() for s in c["stems"]} | set(PLACES.values())
+    for name in names:
+        for part in re.split(r"[\s-]+", name.lower().replace("ё", "е")):
+            stems |= {part, part[:-1], part.removesuffix("ск")}
+    return frozenset(s for s in stems if len(s) >= 4 and s.isalpha())
+
+
+def _place_adjective(low: str, region_next: bool) -> bool:
+    """«петербургский», «московский»: an adjective of a known place, or of a region («побережье»).
+
+    An unknown adjective-shaped word stays a name for the geocoder: «Раменское», «Жуковский»,
+    «Дивноморское» are towns (TRAP-2)."""
+    m = ADJ_SUFFIX.fullmatch(low)
+    if not m:
+        return False
+    base = m.group(1)
+    if region_next or base in NOT_PLACE_ADJECTIVES:
+        return True
+    return base in _place_stems() or re.sub(r"ов$", "в", base) in _place_stems()
+
+
 def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
     """A capitalized name: kept as written, «Грузию» -> «Грузия»; and where it ends in the text.
 
@@ -1495,8 +1525,8 @@ def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
     if low in NOT_PLACES:
         return None  # «Новый год»: «новый» alone is no place (#538)
     # «Петропавловска-Камчатского» is a name: an adjective after a hyphen stays
-    if "-" not in low and re.search(r"ск(?:ий|ая|ое|ие|ого|ой|ую|их|им|ими|ому)$", low):
-        return None  # «в Петербургский музей»: an unknown adjective is no place (#372)
+    if "-" not in low and _place_adjective(low, REGION_NEXT.match(text, end) is not None):
+        return None  # «в Петербургский музей»: an adjective of a place is no place (#372)
     return _nominative(word), end
 
 
