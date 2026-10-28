@@ -16,13 +16,15 @@ same path runs on rules (TRAP-1).
 """
 
 import difflib
+import logging
 import re
+import time
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from api import catalog, llm
+from api import catalog, llm, ops
 from api.answers import (
     closed_line,
     destination_line,
@@ -32,7 +34,15 @@ from api.answers import (
     span,
     without_plan_fields,
 )
-from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
+from api.cart import (
+    CartRefusal,
+    checkout_reply,
+    edit_cart,
+    fill_cart,
+    keep_refusal,
+    remember_refusal,
+    sync_plan,
+)
 from api.contracts import (
     Cart,
     ChatReply,
@@ -105,6 +115,7 @@ from api.optimizer import (
 from api.store import SessionStore
 from api.timeline import VERBS
 
+log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
@@ -1952,6 +1963,7 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
     checkout also the cart); the timeline is built again (TRAP-5). The stage stays: a plain
     consent fills the cart. The model does not read the message; the prices stay from the plan."""
     plan = plan or old.plan
+    plan = remember_refusal(plan, {"out", "back"})
     gone = [o for o in plan.offers if o.kind == "transfer" and o.offer_id in plan.selected]
     if not gone:
         text = f"Трансфера в плане нет, менять нечего. {HINTS[old.stage]}"
@@ -1961,9 +1973,8 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
         for o in gone:
             cart = edit_cart(plan, cart, "remove", o.offer_id)
         plan = sync_plan(plan, old.cart, cart)
-    else:
-        plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
-        plan.timeline, plan.issues = build_timeline(plan)
+    plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
+    plan.timeline, plan.issues = build_timeline(plan)
     rows = "; ".join(f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in gone)
     head = f"Убираю трансфер из плана: {rows}."
     if old.stage == "assemble":
@@ -2646,7 +2657,9 @@ def step(
             return reply(stage, plan, text, questions=questions)
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
-            plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
+            plan.selected = keep_refusal(
+                plan, pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
+            )
             # «Почему» and the bundles name the picked hotel, not the ranked one (#58).
             plan.explanations = explain(plan.spec, plan.offers, plan.selected)
             plan.bundles = bundles(plan.spec, plan.offers, plan.selected)
@@ -2683,16 +2696,34 @@ def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
     booking reply is a rule-based turn: llm is False.
     """
     sid = req.session_id or uuid4().hex
-    prev = store.get(sid)
-    try:
-        draft = step(prev, sid, req.message, use_llm=True)
-        return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
-    except _Confirm as c:
+    started = time.monotonic()
+    with ops.session(sid):
+        prev = store.get(sid)
         try:
-            return checkout_reply(store, sid, c.total_rub).model_copy(update={"llm": False})
-        except CartRefusal as e:  # the cart stays open; the reply says why
-            why = {"reply": e.text, "questions": [], "llm": False}
-            return store.update(sid, lambda cur: cur.model_copy(update=why))
+            with ops.collecting() as marks:  # #290: a failed provider is marked in the reply
+                draft = ops.mark(step(prev, sid, req.message, use_llm=True), marks)
+
+            def next_reply(cur: ChatReply | None) -> ChatReply:
+                if cur == prev:
+                    return draft
+                with ops.collecting() as again:
+                    return ops.mark(step(cur, sid, req.message), again)
+
+            reply = store.update(sid, next_reply)
+        except _Confirm as c:
+            try:
+                reply = checkout_reply(store, sid, c.total_rub).model_copy(update={"llm": False})
+            except CartRefusal as e:  # the cart stays open; the reply says why
+                why = {"reply": e.text, "questions": [], "llm": False}
+                reply = store.update(sid, lambda cur: cur.model_copy(update=why))
+        log.info(
+            "chat stage=%s llm=%s marks=%d ms=%d",
+            reply.stage,
+            reply.llm,
+            len(reply.plan.issues),
+            (time.monotonic() - started) * 1000,
+        )
+        return reply
 
 
 class _Confirm(Exception):  # a signal from step() to chat(), not an error
