@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
-from api import catalog, dag
+from api import catalog, dag, offers
 from api import main as api_main
 from api.contracts import (
     Bundle,
@@ -43,10 +43,21 @@ from api.contracts import (
 )
 from api.fixtures import WARM_WATER_C
 from api.model import NOT_IN_CATALOG, ORIGIN_ASK
-from api.offers import _norm, find_offers, osm_hotels, resolve_place, transfer_id
+from api.offers import (
+    SyntheticTransport,
+    _norm,
+    find_offers,
+    osm_hotels,
+    resolve_place,
+    transfer_id,
+)
 from api.optimizer import enumerate_trips, optimize, pets_ok
 from api.store import SessionStore
 from api.timeline import build_timeline
+
+# make eval measures the synthetic data whatever .env has: api.main picks real flights by
+# TRAVELPAYOUTS_TOKEN (#261); eval needs the same numbers on every machine and no network (TRAP-6).
+offers.TRANSPORT = SyntheticTransport()
 
 MAX_FLIGHT_H = 5.0  # S1: "перелёт дольше 5 ч"
 LLM_ENV = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
