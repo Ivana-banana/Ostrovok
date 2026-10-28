@@ -1,33 +1,117 @@
-import { useEffect, useState } from "react";
-import { Money } from "./Board";
+import { type ReactNode, useEffect, useState } from "react";
+import { Money, Price } from "./Board";
 import { VERBS, VERB_MS } from "./brand";
-import type { Stage } from "./contracts";
+import type { ChatReply, Stage } from "./contracts";
+import { partyText } from "./params";
 import { Mascot } from "./Mascot";
 
-// The five steps of the top bar; the seven stages of the backend fall into them.
-const STEPS: { label: string; stages: Stage[] }[] = [
-  { label: "Уточнение", stages: ["clarify"] },
-  { label: "Вдохновение", stages: ["inspire", "select"] },
-  { label: "Сравнение", stages: ["compare"] },
+// The five steps of the trip roadmap; the seven stages of the backend fall into them.
+export const STEPS: { label: string; what: string; stages: Stage[] }[] = [
+  { label: "Уточнение", what: "Расскажите, куда и когда", stages: ["clarify"] },
+  { label: "Вдохновение", what: "Выберите направление", stages: ["inspire", "select"] },
+  { label: "Сравнение", what: "Сравните отели и транспорт", stages: ["compare"] },
   // assemble: the plan is built and the chat asks «Оформляем?» — the step of the cart
-  { label: "Корзина", stages: ["assemble", "checkout"] },
-  { label: "Бронь", stages: ["booked"] },
+  { label: "Корзина", what: "Проверьте план и стыковки", stages: ["assemble", "checkout"] },
+  { label: "Бронь", what: "Оформление — имитация", stages: ["booked"] },
 ];
 
-export function StagePills({ stage }: { stage: Stage | null }) {
-  const at = stage ? STEPS.findIndex((s) => s.stages.includes(stage)) : -1;
+export const stepOf = (stage: Stage | null) => (stage ? STEPS.findIndex((s) => s.stages.includes(stage)) : -1);
+
+// What the user does now, by stage (the current step of the roadmap).
+const NOW: Record<Stage, string> = {
+  clarify: "ответьте на вопросы агента",
+  inspire: "выберите карточку направления",
+  select: "выберите направление",
+  compare: "выберите отель и рейс или соберите план",
+  assemble: "проверьте стыковки и положите план в корзину",
+  checkout: "проверьте корзину и подтвердите бронь",
+  booked: "поездка оформлена, ваучер в чате",
+};
+
+const shortDate = (iso: string | null) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : "");
+
+// The outcome of a done step in a few words, only from the facts of the reply.
+function outcome(i: number, r: ChatReply): ReactNode {
+  const { spec, offers, selected } = r.plan;
+  if (i === 0) {
+    const dates = spec.date_from && spec.date_to ? `${shortDate(spec.date_from)}–${shortDate(spec.date_to)}` : null;
+    return [partyText(spec.adults, spec.children_ages), dates].filter(Boolean).join(" · ");
+  }
+  if (i === 1) return spec.destinations.join(", ") || null;
+  if (i === 2) {
+    const hotel = offers.find((o) => o.kind === "hotel" && selected.includes(o.offer_id));
+    const legs = offers.filter((o) => o.kind === "transport");
+    const rows = legs.flatMap((o, n) => (selected.includes(o.offer_id) ? [n + 1] : []));
+    const way = rows.length ? `${rows.length > 1 ? "рейсы" : "рейс"} ${rows.join(", ")}` : null;
+    return [hotel?.title, way].filter(Boolean).join(" · ") || null;
+  }
+  if (i === 3) {
+    const items = r.cart.items.length ? r.cart.items : offers.filter((o) => selected.includes(o.offer_id));
+    if (!items.length) return null;
+    const total = r.cart.items.length ? r.cart.total_rub : items.reduce((a, o) => a + o.price_rub, 0);
+    return <Price value={total} synthetic={items.some((o) => o.synthetic)} />;
+  }
+  return r.voucher ? `Бронь ${r.voucher.booking_id}` : null;
+}
+
+// The roadmap of the trip: where the user is and what is done (#434). An ordered list, not
+// buttons: only a done step with a known message is a link back to that place of the chat.
+export function Roadmap({ reply, doneAt = [], onJump }: {
+  reply: ChatReply | null;
+  doneAt?: (number | null)[]; // index of the message that finished the step
+  onJump?: (message: number) => void;
+}) {
+  const stage = reply?.stage ?? null;
+  const at = stepOf(stage);
   return (
-    <ol className="stage" aria-label="Этапы поездки">
-      {STEPS.map((s, i) => (
-        <li
-          key={s.label}
-          className={i === at ? "now" : i < at ? "done" : undefined}
-          aria-current={i === at ? "step" : undefined}
-        >
-          {s.label}
-        </li>
-      ))}
+    <ol className="road" aria-label="Этапы поездки">
+      {STEPS.map((s, i) => {
+        const done = i < at || stage === "booked";
+        const now = i === at;
+        const result = reply && done ? outcome(i, reply) : null;
+        const jump = done && !now ? doneAt[i] : null;
+        return (
+          <li
+            key={s.label}
+            className={[done && "done", now && "now"].filter(Boolean).join(" ") || undefined}
+            aria-current={now ? "step" : undefined}
+          >
+            <span className="dot" aria-hidden="true">
+              {done ? "✓" : i + 1}
+            </span>
+            <div className="road-text">
+              {jump !== null && jump !== undefined && onJump ? (
+                <button type="button" className="label link" title="Показать в чате" onClick={() => onJump(jump)}>
+                  {s.label}
+                </button>
+              ) : (
+                <b className="label">{s.label}</b>
+              )}
+              {done && <span className="sr-only"> — пройден</span>}
+              <span className="what">{s.what}</span>
+              {result && <span className="result">{result}</span>}
+              {now && stage && <span className="nowline">Сейчас: {NOW[stage]}</span>}
+            </div>
+          </li>
+        );
+      })}
     </ol>
+  );
+}
+
+// Below 1100 px the roadmap column hides: the caption of the step and a thin bar open it.
+export function StepCaption({ stage, onOpen }: { stage: Stage | null; onOpen: () => void }) {
+  const at = stepOf(stage);
+  if (at < 0) return null;
+  return (
+    <button type="button" className="step-caption" aria-controls="roadmap" onClick={onOpen}>
+      <span>
+        Шаг {at + 1} из {STEPS.length} · {STEPS[at].label}
+      </span>
+      <span className="step-bar" aria-hidden="true">
+        <i style={{ width: `${((at + 1) / STEPS.length) * 100}%` }} />
+      </span>
+    </button>
   );
 }
 

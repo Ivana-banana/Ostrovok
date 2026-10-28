@@ -81,32 +81,108 @@ make demo     # собирает web и поднимает http://localhost:8080
 | `GET /api/session/{id}` | восстановить сессию |
 | `POST /api/cart` | `{session_id, action: add|remove, offer_id}` |
 | `POST /api/checkout` | `{session_id, confirm_total_rub}` → ваучер (оплата имитируется) |
+| `POST /api/v1/plan` | только для партнёров: текст запроса → план с заполненной корзиной за один вызов |
+| `GET /embed.js` | виджет чата для чужой страницы |
 
 Типы запросов и ответов — `backend/src/api/contracts.py`. Тестовых пользователей нет. Входа нет.
 
 ## Как встроить
 
-Базовый адрес после запуска — `http://localhost:8080/api/v1`. Все маршруты таблицы выше доступны и с префиксом `/api/v1`: например, `POST /api/v1/chat` и `GET /api/v1/session/{session_id}`. Старый `/api` остаётся совместимым: оба адреса читают одни сессии. Версия не меняет JSON-контракт.
+Базовый адрес после запуска — `http://localhost:8080/api/v1`. Все маршруты таблицы выше доступны и с префиксом `/api/v1`: например, `POST /api/v1/chat` и `GET /api/v1/session/{session_id}`. Старый `/api` остаётся для веб-интерфейса: оба адреса читают одни сессии. JSON-модели одни и те же: `backend/src/api/contracts.py`.
 
-OpenAPI: [JSON-схема](http://localhost:8080/openapi.json), [Swagger UI](http://localhost:8080/docs), [ReDoc](http://localhost:8080/redoc). Схема содержит оба префикса, модели запросов и ответов. Некорректное тело даёт 422, неизвестная сессия — 404, отказ покупки или изменение итога — 409.
+OpenAPI: [JSON-схема](http://localhost:8080/openapi.json), [Swagger UI](http://localhost:8080/docs), [ReDoc](http://localhost:8080/redoc). Маршруты партнёра — в группе «Партнёрский API /api/v1», с описаниями и примерами тел. Некорректное тело даёт 422, неизвестная сессия — 404, отказ покупки или изменение итога — 409, нет ключа — 401.
 
-Пример запроса после быстрого старта (без ключа LLM):
+Что есть для партнёра:
+
+| Что | Как |
+|---|---|
+| План одним вызовом | `POST /api/v1/plan` с `{"message": "…"}` → `ChatReply`: `stage=checkout`, корзина `cart`, объяснения `plan.explanations`, таймлайн `plan.timeline`. Это тот же агент, что и `/api/v1/chat`: он сам берёт первое направление и лучший вариант. Бронь не оформляется |
+| Уточнение | агенту нужен ответ путешественника — `questions` не пуст, этап не `checkout`. Пошлите ответ в `POST /api/v1/plan` с тем же `session_id`. Так же работает пересборка: `{"session_id": "…", "message": "а подешевле?"}` |
+| Ключ партнёра | `PARTNER_API_KEYS=key1,key2` в `.env`. Тогда `/api/v1` (кроме `health` и `mode`) требует заголовок `X-API-Key`; без ключа или с чужим — 401. Пусто — доступ открыт. Веб-интерфейс ключ не требует |
+| Бронь без дублей | заголовок `Idempotency-Key` на `POST /api/v1/checkout`: повтор с тем же ключом вернёт тот же ваучер и не создаст вторую бронь. Тот же ключ с другим телом — 422 |
+| Вебхук брони | `BOOKING_WEBHOOK_URL`: после новой брони туда уходит `POST` с JSON ваучера и заголовком `X-Booking-Id`. Ожидание — `BOOKING_WEBHOOK_TIMEOUT_S` (3 с). Сбой вебхука бронь не отменяет, он пишется в лог |
+| Вызов из браузера | `ALLOWED_ORIGINS=https://shop.example` — CORS для домена партнёра |
+| Виджет | `<script src="http://localhost:8080/embed.js" data-partner="my-shop" async></script>` — кнопка и панель с чатом агента (iframe). Пример — `examples/embed.html` |
+
+Оплата везде имитируется: у ваучера `simulated=true`, цены — синтетика.
+
+**curl.** План, затем бронь (без ключа в `.env` заголовок `X-API-Key` можно не слать):
 
 ```bash
-curl -fsS http://localhost:8080/api/v1/chat \
-  -H 'Content-Type: application/json' \
-  --data-binary @- <<'JSON'
+curl -fsS http://localhost:8080/api/v1/plan \
+  -H 'Content-Type: application/json' -H 'X-API-Key: key1' \
+  --data-binary @- <<'JSON' > plan.json
 {"message":"Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё."}
 JSON
+python3 -c 'import json; r = json.load(open("plan.json")); print(r["stage"], r["cart"]["total_rub"])'
+# checkout 24100
+
+# Idempotency-Key — свой на каждую покупку; повтор с ним вернёт тот же ваучер
+curl -fsS http://localhost:8080/api/v1/checkout \
+  -H 'Content-Type: application/json' -H 'X-API-Key: key1' -H 'Idempotency-Key: order-1001' \
+  -d "$(python3 -c 'import json; r = json.load(open("plan.json")); print(json.dumps({"session_id": r["session_id"], "confirm_total_rub": r["cart"]["total_rub"]}))')"
+# {"booking_id":"B-…","items":[…],"total_rub":24100,"status":"confirmed","simulated":true,…}
 ```
 
-Ответ — объект `ChatReply`. Ниже показаны только поля для продолжения диалога. Новый диалог получает новый `session_id`; при продолжении диалога id сохраняется:
+**Python** (только стандартная библиотека):
 
-```json
-{"session_id":"<id из ответа>","stage":"compare","llm":false}
+```python
+import json
+import urllib.request
+
+BASE, KEY = "http://localhost:8080/api/v1", "key1"
+
+
+def post(path, body, **headers):
+    req = urllib.request.Request(
+        BASE + path,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "X-API-Key": KEY, **headers},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.load(resp)
+
+
+plan = post("/plan", {"message": "Сочи на неделю в ноябре, 2 взрослых"})
+if plan["questions"]:  # агенту нужен ответ путешественника
+    print(plan["questions"][0]["text"])
+else:
+    for item in plan["cart"]["items"]:
+        print(item["title"], item["price_rub"])
+    voucher = post(
+        "/checkout",
+        {"session_id": plan["session_id"], "confirm_total_rub": plan["cart"]["total_rub"]},
+        **{"Idempotency-Key": "order-" + plan["session_id"]},
+    )
+    print(voucher["booking_id"], voucher["status"], voucher["simulated"])
 ```
 
-Полный ответ также содержит `reply`, `questions`, `plan`, `cart` и `voucher`. Сохраните `session_id`. Передайте его со следующим `message` в `POST /api/v1/chat` или восстановите ответ через `GET /api/v1/session/{session_id}`. Для покупки используйте `POST /api/v1/checkout` с `session_id` и `confirm_total_rub` из показанной пользователю корзины. Оплата пока имитируется.
+**JavaScript** (браузер или Node 18+; из браузера на другом домене — `ALLOWED_ORIGINS`):
+
+```js
+const BASE = "http://localhost:8080/api/v1";
+const headers = { "Content-Type": "application/json", "X-API-Key": "key1" };
+
+const plan = await fetch(`${BASE}/plan`, {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ message: "Тёплое море в ноябре, недорого, 2 взрослых и ребёнок 5 лет" }),
+}).then((r) => r.json());
+
+if (plan.questions.length) {
+  console.log(plan.questions[0].text);
+} else {
+  console.log(plan.plan.spec.destinations, plan.cart.total_rub, plan.plan.explanations[0].why);
+  const voucher = await fetch(`${BASE}/checkout`, {
+    method: "POST",
+    headers: { ...headers, "Idempotency-Key": `order-${plan.session_id}` },
+    body: JSON.stringify({ session_id: plan.session_id, confirm_total_rub: plan.cart.total_rub }),
+  }).then((r) => r.json());
+  console.log(voucher.booking_id, voucher.status, voucher.simulated);
+}
+```
+
+Пошаговый диалог — `POST /api/v1/chat` с `{session_id?, message}`; ответ сессии можно восстановить через `GET /api/v1/session/{session_id}`.
 
 Схема портов соответствует [ADR-0002](docs/adr/ADR-0002-porty-i-adaptery.md):
 
@@ -177,6 +253,10 @@ flowchart LR
 | `LLM_TIMEOUT_S` | `8` | ожидание ответа модели, секунды |
 | `SESSIONS_DB` | пусто → `data/sessions.db`; в Docker `/app/data/sessions.db` | файл сессий |
 | `APP_PORT` | `8080` (задан в `Dockerfile`) | порт внутри контейнера |
+| `PARTNER_API_KEYS` | пусто → `/api/v1` открыт | ключи партнёров через запятую; заголовок `X-API-Key` |
+| `BOOKING_WEBHOOK_URL` | пусто → вебхука нет | адрес для `POST` ваучера после новой брони |
+| `BOOKING_WEBHOOK_TIMEOUT_S` | `3` | ожидание ответа вебхука, секунды |
+| `ALLOWED_ORIGINS` | пусто → только тот же адрес | домены для CORS через запятую, или `*` |
 
 Модель включается, только если заданы `LLM_BASE_URL`, `LLM_MODEL` и ключ: `LLM_API_KEY` или `GIGACHAT_AUTH_KEY`. Для GigaChat достаточно вписать ключ авторизации: адрес и модель уже есть в `.env.example`. Без ключа — режим правил. Таймаут, 401/403, 429, 5xx и неверный JSON дают ответ по правилам, а не ошибку.
 

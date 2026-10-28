@@ -97,6 +97,20 @@ suite("приложение", () => {
     expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
   });
 
+  it("#434: справа путь поездки вместо панели плана; подпись шага открывает его листом", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const road = box.querySelector("aside#roadmap[aria-label='Путь поездки']");
+    expect(road?.querySelector("[aria-current='step'] .label")?.textContent).toBe("Корзина");
+    expect(road?.querySelector("[aria-label='Сравнение отелей']")).toBeNull(); // no plan data on the right
+    expect(box.querySelector("header.top .road, header.top .stage")).toBeNull();
+    await click("Шаг 4 из 5 · Корзина");
+    expect(box.querySelector(".app")?.classList.contains("road-open")).toBe(true);
+    await click("Закрыть путь поездки");
+    expect(box.querySelector(".app")?.classList.contains("road-open")).toBe(false);
+  });
+
   it("индикатор «думает» чередуется между ответами: банан, потом самолётик", async () => {
     let answer: (v: Response) => void = () => {};
     vi.stubGlobal("fetch", () => new Promise<Response>((r) => (answer = r)));
@@ -122,18 +136,20 @@ suite("приложение", () => {
     await mount();
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     expect(box.querySelector("[role='alert']")).toBeNull();
-    expect(box.textContent).toContain("Здесь появится доска поездки");
+    expect(box.textContent).toContain("Куда поедем?");
   });
 
-  it("TRAP-1: ответ без модели помечен «без ИИ» в чате и на доске", async () => {
+  it("TRAP-1: ответ без модели помечен «без ИИ» значком и в блоке этапа, текст ответа — без хвоста", async () => {
     routes["POST /api/chat"] = () => ({ status: 200, body: { ...booked, llm: false } });
     await mount();
     await click("Выходные в Казани");
     await click("Отправить");
     expect(calls.at(-1)?.body).toMatchObject({ session_id: null });
     expect(localStorage.getItem(SESSION_KEY)).toBe("s1");
-    expect(box.querySelector("[role='status']")?.textContent).toContain("без ИИ");
+    // #434: the badge says it once; the label after every answer is not repeated in the bubble.
+    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
     expect(box.querySelector(".board")?.textContent).toContain("без ИИ");
+    expect(box.querySelector("[role='status'] .b")?.textContent).toBe("Бронь оформлена.");
   });
 
   it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/mode сообщает llm=false", async () => {
@@ -351,7 +367,8 @@ suite("приложение", () => {
       expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
       expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
       await click("＋ Новый чат");
-      expect(box.textContent).toContain("Здесь появится доска поездки");
+      expect(box.textContent).toContain("Куда поедем?");
+      expect(box.querySelector("[aria-label='Корзина']")).toBeNull();
     } finally {
       vi.restoreAllMocks();
     }
@@ -447,7 +464,7 @@ suite("список чатов слева", () => {
     await say("Казань на выходные");
     await click("＋ Новый чат");
     expect(userMsgs()).toEqual([]);
-    expect(box.textContent).toContain("Здесь появится доска поездки");
+    expect(box.textContent).toContain("Куда поедем?");
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     await say("Сочи с детьми");
     expect(calls.filter((c) => c.key === "POST /api/chat").map((c) => c.body)).toEqual([
@@ -593,7 +610,9 @@ suite("чат как в мессенджере", () => {
     await click("Отправить");
     const cards = [...box.querySelectorAll(".feed [aria-label='Направления'] .dest")];
     expect(cards).toHaveLength(2);
-    expect(box.querySelector(".plan [aria-label='Направления']")).toBeNull();
+    // #434: one window — the cards stand under the answer, there is no plan panel.
+    expect(box.querySelectorAll("[aria-label='Направления']")).toHaveLength(1);
+    expect(box.querySelector("#plan, .plan-toggle, .plan-sheet-open")).toBeNull();
     expect(cards[0].querySelector(".tag.best")?.textContent).toBe("лучшая цена");
     expect(cards[1].querySelector(".tag.warn")?.textContent).toBe("дороже бюджета");
     expect(cards[0].querySelector(".tag.warn")).toBeNull();
