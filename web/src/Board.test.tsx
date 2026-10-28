@@ -404,18 +404,42 @@ suite("доска поездки", () => {
     expect(c.at("Таймлайн")).toBeLessThan(c.main);
     const o = order("checkout", "Подтвердить бронь");
     expect(o.at("Таймлайн")).toBeLessThan(o.at("Корзина"));
+    expect(o.at("Корзина")).toBe(o.all.findIndex((e) => e.textContent?.includes("Подтвердить бронь")));
+    expect(o.main).toBe(o.at("Корзина"));
   });
 
   it("#450: варианты прошлого ответа остаются под ним, свёрнутые, кнопки выбора живые", () => {
     const r = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
     const doc = new DOMParser().parseFromString(
-      renderToStaticMarkup(<EarlierChoices reply={r} busy={false} onSend={noop} />),
+      renderToStaticMarkup(<EarlierChoices reply={r} current={r} busy={false} onSend={noop} />),
       "text/html",
     );
     const d = doc.querySelector("details.earlier");
     expect(d?.hasAttribute("open")).toBe(false);
     expect(d?.querySelectorAll("button[aria-label^='Выбрать направление']").length).toBe(r.plan.destinations.length);
-    const booked = renderToStaticMarkup(<EarlierChoices reply={{ ...r, stage: "booked" }} busy={false} onSend={noop} />);
+    const booked = renderToStaticMarkup(<EarlierChoices reply={{ ...r, stage: "booked" }} current={r} busy={false} onSend={noop} />);
     expect(booked).toBe("");
+  });
+
+  it("#450: кнопки старого блока живы только при том же этапе и тех же строках; иначе подпись и ни одной кнопки", () => {
+    const old = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    old.plan.selected = []; // nothing chosen yet: every row has its pick button
+    const html = (cur: ChatReply, sent: string[] = []) =>
+      new DOMParser().parseFromString(
+        renderToStaticMarkup(<EarlierChoices reply={old} current={cur} busy={false} onSend={(t) => sent.push(t)} />),
+        "text/html",
+      );
+    const picks = (d: Document) => d.querySelectorAll("details.earlier button").length;
+    // the same stage and rows: the buttons are live
+    expect(picks(html(old))).toBeGreaterThan(0);
+    expect(html(old).querySelector("details.earlier .muted")?.textContent ?? "").not.toContain("План изменился");
+    // the current stage is assemble: nothing to press, the caption sends the user to the current block
+    const now = html({ ...structuredClone(old), stage: "assemble" });
+    expect(picks(now)).toBe(0);
+    expect(now.querySelector("details.earlier")?.textContent).toContain("План изменился — выберите в текущем блоке");
+    // the same stage, other rows
+    const other = structuredClone(old);
+    other.plan.offers = [...other.plan.offers].reverse();
+    expect(picks(html(other))).toBe(0);
   });
 });

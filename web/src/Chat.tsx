@@ -146,7 +146,7 @@ export function Thinking({ variant = "banana" }: { variant?: "banana" | "plane" 
     return () => clearInterval(t);
   }, []);
   return (
-    <div className={`think ${variant}`} aria-label="Агент думает">
+    <div className={`think ${variant}`} role="status" aria-busy="true" aria-label="Агент думает">
       {variant === "plane" ? <Plane /> : <Mascot size={30} state="thinking" />}
       <span>
         <span className="verb">{VERBS[i]}</span>

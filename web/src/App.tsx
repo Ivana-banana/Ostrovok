@@ -236,12 +236,14 @@ export function App() {
     const withUser = { ...ui, messages: [...ui.messages, { role: "user" as const, text: m }] };
     setUi(withUser);
     setThinking(true);
+    const no = loadNo.current;
     try {
       const t0 = Date.now();
       const r = await chat({ session_id: sid, message: m });
       // A fast offline reply still shows the thinking indicator for a moment (not with reduced motion).
       const rest = MIN_THINK_MS - (Date.now() - t0);
       if (motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
+      if (no !== loadNo.current) return; // the user switched the chat while the agent thought
       writeSid(r.session_id);
       setReply(r);
       setEarlier((e) => ({ ...e, [`${r.session_id}:${withUser.messages.length}`]: r }));
@@ -588,8 +590,7 @@ export function App() {
                     data-msg={i}
                     ref={i === lastAgent ? lastMsg : undefined}
                     className="msg agent"
-                    role={i === lastAgent ? "status" : undefined}
-                    aria-busy={(thinking && i === lastAgent) || undefined}
+                    role={i === lastAgent && !thinking ? "status" : undefined}
                   >
                     <Mascot size={30} state={i === lastAgent ? moodOf(reply, !!error) : "idle"} />
                     <div className="b">
@@ -602,7 +603,7 @@ export function App() {
                 );
               // One key for the block: it moves under a new last answer without losing its state.
               const old = m.role === "agent" && i !== lastAgent ? earlier[`${sid}:${i}`] : undefined;
-              if (old) return [msg, <EarlierChoices key={`earlier-${i}`} reply={old} busy={busy} onSend={send} />];
+              if (old) return [msg, <EarlierChoices key={`earlier-${i}`} reply={old} current={reply!} busy={busy} onSend={send} />];
               return i === lastAgent && block ? [msg, block] : [msg];
             })}
             {lastAgent < 0 && block}

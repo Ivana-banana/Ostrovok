@@ -866,19 +866,34 @@ function moreLine(reply: ChatReply, editable: boolean): string {
 
 // The choices of an older answer stay under it, folded: the user can scroll up and pick an earlier
 // option without retyping (#450). Same cards and buttons as in the block of the stage.
-export function EarlierChoices({ reply, busy, onSend }: { reply: ChatReply; busy: boolean; onSend: (t: string) => void }) {
+export function EarlierChoices({ reply, current, busy, onSend }: {
+  reply: ChatReply;
+  current: ChatReply;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
   const { plan, stage } = reply;
+  const rows = (r: ChatReply) =>
+    r.plan.offers.filter((o) => o.kind === "hotel" || o.kind === "transport").map((o) => o.offer_id).join();
   const n = plan.destinations.length + plan.offers.filter((o) => o.kind === "hotel" || o.kind === "transport").length;
   if (!n || stage === "checkout" || stage === "booked") return null;
+  // «беру второй» is parsed against the current plan: a row button is live only while the stage and
+  // the rows are the same. A destination sends its name, which is unambiguous.
+  const rowsLive = stage === current.stage && rows(reply) === rows(current);
+  const destLive = stage === "inspire" && current.stage === "inspire";
+  const stale = (!rowsLive && rows(reply) !== "") || (!destLive && plan.destinations.length > 0 && stage === "inspire");
   return (
     <details className="more options earlier">
       <summary>
         <b>Варианты</b>
         <span>выбор из прошлого ответа</span>
       </summary>
-      {plan.destinations.length > 0 && <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />}
-      <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
-      <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      {stale && <p className="muted">План изменился — выберите в текущем блоке.</p>}
+      {plan.destinations.length > 0 && (
+        <Destinations plan={plan} stage={destLive ? stage : "booked"} busy={busy} onSend={onSend} />
+      )}
+      <Hotels plan={plan} stage={rowsLive ? stage : "booked"} busy={busy} onSend={onSend} />
+      <Transport plan={plan} stage={rowsLive ? stage : "booked"} busy={busy} onSend={onSend} />
     </details>
   );
 }

@@ -354,7 +354,6 @@ test.describe("с анимацией", () => {
     const status = page.getByRole("status");
     await expect(status).not.toBeEmpty();
     await expect(page.locator(".think")).toHaveCount(0);
-    await expect(status).not.toHaveAttribute("aria-busy", "true");
     const seen = await page.evaluate(() => {
       const w = window as unknown as { thought: boolean; leaked: boolean };
       return { thought: w.thought, leaked: w.leaked };
