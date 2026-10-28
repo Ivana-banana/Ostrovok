@@ -159,7 +159,7 @@ def test_s7_transfer_eats_the_hotel_saving():
     assert out[first].total_rub == 37_500 + 16_000 + 1_200
     assert out[second].total_rub == 32_000 + 16_000 + 7_200
     assert any("трансфер" in t for t in out[second].tradeoffs)
-    assert "съедают экономию 5 500 ₽ на отеле" in " ".join(out[second].tradeoffs)
+    assert "съедают экономию 5 500 ₽ (синтетика) на отеле" in " ".join(out[second].tradeoffs)
 
 
 def test_budget_filter_drops_a_better_trip_over_the_budget():
@@ -182,7 +182,7 @@ def test_budget_fallback_names_the_overrun_and_picks_the_cheapest():
     over = r.bundles[0].total_rub - 30_000
     risks = " ".join(r.explanations[0].risks)
     assert "не укладывается в бюджет 30 000 ₽" in risks
-    assert f"на {over:,} ₽ больше".replace(",", " ") in risks
+    assert f"на {over:,} ₽ (синтетика) больше".replace(",", " ") in risks
     assert "самая дешёвая поездка из найденных" in risks
     assert r.bundles[0].label == "ближе всего к условиям"
 
@@ -210,7 +210,10 @@ def test_hotel_budget_fallback_names_the_overrun_of_the_hotel():
     r = optimize(s, items)
     assert r.selected[0] == "h-a"
     risks = " ".join(r.explanations[0].risks)
-    assert "отель не укладывается в бюджет отеля 20 000 ₽: 25 000 ₽, на 5 000 ₽ больше" in risks
+    assert (
+        "отель не укладывается в бюджет отеля 20 000 ₽: 25 000 ₽ (синтетика), на 5 000 ₽ (синтетика) больше"
+        in risks
+    )
     assert "самая дешёвая поездка из найденных" in risks
     assert "в бюджете отеля" not in r.explanations[0].why
 
@@ -236,7 +239,7 @@ def test_budget_risk_looks_at_every_hotel_not_only_the_meal_ones():
     risks = " ".join(r.explanations[0].risks)
     assert "не укладывается в бюджет 40 000 ₽" in risks
     assert "в бюджет укладывается Отель ro" in risks and "без питания" in risks
-    assert "отель 30 000 ₽ укладывается" in risks  # the road makes the overrun
+    assert "отель 30 000 ₽ (синтетика) укладывается" in risks  # the road makes the overrun
     alt = next(b for b in r.bundles if b.label == "в бюджете")
     assert "h-ro" in alt.offer_ids and any(t.startswith("нарушает") for t in alt.tradeoffs)
 

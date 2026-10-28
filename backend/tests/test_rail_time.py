@@ -69,10 +69,14 @@ def _trip(key: str, hours: float, total: int):
     from types import SimpleNamespace
 
     hotel = SimpleNamespace(
-        title=f"Отель {key}", rating=8.0, cancellation=SimpleNamespace(refundable=True)
+        title=f"Отель {key}",
+        rating=8.0,
+        cancellation=SimpleNamespace(refundable=True),
+        synthetic=True,
+        kind="hotel",
     )
     return SimpleNamespace(
-        key=key, hours=hours, total=total, hotel=hotel, slow_leg=None, slow=False
+        key=key, hours=hours, total=total, hotel=hotel, offers=[hotel], slow_leg=None, slow=False
     )
 
 

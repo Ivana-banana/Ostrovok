@@ -50,33 +50,40 @@ export type BoardProps = {
   onCheckout: (guest: Guest | null) => void;
 };
 
-// The source of a real price (#547). The contract has no source field: derive it from the kind.
+// The source of a real price (#547). The contract has no source field: derive it from the kind,
+// for transport from the mode (backend api/answers.py PRICE_SOURCES, #567).
 // The chip and its tooltip tell where a non-synthetic number comes from.
 const PRICE_SOURCES: Record<string, { chip: string; hint: string }> = {
   hotel: { chip: "101hotels", hint: "итог по цене «от» 101hotels; питание и тариф — оценка" },
-  transport: { chip: "Авиасейлс", hint: "самый дешёвый билет из кэша поиска Авиасейлс, не цена брони" },
-  tutu: { chip: "tutu", hint: "расписание и цена «от» поезда со страницы маршрута tutu.ru, не цена на дату" },
+  flight: { chip: "Авиасейлс", hint: "самый дешёвый билет из кэша поиска Авиасейлс, не цена брони" },
+  train: { chip: "tutu", hint: "расписание и цена «от» поезда со страницы маршрута tutu.ru, не цена на дату" },
 };
 const OTHER_SOURCE = { chip: "реальные данные", hint: "цена не синтетическая" };
+// A sum of real and synthetic prices (TRAP-7, #567): neither «синтетика» nor a source alone.
+const MIXED = "часть цен — синтетика";
 export type PriceSource = { chip: string; hint: string };
-// A real train of the tutu.ru adapter has an offer_id ending «-tutu» (backend/src/api/tutu.py).
-const sourceKey = (o: { kind: string; offer_id?: string }) => (o.offer_id?.endsWith("-tutu") ? "tutu" : o.kind);
-export const sourceOf = (items: { kind: string; offer_id?: string }[]): PriceSource => {
-  const kinds = [...new Set(items.map(sourceKey))];
+type Priced = { kind: string; mode?: string; synthetic?: boolean };
+const keyOf = (o: Priced) => (o.kind === "transport" ? (o.mode ?? "flight") : o.kind);
+export const sourceOf = (items: Priced[]): PriceSource => {
+  const real = items.filter((o) => !o.synthetic);
+  if (real.length && real.length < items.length) {
+    return { chip: MIXED, hint: `реальные цены: ${sourceOf(real).chip}; остальные — синтетика` };
+  }
+  const kinds = [...new Set(items.map(keyOf))];
   if (kinds.length === 1) return PRICE_SOURCES[kinds[0]] ?? OTHER_SOURCE;
   const known = kinds.map((k) => PRICE_SOURCES[k] ?? OTHER_SOURCE);
   return { chip: known.map((x) => x.chip).join(" + "), hint: known.map((x) => x.hint).join("; ") };
 };
 
 // Every price carries the "синтетика" label when the data is mock (TRAP-7); a real price carries
-// the chip of its source instead of nothing (#547).
+// the chip of its source instead of nothing (#547); a sum of both carries MIXED (#567).
 export function Price({ value, synthetic = true, source }: { value: number; synthetic?: boolean; source?: PriceSource }) {
   return (
     <span className="price">
       {rub(value)}
       {synthetic && <span className="synth">синтетика</span>}
       {!synthetic && (
-        <span className="synth synth-real" title={(source ?? OTHER_SOURCE).hint}>
+        <span className={source?.chip === MIXED ? "synth" : "synth synth-real"} title={(source ?? OTHER_SOURCE).hint}>
           {(source ?? OTHER_SOURCE).chip}
         </span>
       )}
@@ -87,18 +94,42 @@ export function Price({ value, synthetic = true, source }: { value: number; synt
 // Free text from the backend ("дороже на 3 300 ₽", "было 6 400 ₽"): every price in it gets the
 // same label as a price (TRAP-7). The text holds prices of the offers, so the label follows them.
 // Not marked: a budget (the number the user typed) and a sum that already has the label.
+// #567: a label of the backend after the sum («7 900 ₽ (101hotels)», api/answers.py price_mark)
+// becomes the chip of that price, so a real price in a mixed message is not marked «синтетика».
 const AMOUNT = /\d[\d\s\u00a0]*\s?₽/g;
+const SOURCE = "(?:101hotels|Авиасейлс|tutu|реальные данные)";
+// The hint of a backend mark of real sources, as at the board chip: «101hotels + tutu».
+const hintOf = (mark: string) =>
+  mark
+    .split(" + ")
+    .map((chip) => Object.values(PRICE_SOURCES).find((x) => x.chip === chip)?.hint ?? OTHER_SOURCE.hint)
+    .join("; ");
+const MARK = new RegExp(`^ \\((синтетика|${MIXED}|${SOURCE}(?: \\+ ${SOURCE})*)\\)`);
 const AFTER_BUDGET = /бюджет[а-яё]*(\s+отеля)?\s*$/i;
 const LABELLED = /^\s*\(?синтетика/;
 // A destination tradeoff of a car with nights on the road starts with it (api/inspire.py, #321).
 const ROAD_LINE = "за рулём ";
 export function Money({ text, synthetic = true }: { text: string; synthetic?: boolean }) {
-  if (!synthetic) return <>{text}</>;
   const out: ReactNode[] = [];
   let at = 0;
   for (const m of text.matchAll(AMOUNT)) {
     const end = m.index + m[0].length;
-    if (AFTER_BUDGET.test(text.slice(0, m.index)) || LABELLED.test(text.slice(end))) continue;
+    const mark = MARK.exec(text.slice(end));
+    if (mark) {
+      const real = mark[1] !== "синтетика" && mark[1] !== MIXED;
+      out.push(
+        text.slice(at, m.index),
+        <span key={m.index} className="price">
+          {m[0]}
+          <span className={real ? "synth synth-real" : "synth"} title={real ? hintOf(mark[1]) : undefined}>
+            {mark[1]}
+          </span>
+        </span>,
+      );
+      at = end + mark[0].length;
+      continue;
+    }
+    if (!synthetic || AFTER_BUDGET.test(text.slice(0, m.index)) || LABELLED.test(text.slice(end))) continue;
     out.push(text.slice(at, m.index));
     out.push(
       <span key={m.index} className="price">
@@ -115,7 +146,10 @@ export function Money({ text, synthetic = true }: { text: string; synthetic?: bo
 // plan.changes rows "бюджет" and "бюджет отеля" hold the number of the user.
 const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 
+// The text of these items has no label per price: one synthetic item marks every sum (TRAP-7).
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
+// A sum of these items: «синтетика» only when all are synthetic; a mix gets MIXED (sourceOf).
+export const allSynthetic = (items: Offer[]) => items.every((o) => o.synthetic);
 
 // The strip of trip parameters above the chat (#434). Origin, dates, guests and budget are the
 // editable chips of ParamsBar, then the hotel filters (#431); the other fields of the spec are read-only chips after them.
@@ -542,7 +576,8 @@ function Bundles({ plan }: { plan: Plan }) {
   if (!plan.bundles.length) return null;
   const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title;
   const of = (b: Bundle) => plan.offers.filter((o) => b.offer_ids.includes(o.offer_id));
-  const synthetic = (b: Bundle) => isSynthetic(of(b));
+  // The total chip: «синтетика» only when all items are; the text of the minus marks every sum (TRAP-7).
+  const synthetic = (b: Bundle) => allSynthetic(of(b));
   const kind = (id: string) => plan.offers.find((o) => o.offer_id === id)?.kind;
   const heading = plan.bundles.every((b) => b.offer_ids.some((id) => kind(id) === "transport"))
     ? "Варианты поездки целиком"
@@ -565,7 +600,7 @@ function Bundles({ plan }: { plan: Plan }) {
             </ul>
             {b.tradeoffs.length > 0 && (
               <p className="muted">
-                Минусы: <Money text={b.tradeoffs.join("; ")} synthetic={synthetic(b)} />
+                Минусы: <Money text={b.tradeoffs.join("; ")} synthetic={isSynthetic(of(b))} />
               </p>
             )}
           </article>
@@ -853,7 +888,8 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
     hotel && spec.hotel_budget_rub !== null && hotel.price_rub > spec.hotel_budget_rub
       ? hotel.price_rub - spec.hotel_budget_rub
       : 0;
-  const synthetic = isSynthetic(cart.items);
+  const synthetic = allSynthetic(cart.items);
+  const mark = synthetic ? "синтетика" : cart.items.some((o) => o.synthetic) ? MIXED : "";
   return (
     <section className="sec" aria-label="Корзина">
       <h2>Корзина</h2>
@@ -899,7 +935,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
           <Price value={shownTotal} synthetic={synthetic} source={sourceOf(cart.items)} />
         </b>
       </p>
-      {synthetic && <span className="sub">все цены — синтетика · оплата имитируется</span>}
+      {mark && <span className="sub">{synthetic ? "все цены" : "часть цен"} — синтетика · оплата имитируется</span>}
       {over && (
         <p className="warn" role="note">
           Итог больше бюджета {rub(spec.budget_rub!)} на{" "}
@@ -957,7 +993,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
           }}
         >
           Подтвердить бронь на {rub(cart.total_rub)}
-          {synthetic && " (синтетика)"} · оплата имитируется
+          {mark && ` (${mark})`} · оплата имитируется
         </button>
       )}
     </section>
@@ -1015,7 +1051,7 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
         ))}
       </ul>
       <p className="total">
-        Итого: <Price value={voucher.total_rub} synthetic={isSynthetic(voucher.items)} source={sourceOf(voucher.items)} />
+        Итого: <Price value={voucher.total_rub} synthetic={allSynthetic(voucher.items)} source={sourceOf(voucher.items)} />
       </p>
     </section>
   );
@@ -1143,7 +1179,7 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
         {stage === "assemble" && picked.length > 0 && (
           <>
             {" · "}
-            <Price value={picked.reduce((t, o) => t + o.price_rub, 0)} synthetic={isSynthetic(picked)} source={sourceOf(picked)} />
+            <Price value={picked.reduce((t, o) => t + o.price_rub, 0)} synthetic={allSynthetic(picked)} source={sourceOf(picked)} />
           </>
         )}
       </button>

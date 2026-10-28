@@ -282,7 +282,7 @@ suite("приложение", () => {
     await click("В корзину");
     const sum = String(total).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     const last = [...box.querySelectorAll(".msg.agent")].at(-1)?.textContent;
-    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
+    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽синтетика.`); // the label is a chip (#567)
   });
 
   it("#161: корзина изменилась, а план не обновился — ошибка вместо тихого устаревшего плана", async () => {

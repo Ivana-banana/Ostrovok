@@ -31,6 +31,7 @@ from api.answers import (
     destination_line,
     is_hotel_compare,
     plan_fact,
+    price_mark,
     rooms_line,
     span,
     without_plan_fields,
@@ -980,6 +981,16 @@ def _rub(n: int) -> str:
     return f"{n:,} ₽".replace(",", " ")
 
 
+def _priced(n: int, offers) -> str:
+    """A price with the label of the offers it sums (TRAP-7, #567): «синтетика», the real source
+    or «часть цен — синтетика»."""
+    return f"{_rub(n)} ({price_mark(offers)})"
+
+
+def _chosen(plan: Plan) -> list:
+    return [o for o in plan.offers if o.offer_id in plan.selected]
+
+
 def _ordinal(text: str) -> int | None:
     m = ORDINAL_RE.search(text.lower())
     if not m:
@@ -1272,11 +1283,15 @@ def is_rebuild(low: str) -> bool:
     return bool(pick_kinds(low) or NO_FLIGHT_RE.search(low) or stay_delta(low))
 
 
-def _ranked_total(plan: Plan) -> int:
-    """The total of the best set the ranking gives for the spec of the plan, without the hotel
-    the user picked by hand (dag._keep_pick): the real minimum of the offers."""
+def _ranked_set(plan: Plan) -> list:
+    """The best set the ranking gives for the spec of the plan, without the hotel the user
+    picked by hand (dag._keep_pick): its total is the real minimum of the offers."""
     ids, _ = rank(plan.spec, plan.offers)
-    return sum(o.price_rub for o in plan.offers if o.offer_id in ids)
+    return [o for o in plan.offers if o.offer_id in ids]
+
+
+def _ranked_total(plan: Plan) -> int:
+    return sum(o.price_rub for o in _ranked_set(plan))
 
 
 # The wish «недорого» in words other than «дешевле» (see api/extract.py WISHES).
@@ -1316,28 +1331,27 @@ def drop_cheaper_wish(found: dict, low: str) -> dict:
     return {**kept, "wishes": rest} if rest else kept
 
 
-def _cheapest_total(plan: Plan, cart: Cart) -> int:
-    """The least total the offers give for the trip: a trial re-plan with a budget nobody meets."""
+def _cheapest_set(plan: Plan, cart: Cart) -> list:
+    """The cheapest set of offers for the trip: a trial re-plan with a budget nobody meets."""
     trial, _, _ = replan(plan, merge(plan.spec, {"budget_rub": 0}, []), cart)
-    return _ranked_total(trial)
+    return _ranked_set(trial)
 
 
 def cheaper_talk_line(old: ChatReply, low: str) -> str:
     """The answer to «не надо дешевле» (the budget stays) and «дешевле не бывает?» (the minimum
     of the offers): no budget changes, no plan changes (#316, TRAP-4)."""
     total = _selected_total(old.plan)
+    now = _priced(total, _chosen(old.plan))
     if CHEAPER_MIN_RE.search(low):
-        floor = _cheapest_total(old.plan, old.cart)
+        cheapest = _cheapest_set(old.plan, old.cart)
+        floor = sum(o.price_rub for o in cheapest)
         if total <= floor:
-            return (
-                f"Дешевле не бывает: минимум в предложениях — {_rub(floor)}, "
-                "он уже в плане (синтетика)."
-            )
+            return f"Дешевле не бывает: минимум в предложениях — {now}, он уже в плане."
         return (
-            f"Бывает: минимум в предложениях — {_rub(floor)}, сейчас {_rub(total)} (синтетика). "
+            f"Бывает: минимум в предложениях — {_priced(floor, cheapest)}, сейчас {now}. "
             "Напишите «подешевле», и я пересоберу план."
         )
-    return f"Хорошо, бюджет не меняю: итог остаётся {_rub(total)} (синтетика)."
+    return f"Хорошо, бюджет не меняю: итог остаётся {now}."
 
 
 def agent_budget(spec: TripSpec) -> bool:
@@ -1374,7 +1388,7 @@ def refit_agent_budget(old: Plan, cart: Cart, spec: TripSpec) -> tuple[TripSpec,
         return spec, ""
     line = (
         f"Бюджет «подешевле» пересчитан под новые даты: {_rub(found['budget_rub'])} "
-        f"вместо {_rub(old.spec.budget_rub or 0)} (синтетика)."
+        f"вместо {_rub(old.spec.budget_rub or 0)}."  # a budget is no provider price: no mark
     )
     return merge(spec, {"budget_rub": found["budget_rub"]}, notes), line
 
@@ -1408,27 +1422,28 @@ def cheaper_line(old: Plan, new: Plan, edited: bool = False) -> str:
     `edited`: the message also changed other conditions, so the total may rise for them."""
     a, b = _selected_total(old), _selected_total(new)
     goal = new.spec.budget_rub
-    cheapest = _ranked_total(new)
+    best = _ranked_set(new)
+    cheapest = sum(o.price_rub for o in best)
     if b > cheapest:  # a hotel picked by hand costs more than the best set (TRAP-4)
         hotel = _hotel_of(new)
         who = f"С отелем «{hotel.title}» " if hotel else "С вашим выбором "
         return (
-            f"{who}дешевле нет; самый дешёвый набор — {_rub(cheapest)} (синтетика). "
+            f"{who}дешевле нет; самый дешёвый набор — {_priced(cheapest, best)}. "
             "Назовите сумму, если нужно другое."
         )
     if b >= a:
         if edited:
             return (
-                f"С вашими условиями итог {_rub(b)} (было {_rub(a)}): дешевле под них набора "
-                "нет (синтетика). Назовите сумму, если нужно другое."
+                f"С вашими условиями итог {_priced(b, _chosen(new))} (было {_priced(a, _chosen(old))}): "
+                "дешевле под них набора нет. Назовите сумму, если нужно другое."
             )
         return (
-            f"Дешевле в предложениях нет: сейчас {_rub(b)} — это минимум под ваши условия "
-            "(синтетика). Назовите сумму, если нужно другое."
+            f"Дешевле в предложениях нет: сейчас {_priced(b, _chosen(new))} — это минимум под ваши "
+            "условия. Назовите сумму, если нужно другое."
         )
     if goal is not None and b >= goal:
         return (
-            f"Снизил итог до {_rub(b)} — это минимум под ваши условия (синтетика). "
+            f"Снизил итог до {_priced(b, _chosen(new))} — это минимум под ваши условия. "
             "Назовите сумму, если нужно другое."
         )
     return ""
@@ -1673,7 +1688,7 @@ def _better_hotel(plan: Plan) -> tuple[Plan | None, str]:
     out.timeline, out.issues = build_timeline(out)
     out.explanations = explain(out.spec, out.offers, out.selected)
     out.bundles = bundles(out.spec, out.offers, out.selected)
-    note = f"Отель получше — {nxt.title}: {'; '.join(what)} (синтетика)."
+    note = f"Отель получше — {nxt.title}: {'; '.join(what)} ({price_mark([nxt])})."
     if spec.hotel_budget_rub is not None and nxt.price_rub > spec.hotel_budget_rub:
         note += f" Дороже бюджета отеля ({_rub(spec.hotel_budget_rub)})."
     if spec.budget_rub is not None and _selected_total(out) > spec.budget_rub:
@@ -1743,7 +1758,7 @@ def _question_fact(old: ChatReply, low: str) -> str:
     if topic == "delay":
         return (
             "Данных о задержках рейсов нет, прогноз не даю: время в плане — по расписанию "
-            "каталога (синтетика)."
+            f"источника ({price_mark([o for o in chosen if o.kind == 'transport'])})."
         )
     if topic == "cancel":
         hotel = next((o for o in chosen if o.kind == "hotel"), None)
@@ -1758,7 +1773,7 @@ def _question_fact(old: ChatReply, low: str) -> str:
         return f"{hotel.title}: бесплатная отмена{until}."
     if topic == "transfer":
         rows = [
-            f"{o.title} — {_rub(o.price_rub)} (синтетика), в пути {span(o)}"
+            f"{o.title} — {_priced(o.price_rub, [o])}, в пути {span(o)}"
             for o in chosen
             if o.kind == "transfer"
         ]
@@ -1786,15 +1801,14 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
     spec = old.plan.spec
     people = spec.adults + len(spec.children_ages)
     if PER_HEAD_RE.search(low) and PER_HEAD_CUE_RE.search(low):
-        total = old.cart.total_rub or sum(
-            o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
-        )
+        items = old.cart.items or _chosen(old.plan)
+        total = old.cart.total_rub or sum(o.price_rub for o in items)
         if not total:
             return f"Состав не меняю: {people} чел. Итог пока не посчитан, цену на человека назвать не могу."
         return (
-            f"Состав не меняю: {people} чел. Итого {_rub(total)} (синтетика), "
+            f"Состав не меняю: {people} чел. Итого {_priced(total, items)}, "
             f"{'в среднем ' if spec.children_ages else ''}на человека около "
-            f"{_rub(round(total / people))} (синтетика)"
+            f"{_priced(round(total / people), items)}"
             + (", дети по детскому тарифу." if spec.children_ages else ".")
         )
     if ROOM_FOR_RE.search(low) and "?" in low:
@@ -1839,10 +1853,13 @@ def _mode_versus_reply(old: ChatReply, modes: list[str]) -> str:
     """«поезд дешевле, чем самолёт?»: the cheapest offer of each mode in the plan (TRAP-4)."""
     rows = []
     for mode in modes:
-        prices = [o.price_rub for o in old.plan.offers if getattr(o, "mode", None) == mode]
+        found = [o for o in old.plan.offers if getattr(o, "mode", None) == mode]
         name = MODE_NAMES[mode].capitalize()
+        cheapest = min(found, key=lambda o: o.price_rub, default=None)
         rows.append(
-            f"{name}: от {_rub(min(prices))} (синтетика)" if prices else f"{name}: в плане нет"
+            f"{name}: от {_priced(cheapest.price_rub, [cheapest])}"
+            if cheapest
+            else f"{name}: в плане нет"
         )
     return f"Это вопрос: план не меняю. {'; '.join(rows)}. {HINTS[old.stage]}"
 
@@ -1858,13 +1875,12 @@ def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
     if not others and len(modes := [m for m, rx in MODES if re.search(rx, low)]) == 2:
         return _mode_versus_reply(old, modes)  # #483: «а поезд дешевле, чем самолёт?»
     if not (others or MARKET_RE.search(low)):
-        return ""
-    total = old.cart.total_rub or sum(
-        o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
-    )
+        return ""  # no other place and no market: not a price comparison, the old rules read it
+    items = old.cart.items or _chosen(old.plan)
+    total = old.cart.total_rub or sum(o.price_rub for o in items)
     place = f"в направлении «{', '.join(others)}»" if others else "в среднем по рынку"
     mine = ", ".join(spec.destinations) or "текущее направление"
-    now = f"Сейчас в плане: {mine}, итого {_rub(total)} (синтетика). " if total else ""
+    now = f"Сейчас в плане: {mine}, итого {_priced(total, items)}. " if total else ""
     ask = f"«{others[0]}»" if others else "«подешевле»"
     return (
         f"Это вопрос: план не меняю. {now}Цен {place} для сравнения в данных нет — "
@@ -1890,9 +1906,9 @@ def _question_answer(
         return f"{head}\n{HINTS['compare']}"
     if old.stage == "assemble":
         return f"{head}\n{_text_assemble(old.plan)}"
-    rows = [f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in old.cart.items]
+    rows = [f"{o.title} — {_priced(o.price_rub, [o])}" for o in old.cart.items]
     cart = (
-        "В корзине:\n" + "\n".join(rows) + f"\nИтого {_rub(old.cart.total_rub)} (синтетика)."
+        "В корзине:\n" + "\n".join(rows) + f"\nИтого {_priced(old.cart.total_rub, old.cart.items)}."
         if rows
         else "Корзина пуста."
     )
@@ -2017,7 +2033,9 @@ def _offer_lines(plan: Plan) -> list[str]:
     for h in (o for o in chosen if isinstance(o, HotelOffer)):
         stars = f", {h.stars}★" if h.stars else ""
         cancel = "бесплатная отмена" if h.cancellation.refundable else "невозвратный"
-        lines.append(f"Отель: {h.title}{stars}, {MEALS[h.meal]}, {cancel} — {_rub(h.price_rub)}")
+        lines.append(
+            f"Отель: {h.title}{stars}, {MEALS[h.meal]}, {cancel} — {_priced(h.price_rub, [h])}"
+        )
         if h.meal != "RO":
             included.append(MEALS[h.meal])
         if h.cancellation.refundable:
@@ -2035,18 +2053,39 @@ def _offer_lines(plan: Plan) -> list[str]:
         # local times of different zones (web/src/format.ts reads it as a fact of the ride)
         lines.append(
             f"{way}: {title[:1].lower()}{title[1:]}, в пути {span(o)}, {_span_at(o)}"
-            f" — {_rub(o.price_rub)}"
+            f" — {_priced(o.price_rub, [o])}"
         )
     rides = [o for o in chosen if o.kind == "transfer"]
     if rides:
         names = "; ".join(o.title.removeprefix("Трансфер: ") for o in rides)
-        lines.append(f"Трансферы: {names} — {_rub(sum(o.price_rub for o in rides))}")
+        lines.append(f"Трансферы: {names} — {_priced(sum(o.price_rub for o in rides), rides)}")
     # paid extras of the hotel («Ранний заезд …»): the items sum to «Итого»
-    lines += [f"Доп. услуга: {o.title} — {_rub(o.price_rub)}" for o in chosen if o.kind == "extra"]
+    lines += [
+        f"Доп. услуга: {o.title} — {_priced(o.price_rub, [o])}" for o in chosen if o.kind == "extra"
+    ]
     if included:
         lines.append(f"Включено: {', '.join(included)}.")
-    lines.append(f"Итого {_rub(_selected_total(plan))}.")
+    lines.append(f"Итого {_priced(_selected_total(plan), chosen)}.")
     return lines
+
+
+# TRAP-7 (#567): the header names the real sources of the offers, the rest is synthetic.
+REAL_PARTS = {
+    "hotel": "отели — 101hotels",
+    "flight": "перелёты — Авиасейлс",
+    "train": "поезда — tutu",
+}
+
+
+def _prices_line(offers) -> str:
+    real = [o for o in offers if not o.synthetic]
+    if not real:
+        return "Цены — синтетика."
+    parts = dict.fromkeys(
+        REAL_PARTS.get(getattr(o, "mode", o.kind), "прочие — реальные данные") for o in real
+    )
+    rest = "; остальные — синтетика" if len(real) < len(offers) else ""
+    return f"Цены: {', '.join(parts)}{rest}."
 
 
 def _text_compare(plan: Plan) -> str:
@@ -2056,7 +2095,7 @@ def _text_compare(plan: Plan) -> str:
     lines = [
         f"{spec.destinations[0]}, {period(spec)}, {spec.nights} ноч., {spec.adults} взр.{kids}"
         + ("." if kids else ""),
-        "Цены — синтетика.",
+        _prices_line(plan.offers),
         *([_cap(line) + "."] if (line := own_tickets(spec)) else []),
         *([line] if (line := destination_line(plan)) else []),
         *([line] if (line := closed_line(plan)) else []),
@@ -2127,7 +2166,8 @@ def _text_assemble(plan: Plan) -> str:
     if _pet_flies(plan):
         lines.append(NO_PET_FLIGHT)
     lines += _unchecked_lines(plan.spec)
-    lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
+    total = _priced(_selected_total(plan), _chosen(plan))
+    lines.append(f"Итого {total}. Оформляем? Напишите «да».")
     return "\n".join(lines)
 
 
@@ -2359,12 +2399,12 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
         plan = sync_plan(plan, old.cart, cart)
     plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
     plan.timeline, plan.issues = build_timeline(plan)
-    rows = "; ".join(f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in gone)
+    rows = "; ".join(f"{o.title} — {_priced(o.price_rub, [o])}" for o in gone)
     head = f"Убираю трансфер из плана: {rows}."
     if old.stage == "assemble":
         text = f"{head} В корзину пока ничего не кладу.\n{_text_assemble(plan)}"
     else:
-        text = f"{head} В корзине теперь {_rub(cart.total_rub)} (синтетика). {HINTS['checkout']}"
+        text = f"{head} В корзине теперь {_priced(cart.total_rub, cart.items)}. {HINTS['checkout']}"
     return old.model_copy(
         update={"plan": plan, "cart": cart, "reply": text, "questions": [], "llm": False}
     )
@@ -3153,8 +3193,8 @@ def step(
     if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
         text = (
-            f"В корзине {len(cart.items)} поз. на {_rub(cart.total_rub)} "
-            f"(синтетика, оплата имитируется). {HINTS['checkout']}"
+            f"В корзине {len(cart.items)} поз. на {_priced(cart.total_rub, cart.items)}, "
+            f"оплата имитируется. {HINTS['checkout']}"
         )
         return reply("checkout", plan, _with_tail(text, plan, low, message, found), cart)
     if booking:  # chat() books outside the session lock; the user saw the stored cart total

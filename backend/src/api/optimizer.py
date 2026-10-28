@@ -113,6 +113,10 @@ class Trip:
         return [self.hotel.offer_id, *(x.offer_id for x in (*self.legs, *self.transfers))]
 
     @property
+    def offers(self) -> list[Offer]:
+        return [self.hotel, *self.legs, *self.transfers]
+
+    @property
     def total(self) -> int:
         return self.hotel.price_rub + self.road + self.transfer_rub
 
@@ -164,8 +168,28 @@ def _tid(hotel: HotelOffer, leg: TransportOffer) -> str:
     return transfer_id(hotel.offer_id, leg.offer_id)
 
 
+# TRAP-7 (#567): the source of a real price by kind and mode (web/src/Board.tsx PRICE_SOURCES).
+PRICE_SOURCES = {"hotel": "101hotels", "flight": "Авиасейлс", "train": "tutu"}
+
+
+def price_mark(offers) -> str:
+    """The label of a sum of these offers: «синтетика» when all are synthetic or there are none,
+    the real sources when none is, «часть цен — синтетика» for a mix (TRAP-7)."""
+    if all(o.synthetic for o in offers):
+        return "синтетика"
+    if any(o.synthetic for o in offers):
+        return "часть цен — синтетика"
+    names = (PRICE_SOURCES.get(getattr(o, "mode", o.kind), "реальные данные") for o in offers)
+    return " + ".join(dict.fromkeys(names))
+
+
 def _rub(n: int) -> str:
     return f"{n:,} ₽".replace(",", " ")
+
+
+def _m(n: int, offers) -> str:
+    """A sum of the offers with its own label: a real hotel price is not «синтетика» (#567)."""
+    return f"{_rub(n)} ({price_mark(offers)})"
 
 
 def _h(x: float) -> str:
@@ -176,8 +200,14 @@ def _leg_hours(leg: TransportOffer) -> float:
     return round((leg.arrive_at - leg.depart_at).total_seconds() / 3600, 1)
 
 
-def _diff(d: int) -> str:
-    return f"дороже на {_rub(d)}" if d > 0 else f"дешевле на {_rub(-d)}" if d else "по той же цене"
+def _diff(d: int, offers) -> str:
+    return (
+        f"дороже на {_m(d, offers)}"
+        if d > 0
+        else f"дешевле на {_m(-d, offers)}"
+        if d
+        else "по той же цене"
+    )
 
 
 def weights(spec: TripSpec) -> dict[Priority, float]:
@@ -355,7 +385,7 @@ def _versus(t: Trip, best: Trip) -> list[str]:
     h, b = t.hotel, best.hotel
     out = []
     if t.total > best.total:
-        out.append(_diff(t.total - best.total) + " за всю поездку")
+        out.append(_diff(t.total - best.total, t.offers + best.offers) + " за всю поездку")
     if h.rating is not None and b.rating is not None and h.rating < b.rating:
         out.append(f"рейтинг {h.rating} вместо {b.rating}")
     if b.cancellation.refundable and not h.cancellation.refundable:
@@ -368,9 +398,10 @@ def _versus(t: Trip, best: Trip) -> list[str]:
     if hd is not None and bd is not None and hd > bd:
         out.append(f"до центра {hd:g} км вместо {bd:g} км")
     if t.transfer_rub > best.transfer_rub:
-        line = f"трансферы {_rub(t.transfer_rub)} вместо {_rub(best.transfer_rub)}"
+        tr = t.transfers + best.transfers
+        line = f"трансферы {_m(t.transfer_rub, tr)} вместо {_m(best.transfer_rub, tr)}"
         if h.price_rub < b.price_rub and t.total >= best.total:
-            line += f": съедают экономию {_rub(b.price_rub - h.price_rub)} на отеле"
+            line += f": съедают экономию {_m(b.price_rub - h.price_rub, [h, b])} на отеле"
         out.append(line)
     return out + [f"нарушает: {r}" for r in t.rules]
 
@@ -389,13 +420,13 @@ def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
         facts.append("бесплатная отмена" if h.cancellation.refundable else "невозвратный тариф")
     if h.distance_center_km is not None:
         facts.append(f"{h.distance_center_km:g} км от центра")
-    parts = [f"отель {_rub(h.price_rub)}"]
+    parts = [f"отель {_m(h.price_rub, [h])}"]
     if t.legs:
-        parts.append(f"дорога {_rub(t.road)}")
+        parts.append(f"дорога {_m(t.road, t.legs)}")
     if t.transfers:
-        parts.append(f"трансферы {_rub(t.transfer_rub)}")
+        parts.append(f"трансферы {_m(t.transfer_rub, t.transfers)}")
     whole = "поездка целиком" if t.legs else "проживание без дороги"
-    why = f"{', '.join(facts)}; {whole} {_rub(t.total)} ({' + '.join(parts)})"
+    why = f"{', '.join(facts)}; {whole} {_m(t.total, t.offers)} ({' + '.join(parts)})"
     if spec.hotel_budget_rub is not None and not t.hotel_over:
         why += f"; отель в бюджете отеля {_rub(spec.hotel_budget_rub)}"
     order = list(dict.fromkeys(spec.priorities))
@@ -436,8 +467,8 @@ def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
     cheapest = min(pool, key=lambda x: (x.total, x.key))
     if cheapest.total < t.total:
         line = (
-            f"дороже самого дешёвого варианта на {_rub(t.total - cheapest.total)} "
-            f"({cheapest.hotel.title}, {_rub(cheapest.total)})"
+            f"дороже самого дешёвого варианта на {_m(t.total - cheapest.total, t.offers + cheapest.offers)} "
+            f"({cheapest.hotel.title}, {_m(cheapest.total, cheapest.offers)})"
         )
         first = spec.priorities[0] if spec.priorities else None
         if first and first != "price" and _wins_on(first, t, cheapest):
@@ -454,7 +485,7 @@ def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
             r = min(refund, key=lambda x: (x.total, x.key))
             out.append(
                 f"невозвратный тариф; с бесплатной отменой — {r.hotel.title}, "
-                f"{_diff(r.total - t.total)}"
+                f"{_diff(r.total - t.total, r.offers + t.offers)}"
             )
     top = min(pool, key=lambda x: (-(x.hotel.rating or 0), x.total, x.key))
     if _less(h.rating, top.hotel.rating):
@@ -463,7 +494,7 @@ def _sacrificed(spec: TripSpec, t: Trip, pool: list[Trip]) -> list[str]:
     saved = t.hours - fast.hours
     if saved >= FASTER_H and saved >= FASTER_SHARE * t.hours:
         out.append(
-            f"дорога {_h(t.hours)}, есть быстрее: {_h(fast.hours)}, {_diff(fast.total - t.total)}"
+            f"дорога {_h(t.hours)}, есть быстрее: {_h(fast.hours)}, {_diff(fast.total - t.total, fast.offers + t.offers)}"
         )
     return out
 
@@ -525,26 +556,28 @@ def _risks(spec: TripSpec, t: Trip, fits: bool, trips: list[Trip]) -> list[str]:
     if t.hotel_over and spec.hotel_budget_rub is not None:
         out.append(
             f"отель не укладывается в бюджет отеля {_rub(spec.hotel_budget_rub)}: "
-            f"{_rub(t.hotel.price_rub)}, на {_rub(t.hotel_over)} больше"
+            f"{_m(t.hotel.price_rub, [t.hotel])}, на {_m(t.hotel_over, [t.hotel])} больше"
         )
     trip_over = t.over - t.hotel_over
     if trip_over and spec.budget_rub is not None:
         line = (
             f"не укладывается в бюджет {_rub(spec.budget_rub)}: "
-            f"{'поездка целиком' if t.legs else 'проживание без дороги'} {_rub(t.total)}, на {_rub(trip_over)} больше"
+            f"{'поездка целиком' if t.legs else 'проживание без дороги'} {_m(t.total, t.offers)}, на {_m(trip_over, t.offers)} больше"
         )
         if t.hotel.price_rub <= spec.budget_rub < t.total:
-            line += f"; отель {_rub(t.hotel.price_rub)} укладывается, сверху дорога и трансферы"
+            line += f"; отель {_m(t.hotel.price_rub, [t.hotel])} укладывается, сверху дорога и трансферы"
         out.append(line)
     if t.over:
         cheap = [x for x in trips if x.over == 0]
         if cheap:
             c = min(cheap, key=lambda x: (len(x.rules), x.key))
             broken = "; ".join(c.rules) or "—"
-            out.append(f"в бюджет укладывается {c.hotel.title} за {_rub(c.total)}, но: {broken}")
+            out.append(
+                f"в бюджет укладывается {c.hotel.title} за {_m(c.total, c.offers)}, но: {broken}"
+            )
         else:
             least = min(trips, key=lambda x: (x.total, x.key))
-            out.append(f"самая дешёвая поездка из найденных — {_rub(least.total)}")
+            out.append(f"самая дешёвая поездка из найденных — {_m(least.total, least.offers)}")
     return out
 
 
@@ -569,7 +602,7 @@ def _leg_why(t: Trip, leg: TransportOffer, offers: list[Offer]) -> Explanation:
     tradeoffs = []
     if leg.price_rub > cheapest.price_rub:
         tradeoffs.append(
-            f"дороже самого дешёвого варианта {way} на {_rub(leg.price_rub - cheapest.price_rub)} "
+            f"дороже самого дешёвого варианта {way} на {_m(leg.price_rub - cheapest.price_rub, [leg, cheapest])} "
             f"({cheapest.title})"
         )
     return Explanation(offer_id=leg.offer_id, why=", ".join(facts), tradeoffs=tradeoffs)
