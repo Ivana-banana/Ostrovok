@@ -455,6 +455,7 @@ function Transport({ plan, stage, busy, onSend }: {
               <th>Прибытие</th>
               <th className="num">В пути</th>
               <th className="num">Пересадки</th>
+              <th>Питомцы</th>
               <th className="num">Цена</th>
               <th className="act">
                 <span className="sr-only">Действие</span>
@@ -480,6 +481,8 @@ function Transport({ plan, stage, busy, onSend }: {
                   </td>
                   <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
                   <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
+                  {/* #475: the pet mark of a leg, as for the hotels */}
+                  <td data-label="Питомцы">{t.pets_allowed ? "можно" : "нет отметки"}</td>
                   <td className="num cost">
                     <Price value={t.price_rub} synthetic={t.synthetic} />
                   </td>

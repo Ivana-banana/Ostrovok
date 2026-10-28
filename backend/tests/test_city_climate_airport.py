@@ -133,7 +133,7 @@ def test_new_year_is_no_city(text):
 def test_a_capitalized_month_is_no_city(store, question):
     r = at(store, "compare")
     r2 = say(store, question, r.session_id)
-    assert "Климата для" not in r2.reply, r2.reply
+    assert ": климата" not in r2.reply, r2.reply  # #212: the no-data line
 
 
 @pytest.mark.parametrize(
@@ -306,8 +306,8 @@ def test_trap_6_named_city_first_answer_has_climate_and_airport(store, monkeypat
     assert line in r.reply, r.reply
     assert "оценка по каталогу, не прогноз" in r.reply
     assert flights(r) and all(" через LED," in t for t in flights(r)), flights(r)
-    assert "Перелёт Москва → Тихвин через LED, " in r.reply
-    assert "Перелёт Тихвин → Москва (VKO) через LED, " in r.reply
+    assert any("Перелёт Москва → Тихвин через LED, " in t for t in flights(r))
+    assert any("Перелёт Тихвин → Москва (VKO) через LED, " in t for t in flights(r))
 
 
 def test_trap_4_catalogue_city_first_answer_has_climate_and_airport(store):
@@ -316,7 +316,7 @@ def test_trap_4_catalogue_city_first_answer_has_climate_and_airport(store):
     air, _ = catalog.month_climate(place, 12)
     rain = place["climate"]["rain"][11]
     assert f"в декабре днём ≈ {air:g} °C, {rain:g} мм; ближайший аэропорт LED, 131 км" in r.reply
-    assert "Перелёт Москва → Выборг через LED, " in r.reply
+    assert any("Перелёт Москва → Выборг через LED, " in t for t in flights(r))
 
 
 def test_city_with_its_own_airport_has_no_via_label(store):
@@ -327,7 +327,7 @@ def test_city_with_its_own_airport_has_no_via_label(store):
         r.reply
     )
     assert flights(r) and not any("через" in t for t in flights(r)), flights(r)
-    assert "Перелёт Москва → Сочи (AER), " in r.reply
+    assert any("Перелёт Москва → Сочи (AER), " in t for t in flights(r))
 
 
 def test_trap_4_no_airport_data_no_line(monkeypatch):
