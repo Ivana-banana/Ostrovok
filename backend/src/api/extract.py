@@ -271,8 +271,9 @@ AGES_TAIL_RE = re.compile(
     r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
 )
 # «сын 10.» / «дочь 3,»: one bare number closing the clause is the age of a single child.
+# #359: «сын 4 и дочь 9»: «и» and the next child word close it too.
 AGE_ONE_RE = re.compile(
-    r"\s*(\d{1,2})(?![\d.,]*\d)(?=\s*(?:[.,;!?)]|$))"
+    r"\s*(\d{1,2})(?![\d.,]*\d)(?=\s*(?:[.,;!?)]|$)|\s+и\s+(?:реб|сын|доч|малыш|внук|внуч))"
     r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
     r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
 )
@@ -1751,6 +1752,31 @@ MONEY_PER_PERSON_RE = re.compile(
 )
 
 
+NO_AGE_NOTE = "возраст ребёнка: 7 лет (возраст не назван)"
+KIN = ("сын", "доч", "внук", "внуч")  # a single child word of its own kind; «ребёнок» is any
+
+
+def _named_again(
+    seen: list[tuple[str, list[int], int]], kind: str, said: list[int], ages: list, notes: list
+) -> bool:
+    """#359: a single child word names a child counted before: the same word, «ребёнок», or a
+    child of a list. With no age it adds nobody; with the age of that child it adds nobody; with
+    an age for a child counted without one it fills the age in («едем с сыном. Сыну 5 лет»)."""
+    same = [i for i, s in enumerate(seen) if s[0] in ("group", kind) or "" in (s[0], kind)]
+    if not same:
+        return False
+    if not said or any(said[0] in seen[i][1] for i in same):
+        return True
+    i = next((i for i in same if seen[i][0] != "group" and not seen[i][1]), None)
+    if i is None:
+        return False
+    ages[seen[i][2]] = said[0]
+    seen[i] = (seen[i][0], said, seen[i][2])
+    if NO_AGE_NOTE in notes:
+        notes.remove(NO_AGE_NOTE)
+    return True
+
+
 def _people(
     t: str, found: dict, notes: list[str], asking: bool = False, built: bool = False
 ) -> None:
@@ -1761,6 +1787,7 @@ def _people(
     asking: the message is a question at a built plan; a child without a number or an age in
     it adds nobody (#179)."""
     ages: list[int] = []
+    seen: list[tuple[str, list[int], int]] = []  # (kind, ages said, position in ages) (#359)
     no_kids = False
     if built and (PRICE_CUE_RE.search(t) or asking):  # only at a built plan
         t = PER_PERSON_RE.sub(" ", t)  # #369: «на 1 человека» is a unit of price, not a party
@@ -1804,17 +1831,22 @@ def _people(
         if (
             plural
             and not m.group(1)
-            and re.match(r"\s*:", t[m.end() :])
+            and re.match(r"\s*[:—–-]", t[m.end() :])
             and CHILD_RE.search(t, m.end())
             and (not a or CHILD_RE.search(t, m.end(), a.start(1)))
         ):
-            continue  # «наши дети: у меня близнецы…»: the list that follows has them
+            continue  # «наши дети: у меня близнецы…», «дети - сын 4 и дочь 9»: the list has them
+        word = m.group(0).split()[-1]
+        kind = next((k for k in KIN if word.startswith(k)), "") if single else "group"
+        if single and len(said) <= 1 and _named_again(seen, kind, said, ages, notes):
+            continue  # #359: «дети: 5 и 8 лет, сын любит море»: the same child again
         if asking and len(said) < count:  # no age for every counted child: nobody is added
             if ASKING_NOTE not in notes:
                 notes.append(ASKING_NOTE)
             continue
         if len(said) < count:
-            notes.append("возраст ребёнка: 7 лет (возраст не назван)")
+            notes.append(NO_AGE_NOTE)
+        seen.append((kind, said, len(ages)))
         ages += (said + [7] * count)[:count]
     if ages:
         found["children_ages"] = ages
