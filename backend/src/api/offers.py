@@ -24,6 +24,9 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
 from importlib.resources import files
@@ -835,6 +838,28 @@ class SyntheticTransfers:
 HOTELS: HotelProvider = OsmOrSynthetic()
 TRANSPORT: TransportProvider = SyntheticTransport()
 TRANSFERS: TransferProvider = SyntheticTransfers()
+# Real flights (#490): main.py builds the adapter once when TRAVELPAYOUTS_TOKEN is set. A chat
+# request uses it only with ChatRequest.real_data: a ContextVar per request, not a module swap,
+# so parallel sessions keep their own choice. Only the live path (find_offers) asks transport();
+# inspiration and the pets check read ESTIMATE_*, travel_hours a SyntheticTransport.
+REAL_TRANSPORT: TransportProvider | None = None
+_real_data: ContextVar[bool] = ContextVar("real_data", default=False)
+
+
+@contextmanager
+def real_data(on: bool) -> Iterator[None]:
+    """The real transport for the searches inside the block, when it exists (#490)."""
+    token = _real_data.set(on)
+    try:
+        yield
+    finally:
+        _real_data.reset(token)
+
+
+def transport() -> TransportProvider:
+    """The transport port of this request: REAL_TRANSPORT when asked and built, else TRANSPORT."""
+    return REAL_TRANSPORT if _real_data.get() and REAL_TRANSPORT is not None else TRANSPORT
+
 
 # The estimate path (ADR-0002, #307): inspiration, the dead-end check of pets and eval price
 # dozens of places per turn. A live API does not fit the turn (5 s per call), so they read
@@ -875,7 +900,7 @@ def offers_for_place(
     hp, tp, xp = (
         (ESTIMATE_HOTELS, ESTIMATE_TRANSPORT, ESTIMATE_TRANSFERS)
         if estimate
-        else (HOTELS, TRANSPORT, TRANSFERS)
+        else (HOTELS, transport(), TRANSFERS)
     )
     # A port that raises gives [] and a mark in the reply (ops.guarded, #290), not a 500.
     pairs = ops.guarded("hotels", lambda: hp.hotels(spec, place, now), [])
