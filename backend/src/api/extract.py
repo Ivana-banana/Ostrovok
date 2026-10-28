@@ -1754,6 +1754,13 @@ MONEY_PER_PERSON_RE = re.compile(
 
 NO_AGE_NOTE = "возраст ребёнка: 7 лет (возраст не назван)"
 KIN = ("сын", "доч", "внук", "внуч")  # a single child word of its own kind; «ребёнок» is any
+# A child word joined to the previous one by «и»/«с» («с сыном 5 лет и малышом», «дети 6 и 9
+# лет и малыш») or after «второй», «ещё один», «другой» is a new child, not the same again.
+JOINED_RE = re.compile(r"(?:[\s,]|\d+|\bи\b|\b(?:лет|года?|месяц\w*|мес)\b\.?)*\b(?:и|с|со)\s+")
+ANOTHER_RE = re.compile(
+    r"\b(?:втор(?:ой|ая|ого|ую|ым|ом)|ещ[её](?:\s+(?:один|одн\w+))?"
+    r"|друг(?:ой|ая|ого|ую|им|ом))\s+$"
+)
 
 
 def _named_again(
@@ -1788,6 +1795,7 @@ def _people(
     it adds nobody (#179)."""
     ages: list[int] = []
     seen: list[tuple[str, list[int], int]] = []  # (kind, ages said, position in ages) (#359)
+    last: int | None = None  # the end of the previous child word (#359)
     no_kids = False
     if built and (PRICE_CUE_RE.search(t) or asking):  # only at a built plan
         t = PER_PERSON_RE.sub(" ", t)  # #369: «на 1 человека» is a unit of price, not a party
@@ -1838,7 +1846,11 @@ def _people(
             continue  # «наши дети: у меня близнецы…», «дети - сын 4 и дочь 9»: the list has them
         word = m.group(0).split()[-1]
         kind = next((k for k in KIN if word.startswith(k)), "") if single else "group"
-        if single and len(said) <= 1 and _named_again(seen, kind, said, ages, notes):
+        new = (last is not None and JOINED_RE.fullmatch(t, last, m.start())) or ANOTHER_RE.search(
+            t[: m.start()]
+        )
+        last = m.end()
+        if single and not new and len(said) <= 1 and _named_again(seen, kind, said, ages, notes):
             continue  # #359: «дети: 5 и 8 лет, сын любит море»: the same child again
         if asking and len(said) < count:  # no age for every counted child: nobody is added
             if ASKING_NOTE not in notes:
