@@ -3,7 +3,7 @@ import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api
 import { Board, EarlierChoices, TripParams } from "./Board";
 import { MIN_THINK_MS, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
-import type { ChatReply, Guest, Offer, Stage } from "./contracts";
+import type { ChatReply, Guest, LlmMode, Offer, Stage } from "./contracts";
 import { SOURCES, brief, cartLine, describe, withoutNoAi } from "./format";
 import {
   type ChatEntry,
@@ -16,6 +16,7 @@ import {
   touchChat,
 } from "./history";
 import { Mascot, moodOf } from "./Mascot";
+import { SourceSwitches, type Switches, loadSwitches, requested, saveSwitches } from "./Sources";
 
 // stage: the stage after an agent message; the roadmap links a done step to it (#434).
 // An agent message keeps its reply: the choices under it stay after «ещё», a reload or a chat switch.
@@ -144,7 +145,8 @@ export function App() {
   const [query, setQuery] = useState("");
   const [thinking, setThinking] = useState(false);
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
-  const [healthNoAi, setHealthNoAi] = useState(false); // /api/mode says no model: known before the first reply
+  const [switches, setSwitches] = useState<Switches>(loadSwitches); // #490: both off by default
+  const [can, setCan] = useState<LlmMode>({ llm: false, real_data: false }); // /api/mode: keys in .env
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const lastMsg = useRef<HTMLDivElement>(null); // the last agent message: its block sits under it
@@ -214,12 +216,17 @@ export function App() {
     }
   }
 
-  // The mode badge must not wait for the first reply.
+  // The switches and the mode badge must not wait for the first reply.
   useEffect(() => {
     getMode()
-      .then((m) => setHealthNoAi(m.llm === false))
-      .catch((e) => console.warn("GET /api/mode failed; the badge waits for the first reply", e));
+      .then((m) => setCan({ llm: m.llm === true, real_data: m.real_data === true }))
+      .catch((e) => console.warn("GET /api/mode failed; the switches stay off", e));
   }, []);
+
+  function switchSources(next: Switches) {
+    setSwitches(next);
+    saveSwitches(next);
+  }
 
   // Reload restores the last open chat.
   useEffect(() => {
@@ -258,7 +265,7 @@ export function App() {
     const no = loadNo.current;
     try {
       const t0 = Date.now();
-      const r = await chat({ session_id: sid, message: m });
+      const r = await chat({ session_id: sid, message: m, ...requested(switches, can) });
       // A fast offline reply still shows the thinking indicator for a moment (not with reduced motion).
       const rest = MIN_THINK_MS - (Date.now() - t0);
       if (motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
@@ -392,7 +399,9 @@ export function App() {
 
   const lastAgent = ui.messages.map((m) => m.role).lastIndexOf("agent");
   const asked = ui.messages.filter((m) => m.role === "user").length; // the thinking banana and plane take turns
-  const badgeNoAi = reply ? noAi : healthNoAi; // the «Без ИИ» badge of the sidebar (TRAP-1)
+  const on = requested(switches, can);
+  // The «Без ИИ» badge of the sidebar (TRAP-1): GigaChat is off, or the last reply was rule-based.
+  const badgeNoAi = !on.llm || (!!reply && noAi);
   // A done step links to the first answer after which the trip was past it.
   const doneAt = STEPS.map((_, i) => {
     const n = ui.messages.findIndex(
@@ -558,6 +567,7 @@ export function App() {
               Без ИИ — упрощённый режим
             </span>
           )}
+          <SourceSwitches on={switches} can={can} onChange={switchSources} />
           <details className="hint">
             <summary aria-label="Где хранятся чаты">
               <span className="qmark" aria-hidden="true">?</span>
@@ -695,7 +705,11 @@ export function App() {
             <summary aria-label="Откуда цены">
               <span className="qmark" aria-hidden="true">?</span>
             </summary>
-            <p>Цены и рейсы — синтетика. Оплата имитирована.</p>
+            <p>
+              {on.real_data
+                ? "Перелёты — Авиасейлс (цены из кэша поиска), остальные цены — синтетика. Оплата имитирована."
+                : "Цены и рейсы — синтетика. Оплата имитирована."}
+            </p>
           </details>
         </form>
       </section>

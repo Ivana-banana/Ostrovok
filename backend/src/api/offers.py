@@ -24,6 +24,9 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
 from importlib.resources import files
@@ -815,6 +818,26 @@ class SyntheticTransfers:
 HOTELS: HotelProvider = OsmOrSynthetic()
 TRANSPORT: TransportProvider = SyntheticTransport()
 TRANSFERS: TransferProvider = SyntheticTransfers()
+# Real flights (#490): main.py builds the adapter once when TRAVELPAYOUTS_TOKEN is set. A chat
+# request uses it only with ChatRequest.real_data: a ContextVar per request, not a module swap,
+# so parallel sessions keep their own choice. Inspiration and travel_hours read TRANSPORT.
+REAL_TRANSPORT: TransportProvider | None = None
+_real_data: ContextVar[bool] = ContextVar("real_data", default=False)
+
+
+@contextmanager
+def real_data(on: bool) -> Iterator[None]:
+    """The real transport for the searches inside the block, when it exists (#490)."""
+    token = _real_data.set(on)
+    try:
+        yield
+    finally:
+        _real_data.reset(token)
+
+
+def transport() -> TransportProvider:
+    """The transport port of this request: REAL_TRANSPORT when asked and built, else TRANSPORT."""
+    return REAL_TRANSPORT if _real_data.get() and REAL_TRANSPORT is not None else TRANSPORT
 
 
 def offers_for_place(
@@ -832,7 +855,7 @@ def offers_for_place(
     pairs = ops.guarded("hotels", lambda: HOTELS.hotels(spec, place, now), [])
     hotels = [h for h, _ in pairs]
     legs = (
-        ops.guarded("transport", lambda: TRANSPORT.legs(spec, _complete(origin), place), [])
+        ops.guarded("transport", lambda: transport().legs(spec, _complete(origin), place), [])
         if origin and not spec.own_transport
         else []
     )

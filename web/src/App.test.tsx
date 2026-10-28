@@ -5,6 +5,7 @@ import fixture from "../../tests/fixtures/chat_reply.json";
 import { App, SESSION_KEY } from "./App";
 import { VERBS } from "./brand";
 import { HISTORY_KEY } from "./history";
+import { SWITCHES_KEY } from "./Sources";
 import type { ChatReply } from "./contracts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -153,15 +154,36 @@ suite("приложение", () => {
   });
 
   it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/mode сообщает llm=false", async () => {
-    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false } });
+    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: false } });
     await mount();
     expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
   });
 
-  it("с моделью пометки до первого сообщения нет", async () => {
-    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true } });
+  it("#490: модель есть, но GigaChat выключен (по умолчанию) — пометка «Без ИИ»", async () => {
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: true } });
+    await mount();
+    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
+  });
+
+  it("с моделью и включённым GigaChat пометки до первого сообщения нет", async () => {
+    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: false } });
     await mount();
     expect(box.querySelector(".badge-noai")).toBeNull();
+  });
+
+  it("#490: переключатель уходит с запросом и хранится в браузере; без ключа — false", async () => {
+    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: true } });
+    routes["POST /api/chat"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const real = box.querySelector<HTMLInputElement>("aside input[role='switch']");
+    await act(async () => real?.click());
+    expect(JSON.parse(localStorage.getItem(SWITCHES_KEY) ?? "{}")).toEqual({ real_data: true, llm: true });
+    await click("Выходные в Казани");
+    await click("Отправить");
+    expect(calls.at(-1)?.body).toMatchObject({ real_data: true, llm: false });
   });
 
   it("ошибка сервера: понятный текст без трассировки", async () => {
@@ -485,8 +507,8 @@ suite("список чатов слева", () => {
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     await say("Сочи с детьми");
     expect(calls.filter((c) => c.key === "POST /api/chat").map((c) => c.body)).toEqual([
-      { session_id: null, message: "Казань на выходные" },
-      { session_id: null, message: "Сочи с детьми" },
+      { session_id: null, message: "Казань на выходные", real_data: false, llm: false },
+      { session_id: null, message: "Сочи с детьми", real_data: false, llm: false },
     ]);
     expect(titles()).toEqual(["Сочи с детьми", "Казань на выходные"]);
     await open("Казань на выходные");
@@ -605,6 +627,8 @@ suite("чат как в мессенджере", () => {
   });
 
   it("TRAP-1: ответ без модели — пометка «Без ИИ» в списке чатов", async () => {
+    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: false } });
     routes["POST /api/chat"] = () => ({ status: 200, body: { ...checkoutStage, llm: false } });
     await mount();
     expect(box.querySelector(".badge-noai")).toBeNull();

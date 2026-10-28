@@ -7,8 +7,10 @@ Routes: POST /api/chat (ChatRequest -> ChatReply), GET /api/session/{session_id}
 POST /api/cart (CartAction -> Cart), POST /api/checkout (CheckoutRequest -> Voucher;
 409 when the total differs from the cart or the booking provider refuses),
 GET /api/mode -> LlmMode (known before the first reply; consumers: web/src/api.ts getMode,
-web/src/App.tsx, web/e2e/noai-badge.spec.ts, backend/tests/test_api.py). GET /health stays
-exactly {"status": "ok"} (task/rules.md): the LLM mode lives only in /api/mode.
+web/src/App.tsx, web/src/Sources.tsx, web/e2e/noai-badge.spec.ts, backend/tests/test_api.py).
+ChatRequest.real_data and ChatRequest.llm (#490; consumers: api/main.py, api/offers.py
+real_data, api/llm.py allowed, web/src/App.tsx, web/src/Sources.tsx, backend/tests/test_sources.py).
+GET /health stays exactly {"status": "ok"} (task/rules.md): the LLM mode lives only in /api/mode.
 
 Partner API (#289, #435): every route above also lives under /api/v1 with the same models.
 POST /api/v1/plan (ChatRequest -> ChatReply): the chat driven to a filled cart (stage
@@ -262,6 +264,11 @@ class ChatRequest(BaseModel):
 
     session_id: str | None = None  # None: new session
     message: str = Field(min_length=1)
+    # #490, switches of the web (both off by default). real_data: flights from Travelpayouts
+    # (Aviasales) when TRAVELPAYOUTS_TOKEN is set, else synthetic; llm: the model when it is
+    # configured, else rules (TRAP-1). Per request: parallel sessions do not share them.
+    real_data: bool = False
+    llm: bool = False
 
 
 class ChatReply(BaseModel):
@@ -276,7 +283,10 @@ class ChatReply(BaseModel):
 
 
 class LlmMode(BaseModel):
-    llm: bool  # False: rule-based mode without a model (TRAP-1); GET /api/mode
+    """GET /api/mode: what the switches of ChatRequest can turn on (#490)."""
+
+    llm: bool  # False: no model in .env, every reply is rule-based (TRAP-1)
+    real_data: bool  # False: no TRAVELPAYOUTS_TOKEN in .env, every price is synthetic
 
 
 class CartAction(BaseModel):
@@ -307,6 +317,8 @@ class CheckoutRequest(BaseModel):
 # Data sources and the purchase behind the core. One Protocol per source; the active adapter
 # is one module variable: api/offers.py (HOTELS, TRANSPORT, TRANSFERS), api/cart.py (BOOKING).
 # Swap it with one assignment at start-up (main.py) or in a test; no factories, no env switch.
+# Exception (#490): offers.REAL_TRANSPORT (Travelpayouts) is built at start-up and serves only
+# the chat requests with real_data (offers.transport()).
 # Backend only: no mirror in web/src/contracts.ts, the types the web sees do not change.
 # Consumers: api/offers.py (adapters, offers_for_place), api/fixtures.py (travel_hours),
 # api/inspire.py (TRANSPORT: hours door to door and at the wheel, #321),

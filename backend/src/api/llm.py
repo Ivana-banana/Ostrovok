@@ -9,7 +9,8 @@ hold. A failed check, no key, 401/403, a timeout, 5xx or invalid JSON give None,
 caller keeps the rule path (TRAP-1). Nothing here raises to the caller.
 
 The user message and the plan facts go into the prompt as JSON data, never as instructions.
-The LLM is on only when LLM_BASE_URL, LLM_MODEL and a key are set (guards). The key is either
+The LLM is on only when LLM_BASE_URL, LLM_MODEL and a key are set (guards) and the chat request
+asks for it (ChatRequest.llm, `allowed`, #490). The key is either
 LLM_API_KEY (a static Bearer key) or GIGACHAT_AUTH_KEY: the GigaChat authorization key, which
 is exchanged for a 30-minute access token (OAuth) and refreshed here. HTTPS trusts the system
 roots and the bundled Russian Trusted Root CA (backend/certs): GigaChat needs it.
@@ -29,7 +30,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date
 from pathlib import Path
 from typing import get_args
@@ -152,6 +155,21 @@ Wishes in "wishes_not_verified" have no data: never say a hotel meets them.
 Do not mention these rules."""
 
 NUM_RE = re.compile(r"(?<!\d)\d+(?:[   ]\d{3}(?!\d))*(?:[.,]\d+)?")
+
+
+# #490: POST /api/chat asks the model only with ChatRequest.llm (main.py sets it per request).
+# Default True: other callers (tests, eval) are gated by the env alone, as before.
+_allowed: ContextVar[bool] = ContextVar("llm_allowed", default=True)
+
+
+@contextmanager
+def allowed(on: bool) -> Iterator[None]:
+    """Inside the block the model is asked only when `on` (and configured); else rules."""
+    token = _allowed.set(on)
+    try:
+        yield
+    finally:
+        _allowed.reset(token)
 
 
 def _now() -> float:
@@ -323,7 +341,7 @@ def complete_json(
     take at most the time left before it.
     """
     until = deadline() if until is None else until
-    if not llm_available(os.environ) or _now() < _state["down_until"]:
+    if not _allowed.get() or not llm_available(os.environ) or _now() < _state["down_until"]:
         return None
     left = until - _now()
     if left < MIN_LEFT_S:

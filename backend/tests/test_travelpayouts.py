@@ -172,19 +172,19 @@ def test_trap6_origin_hub_sweep_does_not_call_the_api(adapter):
 
 
 def test_trap6_tests_and_eval_never_see_the_token(monkeypatch):
-    """conftest drops the token before api.main is imported; checks.py (make eval) puts the
-    synthetic transport back after api.main picked the real one."""
+    """conftest drops the token before api.main is imported. With a token api.main only builds
+    the real adapter; a search outside a real_data request (make eval) stays synthetic (#490)."""
     import api.checks
     import api.main
 
     assert "TRAVELPAYOUTS_TOKEN" not in os.environ
-    assert isinstance(offers.TRANSPORT, SyntheticTransport)
-    monkeypatch.setattr(offers, "TRANSPORT", offers.TRANSPORT)  # restored after the test
+    assert offers.REAL_TRANSPORT is None
+    monkeypatch.setattr(offers, "REAL_TRANSPORT", None)  # restored after the test
     monkeypatch.setenv("TRAVELPAYOUTS_TOKEN", "token")
     importlib.reload(api.main)
-    assert isinstance(offers.TRANSPORT, TravelpayoutsTransport)
     importlib.reload(api.checks)
-    assert isinstance(offers.TRANSPORT, SyntheticTransport)
+    assert isinstance(offers.REAL_TRANSPORT, TravelpayoutsTransport)
+    assert isinstance(offers.transport(), SyntheticTransport)
     monkeypatch.delenv("TRAVELPAYOUTS_TOKEN")
     importlib.reload(api.main)
 
@@ -211,13 +211,16 @@ def test_place_without_iata_is_not_asked(tmp_path):
 def test_trap1_without_token_transport_stays_synthetic(monkeypatch):
     import api.main
 
-    monkeypatch.setattr(offers, "TRANSPORT", offers.TRANSPORT)  # restored after the test
+    monkeypatch.setattr(offers, "REAL_TRANSPORT", None)  # restored after the test
     monkeypatch.delenv("TRAVELPAYOUTS_TOKEN", raising=False)
     importlib.reload(api.main)
-    assert isinstance(offers.TRANSPORT, SyntheticTransport)
+    assert offers.REAL_TRANSPORT is None
+    with offers.real_data(True):
+        assert isinstance(offers.transport(), SyntheticTransport)
     monkeypatch.setenv("TRAVELPAYOUTS_TOKEN", "token")
     importlib.reload(api.main)
-    assert isinstance(offers.TRANSPORT, TravelpayoutsTransport)
+    assert isinstance(offers.REAL_TRANSPORT, TravelpayoutsTransport)
+    assert isinstance(offers.TRANSPORT, SyntheticTransport)  # no swap at start-up (#490)
     monkeypatch.delenv("TRAVELPAYOUTS_TOKEN")
     importlib.reload(api.main)  # leave api.main as the other tests import it
 
