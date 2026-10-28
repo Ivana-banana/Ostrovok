@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
 import { Board, EarlierChoices, TripParams } from "./Board";
-import { MIN_THINK_MS, PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
+import { MIN_THINK_MS, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
 import type { ChatReply, Guest, Offer, Stage } from "./contracts";
 import { SOURCES, brief, cartLine, describe, withoutNoAi } from "./format";
@@ -439,10 +439,7 @@ export function App() {
       <aside id="chats" className="side" aria-label="Чаты">
         <div className="brand">
           <Mascot size={38} />
-          <div>
-            <b>{PRODUCT_NAME}</b>
-            <small>{PRODUCT_LINE}</small>
-          </div>
+          <b>{PRODUCT_NAME}</b>
           <button
             type="button"
             className="icon drawer-close"
