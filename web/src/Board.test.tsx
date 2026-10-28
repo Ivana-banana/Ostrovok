@@ -451,4 +451,15 @@ suite("доска поездки", () => {
     other.plan.offers = [...other.plan.offers].reverse();
     expect(picks(html(other))).toBe(0);
   });
+
+  it("TRAP-5: зона (UTC±N) стоит внутри строки транспорта, после города", () => {
+    const doc = render({ ...structuredClone(base), stage: "compare", voucher: null });
+    const rows = [...doc.querySelectorAll("[aria-label='Сравнение транспорта'] tbody tr")];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const tr of rows) {
+      const ends = [...tr.querySelectorAll("td[data-label='Отправление'], td[data-label='Прибытие']")];
+      expect(ends).toHaveLength(2);
+      for (const td of ends) expect(td.querySelector("small + .zone")?.textContent).toMatch(/\(UTC[+-]\d/);
+    }
+  });
 });
