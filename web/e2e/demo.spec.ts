@@ -1,7 +1,7 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
-// Сценарий демо жюри S6 (eval/cases.json): запрос в чат, дальше только клики на доске
-// поездки до ваучера, затем перезагрузка. Работает на агенте с фикстурами (без ключа LLM).
+// Сценарий демо жюри S6 (eval/cases.json): запрос в чат, дальше только клики по карточкам
+// этапа под ответом агента до ваучера, затем перезагрузка (одно окно, #434). Работает на агенте с фикстурами (без ключа LLM).
 const REQUEST = "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё.";
 
 // #334: семья с ребёнком и младенцем — самая длинная подпись мест в строке перелёта.
@@ -68,6 +68,10 @@ test("S6: запрос → сравнение → план → корзина �
   await page.getByLabel("Запрос").fill(REQUEST);
   await page.getByRole("button", { name: "Отправить" }).click();
   await expect(page.getByRole("status")).not.toBeEmpty();
+  // #434: справа — путь поездки: текущий шаг «Сравнение», пройденные — с итогом из данных.
+  const road = page.getByRole("complementary", { name: "Путь поездки" });
+  await expect(road.locator("[aria-current='step']")).toContainText("Сравнение");
+  await expect(road.locator("li.done").nth(1)).toContainText("Казань");
 
   // Сравнение: ≥ 3 отеля, цены с пометкой «синтетика», транспорт со временем в пути.
   const hotels = page.getByRole("region", { name: "Сравнение отелей" });
@@ -80,6 +84,8 @@ test("S6: запрос → сравнение → план → корзина �
 
   // Выбор другого отеля — один клик; агент собирает план с таймлайном.
   await hotels.getByRole("button", { name: /^Выбрать/ }).first().click();
+  // Таймлайн виден уже на сравнении; этап сборки — кнопка «Положить в корзину» (на сравнении «Собрать план»).
+  await expect(page.getByRole("button", { name: "Положить в корзину" })).toBeVisible();
   const timeline = page.getByRole("region", { name: "Таймлайн" });
   await expect(timeline).toBeVisible();
 
@@ -138,18 +144,62 @@ test("S6: запрос → сравнение → план → корзина �
   await page.reload();
   await expect(page.getByRole("region", { name: "Ваучер" }).locator("h2")).toHaveText(booking ?? "");
   await expect(page.getByRole("region", { name: "Корзина" })).toBeVisible();
+  // #434: после брони сравнение свёрнуто в «Варианты» под ответом и открывается кликом.
+  const options = page.locator(".attach details.options");
+  await expect(page.getByRole("region", { name: "Сравнение отелей" })).toBeHidden();
+  await options.locator("summary").click();
   await expect(page.getByRole("region", { name: "Сравнение отелей" })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test("ширина телефона: чат и доска без горизонтальной прокрутки страницы", async ({ page }) => {
+const noPageScroll = (page: Page) =>
+  page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+
+test("ширина телефона: чат с карточками этапа без горизонтальной прокрутки страницы", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await page.getByLabel("Запрос").fill(REQUEST);
   await page.getByRole("button", { name: "Отправить" }).click();
-  await expect(page.getByRole("region", { name: "Сравнение отелей" })).toBeVisible();
-  const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(wide).toBe(false);
+  await expect(page.getByRole("status")).not.toBeEmpty();
+  expect(await noPageScroll(page)).toBe(false);
+  // #434: one window — the comparison stands in the chat under the answer, no plan panel.
+  const hotels = page.locator(".feed").getByRole("region", { name: "Сравнение отелей" });
+  await expect(hotels).toBeVisible();
+  await expect(page.getByRole("button", { name: /План/ })).toHaveCount(0);
+  // The progress is a caption with a bar on a phone: «Шаг 3 из 5 · Сравнение».
+  await expect(page.locator(".step-caption")).toHaveText("Шаг 3 из 5 · Сравнение");
+  // A tap opens the roadmap of the trip as a sheet; ✕ closes it.
+  const road = page.getByRole("complementary", { name: "Путь поездки" });
+  await expect(road).toBeHidden();
+  await page.locator(".step-caption").click();
+  await expect(road.locator("[aria-current='step']")).toContainText("Сравнение");
+  expect(await noPageScroll(page)).toBe(false);
+  await page.getByRole("button", { name: "Закрыть путь поездки" }).click();
+  await expect(road).toBeHidden();
+  expect(await noPageScroll(page)).toBe(false);
+  // TRAP-7: every price of the tables is visible with «синтетика», inside the screen, no scroll.
+  for (const name of ["Сравнение отелей", "Сравнение транспорта"]) {
+    const prices = page.getByRole("region", { name }).locator("tbody .price");
+    const n = await prices.count();
+    expect(n, `цен в «${name}»`).toBeGreaterThan(0);
+    for (let i = 0; i < n; i++) {
+      const p = prices.nth(i);
+      await p.scrollIntoViewIfNeeded();
+      await expect(p).toBeVisible();
+      await expect(p.locator(".synth")).toHaveText("синтетика");
+      const b = await p.boundingBox();
+      expect(b && b.x >= 0 && b.x + b.width <= 390, `цена ${i + 1} в «${name}» в пределах экрана`).toBe(true);
+    }
+  }
+  const blockScroll = await page.locator(".attach").evaluate((e) => e.scrollWidth > e.clientWidth);
+  expect(blockScroll).toBe(false);
+  // The parameters are one row of chips above the chat: the row scrolls, not the page.
+  await expect(page.getByRole("region", { name: "Параметры поездки" })).toContainText("Казань");
+  expect(await noPageScroll(page)).toBe(false);
+  // Chats: a drawer by ☰.
+  await page.getByRole("button", { name: "Список чатов" }).click();
+  await expect(page.getByRole("button", { name: "＋ Новый чат" })).toBeVisible();
+  expect(await noPageScroll(page)).toBe(false);
 });
 
 test("ширина телефона: длинная подпись мест семьи в корзине без горизонтальной прокрутки", async ({ page }) => {
@@ -165,12 +215,157 @@ test("ширина телефона: длинная подпись мест се
   const label = "3 места (1 детский тариф, 1 младенец без места, 10 % тарифа)";
   const flights = cart.locator("ul.plain").first().locator("li").filter({ hasText: label });
   await expect(flights).toHaveCount(2); // туда и обратно
-  const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(wide).toBe(false);
-  // Строка не вылезает за край корзины: длинная подпись переносится.
+  expect(await noPageScroll(page)).toBe(false);
+  // Подпись не обрезана: переносится, а не прячется за overflow (scrollWidth <= clientWidth).
   const box = await cart.boundingBox();
   for (const row of await flights.all()) {
     const r = await row.boundingBox();
     expect(r && box && r.x + r.width <= box.x + box.width + 1).toBe(true);
+    const clipped = await row
+      .locator(":scope > span:first-child")
+      .evaluate((e) => e.scrollWidth > e.clientWidth);
+    expect(clipped, "подпись мест обрезана").toBe(false);
   }
+});
+
+test("два чата: переключение возвращает сообщения каждого, «Новый чат» — пустой", async ({ page }) => {
+  await page.goto("/");
+  const ask = async (text: string) => {
+    await page.getByLabel("Запрос").fill(text);
+    await page.getByRole("button", { name: "Отправить" }).click();
+    await expect(page.getByRole("status")).not.toBeEmpty();
+  };
+  const userMsgs = () => page.locator(".msg.user").allTextContents();
+  const chats = page.getByRole("navigation", { name: "Прошлые чаты" });
+  await ask(REQUEST);
+  await expect(chats.locator(".chat-open")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "＋ Новый чат" }).click();
+  expect(await userMsgs()).toEqual([]);
+  await expect(page.getByText("Куда поедем?")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Сравнение отелей" })).toHaveCount(0);
+
+  await ask(FAMILY);
+  await expect(chats.locator(".chat-open")).toHaveCount(2);
+  const kazan = chats.locator(".chat-open").filter({ hasText: "Выходные в Казани" });
+  const sochi = chats.locator(".chat-open").filter({ hasText: "Сочи из Москвы" });
+
+  await kazan.click();
+  await expect(kazan).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".msg.user")).toHaveText([REQUEST]);
+  await expect(page.getByRole("region", { name: "Параметры поездки" })).toContainText("Казань");
+
+  await sochi.click();
+  await expect(sochi).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".msg.user")).toHaveText([FAMILY]);
+  await expect(page.getByRole("region", { name: "Параметры поездки" })).toContainText("Сочи");
+
+  // Reload: the list and the open chat stay.
+  await page.reload();
+  await expect(chats.locator(".chat-open")).toHaveCount(2);
+  await expect(page.locator(".msg.user")).toHaveText([FAMILY]);
+});
+
+// #368: на телефоне карточка транспорта — время и город в одной строке, без пустой полосы
+// кнопки и без строки «Пересадки: нет». Длинный город (TRAP-2) переносится внутри карточки.
+const LONG_CITY = "Из Санкт-Петербурга в Минеральные Воды, 2 взрослых, 3 ночи с 10 декабря";
+
+async function transportLayout(transport: Locator) {
+  const box = await transport.locator(".scroll").evaluate((e) => ({
+    scroll: e.scrollWidth,
+    client: e.clientWidth,
+    right: e.getBoundingClientRect().right,
+  }));
+  const rows = await transport.locator("tbody tr").evaluateAll((trs) =>
+    trs.map((tr) => {
+      const cells = [...tr.querySelectorAll("td")];
+      const ends = cells.filter((td) => td.querySelector("small"));
+      const place = ends.map((td) => {
+        const when = td.querySelector(".when")!.getBoundingClientRect();
+        const city = td.querySelector("small")!.getClientRects()[0];
+        return Math.abs(when.top - city.top);
+      });
+      const cityRight = Math.max(...ends.flatMap((td) => [...td.querySelector("small")!.getClientRects()].map((r) => r.right)));
+      const empty = cells.filter((td) => !td.textContent?.trim()).map((td) => td.getBoundingClientRect().height);
+      const noChange = cells.filter((td) => td.textContent?.trim() === "нет").map((td) => td.getBoundingClientRect().height);
+      return { place, cityRight, empty, noChange };
+    }),
+  );
+  expect(rows.length).toBeGreaterThan(0);
+  expect(box.scroll, "у таблицы транспорта нет прокрутки вбок").toBeLessThanOrEqual(box.client);
+  for (const [i, r] of rows.entries()) {
+    expect(r.place, `строка ${i + 1}: отправление и прибытие`).toHaveLength(2);
+    for (const d of r.place) expect(d, `строка ${i + 1}: город начинается в строке времени`).toBeLessThan(4);
+    expect(r.cityRight, `строка ${i + 1}: город не обрезан краем карточки`).toBeLessThanOrEqual(box.right);
+    for (const h of r.empty) expect(h, `строка ${i + 1}: пустая ячейка занимает место`).toBe(0);
+    for (const h of r.noChange) expect(h, `строка ${i + 1}: «Пересадки: нет» видно`).toBe(0);
+  }
+  return rows;
+}
+
+test("ширина телефона: транспорт — время с городом в одной строке, без пустых ячеек", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("Запрос").fill(REQUEST);
+  await page.getByRole("button", { name: "Отправить" }).click();
+  const transport = page.getByRole("region", { name: "Сравнение транспорта" });
+  await expect(transport).toBeVisible();
+  // Pick a hotel: the picked rows lose the «Выбрать» button, their cell is empty.
+  await page.getByRole("region", { name: "Сравнение отелей" }).getByRole("button", { name: /^Выбрать/ }).first().click();
+  await expect(page.getByRole("region", { name: "Таймлайн" })).toBeVisible();
+  await expect(transport.locator("tr.chosen")).not.toHaveCount(0); // the plan picked the legs
+  const rows = await transportLayout(transport);
+  expect(rows.some((r) => r.empty.length > 0), "есть строка без кнопки").toBe(true);
+  expect(await noPageScroll(page)).toBe(false);
+});
+
+for (const width of [390, 360]) {
+  test(`ширина ${width} px: длинный город в транспорте переносится, прокрутки вбок нет (TRAP-2)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/");
+    await page.getByLabel("Запрос").fill(LONG_CITY);
+    await page.getByRole("button", { name: "Отправить" }).click();
+    const transport = page.getByRole("region", { name: "Сравнение транспорта" });
+    await expect(transport).toContainText("Минеральные Воды");
+    await transportLayout(transport);
+    expect(await noPageScroll(page)).toBe(false);
+  });
+}
+
+test.describe("с анимацией", () => {
+  test.use({ reducedMotion: "no-preference" });
+
+  test("пока ответ не готов — только индикатор мысли, затем сообщение целиком с блоком этапа", async ({ page }) => {
+    await page.goto("/");
+    // Record what the chat showed while it thought: the indicator lives ~1 s, polling could miss it.
+    await page.evaluate(() => {
+      const w = window as unknown as { thought: boolean; leaked: boolean };
+      w.thought = false;
+      w.leaked = false;
+      new MutationObserver(() => {
+        if (document.querySelector(".think")) {
+          w.thought = true;
+          if (document.querySelector(".msg.agent .typing, .attach .board")) w.leaked = true;
+        }
+      }).observe(document.body, { subtree: true, childList: true, attributes: true });
+    });
+    await page.getByLabel("Запрос").fill("Хочу на море");
+    await page.getByRole("button", { name: "Отправить" }).click();
+    const status = page.getByRole("status");
+    await expect(status).not.toBeEmpty();
+    await expect(page.locator(".think")).toHaveCount(0);
+    const seen = await page.evaluate(() => {
+      const w = window as unknown as { thought: boolean; leaked: boolean };
+      return { thought: w.thought, leaked: w.leaked };
+    });
+    expect(seen.thought, "индикатор мысли был виден").toBe(true);
+    expect(seen.leaked, "текст и карточки не показывались до готовности").toBe(false);
+    const hint = page.locator(".attach").getByRole("button").first();
+    await expect(hint).toBeVisible();
+    const label = (await hint.getAttribute("aria-label")) ?? (await hint.textContent()) ?? "";
+    await hint.click();
+    await expect(page.locator(".msg.user")).toHaveCount(2);
+    await expect(page.getByRole("status")).not.toBeEmpty();
+    expect(label.length).toBeGreaterThan(0);
+  });
 });

@@ -253,9 +253,21 @@ def test_metric_counts_booked_sessions_questions_and_first_recommendation_time()
     assert m["system"] == 0.67 and m["baseline"] == 0.0
     lines = m["details"]
     assert any(x.startswith("сессий 3, из них идут до брони 3, с ваучером 2") for x in lines)
-    assert any(x.startswith("уточняющих вопросов: всего 2,") for x in lines)
+    # «привет» asks 2; the exact request of S3 names no origin: 1 question in each walk (#436)
+    assert any(x.startswith("уточняющих вопросов: всего 4,") for x in lines)
     assert any("время до первой рекомендации" in x and "нет" not in x for x in lines)
     assert any("ошибки стыковок" in x for x in lines)
+
+
+def test_walk_notes_a_stage_without_a_scripted_answer_instead_of_raising(monkeypatch):
+    """#79: stage «select» has no scripted answer; stop=("compare",) must not raise KeyError."""
+    rewrite(monkeypatch, lambda r: r.model_copy(update={"stage": "select"}))
+    with checks._api() as (client, _):
+        exact = checks._quotes(BY_ID["S3"])[0]
+        run = checks._walk(client, "T", "select", exact, stop=("compare",))
+    assert run.last.stage == "select" and len(run.replies) == 1 and not run.booked
+    assert run.note.startswith("чат не довёл до «compare»") and "«select»" in run.note
+    assert any("чат не довёл до" in x for x in checks.metric("visible")["details"])
 
 
 def test_metric_is_none_without_sessions():
@@ -297,6 +309,17 @@ def test_api_context_removes_only_its_own_override_and_its_directory():
     with checks._api():
         pass
     assert main.get_store not in main.app.dependency_overrides
+
+
+def test_api_context_follows_api_main_after_a_reload(monkeypatch):
+    """#442: a test before this one reloads api.main (cors_app of test_partner_api.py). The app
+    and get_store are new objects then: checks._api must override the store of the new app,
+    not of the old names it imported, or the test above fails by the run order."""
+    from fastapi import FastAPI
+
+    monkeypatch.setattr(main, "app", FastAPI())
+    monkeypatch.setattr(main, "get_store", lambda: None)
+    test_api_context_removes_only_its_own_override_and_its_directory()
 
 
 def test_s9_precondition_needs_the_cheapest_non_refundable_first_option():
@@ -518,7 +541,7 @@ def test_only_checks_py_reads_the_unseen_pool():
     places = [root / "backend/src", root / "scripts", root / "web/src"]
     suffixes = {".py", ".sh", ".ts", ".tsx", ".js", ".json", ".mk"}
     readers = {
-        str(p.relative_to(root))
+        p.relative_to(root).as_posix()
         for base in places
         for p in base.rglob("*")
         if p.is_file() and p.suffix in suffixes and "cases_unseen" in p.read_text("utf-8")

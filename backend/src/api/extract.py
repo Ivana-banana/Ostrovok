@@ -9,7 +9,8 @@ Invalid values (31 ноября, 0 ночей) are skipped with a note, never an
 
 import functools
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from api import catalog
 from api.fixtures import CATALOG, future_date
@@ -423,7 +424,19 @@ WISHES = [
     ("шопинг", r"шопинг|аутлет"),
     ("музеи", r"\bмузе[йяеи]\w*|выставк|\bтеатр"),
     ("йога", r"\bйог(?:а|и|е|у|ой)\b|\bйог-|ретрит"),
-    ("тяжело ходить", r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил"),
+    (
+        "тяжело ходить",
+        r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил|на\s+коляске|инвалидн\w*\s+коляск|колясочник|кресл\w*[\s-]+коляск",
+    ),
+    # #338: hard conditions of a stay; no hotel field checks them, the reply says so
+    ("детская коляска", r"детск\w*\s+коляск|\bс\s+коляск\w*"),
+    ("веганское питание", r"веган"),
+    ("вегетарианское питание", r"вегетариан"),
+    (
+        "поздний заезд",
+        r"засел\w*(?:\s+\w+)?\s+(?:ночью|поздно|сразу)|засел\w*\s+после\s+(?:2[23]|0?[0-5])(?::\d\d|\s*(?:ч\b|час\w*|ночи|утра))|поздн\w*\s+(?:заезд|заселен)|ночн\w*\s+заезд",
+    ),
+    ("детская кроватка", r"кроватк|колыбел"),
     ("вино и еда", r"\bвин[оа]\b|\bвинн|гастро|\bеда\b|\bкухн"),
     ("с удобствами", r"удобств|палатк"),
     ("красиво", r"красив"),
@@ -459,10 +472,29 @@ def _month(word: str) -> int:
     return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»
 
 
+# #338: hard conditions of a stay; no hotel field checks them, the reply says so
+HARD_WISHES = (
+    "детская коляска", "веганское питание", "вегетарианское питание", "поздний заезд",
+    "детская кроватка",
+)  # fmt: skip
 NO_DATA_WISHES = (
     "северное сияние", "киты", "термальные источники", "фестиваль", "дайвинг", "серфинг",
-    "рыбалка", "сафари", "шопинг", "музеи", "йога",
+    "рыбалка", "сафари", "шопинг", "музеи", "йога", *HARD_WISHES,
 )  # fmt: skip
+# «отель у Технопарка», «возле Технопарка»: the landmark is the next capitalized word. The lookahead
+# needs \b: without it the word backtracks («у Чёрного моря» -> «Чёрног»).
+LANDMARK_RE = re.compile(
+    r"(?i:\b(?:(?:отел\w*|гостиниц\w*|жиль[её]|жить|остановиться)\s+(?:\w+\s+)?у|возле|около|рядом\s+с))"
+    r"\s+([А-ЯЁ][\w-]+)\b(?!\s+(?:мор|озер))"
+)
+BREAKFAST_FROM_RE = re.compile(
+    r"завтрак\w*\s+с\s+(\d{1,2})(?::(\d\d)|\s*(?:утра|ч\b|час(?:а|ов)?\b))"
+)
+
+
+def is_unchecked(wish: str) -> bool:
+    """A wish of #338 that no data checks: the reply and the model must not call it met."""
+    return wish in HARD_WISHES or wish.startswith(("рядом: ", "завтрак с "))
 
 
 def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
@@ -1199,6 +1231,34 @@ def llm_past_dates(llm_found: dict, today: date | None = None) -> str | None:
     return f"даты: от модели {start:%d.%m.%Y} {PAST_GONE_MARK} — не применены"
 
 
+# #362: «в конце января» is the end of the month. The day is inside the named part (check-in may
+# run past the month end): start 5th, middle 15th, end 25th.
+MONTH_PART = re.compile(
+    rf"\b(?:(?:ближе\s+к|под)\s+)?(конец|конц\w*|начал\w*|середин\w*|перв\w+\s+числ\w*"
+    rf"|последн\w+\s+числ\w*)\s+{MONTH}"
+)
+MONTH_PART_DAY = (("нач", 5, 10), ("перв", 5, 10), ("сер", 15, 20))  # (stem, day, last day)
+
+
+def _month_part(t: str, today: date) -> tuple[date, str] | None:
+    """Check-in date and the said words for «в конце января»; None if no part is named."""
+    if re.search(r"\bвыходн|\bуик[-\s]?[эе]нд", t) or not (m := MONTH_PART.search(t)):
+        return None
+    month = _month(m.group(2))
+    day, last = next(((d, e) for s, d, e in MONTH_PART_DAY if m.group(1).startswith(s)), (25, 31))
+    start = future_date(month, day, today)
+    if month == today.month and start.year > today.year and today.day < last:
+        start = today + timedelta(days=1)  # the part is under way: tomorrow is still inside it
+    return start, m.group(0)
+
+
+# The day of the return after the start: «улетаем 18-го», «обратно 3 декабря»; not «в 18:30».
+BACK_DAY_RE = re.compile(
+    rf"\b(?:улета\w*|уезжа\w*|возвраща\w*|обратно)\s+(\d{{1,2}})(?![\d:.]|\s*(?:ноч|дн|сут|недел|час|чел))(?:-?(?:го|е)\b)?"
+    rf"(?:\s+{MONTH})?"
+)
+
+
 def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
     """«11–13 декабря», «с 30 ноября по 3 декабря», «с 20 ноября»; month without a day.
 
@@ -1223,6 +1283,12 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         m2 = m1
     elif m := re.search(rf"\b{d}\s+{MONTH}", t):
         (d1, m1), d2, m2 = m.groups(), None, None
+        # C5 (#363): «прилетаем 14 ноября, улетаем 18-го» — the return day ends the stay.
+        # A day alone at or before the start is in the next month: «с 28 ноября, улетаем 3-го».
+        if back := BACK_DAY_RE.search(t, m.end()):
+            d2, m2 = back.group(1), back.group(2) or m1
+            if not back.group(2) and int(d2) <= int(d1):
+                m2 = MONTH_NAMES[_month(m1) % 12]
     else:
         today = date.today()
         if m := re.search(r"\b(сегодня|завтра|послезавтра)\b", t):
@@ -1252,6 +1318,9 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         elif re.search(r"\bследующ\w*\s+недел", t):
             found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
             notes.append(f"даты: с понедельника {found['date_from']:%d.%m} («на следующей неделе»)")
+        elif part := _month_part(t, today):
+            found["date_from"], said = part
+            notes.append(f"даты: с {part[0]:%d.%m} («{said}», допущение: день внутри части месяца)")
         if "date_from" in found:
             found["month"] = found["date_from"].month
         return
@@ -1464,6 +1533,33 @@ def _holiday_end(said: str, found: dict, notes: list[str]) -> None:
 EACH_STAY_RE = re.compile(rf"\bпо\s+{NUM}\s*(ноч\w*|дн(?:я|ей)|день)")
 
 
+# C5 (#408): «билеты у нас уже куплены», «свои билеты», «уже купили билеты».
+OWN_TICKETS_RE = re.compile(
+    r"\bбилет\w*\s+(?:у\s+(?:нас|меня)\s+)?(?:уже\s+)?(?:есть|куплен\w*|взят\w*)"
+    r"|\bсво\w+\s+билет\w*|\bуже\s+(?:купил\w*|взял\w*)\s+билет\w*"
+)
+# The clock time of the own arrival and departure in one clause: «прилетаем 14 ноября в 01:30».
+CLOCK = r"[^.,;!?]*?\bв\s+(\d{1,2})[:.](\d{2})\b"
+ARRIVE_RE = re.compile(rf"\b(?:прилет|приезж|прибыв|приезд|прибыт)\w*{CLOCK}")
+LEAVE_RE = re.compile(rf"\b(?:улет|уезжа|отъезд|обратн)\w*{CLOCK}")
+
+
+def _own_tickets(t: str, found: dict) -> None:
+    """Own tickets and their times at the destination of this message (offers.own_legs)."""
+    if not OWN_TICKETS_RE.search(t):
+        return
+    found["own_transport"] = True
+    place = resolve_place(found["destinations"][0]) if found.get("destinations") else None
+    if place is None:
+        return  # no zone for the clock time
+    tz = ZoneInfo(place["tz"])
+    for key, day, rx in (("arrive_at", "date_from", ARRIVE_RE), ("leave_at", "date_to", LEAVE_RE)):
+        m = rx.search(t)
+        if m and found.get(day) and int(m.group(1)) < 24 and int(m.group(2)) < 60:
+            at = time(int(m.group(1)), int(m.group(2)))
+            found[key] = datetime.combine(found[day], at, tz)
+
+
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     """«3 ночи», «на 3 дня» (2 ночи), «на неделю», «на месяц» (30), «на выходные» (пятница–воскресенье).
 
@@ -1484,7 +1580,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
         notes.append(
             f"длительность: {found['nights']} ноч. на поездку («{m.group(0)}», городов: {cities})"
         )
-    elif m := re.search(rf"\b{NUM}\s*ноч\w*", t):
+    elif m := re.search(rf"(?<![:.])\b{NUM}\s*ноч\w*", t):  # «в 01:30 ночи» is a time (C5)
         n = _num(m.group(1))
         if n >= 1:
             found["nights"] = n
@@ -1964,6 +2060,7 @@ def extract(
         notes[i] = re.sub(r"\d+ \w+$", f"{kept} {_night_word(kept)}", notes[i])
     if holiday:
         _holiday_end(holiday, found, notes)
+    _own_tickets(t, found)
     _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
     if re.search(
@@ -1996,6 +2093,11 @@ def extract(
     if modes:
         found["modes"] = modes
     wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
+    for m in LANDMARK_RE.finditer(text):  # #338: «отель у Технопарка»; cities are no landmark
+        if not _known(m.group(1)):
+            wishes.append(f"рядом: {m.group(1)}")
+    if m := BREAKFAST_FROM_RE.search(t):
+        wishes.append(f"завтрак с {int(m.group(1)):02d}:{m.group(2) or '00'}")
     hours = r"\s*(?:ч\b|час\w*)\s+(?:в\s+пути|лет\w*|перел\w*|езд\w*|дорог\w*)"
     if m := re.search(rf"\b(?:до|не\s+(?:больше|дольше|более))\s+(\d{{1,2}}){hours}", t):
         found["max_travel_hours"] = float(m.group(1))

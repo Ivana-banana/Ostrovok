@@ -4,11 +4,10 @@ All run on rules, without a model (TRAP-1).
 """
 
 import pytest
+from talk import say
 
 from api import catalog
-from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import chat
 from api.store import SessionStore
 
 
@@ -24,10 +23,6 @@ SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def to_stage(store, stage):
@@ -105,12 +100,15 @@ def test_other_destination_clears_the_city_and_offers_variants(store, stage):
 def test_unknown_city_answer_has_two_or_three_variants(store):
     r = say(store, "Хиврии, 3 ночи с 20 ноября")
     assert r.stage == "select" and "другое направление" in r.reply
+    assert r.questions[0].options == []  # #346: the country is asked, no unrelated cities
+    # No country the second time: no loop, honest catalogue variants (not near the place).
+    again = say(store, "не знаю", r.session_id)
+    assert again.stage == "select" and again.questions[0].options
+    assert "не обязательно рядом" in again.reply
+    r = say(store, "Хорватия", r.session_id)
     options = r.questions[0].options
     assert 2 <= len(options) <= 3 and all(in_catalog(o) for o in options)
     assert all(o in r.reply for o in options)
-    # A message with no new city on the select stage gets the variants again.
-    again = say(store, "не знаю", r.session_id)
-    assert again.stage == "select" and 2 <= len(again.questions[0].options) <= 3
     # A variant as a button text and as a number both lead on.
     assert say(store, options[1], r.session_id).plan.spec.destinations == [options[1]]
     assert say(store, "2", r.session_id).plan.spec.destinations == [options[1]]
@@ -179,4 +177,4 @@ def test_other_variants_on_inspire_are_new(store):
     shown = [d.name for d in first.plan.destinations]
     more = say(store, "покажи другие варианты", first.session_id)
     names = [d.name for d in more.plan.destinations]
-    assert more.stage == "inspire" and 2 <= len(names) <= 3 and not set(names) & set(shown)
+    assert more.stage == "inspire" and 2 <= len(names) <= 4 and not set(names) & set(shown)  # #451
