@@ -44,7 +44,6 @@ from api.contracts import (
 from api.fixtures import WARM_WATER_C
 from api.model import NOT_IN_CATALOG, ORIGIN_ASK
 from api.offers import (
-    SyntheticTransport,
     _norm,
     find_offers,
     osm_hotels,
@@ -55,9 +54,9 @@ from api.optimizer import enumerate_trips, optimize, pets_ok
 from api.store import SessionStore
 from api.timeline import build_timeline
 
-# make eval measures the synthetic data whatever .env has: api.main picks real flights by
-# TRAVELPAYOUTS_TOKEN (#261); eval needs the same numbers on every machine and no network (TRAP-6).
-offers.TRANSPORT = SyntheticTransport()
+# make eval measures the synthetic data whatever .env has: real flights (#261) serve only a
+# request with real_data (#490), and _post never sends it; same numbers everywhere (TRAP-6).
+offers.REAL_TRANSPORT = None
 
 MAX_FLIGHT_H = 5.0  # S1: "перелёт дольше 5 ч"
 LLM_ENV = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
@@ -164,7 +163,9 @@ def _api() -> Iterator[tuple[TestClient, SessionStore]]:
 
 
 def _post(client: TestClient, text: str, sid: str | None = None) -> tuple[int, ChatReply | None]:
-    res = client.post("/api/chat", json={"session_id": sid, "message": text})
+    # llm: True — the model is asked whenever the env has one (#490): A2 of S3 needs the 401 path.
+    # real_data stays off: eval measures the synthetic data, no network (TRAP-6).
+    res = client.post("/api/chat", json={"session_id": sid, "message": text, "llm": True})
     return res.status_code, (
         ChatReply.model_validate(res.json()) if res.status_code == 200 else None
     )
@@ -1525,7 +1526,7 @@ def _s10_items(r: ChatReply, tag: str, dog: bool) -> dict[str, str | None]:
     spec = r.plan.spec.model_copy(update={"pets": True})
 
     def dog_goes(name: str) -> bool:  # strict: no trips is no place for the dog
-        return any(pets_ok(t) for t in enumerate_trips(find_offers(spec, name)))
+        return any(pets_ok(t) for t in enumerate_trips(find_offers(spec, name, estimate=True)))
 
     no_pets = [d.name for d in top if dog and not dog_goes(d.name)]
     return {

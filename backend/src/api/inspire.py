@@ -12,10 +12,9 @@ places closer than SPREAD_KM to a shown one wait for a free slot.
 from collections import Counter
 from datetime import timedelta
 
-from api import catalog, ops
-from api import offers as ports  # TRANSPORT is read at call time: a test may swap it
+from api import catalog
 from api.contracts import Destination, TransportOffer, TripSpec
-from api.fixtures import COLD_MONTHS, WARM_WATER_C, future_date, trip_cost
+from api.fixtures import COLD_MONTHS, WARM_WATER_C, probe_legs, trip_cost
 from api.offers import FAR_AIRPORT_KM, drive_time, find_offers, road_nights
 from api.optimizer import pets_possible
 
@@ -180,17 +179,11 @@ def _why(spec: TripSpec, place: dict, water: float | None) -> str:
 
 
 def _road(spec: TripSpec, hub: dict, place: dict) -> tuple[float, float, int]:
-    """The way there by the transport port (offers.TRANSPORT), hours: door to door (the
-    fastest leg, as Destination.travel_hours), at the wheel (#321: a car without its nights on
-    the road, any other leg door to door), and the nights on the road of that leg. 0 at the
-    origin."""
-    probe = (
-        spec
-        if spec.date_from
-        else spec.model_copy(update={"date_from": future_date(spec.month or 1, 15)})
-    )
-    found = ops.guarded("transport", lambda: ports.TRANSPORT.legs(probe, hub, place), [])
-    legs = [x for x in found if x.origin == hub["name"]]
+    """The way there on the estimate path (fixtures.probe_legs, synthetic), hours: door to door
+    (the fastest leg, as Destination.travel_hours), at the wheel (#321: a car without its
+    nights on the road, any other leg door to door), and the nights on the road of that leg.
+    0 at the origin."""
+    legs = probe_legs(spec, hub, place)
     if not legs:
         return 0, 0, 0
     door = min(_hours(x.arrive_at - x.depart_at) for x in legs)
@@ -248,7 +241,7 @@ def card(spec: TripSpec, hub: dict, place: dict, note: str = "") -> Destination:
     air, water = catalog.month_climate(place, month) if month else (None, None)
     road = _road(spec, hub, place)
     hours, wheel, nights = road
-    offers = find_offers(spec, place["name"])
+    offers = find_offers(spec, place["name"], estimate=True)
     cost = trip_cost(spec, offers)
     violates = _rule_breaks(spec, place, hub, month)
     legs = [o for o in offers if o.kind == "transport"]

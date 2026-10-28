@@ -1,6 +1,7 @@
 """Real flights from Travelpayouts (Aviasales Data API, #261): an adapter of TransportProvider.
 
-main.py assigns it to offers.TRANSPORT only when TRAVELPAYOUTS_TOKEN is set (TRAP-1).
+main.py builds it as offers.REAL_TRANSPORT only when TRAVELPAYOUTS_TOKEN is set (TRAP-1); a chat
+request uses it only with real_data (#490).
 
 - One request per direction: GET /aviasales/v3/prices_for_dates, one way, one date; the
   departure city by its IATA city code (CITY_IATA), else airport IATA codes of the catalogue.

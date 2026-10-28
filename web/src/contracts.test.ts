@@ -97,7 +97,10 @@ const sample: ChatReply = {
         "depart_at": "2026-12-11T07:30:00+03:00",
         "arrive_at": "2026-12-11T07:50:00+03:00",
         "price_rub": 600,
-        "synthetic": true
+        "synthetic": true,
+        "hotel_offer_id": "h1",
+        "leg_offer_id": "t1",
+        "ref": null
       },
       {
         "kind": "extra",
@@ -105,7 +108,9 @@ const sample: ChatReply = {
         "title": "Ранний заезд",
         "for_offer_id": "h1",
         "price_rub": 2500,
-        "synthetic": true
+        "synthetic": true,
+        "tag": "early",
+        "at": "10:00:00"
       }
     ],
     "bundles": [
@@ -139,7 +144,10 @@ const sample: ChatReply = {
         "depart_at": "2026-12-11T07:30:00+03:00",
         "arrive_at": "2026-12-11T07:50:00+03:00",
         "price_rub": 600,
-        "synthetic": true
+        "synthetic": true,
+        "hotel_offer_id": "h1",
+        "leg_offer_id": "t1",
+        "ref": null
       }
     ],
     "total_rub": 600
@@ -153,7 +161,9 @@ const sample: ChatReply = {
         "title": "Ранний заезд",
         "for_offer_id": "h1",
         "price_rub": 2500,
-        "synthetic": true
+        "synthetic": true,
+        "tag": "early",
+        "at": "10:00:00"
       }
     ],
     "spec": {
