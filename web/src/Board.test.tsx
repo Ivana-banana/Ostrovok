@@ -268,6 +268,13 @@ suite("доска поездки", () => {
     expect(card?.querySelector("button")?.textContent).toBe("Выбрать");
   });
 
+  it("#451: под карточками направлений — «Показать ещё», только на этапе inspire", () => {
+    const more = (stage: ChatReply["stage"]) =>
+      render({ ...base, stage, voucher: null }).querySelector("[aria-label='Направления'] > button.more");
+    expect(more("inspire")?.textContent).toBe("Показать ещё");
+    expect(more("compare")).toBeNull();
+  });
+
   it("таймлайн: события убранной из корзины позиции помечены, после «Вернуть» — обычный вид", () => {
     const r = structuredClone(base);
     r.stage = "checkout";
