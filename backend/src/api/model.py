@@ -261,6 +261,10 @@ LEG_NONE = {
 LEG_THERE_RE = re.compile(r"\bтуда\b|\bв\s+одну\s+сторону\b")
 LEG_BACK_RE = re.compile(r"\bобратно\b|\bназад\b|\bобратн\w+")
 LEG_CLAUSE_RE = re.compile(r"[,;]|\bа\b|\bи\b")
+# #316: the mark in the note of a budget the agent set after «подешевле».
+AGENT_BUDGET = "задан агентом"
+# A new date, length or party ends that budget: it was fitted to the old trip.
+BUDGET_RESET = ("date_from", "date_to", "nights", "adults", "children_ages")
 # Assumption text starts with "<label>:"; a stated field removes its assumption.
 LABELS = {
     "destinations": "направление",
@@ -1184,6 +1188,27 @@ def cheaper_talk_line(old: ChatReply, low: str) -> str:
     return f"Хорошо, бюджет не меняю: итог остаётся {_rub(total)} (синтетика)."
 
 
+def agent_budget(spec: TripSpec) -> bool:
+    """The budget is a step of the agent from «подешевле», not a sum the user named (#316)."""
+    return spec.budget_rub is not None and any(
+        _label(a) == "бюджет" and AGENT_BUDGET in a for a in spec.assumptions
+    )
+
+
+def end_agent_budget(old: TripSpec, spec: TripSpec, found: dict) -> TripSpec:
+    """The next edit of dates, length or party ends the budget of «подешевле»: the user never
+    named that sum, and it was fitted to the old trip (#316). A sum said now stays."""
+    if (
+        "budget_rub" in found
+        or spec.budget_rub != old.budget_rub
+        or not agent_budget(old)
+        or all(getattr(old, f) == getattr(spec, f) for f in BUDGET_RESET)
+    ):
+        return spec
+    kept = [a for a in spec.assumptions if _label(a) != "бюджет"]
+    return spec.model_copy(update={"budget_rub": None, "assumptions": kept})
+
+
 def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
     """«Бюджет поменьше» at a built plan: the trip budget is one step (15 %) under the current
     total, rounded down to 100 ₽. The DAG then re-plans the ranking only (#278).
@@ -1205,7 +1230,7 @@ def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
     found["budget_rub"] = max(target, cheapest)
     new = found["budget_rub"]
     how = "ниже итога" if new < total else "итог был"
-    notes.append(f"бюджет: {_rub(new)} ({how} {_rub(total)})")
+    notes.append(f"бюджет: {_rub(new)} ({AGENT_BUDGET}; {how} {_rub(total)})")
 
 
 def cheaper_line(old: Plan, new: Plan, edited: bool = False) -> str:
@@ -2579,6 +2604,7 @@ def step(
                 f"Сейчас {period(spec)}. {HINTS.get(old.stage, '')}"
             )
             return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    spec = end_agent_budget(old.plan.spec, spec, found)
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     plan_dirty = bool(dirty_nodes(old.plan.spec, spec) or not plan.offers)

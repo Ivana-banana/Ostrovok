@@ -234,3 +234,23 @@ def test_c316_why_not_cheaper_is_no_refusal():
 
     assert not talks_cheaper("почему не дешевле?")  # stays the wish «недорого»
     assert talks_cheaper("не надо дешевле") and talks_cheaper("дешевле не бывает?")
+
+
+@pytest.mark.parametrize("edit", ["на 2 дня позже", "на 7 ночей", "нас трое", "на 3 дня дольше"])
+def test_c316_agent_budget_is_marked_and_ends_with_the_next_edit(store, edit):
+    first = say(store, START)
+    second = say(store, "подешевле", first.session_id)
+    spec = second.plan.spec
+    if spec.budget_rub is None:  # nothing cheaper: no budget set, nothing to mark
+        return
+    assert any("задан агентом" in a for a in spec.assumptions)
+    third = say(store, edit, second.session_id)
+    assert third.plan.spec.budget_rub is None
+    assert not any(a.startswith("бюджет") for a in third.plan.spec.assumptions)
+
+
+def test_c316_user_budget_survives_the_date_edit(store):
+    first = say(store, START)
+    second = say(store, "бюджет 60000", first.session_id)
+    third = say(store, "на 2 дня позже", second.session_id)
+    assert third.plan.spec.budget_rub == 60000
