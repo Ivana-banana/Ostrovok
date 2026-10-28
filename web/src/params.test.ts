@@ -4,6 +4,8 @@ import type { ChatReply, TripSpec } from "./contracts";
 import {
   budgetMessage,
   datesMessage,
+  hotelBudgetMessage,
+  nightBudget,
   otherAssumptions,
   paramChips,
   partyMessage,
@@ -73,5 +75,18 @@ describe("сообщения правок", () => {
 
   it("бюджет называет единицу — всю поездку", () => {
     expect(budgetMessage(100000)).toBe("Бюджет до 100000 ₽ на всю поездку");
+  });
+});
+
+describe("#431: сообщения фильтров отелей", () => {
+  it("бюджет отеля называет единицу: за ночь или за все ночи", () => {
+    expect(hotelBudgetMessage(8000, true)).toBe("Отель до 8000 ₽ за ночь");
+    expect(hotelBudgetMessage(40000, false)).toBe("Отель до 40000 ₽ за все ночи");
+  });
+
+  it("цена ночи — бюджет отеля на число ночей; без ночей её нет", () => {
+    expect(nightBudget(with_({ hotel_budget_rub: 40000, nights: 5 }))).toBe(8000);
+    expect(nightBudget(with_({ hotel_budget_rub: 40000, nights: null }))).toBeNull();
+    expect(nightBudget(with_({ hotel_budget_rub: null, nights: 5 }))).toBeNull();
   });
 });
