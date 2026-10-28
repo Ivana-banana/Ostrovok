@@ -177,4 +177,4 @@ def test_other_variants_on_inspire_are_new(store):
     shown = [d.name for d in first.plan.destinations]
     more = say(store, "покажи другие варианты", first.session_id)
     names = [d.name for d in more.plan.destinations]
-    assert more.stage == "inspire" and 2 <= len(names) <= 3 and not set(names) & set(shown)
+    assert more.stage == "inspire" and 2 <= len(names) <= 4 and not set(names) & set(shown)  # #451
