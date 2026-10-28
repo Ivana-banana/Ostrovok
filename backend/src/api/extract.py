@@ -370,7 +370,7 @@ NO_FLIGHT = re.compile(
 )
 # #314: «в январе, не летаем» refuses the month, not the flight
 MONTH_CLAUSE_RE = re.compile(
-    r"(?:январ|феврал|март|апрел|ма[йея]|июн|июл|август|сентябр|октябр|ноябр|декабр)\w*"
+    r"\b(?:январ|феврал|март|апрел|ма[йея]|июн|июл|август|сентябр|октябр|ноябр|декабр)\w*"
     r"\s*[,—–-]\s*$"
 )
 # #302: a meal or a mode refused after its name: «all inclusive не надо», «самолёт ни за что».
@@ -2072,7 +2072,9 @@ def extract(
     no_flight = [
         bool(REFUSED_AFTER_RE.match(t, x.end()))
         for x in NO_FLIGHT.finditer(t)
-        if not ("лета" in x.group(0) and MONTH_CLAUSE_RE.search(t, 0, x.start()))
+        if not (
+            re.search(r"\bлета(?:ем|ю)\b", x.group(0)) and MONTH_CLAUSE_RE.search(t, 0, x.start())
+        )
     ]
     if any(no_flight) and "flight" not in modes:
         modes.append("flight")
