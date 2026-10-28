@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { Money, Price } from "./Board";
 import { VERBS, VERB_MS } from "./brand";
 import type { ChatReply, Mode, Stage } from "./contracts";
@@ -180,12 +180,27 @@ function Line({ text, synthetic }: { text: string; synthetic: boolean }) {
   );
 }
 
-// #468: a thin arrow of the routes and times in the proposed trip; screen readers and a copy get «→».
+// #476: the route line ●━○ between places and times; screen readers and a copy get «→».
+// The gradient and the filter need an id that is unique on the page: many lines are drawn.
 function Arrow() {
+  const id = useId().replace(/:/g, "");
   return (
     <>
-      <svg className="arrow" viewBox="0 0 22 8" aria-hidden="true">
-        <path d="M1 4h19M16 1l4 3-4 3" />
+      <svg className="arrow" viewBox="0 0 60 16" aria-hidden="true">
+        <defs>
+          <linearGradient id={`g${id}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" className="route-hi" />
+            <stop offset="1" className="route-lo" />
+          </linearGradient>
+          <filter id={`f${id}`} x="-20%" y="-80%" width="140%" height="260%">
+            <feDropShadow dx="0" dy="1" stdDeviation="0.8" floodColor="#000" floodOpacity=".25" />
+          </filter>
+        </defs>
+        <g filter={`url(#f${id})`}>
+          <rect x="8" y="5" width="44" height="6" rx="3" fill={`url(#g${id})`} />
+          <circle className="route-from" cx="6" cy="8" r="5" />
+          <circle className="route-to" cx="54" cy="8" r="4.2" />
+        </g>
       </svg>
       <span className="sr-only">→</span>
     </>

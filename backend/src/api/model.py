@@ -927,7 +927,7 @@ def leg_commands(text: str) -> list[LegCommand]:
     t = text.lower().replace("ё", "е")
     if NEGATION_RE.search(t) or BOOK_RE.search(t):
         return []
-    verb = bool(LEG_PICK_RE.search(t))
+    verb = bool(LEG_PICK_RE.search(t)) or hotel_row(t) is not None  # #388: «отель 1 и поезд»
     out: list[LegCommand] = []
     for clause in LEG_CLAUSE_RE.split(t):
         if row := _leg_row(clause):
