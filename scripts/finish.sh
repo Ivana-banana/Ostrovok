@@ -9,6 +9,7 @@
 #
 # Проверки: сборка — make check; финал — make lint (тесты запускает только человек).
 # reviewer: сборка — каждый PR; финал — метка contract у задачи, diff > 300 строк или --review.
+# FINISH_REVIEW=important: в сборке reviewer — только при метке contract, diff > 300 или --review.
 # Вердикт — комментарий reviewer в PR со строкой «Вердикт reviewer: merge <sha>». После
 # вердикта в ветке не должно быть своих новых коммитов (merge origin/main допустим).
 set -euo pipefail
@@ -82,7 +83,7 @@ for try in 1 2 3; do
   [ -n "$pr" ] || die "PR для $branch не найден"
 
   need=false why=""
-  if [ "$mode" = сборка ]; then need=true why="режим сборка: reviewer на каждый PR"; fi
+  if [ "$mode" = сборка ] && [ "${FINISH_REVIEW:-}" != important ]; then need=true why="режим сборка: reviewer на каждый PR"; fi
   if [ "$force_review" = true ]; then need=true why="--review"; fi
   if gh issue view "$n" --json labels --jq '.labels[].name' 2>/dev/null | grep -qx contract; then
     need=true why="метка contract"
