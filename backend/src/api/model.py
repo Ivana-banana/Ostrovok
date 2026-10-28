@@ -115,6 +115,7 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
+from api.timeline import NO_ROAD
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
@@ -1852,6 +1853,11 @@ def _selected_total(plan: Plan) -> int:
 # #114: the mode the user asked for, when the data has none: «Поезда … в данных нет».
 NO_MODE = {"train": "поезда", "flight": "перелёта", "car": "поездки на машине"}
 OFFER_MODE = {"train": "поезд", "flight": "перелёт", "car": "машину"}
+# #532: «беру» on a plan without a hotel (the hotel source failed): no cart of the road alone.
+NO_HOTEL = (
+    "В корзину пока не кладу: отеля в плане нет — источник отелей не ответил или ни один "
+    "отель не подошёл. Можно повторить запрос, выбрать другие даты или другое направление."
+)
 
 
 def missing_mode(plan: Plan) -> str:
@@ -1984,7 +1990,9 @@ def _text_blocked(plan: Plan) -> str:
     the plan (TRAP-4): a leg is named by its row in the compare table («рейс N»)."""
     by_id = {o.offer_id: o for o in plan.offers}
     rows = [o.offer_id for o in plan.offers if o.kind == "transport"]
-    lines = ["В корзину пока не кладу: в расписании ошибка стыковки."]
+    road = all(i.text.startswith(NO_ROAD) for i in plan.issues if i.severity == "error")
+    why = "в плане нет дороги." if road else "в расписании ошибка стыковки."
+    lines = [f"В корзину пока не кладу: {why}"]  # #532: no leg there or back is no docking
     for i in plan.issues:
         if i.severity != "error":
             continue
@@ -2856,6 +2864,8 @@ def step(
         plan.timeline, plan.issues = build_timeline(plan)
         if any(i.severity == "error" for i in plan.issues):
             return reply("compare", plan, _text_blocked(plan))  # #276: no cart with an error
+        if not _hotel_selected(plan):  # #532: a failed hotel source leaves nothing to stay in
+            return reply("compare", plan, f"{NO_HOTEL} {HINTS['compare']}")
         return reply("assemble", plan, _with_tail(_text_assemble(plan), plan, low, message, found))
     if old.stage == "assemble" and yes:
         cart = fill_cart(plan)

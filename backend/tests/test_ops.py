@@ -77,7 +77,9 @@ def test_provider_failure_is_logged_and_marked_in_the_reply(monkeypatch, records
     assert not any(r.exc_info for r in records if r.levelno >= logging.INFO)
     assert "SECRET-KEY" not in " ".join(r.getMessage() for r in records)
     assert f"Источник «{label}» не ответил" in body["reply"]
-    marks = [i for i in body["plan"]["issues"] if label in i["text"]]
+    # #532: the plan without transport also has a road error that names transport; the mark
+    # is the issue of the source itself.
+    marks = [i for i in body["plan"]["issues"] if i["text"].startswith(f"Источник «{label}»")]
     assert marks
     assert marks[0]["severity"] == "warn"
     assert "SECRET-KEY" not in r.text  # the exception text stays in the log, not in the reply
