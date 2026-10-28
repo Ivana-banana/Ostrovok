@@ -278,9 +278,12 @@ class TutuTrains:
     def _allowed(self, path: str) -> bool:
         with self.lock:  # both directions ask at once: robots.txt is read one time
             if self.robots is None:
+                if time.monotonic() - self.failed_at < FAILED_S:  # the other direction failed
+                    raise Offline(f"{HOST}: сеть недоступна, ждём {FAILED_S} с")
                 try:
                     self.robots = self.get("/robots.txt")
                 except Offline:
+                    self.failed_at = time.monotonic()  # under the lock: one timeout, not two
                     raise
                 except Refused as e:  # no robots.txt read: allowed, the page itself may fail
                     log.warning("tutu robots.txt: %s; считаем путь разрешённым", e)

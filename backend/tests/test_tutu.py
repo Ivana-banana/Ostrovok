@@ -6,6 +6,7 @@ No network: the adapter gets a fake `get`; the pages are trimmed real tutu.ru ro
 
 import importlib
 import os
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -150,6 +151,18 @@ def test_trap6_offline_keeps_synthetic_trains_and_waits(tmp_path):
     tutu.failed_at -= FAILED_S
     tutu.legs(s, *ends())
     assert len(fake.calls) > asked
+
+
+def test_trap6_offline_robots_is_asked_once_for_both_directions(tmp_path):
+    """Both directions load in parallel: a dead network costs one timeout, not two (#569)."""
+    fake = Fake(**{"/robots.txt": Offline("сеть")})
+
+    def slow(path: str) -> str:
+        time.sleep(0.2)  # a timeout takes time: the other direction is waiting by then
+        return fake(path)
+
+    assert run(slow, spec(), tmp_path) == base(spec())
+    assert fake.calls == ["/robots.txt"]
 
 
 def test_trap6_stale_cache_serves_offline(tmp_path):
