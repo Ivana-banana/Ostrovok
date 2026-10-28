@@ -2530,6 +2530,14 @@ def _change_booking(prev: ChatReply, sid: str, use_llm: bool, origin: str | None
     )
     for edit in edits:
         done = step(done, sid, edit, use_llm, origin)
+    if len(edits) > 1:  # #626: «Было → стало» is booking -> final plan, not the last step only
+        block = "\n".join(["Было → стало:", *describe(done.plan.changes)]) + "\n"
+        whole = plan_changes(prev.plan, done.plan, Cart(), Cart())
+        fresh = "\n".join(["Было → стало:", *describe(whole)]) + "\n" if whole else ""
+        text = done.reply.replace(block, fresh, 1) if block in done.reply else done.reply
+        done = done.model_copy(
+            update={"reply": text, "plan": done.plan.model_copy(update={"changes": whole})}
+        )
     if edits:
         head = "Новая поездка на тех же условиях с вашей правкой — отдельная покупка."
     else:
