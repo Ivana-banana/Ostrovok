@@ -47,3 +47,18 @@ def test_instead_of_beats_the_model_that_keeps_the_old_city(monkeypatch, store):
 )
 def test_adding_a_city_still_adds(text, cities):
     assert extract(text)[0]["destinations"] == cities
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "вместо Казани, Нижний Новгород",
+        "вместо Казани и Нижний Новгород",
+        "вместо Казани или Нижний Новгород",
+        "вместо Казани, в Нижний Новгород",
+    ],
+)
+def test_instead_of_rejects_only_the_first_city(store, text):
+    r = say(store, FIRST)
+    r = say(store, text, r.session_id)
+    assert r.plan.spec.destinations == ["Нижний Новгород"]
