@@ -488,7 +488,7 @@ LANDMARK_RE = re.compile(
     r"\s+([А-ЯЁ][\w-]+)\b(?!\s+(?:мор|озер))"
 )
 # «Красной площадью», «Невского проспекта»: after an adjective the noun is part of the name (#466)
-LANDMARK_NOUN_RE = re.compile(r"\s+(?!(?:для|на|в|во|и|с|со|по|за|или|недорог\w*))[а-яё][\w-]+")
+LANDMARK_NOUN_RE = re.compile(r"\s+(?!(?:для|на|в|во|и|с|со|по|за|или|недорог\w*)\b)[а-яё][\w-]+")
 # «-ом» is a noun after «рядом с»: «Арбатом»; «-ым», «-им» are adjectives: «Большим театром»
 ADJ_ENDINGS = (
     "ой",
