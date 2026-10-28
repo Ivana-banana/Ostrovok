@@ -134,6 +134,12 @@ class TransferOffer(BaseModel):
     arrive_at: AwareDatetime
     price_rub: int = Field(gt=0)
     synthetic: bool = True
+    # The pair of the ride (ADR-0002, #307). Both set: offers_for_place makes offer_id the core
+    # key transfer_id(hotel_offer_id, leg_offer_id) and keeps the provider id in ref. None: the
+    # offer_id must already be that key (the old rule).
+    hotel_offer_id: str | None = None
+    leg_offer_id: str | None = None
+    ref: str | None = None  # the id of the ride at the provider
 
 
 class ExtraOffer(BaseModel):
@@ -145,6 +151,12 @@ class ExtraOffer(BaseModel):
     for_offer_id: str
     price_rub: int = Field(ge=0)
     synthetic: bool = True
+    # What the timeline reads (ADR-0002, #307): tag "early", "late" or "prev" (night before);
+    # another tag or None is a plain add-on. at: the local time of the hotel when the room is
+    # ours ("early") or must be free ("late"). None: the old parse, the offer_id suffix
+    # "-early"/"-late"/"-prev" and the HH:MM in the title.
+    tag: str | None = None
+    at: time | None = None
 
 
 Offer = Annotated[
@@ -308,10 +320,15 @@ class CheckoutRequest(BaseModel):
 # is one module variable: api/offers.py (HOTELS, TRANSPORT, TRANSFERS), api/cart.py (BOOKING).
 # Swap it with one assignment at start-up (main.py) or in a test; no factories, no env switch.
 # Backend only: no mirror in web/src/contracts.ts, the types the web sees do not change.
-# Consumers: api/offers.py (adapters, offers_for_place), api/fixtures.py (travel_hours),
-# api/inspire.py (TRANSPORT: hours door to door and at the wheel, #321),
-# via find_offers: api/dag.py, api/inspire.py, api/model.py, api/checks.py;
-# tests/test_ports.py (conformance).
+# Consumers: api/offers.py (adapters, offers_for_place), via find_offers: api/dag.py (the live
+# ports, only the chosen place). The estimate path (ESTIMATE_* in api/offers.py, synthetic):
+# api/fixtures.py (probe_legs, travel_hours), api/inspire.py (hours door to door and at the
+# wheel, #321; prices), api/model.py (_pet_dead_cities), api/checks.py (eval).
+# Fields the core reads (#307): ExtraOffer.tag, at: api/timeline.py; TransferOffer
+# hotel_offer_id, leg_offer_id, ref: api/offers.py (offers_for_place), and through the key
+# transfer_id: api/timeline.py, api/cart.py, api/optimizer.py, api/checks.py. Mirror:
+# web/src/contracts.ts, contracts.test.ts, tests/fixtures/chat_reply.json (round-trip in
+# backend/tests/test_api.py). Tests: backend/tests/test_ports.py (conformance, foreign adapters).
 # BookingProvider consumers: api/cart.py (SimulatedBooking, checkout_route, checkout_reply),
 # api/store.py (booking attempts), api/main.py (POST /api/checkout), api/model.py (chat
 # «подтверждаю»), api/checks.py (eval); tests/test_booking_port.py (conformance, a foreign
@@ -367,7 +384,9 @@ class TransportProvider(Protocol):
 class TransferProvider(Protocol):
     """Hub <-> hotel rides for the hotels and legs of one search.
 
-    Invariant the core reads: offer_id == offers.transfer_id(hotel_id, leg_id).
+    Invariant the core reads: each ride names its pair in hotel_offer_id and leg_offer_id
+    (ids of `hotels` and `legs`); the core then sets offer_id = offers.transfer_id(hotel_id,
+    leg_id) and keeps the provider id in ref. Without the pair, offer_id must be that key.
     """
 
     def transfers(

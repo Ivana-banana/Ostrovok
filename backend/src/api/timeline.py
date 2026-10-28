@@ -15,8 +15,9 @@ the time of the pair's transfer offer (offers.py derives it from the distance to
 the way out after an arrival), never shorter than OWN_WAY; never the time of a transfer that
 is not taken.
 
-Extra kind comes from the offer_id suffix (-early, -late, -prev, see api/offers.py); the
-time of an add-on comes from its title («с 06:00», «до 18:00»).
+Extra kind is ExtraOffer.tag, the time of an add-on is ExtraOffer.at (ADR-0002, #307).
+Without them: the offer_id suffix (-early, -late, -prev) and the time in the title
+(«с 06:00», «до 18:00»). The «≈N км» of a transfer title is text only: no km, no km text.
 
 All limits below are team estimates without a source.
 """
@@ -89,9 +90,19 @@ def _night(dt: datetime) -> bool:
     return t >= NIGHT_FROM or t < NIGHT_TO
 
 
-def _title_time(extra: ExtraOffer | None) -> time | None:
+def _extra_time(extra: ExtraOffer | None) -> time | None:
+    """ExtraOffer.at; without it the HH:MM in the title (the old rule, ADR-0002)."""
+    if extra and extra.at:
+        return extra.at
     m = TIME_RE.search(extra.title) if extra else None
     return time(int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _tag(extra: ExtraOffer) -> str | None:
+    """ExtraOffer.tag; without it the offer_id suffix "-early", "-late", "-prev" (old rule)."""
+    if extra.tag:
+        return extra.tag
+    return next((t for t in ("early", "late", "prev") if extra.offer_id.endswith(f"-{t}")), None)
 
 
 def _at_place(dt: datetime, city: str) -> datetime:
@@ -134,7 +145,7 @@ class _Trip:
                 if isinstance(o, ExtraOffer)
                 and h
                 and o.for_offer_id == h.offer_id
-                and o.offer_id.endswith(f"-{tag}")
+                and _tag(o) == tag
             ),
             None,
         )
@@ -153,13 +164,13 @@ class _Trip:
         h, tz = self.room()
         if self.has("prev"):
             return _local(h.date_in - timedelta(days=1), h.check_in, tz)
-        early = _title_time(self.extra("early")) if self.has("early") else None
+        early = _extra_time(self.extra("early")) if self.has("early") else None
         return _local(h.date_in, min(early or h.check_in, h.check_in), tz)
 
     def leave_by(self) -> datetime:
         """The moment the room must be free."""
         h, tz = self.room()
-        late = _title_time(self.extra("late")) if self.has("late") else None
+        late = _extra_time(self.extra("late")) if self.has("late") else None
         return _local(h.date_out, max(late or h.check_out, h.check_out), tz)
 
     def offered(self, leg: TransportOffer) -> TransferOffer | None:
