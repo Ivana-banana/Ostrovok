@@ -37,3 +37,12 @@ def test_a_fly_refusal_with_a_detail_is_no_ban(text):
 )
 def test_we_do_not_fly_at_clause_end_bans_the_flight(text):
     assert extract(text)[0]["modes"] == ["train", "car"]
+
+
+def test_we_do_not_fly_on_a_new_line_bans_the_flight():
+    assert extract("не летаем\nКазань на выходные")[0]["modes"] == ["train", "car"]
+
+
+@pytest.mark.parametrize("text", ["в январе, не летаем, подтверждаю", "январь — не летаем"])
+def test_no_fly_after_a_month_refuses_the_month(text):
+    assert "train" not in extract(text)[0].get("modes", [])
