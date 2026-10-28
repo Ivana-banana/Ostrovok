@@ -21,14 +21,17 @@ def record(name: str, country: str = "Аргентина") -> dict:
 
 @pytest.fixture
 def stub():
-    def make(table: dict[str, list[dict]]):
+    def make(table: dict[str, list[dict]], any_latin: list[dict] | None = None):
         calls: list[tuple[str, int]] = []
         days = [f"2025-{m:02d}-15" for m in range(1, 13)]
 
         def fetch(url: str, params: dict) -> dict:
             if url == catalog.GEOCODE:
                 calls.append((params["name"], params["count"]))
-                return {"results": table.get(params["name"], [])[: params["count"]]}
+                found = table.get(params["name"], [])
+                if any_latin is not None and params["name"].isascii():
+                    found = any_latin
+                return {"results": found[: params["count"]]}
             if url == catalog.ARCHIVE:
                 return {"daily": {"time": days, "temperature_2m_max": [10.0] * 12,
                                   "precipitation_sum": [1.0] * 12}}  # fmt: skip
@@ -59,13 +62,34 @@ def test_trap_3_a_case_form_of_the_name_is_found_too(stub):
 
 
 @pytest.mark.parametrize(
-    ("written", "latin", "fuzzy"),
-    [("Тарту", "Tartu", "Тартус"), ("Ушуайя", "Ushuaia", "Ушуаил"),
-     ("Ушуайя", "Ushuaia", "Ushuaia Aerodrome")],
-)  # fmt: skip
-def test_trap_3_a_fuzzy_latin_answer_is_no_place(stub, written, latin, fuzzy):
-    fetch, _ = stub({latin: [record(fuzzy, "Сирия")], "Ushuayya": [record(fuzzy, "Сирия")]})
+    ("written", "fuzzy"), [("Тарту", "Тартус"), ("Ушуайя", "Ушуаил"), ("Ривьера", "Ривера")]
+)
+def test_trap_3_a_fuzzy_latin_answer_is_no_place(stub, written, fuzzy):
+    """The stub answers any Latin ask with the wrong place; the Latin ask must really be made."""
+    fetch, calls = stub({}, any_latin=[record(fuzzy, "Сирия")])
     assert catalog.lookup_online(written, fetch) is None
+    assert any(c[0].isascii() for c in calls)
+
+
+@pytest.mark.parametrize(
+    ("written", "answer", "country"),
+    [("Ривьера", "Ривера", "Уругвай"), ("Ривьеру", "Ривера", "Уругвай"),
+     ("Ривьере", "River", "Великобритания"), ("Марриотт", "Marriott", "США"),
+     ("Шератон", "Sheraton", "Канада"), ("Ибис", "Ibis", "Перу"), ("Плаза", "Plaza", "США")],
+)  # fmt: skip
+def test_trap_3_a_hotel_or_region_is_not_a_village_with_the_same_letters(
+    stub, written, answer, country
+):
+    """Recorded from the live geocoder (2026-10-28): the Latin ask answers with a namesake."""
+    fetch, calls = stub({}, any_latin=[record(answer, country)])
+    assert catalog.lookup_online(written, fetch) is None
+    assert any(c[0].isascii() for c in calls)
+
+
+def test_trap_3_a_case_form_is_asked_in_latin_as_written_too(stub):
+    fetch, calls = stub({})
+    catalog.lookup_online("Ушуайе", fetch)
+    assert "Ushuaye" in [c[0] for c in calls] and len([c for c in calls if c[0].isascii()]) <= 2
 
 
 def test_trap_3_the_right_record_behind_a_fuzzy_first_one_is_taken(stub):

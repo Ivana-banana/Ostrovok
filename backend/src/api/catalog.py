@@ -408,9 +408,17 @@ def latin_variants(name: str) -> list[str]:
 
 
 def _skeleton(name: str) -> str:
-    """Latin skeleton of a Russian name: «Ушуайя» and «Ушуая» are one: ushuaia (#548)."""
-    s = re.sub(r"y(?=[aeuo])", "i", _latin(name)).replace("y", "i").replace("j", "i")
-    return re.sub(r"(.)\1+", r"\1", s)
+    """Latin skeleton of a Russian name: «Ушуайя» and «Ушуая» are one: ushuaia (#548).
+
+    «ь» stays as an apostrophe: «Ривьера» is not «Ривера»."""
+    s = re.sub(r"y(?=[aeuo])", "i", _latin(name.replace("ь", "'"))).replace("y", "i")
+    return re.sub(r"(.)\1+", r"\1", s.replace("j", "i"))
+
+
+def _russian(name: str) -> bool:
+    """The record name is Cyrillic: «Ушуая» is, «Marriott» and «River» are no Russian name."""
+    low = norm(name)
+    return bool(re.search("[а-яё]", low)) and not re.search("[a-z]", low)
 
 
 def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
@@ -425,8 +433,8 @@ def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     - then, when the first answer was another place, a longer list for the name as written:
       «Тарту» is the second record after Тартус;
     - last, a Latin spelling of the name (#548): «Ушуайя» is unknown, «Ushuaia» is Ушуая. Two
-      asks at most. The answer is the place only when its Russian name has the same Latin
-      skeleton as the name asked: «Тарту» never becomes Тартус.
+      asks at most. The answer is the place only when its name is Russian (not «Marriott») and
+      has the same Latin skeleton as the name asked: «Тарту» never becomes Тартус.
     All of it fits GEOCODE_BUDGET_S: the first network error or the end of the time stops it.
     """
     ask = {"count": 1, "language": "ru", "format": "json"}
@@ -453,10 +461,13 @@ def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
         wide = search(written, WIDE_COUNT)
         if hit := next((g for g in wide if _same_words(words, norm(g["name"]).split())), None):
             return hit
-        want = _skeleton(name_candidates(name)[0])
-        for latin in latin_variants(name_candidates(name)[0]):
+        # The name as written and its first nominative guess: «Ушуайе» -> «Ушуай». Two asks.
+        bases = list(dict.fromkeys([written, name_candidates(name)[0]]))
+        wanted = {_skeleton(b) for b in bases}
+        asks = dict.fromkeys(v for i in (0, 1) for b in bases for v in latin_variants(b)[i : i + 1])
+        for latin in list(asks)[:2]:
             for g in search(latin, 3):
-                if _skeleton(g["name"]) == want:
+                if _russian(g["name"]) and _skeleton(g["name"]) in wanted:
                     return g
         return None
     finally:
