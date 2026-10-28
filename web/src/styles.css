@@ -1078,6 +1078,19 @@ button.icon {
   line-height: 1.4;
 }
 
+/* #478: route and time of a leg are two rows of one grid: both lines stand in one column */
+.pt-route {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) auto minmax(0, max-content);
+  justify-content: start;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-route .pt-line {
+  display: flex;
+}
+
 .arrow {
   width: 52px;
   height: 14px;
@@ -1100,7 +1113,7 @@ button.icon {
 .arrow .route-to {
   fill: var(--card);
   stroke: var(--ink);
-  stroke-width: 2.2;
+  stroke-width: 1.6;
 }
 
 @media (max-width: 480px) {
