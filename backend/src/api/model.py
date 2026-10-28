@@ -1725,7 +1725,12 @@ def _offer_lines(plan: Plan) -> list[str]:
     for o in sorted(legs, key=lambda o: o.depart_at):  # own tickets are no offers (offers.py)
         way = "Обратно" if o.origin == city else "Туда"
         title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
-        lines.append(f"{way}: {title[:1].lower()}{title[1:]}, {_span_at(o)} — {_rub(o.price_rub)}")
+        # C14 (TRAP-5): the duration stands as a fact of the leg, so the chat shows it next to
+        # local times of different zones (web/src/format.ts reads it as a fact of the ride)
+        lines.append(
+            f"{way}: {title[:1].lower()}{title[1:]}, в пути {span(o)}, {_span_at(o)}"
+            f" — {_rub(o.price_rub)}"
+        )
     rides = [o for o in chosen if o.kind == "transfer"]
     if rides:
         names = "; ".join(o.title.removeprefix("Трансфер: ") for o in rides)
