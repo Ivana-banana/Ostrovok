@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the hotels of the agent with the real offers of eval/reference_offers.json (#263).
+"""Compare the hotels and the transport of the agent with eval/reference_offers.json (#263, #607).
 
     cd backend && uv run --frozen python ../scripts/compare_reference_offers.py
 
@@ -8,7 +8,12 @@ For each request of the reference and each of 3, 4, 5 stars it prints
 - the agent night price (the median of its hotel offers of these stars; price_rub is the whole stay)
   against min / median / max night price of the real Booking offers of the same city and stay;
 - whether the agent sells free cancellation and breakfast at these stars, against the real shares.
-The last line of a request is the hotel the agent selected. Agoda offers (EUR) are in the
+The last line of a request is the hotel the agent selected.
+Transport (#607): for each real leg (a train route or a flight) it prints the price of the agent
+for one adult and the duration against the real price (min / median / max) and duration. The
+agent offers of a leg are all its offers of that mode, direction and, for a flight, date. A train
+reference is the cheapest seat «от» of each train of tutu, so its prices are a lower bound.
+ Agoda offers (EUR) are in the
 reference, but they are not compared: no exchange rate is applied. The script only measures.
 Exit code is always 0 when the table is printed.
 """
@@ -129,6 +134,86 @@ def render(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def compare_leg(leg: dict, reply: ChatReply) -> dict:
+    """The offers of the agent for one real leg; `agent` is None when the agent has none."""
+    spec = reply.plan.spec
+    assert not spec.children_ages, "the reference price is for one adult"
+    offers = [
+        o
+        for o in reply.plan.offers
+        if o.kind == "transport"
+        and o.mode == leg["mode"]
+        and (o.origin, o.destination) == (leg["origin"], leg["destination"])
+        and (leg["date"] is None or str(o.depart_at.date()) == leg["date"])
+    ]
+    row = {"leg": leg, "agent": None}
+    if offers:
+        prices = [round(o.price_rub / spec.adults) for o in offers]
+        times = [round((o.arrive_at - o.depart_at).total_seconds() / 60) for o in offers]
+        ref, ref_time = leg["price_rub"], leg["duration_min"]
+        price = round(statistics.median(prices))
+        row["agent"] = {"n": len(offers), "price": price, "min": min(prices), "max": max(prices)}
+        row["agent"]["time"] = round(statistics.median(times))
+        row["ratio"] = round(price / ref["median"], 2)
+        row["in_range"] = ref["min"] <= price <= ref["max"]
+        if ref_time:
+            row["time_ratio"] = round(row["agent"]["time"] / ref_time["median"], 2)
+            row["time_in_range"] = ref_time["min"] <= row["agent"]["time"] <= ref_time["max"]
+    return row
+
+
+def clock(minutes: int) -> str:
+    return f"{minutes // 60}ч{minutes % 60:02d}"
+
+
+def render_transport(rows: list[dict]) -> str:
+    head = (
+        f"{'req':<4}{'маршрут':<25}{'вид':<8}{'дата':<12}{'агент n':>8}{'агент ₽':>9}{'ref min':>9}"
+        f"{'ref med':>9}{'ref max':>9}{'агент/med':>10}{'в диапаз.':>10}{'агент время':>13}"
+        f"{'ref время':>12}{'время/med':>10}"
+    )
+    lines = [head, "-" * len(head)]
+    for r in rows:
+        leg, agent = r["leg"], r["agent"]
+        ref, ref_time = leg["price_rub"], leg["duration_min"]
+        route = f"{leg['origin']}→{leg['destination']}"
+        mode = {"train": "поезд", "flight": "рейс"}[leg["mode"]]
+        cells = [f"{leg['request']:<4}{route:<25}{mode:<8}{leg['date'] or 'от (без дат)':<12}"]
+        if agent is None:
+            cells.append(f"{'нет':>8}{'—':>9}")
+        else:
+            cells.append(f"{agent['n']:>8}{agent['price']:>9}")
+        cells.append(f"{ref['min']:>9}{ref['median']:>9}{ref['max']:>9}")
+        if agent is None:
+            cells.append(f"{'—':>10}{'—':>10}{'—':>13}")
+        else:
+            cells.append(
+                f"{r['ratio']:>10}{'да' if r['in_range'] else 'НЕТ':>10}{clock(agent['time']):>13}"
+            )
+        if ref_time is None:
+            cells.append(f"{'—':>12}{'—':>10}")
+        else:
+            rng = (
+                f"{clock(ref_time['min'])}-{clock(ref_time['max'])}"
+                if ref_time["min"] != ref_time["max"]
+                else clock(ref_time["min"])
+            )
+            ratio = f"{r['time_ratio']}" if agent else "—"
+            cells.append(f"{rng:>12}{ratio:>10}")
+        lines.append("".join(cells))
+    return "\n".join(lines)
+
+
+def run_transport(reference: dict) -> list[dict]:
+    rows = []
+    for req in reference["transport_requests"]:
+        reply = ask_agent(req["message"])
+        rows += [
+            compare_leg(leg, reply) for leg in reference["transport"] if leg["request"] == req["id"]
+        ]
+    return rows
+
+
 def run(reference: dict) -> list[dict]:
     rows = []
     for req in reference["requests"]:
@@ -149,6 +234,17 @@ def main() -> None:
             f"{sum(r['in_range'] for r in graded)}; агент/median: "
             f"медиана {statistics.median(ratios):.2f}, от {min(ratios):.2f} до {max(ratios):.2f}"
         )
+    legs = run_transport(reference)
+    print(
+        "\nТранспорт (цена за одного взрослого; ref: поезда — «от» tutu 27.10, рейсы — кэш Авиасейлс 28.10)\n"
+    )
+    print(render_transport(legs))
+    found = [r for r in legs if r["agent"]]
+    print(
+        f"\nсравнено {len(found)} из {len(legs)} плеч; цена агента в диапазоне ref: "
+        f"{sum(r['in_range'] for r in found)}; агент/median: "
+        f"{', '.join(str(r['ratio']) for r in found)}"
+    )
 
 
 if __name__ == "__main__":
