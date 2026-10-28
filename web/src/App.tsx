@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, cartAction, chat, checkout, getSession } from "./api";
+import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
 import { Board, Destinations, destinationsInChat } from "./Board";
 import { PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, StagePills, Thinking } from "./Chat";
@@ -204,10 +204,9 @@ export function App() {
 
   // The mode badge must not wait for the first reply.
   useEffect(() => {
-    fetch("/api/mode")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((h) => setHealthNoAi(h?.llm === false))
-      .catch(() => {});
+    getMode()
+      .then((m) => setHealthNoAi(m.llm === false))
+      .catch((e) => console.warn("GET /api/mode failed; the badge waits for the first reply", e));
   }, []);
 
   // Reload restores the last open chat.

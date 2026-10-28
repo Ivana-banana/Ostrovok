@@ -19,8 +19,11 @@ def test_mode_known_before_first_reply(monkeypatch):
     # TRAP-1: режим «Без ИИ» известен до первого сообщения (#350).
     for path in ("/api/mode", "/api/v1/mode"):
         assert isinstance(client.get(path).json()["llm"], bool)
-    monkeypatch.setattr("api.main.llm_available", lambda: False)
-    assert client.get("/api/mode").json() == {"llm": False}
+    # The real path: no LLM_* variables, no mocked helper.
+    for k in ("LLM_API_KEY", "GIGACHAT_AUTH_KEY", "LLM_BASE_URL", "LLM_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    for path in ("/api/mode", "/api/v1/mode"):
+        assert client.get(path).json() == {"llm": False}
 
 
 def test_chat_follows_contract():
