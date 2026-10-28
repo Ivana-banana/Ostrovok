@@ -1,8 +1,9 @@
 """LLM client (T11, #15): OpenAI-compatible POST {LLM_BASE_URL}/chat/completions, stdlib only.
 
-The LLM does two things only (ADR-0001):
+The LLM does three things only (ADR-0001):
 - extract_spec: TripSpec fields stated in one user message, given the current spec;
-- explain: a new `why` text for the optimizer explanations, from the facts of the plan.
+- explain: a new `why` text for the optimizer explanations, from the facts of the plan;
+- rewrite_questions: the clarifying questions of the first reply in its own words (#259).
 It never writes prices, times or offer ids (TRAP-4). Every output is checked: the spec patch
 with pydantic, the explanation for unknown offer_id and for any number that the facts do not
 hold. A failed check, no key, 401/403, a timeout, 5xx or invalid JSON give None, and the
@@ -659,6 +660,8 @@ def rewrite_questions(questions: list[Question], until: float | None = None) -> 
         return None
     reply = " ".join(reply.split())
     if not reply or len(reply) > MAX_ASK or _leaks(reply, ASK_PROMPT):
+        return None
+    if reply.count("?") < len(questions):  # a question was dropped
         return None
     given = " ".join((*texts, *(o for q in questions for o in q.options)))
     sums = {int(re.sub(r"\D", "", m.group(1))) for m in PRICE_RE.finditer(given)}

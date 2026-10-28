@@ -10,7 +10,7 @@ from api.contracts import Question
 from api.store import SessionStore
 
 NULLS = dict.fromkeys(llm.SPEC_FIELDS)
-OWN = "Подскажите, откуда вы вылетаете и когда хотите поехать?"
+OWN = "Откуда вы вылетаете? И когда хотите поехать?"
 
 
 class Resp:
@@ -104,4 +104,16 @@ def test_trap_7_lost_price_mark_in_the_rewrite_is_rejected(monkeypatch):
 def test_trap_4_repeated_prompt_line_in_the_rewrite_is_rejected(monkeypatch):
     q = [Question(text="Откуда летите?", options=[])]
     with_model(monkeypatch, "Ask every question. Do not add facts. Do not list the options.")
+    assert llm.rewrite_questions(q) is None
+
+
+def test_trap_4_bare_made_up_number_keeps_the_template(monkeypatch):
+    q = [Question(text="Откуда летите?", options=[])]
+    with_model(monkeypatch, "Вы едете на 5 ночей, а откуда летите?")
+    assert llm.rewrite_questions(q) is None
+
+
+def test_dropped_question_keeps_the_template(monkeypatch):
+    q = [Question(text="Откуда летите?", options=[]), Question(text="Когда поедете?", options=[])]
+    with_model(monkeypatch, "Откуда вы летите?")
     assert llm.rewrite_questions(q) is None
