@@ -160,7 +160,7 @@ def test_city_off_the_catalogue_offline_is_no_destination(store):
 # ------------------------------------------------------------- #442: unexpected answers
 
 
-@pytest.mark.parametrize("answer", ["Турция", "Анталья", "Анталия"])
+@pytest.mark.parametrize("answer", ["Анталья", "Анталия"])
 def test_place_abroad_answers_where_to_go_not_where_from(store, answer):
     """#442: «Турция» or «Анталья» to «Откуда?» named the origin; the nearest hub (Сочи) became
     the departure city and the trip lost its place. A place abroad is where the user goes."""
@@ -171,6 +171,20 @@ def test_place_abroad_answers_where_to_go_not_where_from(store, answer):
     s = after.plan.spec
     assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
     assert s.destinations and catalog.resolve(s.destinations[0])["country"] == "Турция"
+
+
+def test_country_answers_where_to_go_not_where_from(store):
+    """#442, #452: «Турция» to «Откуда?» is no origin. #452 (jury, PR #444) is the later rule:
+    a bare country shows the places of that country (inspire), not one place at once."""
+    from api import catalog
+
+    r = say(store, "Хочу отдохнуть")
+    after = say(store, "Турция", r.session_id)
+    s = after.plan.spec
+    assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
+    assert after.stage == "inspire" and s.destinations == []
+    names = [d.name for d in after.plan.destinations]
+    assert names and all(catalog.resolve(n)["country"] == "Турция" for n in names)
 
 
 def test_country_off_the_snapshot_from_the_geocoder_is_no_origin(geo, monkeypatch, store):
