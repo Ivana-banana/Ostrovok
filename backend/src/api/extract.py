@@ -225,6 +225,17 @@ NO_CHILD_BEFORE = re.compile(r"\bбез\s+(?:\w+\s+и\s+|\w+[иы]х\s+)?$")
 # later in the clause is a double negation («без детей не поедем»): the children stay.
 NO_CHILD_AFTER = re.compile(r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)|[^,.;!?]*\b(?:не|ни\w*)\b")
 NO_CHILD_FORM = ("детей", "ребенка", "сына", "дочери", "малыша")
+# #202: «отель без детей» is a wish for the hotel (adults only), not the party.
+HOTEL_NO_KIDS_BEFORE = re.compile(
+    r"\b(?:отел\w*|гостиниц\w*|хостел\w*|апарт\w*)\s+без\s+(?:\w+[иы]х\s+)?$"
+)
+# #202: «детей нет», «дети не едут», «детей у нас нет»: the party has no children. Before the
+# child: «у нас нет детей».
+NO_CHILD_SAID_AFTER = re.compile(
+    r"\s*(?:у\s+нас\s+|с\s+нами\s+)?(?:нет\b|не\s+(?:едут|поедут|едет|поедет|будут\s+ехать)\b)"
+)
+NO_CHILD_SAID_BEFORE = re.compile(r"\bнет\s+(?:\w+[иы]х\s+)?$")
+HOTEL_NO_KIDS_NOTE = "отель без детей: пожелание к отелю не учитываю, состав не меняю"
 # #112: the party. A number word names a person only in a few forms; «одна ночь», «один из
 # вариантов», «один и тот же отель» are not a party. A solo word needs a stop, a preposition
 # or a verb of the trip after it (or a verb of the trip before it).
@@ -2263,6 +2274,15 @@ def _people(
     for m in CHILD_RE.finditer(t):
         if ADULT_KIN_RE.match(t, m.end()):
             continue  # «сын с женой»: a grown-up son is no child (#275)
+        if m.group(0).endswith(NO_CHILD_FORM) and HOTEL_NO_KIDS_BEFORE.search(t[: m.start()]):
+            if HOTEL_NO_KIDS_NOTE not in notes:
+                notes.append(HOTEL_NO_KIDS_NOTE)  # #202: a wish for the hotel, the party stays
+            continue
+        if not m.group(1) and (
+            NO_CHILD_SAID_AFTER.match(t, m.end()) or NO_CHILD_SAID_BEFORE.search(t[: m.start()])
+        ):
+            no_kids = True  # #202: «детей нет», «у нас нет детей», «дети не едут»
+            continue
         if (
             m.group(0).endswith(NO_CHILD_FORM)
             and NO_CHILD_BEFORE.search(t[: m.start()])
