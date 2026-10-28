@@ -1773,6 +1773,9 @@ def _people_count(t: str, kids: int) -> tuple[int, str] | None:
 
 # #369: «по 50 тысяч на 1 человека», «сколько на человека?»: the price per head, no party.
 PER_PERSON_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
+PARTY_EDIT_RE = re.compile(
+    r"(?:давай\w*|можно|хочу|хотим|сделай\w*|переделай\w*|пересобер\w*|поменяй\w*)"
+)
 PRICE_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж\w*\s+цен")
 MONEY_PER_PERSON_RE = re.compile(
     r"((?:тыс\w*|руб\w*|₽|\d\s*к|\bр)\.?)\s+на\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b"
@@ -1790,7 +1793,9 @@ def _people(
     it adds nobody (#179)."""
     ages: list[int] = []
     no_kids = False
-    if built and (PRICE_CUE_RE.search(t) or asking):  # only at a built plan
+    # #385: «давай на 1 человека?» asks for a party edit, not for a price
+    edit = asking and not PRICE_CUE_RE.search(t) and PARTY_EDIT_RE.search(t) and "номер" not in t
+    if built and (PRICE_CUE_RE.search(t) or asking) and not edit:  # only at a built plan
         t = PER_PERSON_RE.sub(" ", t)  # #369: «на 1 человека» is a unit of price, not a party
     t = MONEY_PER_PERSON_RE.sub(r"\1", t)
     for m in CHILD_RE.finditer(t):
