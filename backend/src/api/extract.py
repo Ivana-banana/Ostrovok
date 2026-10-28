@@ -461,7 +461,10 @@ WARM_REFUSED_AFTER = re.compile(
 )
 WISHES = [
     ("море", r"\bмор[еяю]\b|\bморск|пляж|купат|\bsea\b|\bbeach"),
-    ("недорого", r"недорог|деш[её]в|бюджетн|эконом|\bcheap"),
+    (
+        "недорого",
+        r"недорог|\bне\s+(?:очень\s+)?дорог(?:о|ой|ая|ое|ие|ую)\b|деш[её]в|бюджетн|эконом|\bcheap",
+    ),
     ("горы", r"\bгор(?:ы|ах|ам|ами|у)\b|\bгорн|\bmountains?\b"),
     ("лыжи", r"лыж|сноуборд|\bski"),
     # #277: quiet and green words are the nature tag of the catalogue (api/inspire.py)
