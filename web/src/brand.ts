@@ -3,7 +3,6 @@
 
 // The working name until the team picks one: change it here only.
 export const PRODUCT_NAME = "О!дин запрос";
-export const PRODUCT_LINE = "агент путешествий · один запрос";
 
 // The thinking line while the agent answers: one verb every VERB_MS.
 export const VERBS = [
