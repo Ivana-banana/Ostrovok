@@ -998,9 +998,18 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   const more = moreLine(reply, editable);
   // The sum of the chosen plan, before the cart exists: the same offers the cart will hold.
   const picked = cart.items.length ? cart.items : plan.offers.filter((o) => plan.selected.includes(o.offer_id));
+  // #556: on compare a plan with no hotel is a dead end (pets filtered the hotels out, #550): "беру" is off.
+  const noHotel = stage === "compare" && !plan.offers.some((o) => o.kind === "hotel" && plan.selected.includes(o.offer_id));
+  const noHotelHint = "В плане нет отеля — выберите отель, другой город или «Без питомца»";
   const nextStep = next && (
     <section className="sec next" aria-label="Следующий шаг">
-      <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
+      <button
+        type="button"
+        className="buy"
+        disabled={busy || noHotel}
+        title={noHotel ? noHotelHint : undefined}
+        onClick={() => onSend(next.text)}
+      >
         {next.label}
         {stage === "assemble" && picked.length > 0 && (
           <>
@@ -1009,6 +1018,7 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
           </>
         )}
       </button>
+      {noHotel && <p className="muted no-hotel">{noHotelHint}</p>}
     </section>
   );
   return (

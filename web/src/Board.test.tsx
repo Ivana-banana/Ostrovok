@@ -475,6 +475,20 @@ suite("доска поездки", () => {
     expect(o.main).toBe(o.at("Корзина"));
   });
 
+  it("#556: на сравнении без отеля в плане «Беру этот план» недоступна, с подсказкой", () => {
+    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    const buy = (x: ChatReply) => render(x).querySelector(".board > .next button.buy") as HTMLButtonElement;
+    expect(buy(r).disabled).toBe(false);
+    expect(render(r).querySelector(".no-hotel")).toBeNull();
+    r.plan.selected = r.plan.selected.filter((id) => id !== "h1");
+    expect(buy(r).disabled).toBe(true);
+    expect(buy(r).textContent).toBe("Беру этот план");
+    expect(buy(r).getAttribute("title")).toContain("В плане нет отеля");
+    expect(render(r).querySelector(".no-hotel")?.textContent).toContain("Без питомца");
+    // another stage is not touched: «Положить в корзину» stays live
+    expect((render({ ...r, stage: "assemble" }).querySelector(".board > .next button.buy") as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("#450: варианты прошлого ответа остаются под ним, кнопки выбора живые", () => {
     const r = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
     const doc = new DOMParser().parseFromString(

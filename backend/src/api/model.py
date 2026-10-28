@@ -121,6 +121,9 @@ from api.timeline import NO_ROAD
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
+NO_PET_HOTEL = (
+    "Внимание: у отеля нет отметки о приёме животных — уточните у отеля до брони."  # #556
+)
 NO_PET_MARK = "Нет отметки о животных:"  # the count line of the compare reply (#475)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
@@ -2000,6 +2003,9 @@ def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
     lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
     lines += [f"Внимание: {i.text.rstrip('.')}." for i in plan.issues]
+    chosen = [o for o in plan.offers if o.kind == "hotel" and o.offer_id in plan.selected]
+    if plan.spec.pets and any(not h.pets_allowed for h in chosen):
+        lines.append(NO_PET_HOTEL)  # #556: the reminder stays on «Оформляем?»
     lines += _unchecked_lines(plan.spec)
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
