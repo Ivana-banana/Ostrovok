@@ -603,7 +603,7 @@ export function App() {
                 );
               // One key for the block: it moves under a new last answer without losing its state.
               const old = m.role === "agent" && i !== lastAgent ? earlier[`${sid}:${i}`] : undefined;
-              if (old) return [msg, <EarlierChoices key={`earlier-${i}`} reply={old} current={reply!} busy={busy} onSend={send} />];
+              if (old && reply) return [msg, <EarlierChoices key={`earlier-${i}`} reply={old} current={reply} busy={busy} onSend={send} />];
               return i === lastAgent && block ? [msg, block] : [msg];
             })}
             {lastAgent < 0 && block}

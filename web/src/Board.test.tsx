@@ -1,3 +1,5 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
@@ -461,5 +463,34 @@ suite("доска поездки", () => {
       expect(ends).toHaveLength(2);
       for (const td of ends) expect(td.querySelector("small + .zone")?.textContent).toMatch(/\(UTC[+-]\d/);
     }
+  });
+
+  it("#450: старый блок направлений жив только при том же списке; иначе подпись и 0 кнопок", () => {
+    const old = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
+    const cur = structuredClone(old);
+    cur.plan.destinations = cur.plan.destinations.map((x) => ({ ...x, name: `${x.name} (другой)` })); // «ещё» changed the list
+    const d = new DOMParser().parseFromString(
+      renderToStaticMarkup(<EarlierChoices reply={old} current={cur} busy={false} onSend={noop} />),
+      "text/html",
+    );
+    expect(d.querySelectorAll("details.earlier button").length).toBe(0);
+    expect(d.querySelector("details.earlier")?.textContent).toContain("План изменился — выберите в текущем блоке");
+  });
+
+  it("#450: клик по живой кнопке старого блока шлёт текст строки, которая в текущем плане та же", async () => {
+    const old = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
+    const sent: string[] = [];
+    const box = document.createElement("div");
+    document.body.append(box);
+    const root = createRoot(box);
+    await act(async () =>
+      root.render(<EarlierChoices reply={old} current={structuredClone(old)} busy={false} onSend={(t) => sent.push(t)} />),
+    );
+    const btn = box.querySelectorAll<HTMLButtonElement>("details.earlier button[aria-label^='Выбрать направление']")[0];
+    await act(async () => btn.click());
+    // the first row: the same destination in the current plan, so the number points to it
+    expect(sent).toEqual([`первый: ${old.plan.destinations[0].name}`]);
+    act(() => root.unmount());
+    box.remove();
   });
 });

@@ -891,10 +891,11 @@ export function EarlierChoices({ reply, current, busy, onSend }: {
     r.plan.offers.filter((o) => o.kind === "hotel" || o.kind === "transport").map((o) => o.offer_id).join();
   const n = plan.destinations.length + plan.offers.filter((o) => o.kind === "hotel" || o.kind === "transport").length;
   if (!n || stage === "checkout" || stage === "booked") return null;
-  // «беру второй» is parsed against the current plan: a row button is live only while the stage and
-  // the rows are the same. A destination sends its name, which is unambiguous.
+  // «беру второй» and «третий: Сочи» are parsed against the CURRENT list by the row number: a button
+  // is live only while the stage and the rows (the destination names) are the same as in the current plan.
+  const names = (r: ChatReply) => r.plan.destinations.map((d) => d.name).join();
   const rowsLive = stage === current.stage && rows(reply) === rows(current);
-  const destLive = stage === "inspire" && current.stage === "inspire";
+  const destLive = stage === "inspire" && current.stage === "inspire" && names(reply) === names(current);
   const stale = (!rowsLive && rows(reply) !== "") || (!destLive && plan.destinations.length > 0 && stage === "inspire");
   return (
     <details className="more options earlier">
