@@ -31,7 +31,6 @@ from fastapi.testclient import TestClient
 
 from api import catalog, dag, offers
 from api import main as api_main
-from api.live_hotels import Live101Hotels
 from api.contracts import (
     Bundle,
     Cancellation,
@@ -43,6 +42,7 @@ from api.contracts import (
     TransportOffer,
 )
 from api.fixtures import WARM_WATER_C
+from api.live_hotels import Live101Hotels
 from api.model import NOT_IN_CATALOG, ORIGIN_ASK
 from api.offers import (
     _norm,
@@ -65,6 +65,7 @@ def _offline_hotels(p: object) -> object:
     while isinstance(p, Live101Hotels):
         p = p.base
     return p
+
 
 MAX_FLIGHT_H = 5.0  # S1: "перелёт дольше 5 ч"
 LLM_ENV = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
