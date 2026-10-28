@@ -1030,6 +1030,24 @@ def _transit_dropped(t: str, hits: list) -> list:
     return out or hits
 
 
+# #381: a bare place closes a clause after a comma («Не боюсь летать, Бали») or follows «ради»
+# («но ради Бали готов»). Only a place of the catalogue counts (_catalog_word).
+TAIL_PLACE = re.compile(r",\s*([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)(?=\s*(?:[.!?;)\n]|$))")
+FOR_PLACE = re.compile(r"\bради\s+([а-яе]+(?:-[а-яе]+)*)")
+
+
+def _catalog_word(word: str) -> str | None:
+    """A place of the catalogue by one word: a name in any case, an alias as written («Бали»),
+    a country with a main place. A short name counts only as written: «бара» is no «Бар»."""
+    if known := _known(word, exact_short=True):
+        return known
+    low = word.lower().replace("ё", "е")
+    if any(low == a.replace("ё", "е") for p in places() for a in p["aliases"]):
+        return word[0].upper() + word[1:]
+    country = next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None)
+    return country if country and any(p["main"] for p in catalog.by_country(country)) else None
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -1079,6 +1097,11 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n, m.end(1)))
+    for m in [*TAIL_PLACE.finditer(text), *FOR_PLACE.finditer(t)]:  # «…, Бали», «ради Бали»
+        s, e = m.span(1)
+        taken = t[s] == " " or any(hs <= s < he for hs, _, he in hits)  # " ": the origin span
+        if not taken and (name := _catalog_word(text[s:e])):
+            hits.append((s, name, e))
     # The leading country is a destination only alone and with a main place: «Россия, хочу в Сочи»
     # is Сочи; «Россия, море» has no main place and stays an inspiration request.
     if lead and not hits and any(p["main"] for p in catalog.by_country(lead[1])):
