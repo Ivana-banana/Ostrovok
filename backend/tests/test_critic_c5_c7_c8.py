@@ -9,9 +9,8 @@ no flight to it, a train or a flight through the nearest open airport, and the r
 from datetime import date, time, timedelta
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.store import SessionStore
 
 C5 = (
@@ -29,10 +28,6 @@ def store(tmp_path, monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("GIGACHAT_AUTH_KEY", raising=False)
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def chosen(r, kind):

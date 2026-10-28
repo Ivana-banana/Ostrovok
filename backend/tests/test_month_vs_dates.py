@@ -6,9 +6,8 @@ Rules only, no model (TRAP-1). Today is fixed: Tuesday 2026-10-27.
 from datetime import date
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.store import SessionStore
 
 
@@ -26,10 +25,6 @@ def today(monkeypatch):
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def named(store, dates="с 3 по 8 декабря"):

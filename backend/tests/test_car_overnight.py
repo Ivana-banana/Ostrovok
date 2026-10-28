@@ -10,10 +10,10 @@ All runs are offline, without an LLM key (TRAP-1); times come only from offers (
 from datetime import date, datetime, timedelta
 
 import pytest
+from talk import say
 
 from api import model
-from api.contracts import ChatRequest, TimelineIssue, TransportOffer, TripSpec
-from api.model import chat
+from api.contracts import TimelineIssue, TransportOffer, TripSpec
 from api.offers import MAX_DRIVE, resolve_place, transport_offers
 from api.store import SessionStore
 from api.timeline import build_timeline
@@ -24,10 +24,6 @@ C4 = "На машине из Москвы в Сочи с собакой, дво�
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def car_legs(day_from: date = date(2027, 7, 5), nights: int = 10) -> list[TransportOffer]:

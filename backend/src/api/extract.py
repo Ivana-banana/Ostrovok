@@ -424,7 +424,19 @@ WISHES = [
     ("шопинг", r"шопинг|аутлет"),
     ("музеи", r"\bмузе[йяеи]\w*|выставк|\bтеатр"),
     ("йога", r"\bйог(?:а|и|е|у|ой)\b|\bйог-|ретрит"),
-    ("тяжело ходить", r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил"),
+    (
+        "тяжело ходить",
+        r"(?:тяжело|трудно|сложно)\s+ход|без\s+лестниц|маломобил|на\s+коляске|инвалидн\w*\s+коляск|колясочник|кресл\w*[\s-]+коляск",
+    ),
+    # #338: hard conditions of a stay; no hotel field checks them, the reply says so
+    ("детская коляска", r"детск\w*\s+коляск|\bс\s+коляск\w*"),
+    ("веганское питание", r"веган"),
+    ("вегетарианское питание", r"вегетариан"),
+    (
+        "поздний заезд",
+        r"засел\w*(?:\s+\w+)?\s+(?:ночью|поздно|сразу)|засел\w*\s+после\s+(?:2[23]|0?[0-5])(?::\d\d|\s*(?:ч\b|час\w*|ночи|утра))|поздн\w*\s+(?:заезд|заселен)|ночн\w*\s+заезд",
+    ),
+    ("детская кроватка", r"кроватк|колыбел"),
     ("вино и еда", r"\bвин[оа]\b|\bвинн|гастро|\bеда\b|\bкухн"),
     ("с удобствами", r"удобств|палатк"),
     ("красиво", r"красив"),
@@ -460,10 +472,29 @@ def _month(word: str) -> int:
     return next(n for s, n in MONTHS.items() if word.startswith(s))  # «март» before «ма»
 
 
+# #338: hard conditions of a stay; no hotel field checks them, the reply says so
+HARD_WISHES = (
+    "детская коляска", "веганское питание", "вегетарианское питание", "поздний заезд",
+    "детская кроватка",
+)  # fmt: skip
 NO_DATA_WISHES = (
     "северное сияние", "киты", "термальные источники", "фестиваль", "дайвинг", "серфинг",
-    "рыбалка", "сафари", "шопинг", "музеи", "йога",
+    "рыбалка", "сафари", "шопинг", "музеи", "йога", *HARD_WISHES,
 )  # fmt: skip
+# «отель у Технопарка», «возле Технопарка»: the landmark is the next capitalized word. The lookahead
+# needs \b: without it the word backtracks («у Чёрного моря» -> «Чёрног»).
+LANDMARK_RE = re.compile(
+    r"(?i:\b(?:(?:отел\w*|гостиниц\w*|жиль[её]|жить|остановиться)\s+(?:\w+\s+)?у|возле|около|рядом\s+с))"
+    r"\s+([А-ЯЁ][\w-]+)\b(?!\s+(?:мор|озер))"
+)
+BREAKFAST_FROM_RE = re.compile(
+    r"завтрак\w*\s+с\s+(\d{1,2})(?::(\d\d)|\s*(?:утра|ч\b|час(?:а|ов)?\b))"
+)
+
+
+def is_unchecked(wish: str) -> bool:
+    """A wish of #338 that no data checks: the reply and the model must not call it met."""
+    return wish in HARD_WISHES or wish.startswith(("рядом: ", "завтрак с "))
 
 
 def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
@@ -2027,6 +2058,11 @@ def extract(
     if modes:
         found["modes"] = modes
     wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
+    for m in LANDMARK_RE.finditer(text):  # #338: «отель у Технопарка»; cities are no landmark
+        if not _known(m.group(1)):
+            wishes.append(f"рядом: {m.group(1)}")
+    if m := BREAKFAST_FROM_RE.search(t):
+        wishes.append(f"завтрак с {int(m.group(1)):02d}:{m.group(2) or '00'}")
     hours = r"\s*(?:ч\b|час\w*)\s+(?:в\s+пути|лет\w*|перел\w*|езд\w*|дорог\w*)"
     if m := re.search(rf"\b(?:до|не\s+(?:больше|дольше|более))\s+(\d{{1,2}}){hours}", t):
         found["max_travel_hours"] = float(m.group(1))
