@@ -1038,6 +1038,11 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         w = re.match(r"[а-яе-]+", t[m.end() :])
         if re.search(r"устал\w*\s+$", t[: m.start()]):
             continue  # «устали от Турции» is a refusal, not an origin
+        if re.search(r"\bне\s+$", t[: m.start()]):  # «не из Москвы, а из Кинешмы» (#504, C25)
+            end = t.find(" ", m.end())
+            end = len(t) if end < 0 else end
+            t = t[: m.start()] + " " * (end - m.start()) + t[end:]  # no origin, no destination
+            continue
         if name := _place_at(text, t, m.end()) or _capital(text, m.end()) or (w and _known(w[0])):
             break
     else:

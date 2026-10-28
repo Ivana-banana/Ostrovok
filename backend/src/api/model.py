@@ -2554,6 +2554,14 @@ def step(
                 f"Сейчас {period(spec)}. {HINTS.get(old.stage, '')}"
             )
             return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    said = found.get("origin")
+    # C25 (#504): «из Кинешмы» maps to the same hub; the reply says so, not only the hint
+    if (
+        said
+        and spec.origin == old.plan.spec.origin != said
+        and (why := catalog.origin_hub(said)[1])
+    ):
+        lines.append(f"{why} План не меняю.")
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     plan_dirty = bool(dirty_nodes(old.plan.spec, spec) or not plan.offers)
