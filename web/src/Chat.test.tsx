@@ -95,12 +95,12 @@ suite("чат", () => {
       ["Итого15 700 ₽синтетика"],
     ]);
     expect(items.map((li) => li.querySelector("svg.pt-ic") !== null)).toEqual([true, true, false]);
-    // #478: route and time are one grid of 2 rows × 3 columns, the lines stand in one column
+    // #478: route and time are one grid of 2 rows × 2 columns, the right words stand in one column
     const grid = items[1].querySelectorAll(".pt-route");
     expect(grid).toHaveLength(1);
-    expect([...grid[0].children].map((c) => c.className || "cell")).toEqual(["cell", "pt-line", "cell", "pt-time", "pt-line", "pt-time"]);
+    expect([...grid[0].children].map((c) => c.className || "cell")).toEqual(["pt-from", "cell", "pt-from", "pt-time"]);
     // the arrow is a drawing; the text «→» stays for a screen reader and a copy
-    expect(items[1].querySelectorAll("svg.arrow[aria-hidden='true']")).toHaveLength(2);
+    expect(items[1].querySelectorAll(".pt-line[aria-hidden='true']")).toHaveLength(2);
     // TRAP-7: one chip at each price of the list, none at the facts
     expect([...box.querySelectorAll("ul.offer .price")].map((x) => x.textContent)).toEqual([
       "7 900 ₽синтетика",
@@ -112,6 +112,21 @@ suite("чат", () => {
     expect([...more.querySelectorAll("p")].map((p) => p.textContent?.split(" ")[0])).toEqual(["Цены", "Климат:", "Почему:"]);
     expect(more.querySelector("mark")?.textContent).toBe("5.3 °C");
     expect(box.lastElementChild?.textContent).toBe("Напишите «беру» или номер отеля.");
+    act(() => root.unmount());
+  });
+
+  it("#473: трансфер без «≈… км» — маршрут без висящей точки, блок остаётся списком", async () => {
+    const box = document.createElement("div");
+    const root = createRoot(box);
+    const text = [
+      "Предлагаю:",
+      "Трансферы: вокзал → Казантель, Казань; Казантель, Казань → вокзал — 1 000 ₽",
+      "Итого 1 000 ₽.",
+    ].join("\n");
+    await act(async () => root.render(<AgentText text={text} synthetic />));
+    expect(box.querySelectorAll("ul.offer li")).toHaveLength(2);
+    expect(box.querySelector(".pt-route")?.textContent).toBe("вокзал → Казантель, Казань Казантель, Казань → вокзал ");
+    expect(box.querySelector(".pt-route")?.textContent).not.toContain("·");
     act(() => root.unmount());
   });
 });
