@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import statistics
 from pathlib import Path
 
 from api import catalog, offers
@@ -95,3 +96,22 @@ def test_catalog_levels_equal_the_committed_aggregate():
             cal.level_of(r),
             r["free_cancel_share3plus"],
         )
+
+
+def test_route_row_keeps_numbers_only():
+    facts = {"route": ["Москва", "Тверь"], "source_url": "https://www.tutu.ru/poezda/Moskva/Tver/",
+             "low_rub": 500, "high_rub": 9000,
+             "trains": [{"number": "1", "category": "Сидячий", "price_rub": p} for p in (900, 500, 700)]}  # fmt: skip
+    assert cal.route_row(facts, "2026-10-27") == {
+        "route": ["Москва", "Тверь"], "url": "https://www.tutu.ru/poezda/Moskva/Tver/",
+        "fetched_at": "2026-10-27", "n": 3, "median_rub": 700, "low_rub": 500,
+    }  # fmt: skip
+
+
+def test_train_fares_match_the_tutu_medians():
+    """#280: the synthetic full fare in the month of the run is the tutu median (±5 %) for the day
+    and the overnight train; before the calibration it was 1.45x and 1.67x."""
+    rows = json.loads(cal.TRAINS.read_text("utf-8"))
+    for kind, ratios in cal.train_ratios(rows, offers.TRAIN_FARE).items():
+        assert len(ratios) >= 20, kind
+        assert 0.95 <= statistics.median(ratios) <= 1.05, kind
