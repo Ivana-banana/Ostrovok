@@ -275,11 +275,56 @@ def test_origin_equal_to_the_place_with_more_fields_is_asked_again(store):
     assert after.plan.spec.origin == "Казань" and after.plan.spec.adults == 3
 
 
-def test_place_abroad_as_the_trip_place_is_asked_again(store):
-    first = say(store, "Анталья на 5 ночей в июле, двое")
-    r = say(store, "Анталья", first.session_id)
+ANTALYA_TRIP = "Анталья на 5 ночей в июле, двое"
+
+
+@pytest.mark.parametrize("answer", ["Анталья", "из Антальи"])
+def test_place_abroad_as_the_trip_place_asks_the_origin_again(store, answer):
+    """#442 review: no «уже там» for a place abroad: the plan always flies from a hub in Россия,
+    so «дорога не нужна» would be a promise the plan does not keep. The origin is asked again."""
+    first = say(store, ANTALYA_TRIP)
+    r = say(store, answer, first.session_id)
     q = origin_q(r)
-    assert r.stage == "clarify" and q and SAME_PLACE in q.text
-    assert q.options[0] == "Из города Анталия"  # no genitive rule: the name keeps its case
-    after = say(store, q.options[0], r.session_id)
-    assert after.stage == "compare" and after.plan.spec.destinations == ["Анталия"]
+    assert r.stage == "clarify" and r.plan.spec.origin is None
+    assert q and SAME_PLACE in q.text and "дорога не нужна" not in q.text
+    assert q.options == CHIPS
+
+
+@pytest.mark.parametrize("again", ["Анталья", "из Антальи"])
+def test_place_abroad_named_twice_is_no_origin(store, again):
+    """The second «Анталья» is no departure city either (it gave «из Сочи»): Москва is said."""
+    first = say(store, ANTALYA_TRIP)
+    asked = say(store, "Анталья", first.session_id)
+    r = say(store, again, asked.session_id)
+    s = r.plan.spec
+    assert r.stage == "compare" and s.destinations == ["Анталия"]
+    assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
+
+
+def test_place_abroad_reasked_then_a_city_goes_on(store):
+    first = say(store, ANTALYA_TRIP)
+    asked = say(store, "Анталья", first.session_id)
+    r = say(store, origin_q(asked).options[1], asked.session_id)
+    assert r.stage == "compare" and r.plan.spec.origin == "Санкт-Петербург"
+    assert r.plan.spec.destinations == ["Анталия"]
+
+
+def test_already_there_button_needs_no_road(store):
+    """The «уже там» button of a Russian place: origin = the place, and no road in the plan."""
+    first = say(store, KAZAN_TRIP)
+    asked = say(store, "Казань", first.session_id)
+    q = origin_q(asked)
+    assert "дорога не нужна" in q.text and q.options[0] == "Из Казани"
+    r = say(store, q.options[0], asked.session_id)
+    s = r.plan.spec
+    assert r.stage == "compare" and s.origin == "Казань" and s.destinations == ["Казань"]
+    assert not any(a.startswith("откуда") for a in s.assumptions)
+    assert not [o for o in r.plan.offers if o.kind == "transport"]
+
+
+def test_origin_compared_with_the_new_destination(store):
+    """«Казань, едем в Сочи» to a Kazan trip: the new place is Сочи, so Казань is the origin."""
+    first = say(store, KAZAN_TRIP)
+    r = say(store, "Казань, едем в Сочи", first.session_id)
+    assert not any(SAME_PLACE in q.text for q in r.questions)
+    assert r.plan.spec.origin == "Казань" and r.plan.spec.destinations == ["Сочи"]
