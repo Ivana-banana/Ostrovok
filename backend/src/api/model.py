@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 from api import catalog, llm, ops
 from api.answers import (
     closed_line,
+    consent_fact,
     destination_line,
     is_hotel_compare,
     plan_fact,
@@ -73,6 +74,7 @@ from api.extract import (
     CAPITAL_PLACES,
     DATE_KEYS,
     DEFAULT_NIGHTS,
+    EACH_STAY_RE,
     HOTEL_NOTE,
     MAX_NIGHTS,
     MONTH,
@@ -113,10 +115,10 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
-from api.timeline import VERBS
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
+NO_PET_MARK = "Нет отметки о животных:"  # the count line of the compare reply (#475)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
@@ -201,10 +203,17 @@ EDIT_KEYS = {
 RESTART_RE = re.compile(
     r"\bнач(?:ать|ни|ните|н[её]м|инаем)\s+"
     r"(?:(?:вс[её]|поиск|план|диалог|поездку)\s+)?(?:заново|сначала|с\s+нуля)\b"
-    r"|\b(?:давай(?:те)?|хочу|попробу\w+|поехали)\s+(?:вс[её]\s+)?(?:заново|с\s+нуля)\b"
+    # #98: «давай заново» resets at the end of a phrase or before a mark, like «сбрось»:
+    # «давай заново посчитаем цену» edits the plan. A bare «заново» is a reset too.
+    r"|\b(?:давай(?:те)?|хочу|попробу\w+|поехали)\s+(?:вс[её]\s+)?"
+    r"(?:заново|сначала|с\s+нуля|по\s+нов(?:ой|ому))(?=\s*(?:[.!,;:]|$))"
     r"|\bвс[её]\s+заново\b"
     r"|\bсбрось(?:те)?(?:\s+(?:вс[её]|план|поиск|поездку|диалог))?\s*(?:[.!,;]|$)"
-    r"|\bнов(?:ый|ую)\s+(?:поиск|запрос|поездк\w*)\b",
+    r"|^\s*(?:заново|по\s+нов(?:ой|ому)|с\s+нуля)\s*[.!]*\s*$"
+    # «новая поездка» as a command; «сколько стоит новая поездка» and «это не новая поездка» ask
+    r"|(?:^\s*|[.!,;:]\s*|\b(?:давай(?:те)?|хочу|начн\w+|начать|начинаем)\s+)"
+    r"нов(?:ая|ую)\s+поездк\w*(?=\s*(?:[.!,;:]|$))"
+    r"|\bнов(?:ый|ую)\s+(?:поиск|запрос)(?=\s*(?:[.!,;:?]|$))",
     re.IGNORECASE,
 )
 # A negation before the phrase («не хочу с нуля») or after it («с нуля не надо»).
@@ -212,6 +221,11 @@ NOT_RESTART_RE = re.compile(
     r"\bне\s+(?:\w+\s+)?(?:начин\w+|начат\w*|сбрас\w+|с\s+нуля|заново|сначала)"
     r"|\b(?:с\s+нуля|заново|сначала|поиск\w*|запрос\w*|поездк\w*)\s+(?:\w+\s+)?"
     r"не\s+(?:надо|нужн\w*|хочу|будем)"
+)
+RESTART_CHIP = "Начать заново"
+AFTER_BOOKING = (
+    "Другое направление, другие даты или состав — это новая поездка: нажмите "
+    f"«{RESTART_CHIP}» или напишите «новая поездка»."
 )
 OTHER_RE = re.compile(
     r"\b(?:друг(?:ое|ой|ую|ие|их)|ино[ейю])\s+(?:направлен\w*|город\w*|мест\w*|стран\w*|курорт\w*)"
@@ -264,6 +278,10 @@ LEG_NONE = {
 LEG_THERE_RE = re.compile(r"\bтуда\b|\bв\s+одну\s+сторону\b")
 LEG_BACK_RE = re.compile(r"\bобратно\b|\bназад\b|\bобратн\w+")
 LEG_CLAUSE_RE = re.compile(r"[,;]|\bа\b|\bи\b")
+# #316: the mark in the note of a budget the agent set after «подешевле».
+AGENT_BUDGET = "задан агентом"
+# A new date, length or party ends that budget: it was fitted to the old trip.
+BUDGET_RESET = ("date_from", "date_to", "nights", "adults", "children_ages")
 # Assumption text starts with "<label>:"; a stated field removes its assumption.
 LABELS = {
     "destinations": "направление",
@@ -732,7 +750,8 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     party = party_question(spec) if spec.destinations else []
     if spec.destinations:
         return [*origin, *(children_question(message, spec) or party)[:1]]
-    if spec.wishes:
+    if spec.wishes or spec.max_travel_hours is not None:
+        # #365 (C21): «недалеко» is a wish of the road: the agent shows the near places at once
         return [*origin, *party]
     out = [*origin]
     if not spec.month and not spec.date_from:
@@ -824,7 +843,8 @@ def is_route(message: str, destinations: list[str]) -> bool:
         return False
     stays = STAY_RE.findall(AHEAD_RE.sub(" ", low))
     linked = any(_city_in_clause(message, low, m, destinations[1:]) for m in LINK_RE.finditer(low))
-    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1
+    # #365: «по 3 дня» with two cities is a stay in each: a route
+    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1 or bool(EACH_STAY_RE.search(low))
 
 
 def severals(message: str, destinations: list[str]) -> str | None:
@@ -1089,13 +1109,18 @@ CHEAPER_RE = re.compile(
     r"|\bэкономнее\b|\bслишком\s+дорого\b|\bдорогов\w+"
 )
 CHEAPER_WORD = r"(?:по)?дешевле|экономнее"
-CHEAPER_ASK_RE = re.compile(
-    rf"\b(?:{CHEAPER_WORD})\s*,?\s*(?:чем|ли)\b|\bли\b|\bпочему\b|\bсколько\b"
-    # #310: a refusal is adjacent to the word: «не надо дешевле», «дешевле не надо». A refusal
-    # elsewhere in the phrase («подешевле, не хочу переплачивать») refuses something else.
-    rf"|\bне\s+(?:(?:надо|нужно|нужн\w+|хочу|хотим|стоит)\s+)?(?:{CHEAPER_WORD})\b"
+# #310: a refusal is adjacent to the word: «не надо дешевле», «дешевле не надо». A refusal
+# elsewhere in the phrase («подешевле, не хочу переплачивать») refuses something else.
+CHEAPER_REFUSAL_RE = re.compile(
+    rf"\bне\s+(?:(?:надо|нужно|нужн\w+|хочу|хотим|стоит)\s+)?(?:{CHEAPER_WORD})\b"
     rf"|\b(?:{CHEAPER_WORD})\s+не\s+(?:надо|нужно|нужн\w+|хочу|хотим|стоит)\b"
 )
+CHEAPER_ASK_RE = re.compile(
+    rf"\b(?:{CHEAPER_WORD})\s*,?\s*(?:чем|ли)\b|\bли\b|\bпочему\b|\bсколько\b"
+    rf"|{CHEAPER_REFUSAL_RE.pattern}"
+)
+# #316: «дешевле не бывает?» asks for the minimum of the offers.
+CHEAPER_MIN_RE = re.compile(rf"\b(?:{CHEAPER_WORD})\s+не\s+(?:бывает|будет|бывало)\b")
 # «можно ли», «есть ли», «нельзя ли» ask for the thing: a request.
 REQUEST_LI_RE = re.compile(r"\b(?:можно|есть|нельзя|будет)\s+ли\b")
 BUDGET_STEP = 15  # percent off the current total per «подешевле»
@@ -1104,7 +1129,7 @@ BUDGET_STEP = 15  # percent off the current total per «подешевле»
 def asks_cheaper(low: str) -> bool:
     """«Можно ли подешевле?» is a request; «дешевле ли …?», «дешевле, чем …?» and a refusal are not."""
     clean = REQUEST_LI_RE.sub("можно", low)
-    if re.search(rf"\b(?:{CHEAPER_WORD})\s+не\s+(?:бывает|будет|бывало)\b", clean):
+    if CHEAPER_MIN_RE.search(clean):
         return False  # «дешевле не бывает?» is a remark or a question
     return bool(CHEAPER_RE.search(clean) and not CHEAPER_ASK_RE.search(clean))
 
@@ -1119,6 +1144,88 @@ def _ranked_total(plan: Plan) -> int:
     the user picked by hand (dag._keep_pick): the real minimum of the offers."""
     ids, _ = rank(plan.spec, plan.offers)
     return sum(o.price_rub for o in plan.offers if o.offer_id in ids)
+
+
+# The wish «недорого» in words other than «дешевле» (see api/extract.py WISHES).
+WISH_CHEAP_RE = re.compile(r"недорог|бюджетн|эконом|cheap")
+
+
+def _other_edits(found: dict) -> bool:
+    """The message changes a condition besides the budget. The wish «недорого» comes from the
+    word «подешевле» itself: it is no other condition (#316)."""
+    rest = set(found) - {"budget_rub"}
+    if set(found.get("wishes", [])) <= {"недорого"}:
+        rest.discard("wishes")
+    return bool(rest)
+
+
+WHY_RE = re.compile(r"\bпочему\b")
+
+
+def talks_cheaper(low: str) -> bool:
+    """«Не надо дешевле» and «дешевле не бывает?» talk about the word, they ask for no change.
+    «Почему не дешевле?» is no refusal: it stays the wish «недорого», as before (#316)."""
+    if CHEAPER_MIN_RE.search(low):
+        return True
+    return bool(CHEAPER_REFUSAL_RE.search(low) and not WHY_RE.search(low))
+
+
+def drop_cheaper_wish(found: dict, low: str) -> dict:
+    """«Не надо дешевле», «дешевле не бывает?» name the word, not a wish: «недорого» does not
+    enter the spec and does not re-plan the trip (#316)."""
+    wishes = found.get("wishes")
+    if not wishes or "недорого" not in wishes or not talks_cheaper(low):
+        return found
+    if WISH_CHEAP_RE.search(re.sub(rf"\b(?:{CHEAPER_WORD})\b", " ", low)):
+        return found  # «недорогой отель, не надо дешевле»: the wish is said in other words
+    rest = [w for w in wishes if w != "недорого"]
+    kept = {k: v for k, v in found.items() if k != "wishes"}
+    return {**kept, "wishes": rest} if rest else kept
+
+
+def _cheapest_total(plan: Plan, cart: Cart) -> int:
+    """The least total the offers give for the trip: a trial re-plan with a budget nobody meets."""
+    trial, _, _ = replan(plan, merge(plan.spec, {"budget_rub": 0}, []), cart)
+    return _ranked_total(trial)
+
+
+def cheaper_talk_line(old: ChatReply, low: str) -> str:
+    """The answer to «не надо дешевле» (the budget stays) and «дешевле не бывает?» (the minimum
+    of the offers): no budget changes, no plan changes (#316, TRAP-4)."""
+    total = _selected_total(old.plan)
+    if CHEAPER_MIN_RE.search(low):
+        floor = _cheapest_total(old.plan, old.cart)
+        if total <= floor:
+            return (
+                f"Дешевле не бывает: минимум в предложениях — {_rub(floor)}, "
+                "он уже в плане (синтетика)."
+            )
+        return (
+            f"Бывает: минимум в предложениях — {_rub(floor)}, сейчас {_rub(total)} (синтетика). "
+            "Напишите «подешевле», и я пересоберу план."
+        )
+    return f"Хорошо, бюджет не меняю: итог остаётся {_rub(total)} (синтетика)."
+
+
+def agent_budget(spec: TripSpec) -> bool:
+    """The budget is a step of the agent from «подешевле», not a sum the user named (#316)."""
+    return spec.budget_rub is not None and any(
+        _label(a) == "бюджет" and AGENT_BUDGET in a for a in spec.assumptions
+    )
+
+
+def end_agent_budget(old: TripSpec, spec: TripSpec, found: dict) -> TripSpec:
+    """The next edit of dates, length or party ends the budget of «подешевле»: the user never
+    named that sum, and it was fitted to the old trip (#316). A sum said now stays."""
+    if (
+        "budget_rub" in found
+        or spec.budget_rub != old.budget_rub
+        or not agent_budget(old)
+        or all(getattr(old, f) == getattr(spec, f) for f in BUDGET_RESET)
+    ):
+        return spec
+    kept = [a for a in spec.assumptions if _label(a) != "бюджет"]
+    return spec.model_copy(update={"budget_rub": None, "assumptions": kept})
 
 
 def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
@@ -1136,12 +1243,13 @@ def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
     edited = merge(plan.spec, {**found, "budget_rub": target}, list(notes))
     trial, _, _ = replan(plan, edited, cart)
     cheapest = _ranked_total(trial)
-    if cheapest >= total and not found:
+    if cheapest >= total and not _other_edits(found):
+        found.pop("wishes", None)  # nothing is cheaper: the word «подешевле» changes nothing
         return
     found["budget_rub"] = max(target, cheapest)
     new = found["budget_rub"]
     how = "ниже итога" if new < total else "итог был"
-    notes.append(f"бюджет: {_rub(new)} ({how} {_rub(total)})")
+    notes.append(f"бюджет: {_rub(new)} ({AGENT_BUDGET}; {how} {_rub(total)})")
 
 
 def cheaper_line(old: Plan, new: Plan, edited: bool = False) -> str:
@@ -1548,7 +1656,14 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
 
 # #311: «дешевле, чем в Турции?», «это дешевле, чем в среднем?» ask for a comparison. They name no
 # new place and no «недорого» wish; the plan stays. A request («хочу дешевле, чем сейчас») is an edit.
-PRICE_VERSUS_RE = re.compile(r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?")
+# #390: «а в Турции дешевле?» asks the same without «чем». Only the whole message «[а] в <place in
+# the prepositional case> дешевле?»: «поехали в Египет, там дешевле?» and «в Турцию, там дешевле?»
+# move the trip, as on main.
+PRICE_VERSUS_RE = re.compile(
+    r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?"
+    r"|^\s*(?:а\s+)?(?:в|на)\s+(?:\w+\s+)?\w*[^\Wую]\s+(?:будет\s+|вс[её]\s+же\s+)?"
+    r"(?:дешевле|дороже|выгоднее)\s*\?\s*$"
+)
 VERSUS_ORDER_RE = re.compile(
     r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
 )
@@ -1608,6 +1723,12 @@ def _question_answer(
         )
     edit = "Чтобы изменить поездку, напишите, что поменять: например, «хотим с бассейном»."
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
+
+
+def _with_tail(text: str, plan: Plan, low: str, message: str, found: dict) -> str:
+    """#212: a consent with a question («беру, а что с визой?») gets the fact line before the text."""
+    fact = consent_fact(plan, low, message, found)
+    return f"{fact}\n{text}" if fact else text
 
 
 def _tail(spec: TripSpec, hint: str, extra: list[str] | None = None) -> list[str]:
@@ -1726,7 +1847,12 @@ def _offer_lines(plan: Plan) -> list[str]:
     for o in sorted(legs, key=lambda o: o.depart_at):  # own tickets are no offers (offers.py)
         way = "Обратно" if o.origin == city else "Туда"
         title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
-        lines.append(f"{way}: {title[:1].lower()}{title[1:]}, {_span_at(o)} — {_rub(o.price_rub)}")
+        # C14 (TRAP-5): the duration stands as a fact of the leg, so the chat shows it next to
+        # local times of different zones (web/src/format.ts reads it as a fact of the ride)
+        lines.append(
+            f"{way}: {title[:1].lower()}{title[1:]}, в пути {span(o)}, {_span_at(o)}"
+            f" — {_rub(o.price_rub)}"
+        )
     rides = [o for o in chosen if o.kind == "transfer"]
     if rides:
         names = "; ".join(o.title.removeprefix("Трансфер: ") for o in rides)
@@ -1742,6 +1868,7 @@ def _offer_lines(plan: Plan) -> list[str]:
 def _text_compare(plan: Plan) -> str:
     spec = plan.spec
     kids = f" + дети {', '.join(map(str, spec.children_ages))} лет" if spec.children_ages else ""
+    rows = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
     lines = [
         f"{spec.destinations[0]}, {period(spec)}, {spec.nights} ноч., {spec.adults} взр.{kids}"
         + ("." if kids else ""),
@@ -1751,28 +1878,15 @@ def _text_compare(plan: Plan) -> str:
         *([line] if (line := closed_line(plan)) else []),
         *([line] if (line := missing_mode(plan)) else []),
         *([line] if (line := rooms_line(spec)) else []),
-        "Отели:",
+        # #349: the hotels and legs are on the board; the chat keeps a short summary.
+        (
+            "Отели и рейсы — на доске: детали и номера там. "
+            f"Отелей: {len(rows)}, вариантов транспорта: {sum(o.kind == 'transport' for o in plan.offers)}."
+        ),
     ]
-    hotels = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
-    pet = spec.pets
-    for i, h in enumerate(hotels, 1):
-        cancel = "бесплатная отмена" if h.cancellation.refundable else "невозвратный"
-        lines.append(
-            f"{i}. {h.title} — {h.stars}★, рейтинг {h.rating}, {h.meal}, {cancel} — "
-            f"{_rub(h.price_rub)}"
-            + (" · нет отметки о животных" if pet and not h.pets_allowed else "")
-        )
-    legs = [o for o in plan.offers if o.kind == "transport"]
-    if legs:
-        lines.append("Транспорт:")
-    for i, o in enumerate(legs, 1):
-        no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
-        # C14 (#364, TRAP-5): local times with their zones, the verbs of the mode and the
-        # duration; the start time leaves the title so it is not shown twice.
-        start, end = (v.lower() for v in VERBS[o.mode])
-        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
-        when = f"{start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)}"
-        lines.append(f"Рейс {i}. {title} — {_rub(o.price_rub)}{no_pet} · {when}")
+    if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
+        lines.append(f"{NO_PET_MARK} у {n} из {len(rows)} отелей.")
+    # C14 (#364, TRAP-5): the chosen legs keep local times with zones (_offer_lines, #468).
     lines += _offer_lines(plan)
     for e in plan.explanations[:1]:
         lines.append(f"Почему: {e.why}." + "".join(f" {_cap(x)}." for x in e.tradeoffs))
@@ -1865,7 +1979,10 @@ def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
     spec = plan.spec
     text = dead_end_text(spec, plan.offers)
     if plan.selected:  # the hotels, as the user must see them to pick one
-        text = _text_compare(plan).split("\nПредлагаю:")[0] + "\n" + text
+        head = _text_compare(plan).split("\nПредлагаю:")[0].split("\n")
+        # #475: the dead end paragraph says it about the pets; no count line before it
+        head = [x for x in head if not x.startswith(NO_PET_MARK)]
+        text = "\n".join(head) + "\n" + text
     text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
     return ("compare" if plan.selected else "select"), plan, text, questions
 
@@ -2086,7 +2203,10 @@ def step(
             text += " Контакт из сообщения в неё не добавлен."
             if prev.voucher.simulated:
                 text += " Бронь имитирована."
-        return prev.model_copy(update={"reply": text, "questions": [], "llm": False})
+        # #98: no dead end — another city or other dates mean a new trip; the booking stays
+        text += f" {AFTER_BOOKING}"
+        chip = Question(text="Что дальше?", options=[RESTART_CHIP])
+        return prev.model_copy(update={"reply": text, "questions": [chip], "llm": False})
     old = prev or ChatReply(
         session_id=sid,
         stage="clarify",
@@ -2389,6 +2509,7 @@ def step(
     told: list[str] = []
 
     def without_origin(f: dict) -> dict:
+        f = drop_cheaper_wish(f, low) if prev is not None else f
         named_here = f.get("destinations", [])
         start = f.get("origin") or old.plan.spec.origin or DEFAULT_ORIGIN
         if len(named_here) > 1 and start in named_here:
@@ -2554,6 +2675,7 @@ def step(
                 f"Сейчас {period(spec)}. {HINTS.get(old.stage, '')}"
             )
             return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    spec = end_agent_budget(old.plan.spec, spec, found)
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     plan_dirty = bool(dirty_nodes(old.plan.spec, spec) or not plan.offers)
@@ -2589,7 +2711,7 @@ def step(
             lines = [*lines, *more]
             plan.changes = plan_changes(old.plan, plan, old.cart, cart)
         lines = [_replanned(x) for x in lines]
-        if cheaper and (line := cheaper_line(old.plan, plan, bool(set(found) - {"budget_rub"}))):
+        if cheaper and (line := cheaper_line(old.plan, plan, _other_edits(found))):
             lines.append(line)
         same_trip = (old.plan.spec.destinations, old.plan.spec.origin, old.plan.spec.modes) == (
             spec.destinations,
@@ -2618,6 +2740,14 @@ def step(
     if cheaper and not plan_dirty:
         # The budget of the last step already holds: the plan is the cheapest one (#278).
         text = f"{cheaper_line(old.plan, old.plan)} {HINTS[old.stage]}"
+        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    if (
+        old.stage in ("compare", "assemble")
+        and not (plan_dirty or picks or lines)
+        and prev is not None
+        and talks_cheaper(low)
+    ):
+        text = f"{cheaper_talk_line(old, low)} {HINTS[old.stage]}"  # #316
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})
     if (picks or (lines and not yes)) and not plan_dirty:
         # Nothing to re-plan: a pick on the plan, or the reason there is no change (#184).
@@ -2666,14 +2796,14 @@ def step(
         plan.timeline, plan.issues = build_timeline(plan)
         if any(i.severity == "error" for i in plan.issues):
             return reply("compare", plan, _text_blocked(plan))  # #276: no cart with an error
-        return reply("assemble", plan, _text_assemble(plan))
+        return reply("assemble", plan, _with_tail(_text_assemble(plan), plan, low, message, found))
     if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
         text = (
             f"В корзине {len(cart.items)} поз. на {_rub(cart.total_rub)} "
             f"(синтетика, оплата имитируется). {HINTS['checkout']}"
         )
-        return reply("checkout", plan, text, cart)
+        return reply("checkout", plan, _with_tail(text, plan, low, message, found), cart)
     if booking:  # chat() books outside the session lock; the user saw the stored cart total
         raise _Confirm(old.cart.total_rub)
     text = HINTS.get(old.stage, "Уточните запрос.")
