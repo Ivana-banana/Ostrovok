@@ -113,7 +113,6 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
-from api.timeline import VERBS
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
