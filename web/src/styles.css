@@ -2698,7 +2698,8 @@ h3,
 }
 
 .msg.agent ul.alts {
-  flex: 1 0 100%;
+  flex: none;
+  width: calc(100% - 34px); /* under the text of the item, past the icon */
   margin: 6px 0 0 34px;
   padding: 0;
   list-style: none;
@@ -2785,7 +2786,12 @@ h3,
 
 @media (max-width: 480px) {
   .msg.agent ul.alts {
+    width: 100%;
     margin-left: 0;
+  }
+
+  .alt-body {
+    flex-basis: 100%;
   }
 
   .msg.agent ul.alts li.alt {

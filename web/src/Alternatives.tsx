@@ -1,5 +1,5 @@
-import { Price } from "./Board";
-import type { ChatReply, HotelOffer, Plan, TransportOffer } from "./contracts";
+import { Price, hotelRows } from "./Board";
+import type { ChatReply, HotelOffer, TransportOffer } from "./contracts";
 import { MEALS, duration, ordinal, zonedTime } from "./format";
 
 // #489: an item of the proposed trip opens the other options of its kind from plan.offers.
@@ -43,27 +43,13 @@ export function badges(options: Option[]): Record<string, Badge[]> {
   return out;
 }
 
-// One row per hotel, the same order as the hotel table: «беру второй» counts these rows
-// (Board.tsx hotelRows, backend optimizer.hotel_rows).
-function hotelRows(plan: Plan): HotelOffer[] {
-  const rows = new Map<string, HotelOffer>();
-  for (const o of plan.offers) {
-    if (o.kind !== "hotel") continue;
-    const key = `${o.title}|${o.city}`;
-    const row = rows.get(key);
-    if (!row || (plan.selected.includes(o.offer_id) && !plan.selected.includes(row.offer_id))) {
-      rows.set(key, o);
-    }
-  }
-  return [...rows.values()];
-}
-
 // The options of an item and the chat message that picks each one (null: no pick now).
 // «Туда» are the legs to the hotel city, «Обратно» the legs from it (TransportProvider);
 // «возьми рейс N» counts the whole transport table (backend model.switch_transport).
 export function optionsOf(label: string, reply: ChatReply): { option: Option; pick: string | null }[] {
   const { plan, stage } = reply;
   if (label === "Отель") {
+    // the rows of the hotel table: «беру второй» counts them (backend optimizer.hotel_rows)
     return hotelRows(plan).map((h, i) => {
       const word = ordinal(i);
       return { option: h, pick: stage === "compare" && word ? `беру ${word}` : null };
