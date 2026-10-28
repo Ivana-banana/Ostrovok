@@ -452,6 +452,20 @@ def test_named_place_or_country_clears_the_country(store):
     assert not any(a.startswith("страна") for a in r.plan.spec.assumptions)
 
 
+@pytest.mark.parametrize("refusal", ["не хочу в Турцию", "кроме Турции"])
+def test_refused_country_leaves_the_country_pool(store, refusal):
+    """#452: the country the user refuses now is no country filter: no «мест нет», no Турция."""
+    from api import catalog
+
+    first = say(store, "Тёплое море в ноябре, недорого, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    r = say(store, refusal, r.session_id)
+    assert "мест нет" not in r.reply
+    assert not any(a.startswith("страна") for a in r.plan.spec.assumptions)
+    names = [d.name for d in r.plan.destinations]
+    assert all(catalog.resolve(n)["country"] != "Турция" for n in names), names
+
+
 def test_country_without_fitting_places_says_so(store, monkeypatch):
     """#452: no place of Турция fits: the reply says so, it does not fall back silently."""
     from api import model

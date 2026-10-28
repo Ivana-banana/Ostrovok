@@ -2733,6 +2733,8 @@ def step(
     )
     spec = with_shown(spec, [])  # the note is set again below, by a «ещё» batch only
     country_pool = country_pool or country_before(old.plan.spec)  # #452: kept till a place is named
+    if country_pool in refused:
+        country_pool = None  # «не хочу в Турцию»: a refused country is no filter
     spec = with_country(spec, country_pool)  # a place named now drops the note
     route = severals(message, found.get("destinations", []))
     if route:  # the lost city stays visible (#128, #139)
