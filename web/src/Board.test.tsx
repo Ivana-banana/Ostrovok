@@ -264,6 +264,15 @@ suite("доска поездки", () => {
     expect(cart?.textContent).toContain("(часть цен — синтетика) · оплата имитируется");
   });
 
+  it("TRAP-7 (#567): смешанный вариант поездки — итог «часть цен», суммы в минусах с «синтетика»", () => {
+    const r = structuredClone(base);
+    r.plan.offers = r.plan.offers.map((o) => (o.kind === "hotel" ? { ...o, synthetic: false } : o));
+    r.plan.bundles = r.plan.bundles.map((b) => ({ ...b, tradeoffs: ["дороже на 2 000 ₽ (отель, 9 000 ₽)"] }));
+    const card = render(r).querySelector("[aria-label='Варианты поездки целиком'] .card");
+    const marks = [...(card?.querySelectorAll(".price") ?? [])].map((p) => p.querySelector(".synth")?.textContent);
+    expect(marks).toEqual(["часть цен — синтетика", "синтетика", "синтетика"]);
+  });
+
   it("#41: бюджет отеля — своя строка в параметрах, не «Бюджет» на поездку", () => {
     const r = structuredClone(base);
     r.plan.spec.budget_rub = null;

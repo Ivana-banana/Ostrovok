@@ -1206,11 +1206,15 @@ def is_rebuild(low: str) -> bool:
     return bool(pick_kinds(low) or NO_FLIGHT_RE.search(low) or stay_delta(low))
 
 
-def _ranked_total(plan: Plan) -> int:
-    """The total of the best set the ranking gives for the spec of the plan, without the hotel
-    the user picked by hand (dag._keep_pick): the real minimum of the offers."""
+def _ranked_set(plan: Plan) -> list:
+    """The best set the ranking gives for the spec of the plan, without the hotel the user
+    picked by hand (dag._keep_pick): its total is the real minimum of the offers."""
     ids, _ = rank(plan.spec, plan.offers)
-    return sum(o.price_rub for o in plan.offers if o.offer_id in ids)
+    return [o for o in plan.offers if o.offer_id in ids]
+
+
+def _ranked_total(plan: Plan) -> int:
+    return sum(o.price_rub for o in _ranked_set(plan))
 
 
 # The wish «недорого» in words other than «дешевле» (see api/extract.py WISHES).
@@ -1250,10 +1254,10 @@ def drop_cheaper_wish(found: dict, low: str) -> dict:
     return {**kept, "wishes": rest} if rest else kept
 
 
-def _cheapest_total(plan: Plan, cart: Cart) -> int:
-    """The least total the offers give for the trip: a trial re-plan with a budget nobody meets."""
+def _cheapest_set(plan: Plan, cart: Cart) -> list:
+    """The cheapest set of offers for the trip: a trial re-plan with a budget nobody meets."""
     trial, _, _ = replan(plan, merge(plan.spec, {"budget_rub": 0}, []), cart)
-    return _ranked_total(trial)
+    return _ranked_set(trial)
 
 
 def cheaper_talk_line(old: ChatReply, low: str) -> str:
@@ -1262,11 +1266,12 @@ def cheaper_talk_line(old: ChatReply, low: str) -> str:
     total = _selected_total(old.plan)
     now = _priced(total, _chosen(old.plan))
     if CHEAPER_MIN_RE.search(low):
-        floor = _cheapest_total(old.plan, old.cart)
+        cheapest = _cheapest_set(old.plan, old.cart)
+        floor = sum(o.price_rub for o in cheapest)
         if total <= floor:
             return f"Дешевле не бывает: минимум в предложениях — {now}, он уже в плане."
         return (
-            f"Бывает: минимум в предложениях — {_priced(floor, old.plan.offers)}, сейчас {now}. "
+            f"Бывает: минимум в предложениях — {_priced(floor, cheapest)}, сейчас {now}. "
             "Напишите «подешевле», и я пересоберу план."
         )
     return f"Хорошо, бюджет не меняю: итог остаётся {now}."
@@ -1306,7 +1311,7 @@ def refit_agent_budget(old: Plan, cart: Cart, spec: TripSpec) -> tuple[TripSpec,
         return spec, ""
     line = (
         f"Бюджет «подешевле» пересчитан под новые даты: {_rub(found['budget_rub'])} "
-        f"вместо {_rub(old.spec.budget_rub or 0)} ({price_mark(trial.offers)})."
+        f"вместо {_rub(old.spec.budget_rub or 0)}."  # a budget is no provider price: no mark
     )
     return merge(spec, {"budget_rub": found["budget_rub"]}, notes), line
 
@@ -1340,12 +1345,13 @@ def cheaper_line(old: Plan, new: Plan, edited: bool = False) -> str:
     `edited`: the message also changed other conditions, so the total may rise for them."""
     a, b = _selected_total(old), _selected_total(new)
     goal = new.spec.budget_rub
-    cheapest = _ranked_total(new)
+    best = _ranked_set(new)
+    cheapest = sum(o.price_rub for o in best)
     if b > cheapest:  # a hotel picked by hand costs more than the best set (TRAP-4)
         hotel = _hotel_of(new)
         who = f"С отелем «{hotel.title}» " if hotel else "С вашим выбором "
         return (
-            f"{who}дешевле нет; самый дешёвый набор — {_priced(cheapest, new.offers)}. "
+            f"{who}дешевле нет; самый дешёвый набор — {_priced(cheapest, best)}. "
             "Назовите сумму, если нужно другое."
         )
     if b >= a:

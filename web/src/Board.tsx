@@ -96,6 +96,12 @@ export function Price({ value, synthetic = true, source }: { value: number; synt
 // becomes the chip of that price, so a real price in a mixed message is not marked «синтетика».
 const AMOUNT = /\d[\d\s\u00a0]*\s?₽/g;
 const SOURCE = "(?:101hotels|Авиасейлс|tutu|реальные данные)";
+// The hint of a backend mark of real sources, as at the board chip: «101hotels + tutu».
+const hintOf = (mark: string) =>
+  mark
+    .split(" + ")
+    .map((chip) => Object.values(PRICE_SOURCES).find((x) => x.chip === chip)?.hint ?? OTHER_SOURCE.hint)
+    .join("; ");
 const MARK = new RegExp(`^ \\((синтетика|${MIXED}|${SOURCE}(?: \\+ ${SOURCE})*)\\)`);
 const AFTER_BUDGET = /бюджет[а-яё]*(\s+отеля)?\s*$/i;
 const LABELLED = /^\s*\(?синтетика/;
@@ -113,7 +119,9 @@ export function Money({ text, synthetic = true }: { text: string; synthetic?: bo
         text.slice(at, m.index),
         <span key={m.index} className="price">
           {m[0]}
-          <span className={real ? "synth synth-real" : "synth"}>{mark[1]}</span>
+          <span className={real ? "synth synth-real" : "synth"} title={real ? hintOf(mark[1]) : undefined}>
+            {mark[1]}
+          </span>
         </span>,
       );
       at = end + mark[0].length;
@@ -563,6 +571,7 @@ function Bundles({ plan }: { plan: Plan }) {
   if (!plan.bundles.length) return null;
   const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title;
   const of = (b: Bundle) => plan.offers.filter((o) => b.offer_ids.includes(o.offer_id));
+  // The total chip: «синтетика» only when all items are; the text of the minus marks every sum (TRAP-7).
   const synthetic = (b: Bundle) => allSynthetic(of(b));
   const kind = (id: string) => plan.offers.find((o) => o.offer_id === id)?.kind;
   const heading = plan.bundles.every((b) => b.offer_ids.some((id) => kind(id) === "transport"))
@@ -586,7 +595,7 @@ function Bundles({ plan }: { plan: Plan }) {
             </ul>
             {b.tradeoffs.length > 0 && (
               <p className="muted">
-                Минусы: <Money text={b.tradeoffs.join("; ")} synthetic={synthetic(b)} />
+                Минусы: <Money text={b.tradeoffs.join("; ")} synthetic={isSynthetic(of(b))} />
               </p>
             )}
           </article>

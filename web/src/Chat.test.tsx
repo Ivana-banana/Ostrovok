@@ -135,6 +135,7 @@ suite("чат", () => {
       ["15 700 ₽часть цен — синтетика", false],
     ]);
     expect(box.textContent).not.toContain("(");  // the label is the chip, not a second text
+    expect(box.querySelector(".synth-real")?.getAttribute("title")).toBe("итог по цене «от» 101hotels; питание и тариф — оценка");
     act(() => root.unmount());
   });
 
