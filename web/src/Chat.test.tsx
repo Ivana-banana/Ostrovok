@@ -95,12 +95,12 @@ suite("чат", () => {
       ["Итого15 700 ₽синтетика"],
     ]);
     expect(items.map((li) => li.querySelector("svg.pt-ic") !== null)).toEqual([true, true, false]);
-    // #478: route and time are one grid of 2 rows × 3 columns, the lines stand in one column
+    // #478: route and time are one grid of 2 rows × 2 columns, the right words stand in one column
     const grid = items[1].querySelectorAll(".pt-route");
     expect(grid).toHaveLength(1);
-    expect([...grid[0].children].map((c) => c.className || "cell")).toEqual(["cell", "pt-line", "cell", "pt-time", "pt-line", "pt-time"]);
+    expect([...grid[0].children].map((c) => c.className || "cell")).toEqual(["pt-from", "cell", "pt-from", "pt-time"]);
     // the arrow is a drawing; the text «→» stays for a screen reader and a copy
-    expect(items[1].querySelectorAll("svg.arrow[aria-hidden='true']")).toHaveLength(2);
+    expect(items[1].querySelectorAll(".pt-line[aria-hidden='true']")).toHaveLength(2);
     // TRAP-7: one chip at each price of the list, none at the facts
     expect([...box.querySelectorAll("ul.offer .price")].map((x) => x.textContent)).toEqual([
       "7 900 ₽синтетика",
