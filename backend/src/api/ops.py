@@ -129,19 +129,20 @@ def setup_logging() -> None:
 
 def data_mode() -> dict[str, str]:
     """Mode of each source and of the whole: the lowest of the adapters (an adapter that does
-    not declare `data_mode` counts as синтетика). The catalogue is a repository snapshot."""
+    not declare `data_mode` counts as синтетика). The catalogue is a repository snapshot.
+    An adapter with `health_label` (Live101Hotels, #547) shows that text for its source; its rank
+    stays the one of `data_mode`, because the fallback is synthetic (TRAP-7)."""
     from api import offers  # offers imports this module
 
-    modes = {
-        name: getattr(adapter, "data_mode", "синтетика")
-        for name, adapter in (
-            ("hotels", offers.HOTELS),
-            ("transport", offers.TRANSPORT),
-            ("transfers", offers.TRANSFERS),
-        )
+    adapters = {
+        "hotels": offers.HOTELS,
+        "transport": offers.TRANSPORT,
+        "transfers": offers.TRANSFERS,
     }
+    modes = {k: getattr(a, "data_mode", "синтетика") for k, a in adapters.items()}
     modes = {k: v if v in RANK else "синтетика" for k, v in modes.items()}
-    return {"data_mode": min(modes.values(), key=RANK.__getitem__), **modes, "catalog": "снапшот"}
+    shown = {k: getattr(a, "health_label", None) or modes[k] for k, a in adapters.items()}
+    return {"data_mode": min(modes.values(), key=RANK.__getitem__), **shown, "catalog": "снапшот"}
 
 
 def llm_mode() -> dict[str, object]:

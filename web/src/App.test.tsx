@@ -470,6 +470,18 @@ suite("приложение", () => {
     expect(hints[1].open).toBe(true);
   });
 
+  it("TRAP-7: справка «Откуда цены» берёт источники из предложений плана (#547)", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const real = structuredClone(booked);
+    real.plan.offers = real.plan.offers.map((o) => (o.kind === "hotel" ? { ...o, synthetic: false } : o));
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: real });
+    await mount();
+    const help = box.querySelector("summary[aria-label='Откуда цены']")?.parentElement?.textContent ?? "";
+    expect(help).toContain("Отели — 101hotels (цена «от» на сегодня), остальные цены — синтетика.");
+    expect(help).not.toContain("Цены и рейсы — синтетика");
+    expect(box.querySelector("footer[aria-label='Источники данных']")?.textContent).toContain("Отели — 101hotels");
+  });
+
   it("подвал: атрибуция OpenStreetMap (ODbL) есть и без поездки, под «Данные ?» в один клик", async () => {
     await mount();
     const foot = box.querySelector("footer[aria-label='Источники данных']");

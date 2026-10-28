@@ -91,12 +91,13 @@ suite("доска поездки", () => {
     }
   });
 
-  it("TRAP-7: цена реальных данных без пометки", () => {
+  it("TRAP-7: у цены реальных данных нет «синтетика», есть пометка источника (#547)", () => {
     const real = structuredClone(base);
     real.plan.offers = real.plan.offers.map((o) => ({ ...o, synthetic: false }));
     const doc = render(real);
     const row = [...doc.querySelectorAll("tr")].find((r) => r.textContent?.includes("Отель у Кремля"));
-    expect(row?.querySelector(".synth")).toBeNull();
+    expect(row?.querySelector(".synth:not(.synth-real)")).toBeNull();
+    expect(row?.querySelector(".synth-real")?.textContent).toBe("101hotels");
   });
 
   it("TRAP-1: плашка «без ИИ», когда модель недоступна", () => {
@@ -271,7 +272,36 @@ suite("доска поездки", () => {
     expect(real?.querySelector("button.primary")?.textContent).toBe(
       "Подтвердить бронь на 600 ₽ · оплата имитируется",
     );
-    expect(real?.querySelector(".synth")).toBeNull();
+    expect(real?.querySelector(".synth:not(.synth-real)")).toBeNull();
+  });
+
+  it("TRAP-7: реальная цена получает пометку источника, синтетическая остаётся «синтетика» (#547)", () => {
+    const r = structuredClone(hotelBought);
+    r.stage = "compare";
+    r.plan.offers = r.plan.offers.map((o) =>
+      o.kind === "hotel" || o.kind === "transport" ? { ...o, synthetic: false } : o,
+    );
+    const doc = render(r);
+    const chips = (label: string) =>
+      [...doc.querySelectorAll(`[aria-label='${label}'] td.cost .synth`)].map((c) => c.textContent);
+    const hotelChip = doc.querySelector("[aria-label='Сравнение отелей'] td.cost .synth");
+    expect(hotelChip?.textContent).toBe("101hotels");
+    expect(hotelChip?.classList.contains("synth-real")).toBe(true);
+    expect(hotelChip?.getAttribute("title")).toBe("цена «от» на сегодня с 101hotels.ru");
+    expect(chips("Сравнение транспорта")).toEqual(["Авиасейлс"]);
+    // the transfer stays synthetic; its price keeps «синтетика»
+    r.plan.offers = r.plan.offers.map((o) => ({ ...o, synthetic: o.kind !== "hotel" && o.kind !== "transport" }));
+    const cart = render({ ...r, stage: "checkout", voucher: null }).querySelector("[aria-label='Корзина']");
+    expect([...(cart?.querySelectorAll(".synth") ?? [])].every((c) => c.textContent === "синтетика")).toBe(true);
+  });
+
+  it("TRAP-7: ваучер с реальным отелем называет источник у цены (#547)", () => {
+    const r = structuredClone(base);
+    r.voucher!.items = r.plan.offers.filter((o) => o.kind === "hotel").map((o) => ({ ...o, synthetic: false }));
+    const voucher = render(r).querySelector("[aria-label='Ваучер']");
+    const marks = [...(voucher?.querySelectorAll(".synth") ?? [])].map((c) => c.textContent);
+    expect(marks).toContain("101hotels");
+    expect(marks).not.toContain("синтетика");
   });
 
   it("направления: карточки с кнопкой выбора на этапе inspire", () => {
