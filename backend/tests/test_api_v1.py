@@ -36,7 +36,7 @@ def test_openapi_describes_both_versions(client):
             for operation in (legacy, versioned):
                 health = operation["responses"]["200"]["content"]["application/json"]["schema"]
                 assert health["type"] == "object"
-                assert health["additionalProperties"] == {"type": "string"}
+                assert health["additionalProperties"] is True  # modes since #290
         else:
             assert versioned["responses"] == legacy["responses"]
         assert versioned.get("requestBody") == legacy.get("requestBody")
@@ -80,6 +80,7 @@ def test_versioned_trip_can_be_restored_by_legacy_client(client):
 
 
 def test_versioned_errors_and_health(client):
-    assert client.get("/api/v1/health").json() == {"status": "ok"}
+    assert client.get("/api/v1/health").json() == client.get("/api/health").json()
+    assert client.get("/api/v1/health").json()["status"] == "ok"
     assert client.get("/api/v1/session/absent").status_code == 404
     assert client.post("/api/v1/chat", json={"message": ""}).status_code == 422

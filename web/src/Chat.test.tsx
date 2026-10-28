@@ -72,4 +72,46 @@ suite("чат", () => {
     expect(box.textContent).toBe(text.replace("₽", "₽синтетика"));
     act(() => root.unmount());
   });
+
+  it("#468: предложение — список, «синтетика» у каждой цены, детали свёрнуты под «Подробнее»", async () => {
+    const box = document.createElement("div");
+    const root = createRoot(box);
+    const text = [
+      "Казань, 11.12–13.12, 2 ноч., 2 взр.",
+      "Цены — синтетика.",
+      "Климат: в декабре днём ≈ -5.3 °C.",
+      "Предлагаю:",
+      "Отель: Казантель, Казань, 2★, без питания, невозвратный — 7 900 ₽",
+      "Туда: поезд Москва → Казань, 10.12 18:50 → 11.12 07:10 (UTC+3) — 7 800 ₽",
+      "Итого 15 700 ₽.",
+      "Почему: поездка целиком 15 700 ₽.",
+      "Напишите «беру» или номер отеля.",
+    ].join("\n");
+    await act(async () => root.render(<AgentText text={text} synthetic />));
+    const items = [...box.querySelectorAll("ul.offer li")];
+    expect(items.map((li) => [...li.querySelectorAll(".pt-row, .pt-sub")].map((x) => x.textContent))).toEqual([
+      ["Отель Казантель, Казань7 900 ₽синтетика", "2★ · без питания · невозвратный"],
+      ["Туда · поезд7 800 ₽синтетика", "Москва → Казань 10.12 18:50 → 11.12 07:10 · UTC+3"],
+      ["Итого15 700 ₽синтетика"],
+    ]);
+    expect(items.map((li) => li.querySelector("svg.pt-ic") !== null)).toEqual([true, true, false]);
+    // #478: route and time are one grid of 2 rows × 2 columns, the right words stand in one column
+    const grid = items[1].querySelectorAll(".pt-route");
+    expect(grid).toHaveLength(1);
+    expect([...grid[0].children].map((c) => c.className || "cell")).toEqual(["pt-from", "cell", "pt-from", "pt-time"]);
+    // the arrow is a drawing; the text «→» stays for a screen reader and a copy
+    expect(items[1].querySelectorAll(".pt-line[aria-hidden='true']")).toHaveLength(2);
+    // TRAP-7: one chip at each price of the list, none at the facts
+    expect([...box.querySelectorAll("ul.offer .price")].map((x) => x.textContent)).toEqual([
+      "7 900 ₽синтетика",
+      "7 800 ₽синтетика",
+      "15 700 ₽синтетика",
+    ]);
+    const more = box.querySelector("details.more") as HTMLDetailsElement;
+    expect(more.open).toBe(false);
+    expect([...more.querySelectorAll("p")].map((p) => p.textContent?.split(" ")[0])).toEqual(["Цены", "Климат:", "Почему:"]);
+    expect(more.querySelector("mark")?.textContent).toBe("5.3 °C");
+    expect(box.lastElementChild?.textContent).toBe("Напишите «беру» или номер отеля.");
+    act(() => root.unmount());
+  });
 });

@@ -139,8 +139,8 @@ def test_partner_keys_guard_v1_only(client, monkeypatch):
     # the web client (/api/*), health and mode need no key
     assert client.post("/api/chat", json=msg).status_code == 200
     assert client.get(f"/api/session/{sid}").status_code == 200
-    assert client.get("/api/v1/health").json() == {"status": "ok"}
-    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/api/v1/health").json()["status"] == "ok"  # plus the modes since #290
+    assert client.get("/health").json()["status"] == "ok"
     assert client.get("/api/v1/mode").status_code == 200
 
 

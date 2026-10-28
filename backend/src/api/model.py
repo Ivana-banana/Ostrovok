@@ -16,13 +16,15 @@ same path runs on rules (TRAP-1).
 """
 
 import difflib
+import logging
 import re
+import time
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from api import catalog, llm
+from api import catalog, llm, ops
 from api.answers import (
     closed_line,
     destination_line,
@@ -32,7 +34,15 @@ from api.answers import (
     span,
     without_plan_fields,
 )
-from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
+from api.cart import (
+    CartRefusal,
+    checkout_reply,
+    edit_cart,
+    fill_cart,
+    keep_refusal,
+    remember_refusal,
+    sync_plan,
+)
 from api.contracts import (
     Cart,
     ChatReply,
@@ -46,6 +56,7 @@ from api.contracts import (
 )
 from api.dag import (
     DATE_EDIT_RE,
+    MEALS,
     SHIFT_RE,
     describe,
     dirty_nodes,
@@ -104,6 +115,7 @@ from api.optimizer import (
 from api.store import SessionStore
 from api.timeline import VERBS
 
+log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
@@ -926,7 +938,7 @@ def leg_commands(text: str) -> list[LegCommand]:
     t = text.lower().replace("ё", "е")
     if NEGATION_RE.search(t) or BOOK_RE.search(t):
         return []
-    verb = bool(LEG_PICK_RE.search(t))
+    verb = bool(LEG_PICK_RE.search(t)) or hotel_row(t) is not None  # #388: «отель 1 и поезд»
     out: list[LegCommand] = []
     for clause in LEG_CLAUSE_RE.split(t):
         if row := _leg_row(clause):
@@ -1534,6 +1546,38 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
     return ""
 
 
+# #311: «дешевле, чем в Турции?», «это дешевле, чем в среднем?» ask for a comparison. They name no
+# new place and no «недорого» wish; the plan stays. A request («хочу дешевле, чем сейчас») is an edit.
+PRICE_VERSUS_RE = re.compile(r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?")
+VERSUS_ORDER_RE = re.compile(
+    r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
+)
+MARKET_RE = re.compile(r"\bв\s+среднем\b|рынк|\bобычно\b")  # «дешевле, чем в среднем?»
+
+
+def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
+    """The reply to a price comparison question, from the plan only (TRAP-4); "" if it is none.
+    The plan has the price of its own trip only: the price of the other place and the market
+    average are not in the data, and we say so."""
+    if not PRICE_VERSUS_RE.search(low) or CHOICE_RE.search(low) or VERSUS_ORDER_RE.search(low):
+        return ""
+    spec = old.plan.spec
+    others = [d for d in found.get("destinations", []) if d not in spec.destinations]
+    if not (others or MARKET_RE.search(low)):
+        return ""  # «а поезд дешевле, чем самолёт?»: not this question, the old rules read it
+    total = old.cart.total_rub or sum(
+        o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
+    )
+    place = f"в направлении «{', '.join(others)}»" if others else "в среднем по рынку"
+    mine = ", ".join(spec.destinations) or "текущее направление"
+    now = f"Сейчас в плане: {mine}, итого {_rub(total)} (синтетика). " if total else ""
+    ask = f"«{others[0]}»" if others else "«подешевле»"
+    return (
+        f"Это вопрос: план не меняю. {now}Цен {place} для сравнения в данных нет — "
+        f"цифр не выдумываю. Чтобы собрать такой план, напишите: {ask}. {HINTS[old.stage]}"
+    )
+
+
 def _question_answer(
     old: ChatReply, low: str = "", message: str = "", found: dict | None = None
 ) -> str:
@@ -1652,15 +1696,57 @@ def missing_mode(plan: Plan) -> str:
     return f"{_cap(asked)} {way} в данных нет: предлагаю {have}."
 
 
+def _span_at(o: TransportOffer) -> str:
+    """«10.12 18:50 → 11.12 07:10 (UTC+3)»: local times of the leg, one zone when they share it."""
+    a, b = _zone(o.depart_at), _zone(o.arrive_at)
+    start = f"{o.depart_at:%d.%m %H:%M}" + ("" if a == b else f" ({a})")
+    return f"{start} → {o.arrive_at:%d.%m %H:%M} ({b})"
+
+
+def _offer_lines(plan: Plan) -> list[str]:
+    """#468: the selected trip, one line per item. Names, prices and times are the fields of
+    the selected offers (TRAP-4); «Включено» names only what an offer field says."""
+    chosen = [o for o in plan.offers if o.offer_id in plan.selected]
+    lines = ["Предлагаю:"]
+    included = []
+    for h in (o for o in chosen if isinstance(o, HotelOffer)):
+        stars = f", {h.stars}★" if h.stars else ""
+        cancel = "бесплатная отмена" if h.cancellation.refundable else "невозвратный"
+        lines.append(f"Отель: {h.title}{stars}, {MEALS[h.meal]}, {cancel} — {_rub(h.price_rub)}")
+        if h.meal != "RO":
+            included.append(MEALS[h.meal])
+        if h.cancellation.refundable:
+            until = h.cancellation.free_until
+            included.append(
+                "бесплатная отмена"
+                + (f" до {until.astimezone(ZoneInfo(h.tz)):%d.%m}" if until else "")
+            )
+    city = next((o.city for o in chosen if isinstance(o, HotelOffer)), plan.spec.destinations[0])
+    legs = [o for o in chosen if isinstance(o, TransportOffer)]
+    for o in sorted(legs, key=lambda o: o.depart_at):  # own tickets are no offers (offers.py)
+        way = "Обратно" if o.origin == city else "Туда"
+        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
+        lines.append(f"{way}: {title[:1].lower()}{title[1:]}, {_span_at(o)} — {_rub(o.price_rub)}")
+    rides = [o for o in chosen if o.kind == "transfer"]
+    if rides:
+        names = "; ".join(o.title.removeprefix("Трансфер: ") for o in rides)
+        lines.append(f"Трансферы: {names} — {_rub(sum(o.price_rub for o in rides))}")
+    # paid extras of the hotel («Ранний заезд …»): the items sum to «Итого»
+    lines += [f"Доп. услуга: {o.title} — {_rub(o.price_rub)}" for o in chosen if o.kind == "extra"]
+    if included:
+        lines.append(f"Включено: {', '.join(included)}.")
+    lines.append(f"Итого {_rub(_selected_total(plan))}.")
+    return lines
+
+
 def _text_compare(plan: Plan) -> str:
     spec = plan.spec
     kids = f" + дети {', '.join(map(str, spec.children_ages))} лет" if spec.children_ages else ""
     rows = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
     lines = [
-        (
-            f"{spec.destinations[0]}, {period(spec)}, "
-            f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
-        ),
+        f"{spec.destinations[0]}, {period(spec)}, {spec.nights} ноч., {spec.adults} взр.{kids}"
+        + ("." if kids else ""),
+        "Цены — синтетика.",
         *([_cap(line) + "."] if (line := own_tickets(spec)) else []),
         *([line] if (line := destination_line(plan)) else []),
         *([line] if (line := closed_line(plan)) else []),
@@ -1674,20 +1760,8 @@ def _text_compare(plan: Plan) -> str:
     ]
     if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
         lines.append(f"Нет отметки о животных: у {n} из {len(rows)} отелей.")
-    chosen = []
-    for o in plan.offers:
-        if o.offer_id not in plan.selected:
-            continue
-        if o.kind != "transport":
-            chosen.append(o.title)
-            continue
-        # C14 (#364, TRAP-5): the chosen leg keeps local times with zones and the duration.
-        start, end = (v.lower() for v in VERBS[o.mode])
-        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
-        chosen.append(
-            f"{title} ({start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)})"
-        )
-    lines.append(f"Предлагаю: {'; '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
+    # C14 (#364, TRAP-5): the chosen legs keep local times with zones (_offer_lines, #468).
+    lines += _offer_lines(plan)
     for e in plan.explanations[:1]:
         lines.append(f"Почему: {e.why}." + "".join(f" {_cap(x)}." for x in e.tradeoffs))
         lines += [f"Риск: {r}." for r in e.risks]
@@ -1877,6 +1951,7 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
     checkout also the cart); the timeline is built again (TRAP-5). The stage stays: a plain
     consent fills the cart. The model does not read the message; the prices stay from the plan."""
     plan = plan or old.plan
+    plan = remember_refusal(plan, {"out", "back"})
     gone = [o for o in plan.offers if o.kind == "transfer" and o.offer_id in plan.selected]
     if not gone:
         text = f"Трансфера в плане нет, менять нечего. {HINTS[old.stage]}"
@@ -1886,9 +1961,8 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
         for o in gone:
             cart = edit_cart(plan, cart, "remove", o.offer_id)
         plan = sync_plan(plan, old.cart, cart)
-    else:
-        plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
-        plan.timeline, plan.issues = build_timeline(plan)
+    plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
+    plan.timeline, plan.issues = build_timeline(plan)
     rows = "; ".join(f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in gone)
     head = f"Убираю трансфер из плана: {rows}."
     if old.stage == "assemble":
@@ -2052,6 +2126,14 @@ def step(
         and not rules_found  # an edit in the same message is a rebuild, as before
         and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
         and (reply := _per_head_reply(old, low))
+    ):
+        return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
+    if (
+        prev
+        and old.stage in PLAN3
+        and set(rules_found) <= {"destinations", "wishes"}  # «дешевле, чем 50 тысяч?» is a budget
+        and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
+        and (reply := _price_versus_reply(old, low, rules_found))
     ):
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
@@ -2563,7 +2645,9 @@ def step(
             return reply(stage, plan, text, questions=questions)
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
-            plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
+            plan.selected = keep_refusal(
+                plan, pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
+            )
             # «Почему» and the bundles name the picked hotel, not the ranked one (#58).
             plan.explanations = explain(plan.spec, plan.offers, plan.selected)
             plan.bundles = bundles(plan.spec, plan.offers, plan.selected)
@@ -2600,16 +2684,34 @@ def chat(req: ChatRequest, store: SessionStore) -> ChatReply:
     booking reply is a rule-based turn: llm is False.
     """
     sid = req.session_id or uuid4().hex
-    prev = store.get(sid)
-    try:
-        draft = step(prev, sid, req.message, use_llm=True)
-        return store.update(sid, lambda cur: draft if cur == prev else step(cur, sid, req.message))
-    except _Confirm as c:
+    started = time.monotonic()
+    with ops.session(sid):
+        prev = store.get(sid)
         try:
-            return checkout_reply(store, sid, c.total_rub).model_copy(update={"llm": False})
-        except CartRefusal as e:  # the cart stays open; the reply says why
-            why = {"reply": e.text, "questions": [], "llm": False}
-            return store.update(sid, lambda cur: cur.model_copy(update=why))
+            with ops.collecting() as marks:  # #290: a failed provider is marked in the reply
+                draft = ops.mark(step(prev, sid, req.message, use_llm=True), marks)
+
+            def next_reply(cur: ChatReply | None) -> ChatReply:
+                if cur == prev:
+                    return draft
+                with ops.collecting() as again:
+                    return ops.mark(step(cur, sid, req.message), again)
+
+            reply = store.update(sid, next_reply)
+        except _Confirm as c:
+            try:
+                reply = checkout_reply(store, sid, c.total_rub).model_copy(update={"llm": False})
+            except CartRefusal as e:  # the cart stays open; the reply says why
+                why = {"reply": e.text, "questions": [], "llm": False}
+                reply = store.update(sid, lambda cur: cur.model_copy(update=why))
+        log.info(
+            "chat stage=%s llm=%s marks=%d ms=%d",
+            reply.stage,
+            reply.llm,
+            len(reply.plan.issues),
+            (time.monotonic() - started) * 1000,
+        )
+        return reply
 
 
 class _Confirm(Exception):  # a signal from step() to chat(), not an error

@@ -12,7 +12,7 @@ places closer than SPREAD_KM to a shown one wait for a free slot.
 from collections import Counter
 from datetime import timedelta
 
-from api import catalog
+from api import catalog, ops
 from api import offers as ports  # TRANSPORT is read at call time: a test may swap it
 from api.contracts import Destination, TransportOffer, TripSpec
 from api.fixtures import COLD_MONTHS, WARM_WATER_C, future_date, trip_cost
@@ -189,7 +189,8 @@ def _road(spec: TripSpec, hub: dict, place: dict) -> tuple[float, float, int]:
         if spec.date_from
         else spec.model_copy(update={"date_from": future_date(spec.month or 1, 15)})
     )
-    legs = [x for x in ports.TRANSPORT.legs(probe, hub, place) if x.origin == hub["name"]]
+    found = ops.guarded("transport", lambda: ports.TRANSPORT.legs(probe, hub, place), [])
+    legs = [x for x in found if x.origin == hub["name"]]
     if not legs:
         return 0, 0, 0
     door = min(_hours(x.arrive_at - x.depart_at) for x in legs)

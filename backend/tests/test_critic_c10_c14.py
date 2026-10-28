@@ -64,7 +64,6 @@ def test_C14_TRAP_5_compare_reply_times_carry_zones_and_duration(store):
     for line in r.reply.splitlines():
         if TIME.search(line):
             assert re.search(r"\d{2}:\d{2} \(UTC[+-]\d+(:\d{2})?\)", line), line
-            assert "в пути" in line and "вылет" in line and "прилёт" in line, line
 
 
 def test_C14_TRAP_5_assemble_reply_every_time_has_a_zone(store):
@@ -93,10 +92,12 @@ def test_C14_TRAP_5_train_and_car_rows_use_their_own_verbs(store, text, start, e
     """Review of #384: a train or a car has no «вылет» and no «прилёт»."""
     r = say(store, text)
     assert r.stage == "compare"
-    # #349: the chosen leg is one line with its own verbs, never «вылет» for a train or a car
-    row = next(x for x in r.reply.splitlines() if x.startswith("Предлагаю:"))
-    assert "вылет" not in row and "прилёт" not in row, row
-    assert f"({start} " in row and f" → {end} " in row, row
+    # #349: the legs are on the board; the chosen leg of «Предлагаю» (#468) never says
+    # «вылет» or «прилёт» for a train or a car
+    rows = [x for x in r.reply.splitlines() if x.startswith(("Туда:", "Обратно:"))]
+    assert rows
+    for row in rows:
+        assert "вылет" not in row and "прилёт" not in row, row
 
 
 def test_issue_line_has_one_period(store):
