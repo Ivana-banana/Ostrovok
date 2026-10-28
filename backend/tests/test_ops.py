@@ -146,3 +146,15 @@ def test_health_data_mode_is_the_lowest_of_the_adapters(monkeypatch):
     assert ops.data_mode()["data_mode"] == "реальный"
     monkeypatch.setattr(offers, "TRANSFERS", object())  # no declared mode: the safe side
     assert ops.data_mode()["data_mode"] == "синтетика"
+
+
+def test_trap7_health_names_the_live_hotels_but_keeps_the_synthetic_rank(monkeypatch):
+    from api.live_hotels import Live101Hotels
+
+    monkeypatch.setattr(offers, "HOTELS", Live101Hotels(offers.HOTELS))
+    body = ops.health()
+    assert body["status"] == "ok"
+    assert body["hotels"] == "101hotels (живые) / синтетика при сбое"
+    # the fallback is synthetic: the whole is not «реальный»
+    assert body["data_mode"] == "синтетика"
+    assert body["transport"] == "синтетика"
