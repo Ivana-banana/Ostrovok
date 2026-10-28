@@ -569,7 +569,7 @@ export function App() {
             )}
             {!ui.messages.length && !restoring && (
               <div className="hello">
-                <Mascot size={84} state="hello" />
+                <Mascot size={110} state="hello" />
                 <h2>Куда поедем?</h2>
               </div>
             )}

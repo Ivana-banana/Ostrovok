@@ -1,11 +1,12 @@
 import { useEffect, useRef } from "react";
 import { motionOk } from "./brand";
 
-// The banana mascot: an inline SVG, every animation in styles.css («mascot»).
-//   idle     — breathes, blinks, looks around; wiggles on hover
+// The banana mascot: a flat banana with a peel facet (concept 6 of ostrovok-coord/mascot/v7-flat),
+// an inline SVG; every animation in styles.css («mascot»).
+//   idle     — sways a little, blinks; wiggles on hover
 //   hello    — the empty chat: waves, the eyes follow the pointer
 //   thinking — tossed like a boomerang: every toss has its own turns, flips and height
-//   happy    — the trip is booked: jumps, the eyes become ^^
+//   happy    — the trip is booked: a short jump, both arms up
 export type MascotState = "idle" | "hello" | "thinking" | "happy";
 
 export function Mascot({ size = 30, state = "idle" }: { size?: number; state?: MascotState }) {
@@ -20,29 +21,36 @@ export function Mascot({ size = 30, state = "idle" }: { size?: number; state?: M
     <span ref={el} className={`mascot ${state}`} style={{ width: size, height: size }} aria-hidden="true">
       <svg width={size} height={size} viewBox="0 0 64 64">
         <g className="bw">
-          <path className="arm arm-l" d="M27 43C24 44 21 45 19 48" />
-          <path className="arm arm-r" d="M53 37C56 36 58 33 59 30" />
-          <path
-            className="skin"
-            d="M28 9C45 10 56 22 55 37C54 51 43 59 27 59C22 59 18 57 19 53C25 48 27 41 27 31C27 22 26 16 23 12C23 10 25 9 28 9Z"
-          />
-          <path className="shine" d="M33 13.5C42 17 47.5 26 47.5 37" />
-          <path className="ridge" d="M29 53C38 51 45 46 49.5 39" />
-          <path className="stem" d="M23.5 11.5C22.5 8 23.5 4.5 27 3L30.5 4.5C28.5 6.5 28 8.5 28.5 10.5Z" />
-          <ellipse className="tip" cx="20.5" cy="55" rx="2.3" ry="1.9" />
-          <g className="face">
+          <g transform="translate(-2.58 -1.724) scale(.0665)">
+            <path className="arm arm-l" d="M409 518C374 557 329 618 322 663C314 703 331 728 359 703C374 685 389 577 409 518Z" />
+            <path
+              className="arm arm-r"
+              d="M675 546C696 581 718 628 719 665C720 698 703 727 682 730C664 733 655 718 656 694C658 664 659 638 640 600Z"
+            />
+            <path
+              className="body"
+              d="M437 173C459 253 432 407 410 515C395 588 370 677 357 744C345 806 359 876 389 918C415 955 466 957 506 945C573 927 626 865 656 793C684 726 695 648 692 563C690 438 678 344 637 270C605 213 556 178 508 148L496 142Z"
+            />
+            <path
+              className="shade"
+              d="M508 148C556 178 605 213 637 270C678 344 690 438 692 563C695 648 684 726 656 793C637 839 608 880 573 909C614 855 634 799 633 742C633 684 611 629 592 587C611 535 632 474 640 429C614 323 566 210 508 148Z"
+            />
+            <path
+              className="stem"
+              d="M437 177C426 143 409 131 389 112C375 99 389 87 413 74C431 64 455 57 463 63C470 69 475 114 496 142C484 160 461 173 437 177Z"
+            />
+            <path
+              className="outline"
+              d="M463 63C470 69 475 114 496 142C505 153 549 174 586 213C661 289 690 398 692 563C695 648 684 726 656 793C626 865 573 927 506 945C466 957 415 955 389 918C359 876 345 806 357 744C370 677 395 588 410 515C432 407 459 253 437 173C426 143 409 131 389 112C375 99 389 87 413 74C431 64 455 57 463 63Z"
+            />
+            <path
+              className="outline facet"
+              d="M508 148C566 210 614 323 640 429C632 474 611 535 592 587C611 629 633 684 633 742C634 799 614 855 573 909"
+            />
             <g className="eyes">
-              <ellipse cx="35.5" cy="30" rx="3.3" ry="4.2" />
-              <ellipse cx="45.5" cy="29" rx="3.3" ry="4.2" />
-              <g className="glint">
-                <circle cx="36.5" cy="28.3" r="1.2" />
-                <circle cx="46.5" cy="27.3" r="1.2" />
-              </g>
+              <ellipse cx="475.5" cy="395.5" rx="14" ry="20" />
+              <ellipse cx="560" cy="395.5" rx="14" ry="20" />
             </g>
-            <path className="joy" d="M32.5 30.5Q35.5 26 38.5 30.5M42.5 29.5Q45.5 25 48.5 29.5" />
-            <ellipse className="cheek" cx="32" cy="37" rx="2.5" ry="1.5" />
-            <ellipse className="cheek" cx="50" cy="35.5" rx="2.5" ry="1.5" />
-            <path className="mouth" d="M38 37C39.5 39.3 43 39.3 44.5 36.6" />
           </g>
         </g>
       </svg>
@@ -50,14 +58,14 @@ export function Mascot({ size = 30, state = "idle" }: { size?: number; state?: M
   );
 }
 
-// The pupils look at the pointer: at most 2 units of the 64-unit drawing.
+// The eyes look at the pointer: at most 2 units of the 64-unit drawing (30 in the scaled group).
 function followPointer(node: HTMLElement): () => void {
   const move = (e: PointerEvent) => {
     const r = node.getBoundingClientRect();
     const dx = e.clientX - (r.left + r.width / 2);
     const dy = e.clientY - (r.top + r.height / 2);
     const d = Math.hypot(dx, dy) || 1;
-    const k = Math.min(1, d / 300) * 2;
+    const k = Math.min(1, d / 300) * 30;
     node.style.setProperty("--lx", `${((dx / d) * k).toFixed(2)}px`);
     node.style.setProperty("--ly", `${((dy / d) * k).toFixed(2)}px`);
   };

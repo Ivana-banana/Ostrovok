@@ -13,14 +13,16 @@ const html = (el: React.ReactElement) =>
 afterEach(() => vi.unstubAllGlobals());
 
 suite("маскот", () => {
-  it("банан нарисован в SVG: тело, глаза, рот; состояние — класс", () => {
+  it("банан нарисован в SVG: тело, грань, глаза, руки; без рта и звезды; состояние — класс", () => {
     const b = html(<Mascot size={30} state="happy" />);
     const m = b.querySelector(".mascot");
     expect(m?.classList.contains("happy")).toBe(true);
     expect(m?.getAttribute("aria-hidden")).toBe("true");
-    expect(b.querySelector("svg .skin")).not.toBeNull();
+    expect(b.querySelector("svg .body")).not.toBeNull();
+    expect(b.querySelector("svg .shade")).not.toBeNull();
     expect(b.querySelectorAll("svg .eyes ellipse")).toHaveLength(2);
-    expect(b.querySelector("svg .mouth")).not.toBeNull();
+    expect(b.querySelectorAll("svg .arm")).toHaveLength(2);
+    expect(b.querySelector("svg .mouth, svg .star")).toBeNull();
     expect(b.querySelector("img")).toBeNull();
   });
 
