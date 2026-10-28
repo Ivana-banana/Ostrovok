@@ -47,6 +47,7 @@
   --shadow-lg: 0 12px 40px rgb(20 20 20 / 28%);
 
   --side-w: 268px;
+  --road-w: 300px;
   --thread-w: 840px; /* the one window: the chat with the cards of the stage (#434) */
   --bar-h: 54px;
 
@@ -152,11 +153,11 @@ button.icon {
   font-size: var(--fs-s);
 }
 
-/* ---------- layout: chats | chat ---------- */
+/* ---------- layout: chats | chat | trip roadmap ---------- */
 
 .app {
   display: grid;
-  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  grid-template-columns: var(--side-w) minmax(0, 1fr) var(--road-w);
   height: 100vh;
   height: 100dvh;
 }
@@ -669,105 +670,185 @@ button.icon {
   text-overflow: ellipsis;
 }
 
-/* progress of the trip: numbered steps joined by a line, not buttons (#434) */
+/* the trip roadmap: the right column (#434). Steps of the trip, not the plan data. */
 
-.steps {
+.roadmap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.roadmap .hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   flex: none;
+  height: var(--bar-h);
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
 }
 
-.stage {
-  display: flex;
-  align-items: center;
+.road-close {
+  display: none !important;
+}
+
+.road {
   margin: 0;
-  padding: 0;
+  padding: 18px 18px 8px;
   list-style: none;
-  font-size: var(--fs-xs);
-  color: var(--muted);
-  cursor: default;
-  user-select: none;
 }
 
-.stage li {
+.road li {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
+  gap: 12px;
+  padding-bottom: 18px;
+  color: var(--muted);
 }
 
-.stage li + li::before {
+/* the line from a step to the next one */
+.road li:not(:last-child)::before {
   content: "";
-  width: 22px;
-  height: 2px;
-  margin: 0 8px;
+  position: absolute;
+  left: 13px;
+  top: 30px;
+  bottom: 2px;
+  width: 2px;
   border-radius: 1px;
   background: var(--line);
 }
 
-.stage li.done + li::before {
+.road li.done:not(:last-child)::before {
   background: var(--ink);
 }
 
-.stage .dot {
+.road .dot {
   display: inline-grid;
+  flex: none;
   place-items: center;
-  width: 20px;
-  height: 20px;
-  border: 1.5px solid #c9c6bb;
+  width: 28px;
+  height: 28px;
+  border: 2px solid #c9c6bb;
   border-radius: 50%;
-  font-size: 10.5px;
+  background: var(--paper);
+  font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
 
-.stage li.done {
-  color: var(--text-2);
-}
-
-.stage li.done .dot {
+.road li.done .dot {
   border-color: var(--ink);
   background: var(--ink);
   font-size: 0; /* the ✓ of the text is drawn by ::after: the same in every font */
 }
 
-.stage li.done .dot::after {
+.road li.done .dot::after {
   content: "";
-  width: 4px;
-  height: 8px;
+  width: 5px;
+  height: 10px;
   margin-top: -3px;
   border: solid var(--acc);
-  border-width: 0 2px 2px 0;
+  border-width: 0 2.5px 2.5px 0;
   transform: rotate(45deg);
 }
 
-.stage li.now {
-  color: var(--text);
-  font-weight: 700;
-}
-
-.stage li.now .dot {
+.road li.now .dot {
   border-color: var(--ink);
   background: var(--acc);
   color: var(--acc-ink);
-  box-shadow: 0 0 0 3px rgb(255 216 0 / 35%);
+  box-shadow: 0 0 0 4px rgb(255 216 0 / 35%);
 }
 
+.road li.now.done .dot {
+  background: var(--ink);
+}
+
+.road-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 4px;
+  font-size: var(--fs-s);
+  overflow-wrap: anywhere;
+}
+
+.road .label {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  color: inherit;
+  text-align: left;
+}
+
+.road li.done,
+.road li.now {
+  color: var(--text);
+}
+
+.road button.label {
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 3px;
+}
+
+.road button.label:hover {
+  text-decoration-color: var(--ink);
+}
+
+.road .what {
+  color: var(--muted);
+}
+
+.road li:not(.done, .now) .what {
+  color: #9a9a92;
+}
+
+.road .result {
+  justify-self: start;
+  margin-top: 2px;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.road .nowline {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 4px 9px;
+  border-radius: var(--r-xs);
+  background: var(--ink);
+  color: var(--acc);
+  font-weight: 600;
+}
+
+.roadmap .sources {
+  margin: auto 18px 0;
+  padding: 12px 0 16px;
+}
+
+/* below 1100 px: the step under the header, a tap opens the roadmap */
 .step-caption {
   display: none;
-  margin: 0;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  color: var(--text-2);
-  white-space: nowrap;
 }
 
 .step-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
+  display: block;
   height: 3px;
+  margin-top: 5px;
+  border-radius: 2px;
   background: var(--line);
+  overflow: hidden;
 }
 
 .step-bar i {
@@ -2162,33 +2243,56 @@ button.param.assumed {
     gap: 8px;
   }
 
-  .stage .label {
-    display: none; /* numbers and the line; the current step keeps its name */
+  .roadmap {
+    position: fixed;
+    inset: 0 0 0 auto;
+    z-index: 30;
+    width: min(340px, 90vw);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform 0.2s ease, visibility 0.2s;
+    box-shadow: var(--shadow-lg);
   }
 
-  .stage li.now .label {
-    display: inline;
+  .road-open .roadmap {
+    transform: none;
+    visibility: visible;
   }
 
-  .stage li + li::before {
-    width: 14px;
-    margin: 0 5px;
+  .road-close {
+    display: inline-grid !important;
+  }
+
+  .step-caption::after {
+    content: "Путь поездки ›"; /* a tap opens the roadmap; the text of the button stays the step */
+    position: absolute;
+    top: 7px;
+    right: 20px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .step-caption {
+    position: relative;
+    display: block;
+    flex: none;
+    width: 100%;
+    padding: 7px 20px 6px;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--text-2);
+    text-align: left;
   }
 }
 
 /* ---------- phone: the step caption with a thin bar, chips in one scrolling row ---------- */
 
 @media (max-width: 759px) {
-  .top {
-    position: relative;
-  }
-
-  .stage {
-    display: none;
-  }
-
   .step-caption {
-    display: block;
+    padding: 6px 12px 5px;
   }
 
   .strip {

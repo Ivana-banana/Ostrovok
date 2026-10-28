@@ -97,6 +97,20 @@ suite("приложение", () => {
     expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
   });
 
+  it("#434: справа путь поездки вместо панели плана; подпись шага открывает его листом", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const road = box.querySelector("aside#roadmap[aria-label='Путь поездки']");
+    expect(road?.querySelector("[aria-current='step'] .label")?.textContent).toBe("Корзина");
+    expect(road?.querySelector("[aria-label='Сравнение отелей']")).toBeNull(); // no plan data on the right
+    expect(box.querySelector("header.top .road, header.top .stage")).toBeNull();
+    await click("Шаг 4 из 5 · Корзина");
+    expect(box.querySelector(".app")?.classList.contains("road-open")).toBe(true);
+    await click("Закрыть путь поездки");
+    expect(box.querySelector(".app")?.classList.contains("road-open")).toBe(false);
+  });
+
   it("индикатор «думает» чередуется между ответами: банан, потом самолётик", async () => {
     let answer: (v: Response) => void = () => {};
     vi.stubGlobal("fetch", () => new Promise<Response>((r) => (answer = r)));

@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
 import { Board, TripParams } from "./Board";
 import { PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
-import { AgentText, StagePills, Thinking } from "./Chat";
-import type { ChatReply, Guest, Offer } from "./contracts";
+import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
+import type { ChatReply, Guest, Offer, Stage } from "./contracts";
 import { SOURCES, brief, cartLine, describe, withoutNoAi } from "./format";
 import {
   type ChatEntry,
@@ -17,7 +17,8 @@ import {
 } from "./history";
 import { Mascot } from "./Mascot";
 
-type Msg = { role: "user" | "agent"; text: string };
+// stage: the stage after an agent message; the roadmap links a done step to it (#434).
+type Msg = { role: "user" | "agent"; text: string; stage?: Stage };
 type Ui = { messages: Msg[]; removed: Offer[] };
 
 const STALE_PLAN = "Не удалось обновить план — перезагрузите страницу";
@@ -117,6 +118,7 @@ export function App() {
   const [restoring, setRestoring] = useState(() => !!readSid());
   const [chats, setChats] = useState<ChatEntry[]>(loadChats);
   const [drawer, setDrawer] = useState(false);
+  const [road, setRoad] = useState(false); // the roadmap sheet below 1100 px
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [query, setQuery] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -172,7 +174,7 @@ export function App() {
       const saved = loadUi(id);
       const messages = saved.messages.length
         ? saved.messages
-        : [{ role: "agent" as const, text: describe(r) }];
+        : [{ role: "agent" as const, text: describe(r), stage: r.stage }];
       writeSid(id);
       setReply(r);
       setNoAi(!r.llm);
@@ -241,7 +243,7 @@ export function App() {
       setNoAi(!r.llm);
       if (motionOk()) setTyping(withUser.messages.length);
       update(
-        { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r) }] },
+        { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage }] },
         r.session_id,
       );
       const first = withUser.messages.find((x) => x.role === "user")?.text ?? m;
@@ -288,7 +290,7 @@ export function App() {
       const fresh = await getSession(id).catch(() => null);
       if (!fresh) setError(STALE_PLAN);
       // The old chat line with the cart sum is stale now: say the real count and total.
-      update({ ...ui, removed, messages: [...ui.messages, { role: "agent", text: cartLine(cart) }] });
+      update({ ...ui, removed, messages: [...ui.messages, { role: "agent", text: cartLine(cart), stage: (fresh ?? reply).stage }] });
       setReply({ ...(fresh ?? reply), cart });
       editChats((list) => touchChat(list, id, ""));
     } catch (e) {
@@ -313,7 +315,7 @@ export function App() {
       if (!fresh?.voucher) setError(STALE_PLAN);
       setReply(fresh?.voucher ? fresh : { ...reply, stage: "booked", voucher });
       const text = `Бронь ${voucher.booking_id} оформлена. ${voucher.simulated ? "Оплата имитирована." : "Оплата принята."}`;
-      update({ ...ui, messages: [...ui.messages, { role: "agent", text }] });
+      update({ ...ui, messages: [...ui.messages, { role: "agent", text, stage: "booked" }] });
       editChats((list) => touchChat(list, id, ""));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -368,7 +370,18 @@ export function App() {
   const lastAgent = ui.messages.map((m) => m.role).lastIndexOf("agent");
   const asked = ui.messages.filter((m) => m.role === "user").length; // the thinking banana and plane take turns
   const badgeNoAi = reply ? noAi : healthNoAi; // the «Без ИИ» badge of the sidebar (TRAP-1)
-  const cls = ["app", drawer && "drawer-open"].filter(Boolean).join(" ");
+  // A done step links to the first answer after which the trip was past it.
+  const doneAt = STEPS.map((_, i) => {
+    const n = ui.messages.findIndex(
+      (m) => m.role === "agent" && m.stage && (stepOf(m.stage) > i || (i === STEPS.length - 1 && m.stage === "booked")),
+    );
+    return n < 0 ? null : n;
+  });
+  const jump = (n: number) => {
+    setRoad(false);
+    document.querySelector(`[data-msg="${n}"]`)?.scrollIntoView?.({ block: "start", behavior: motionOk() ? "smooth" : "auto" });
+  };
+  const cls = ["app", drawer && "drawer-open", road && "road-open"].filter(Boolean).join(" ");
   const synthetic = !reply || !reply.plan.offers.length || reply.plan.offers.some((o) => o.synthetic);
   const groups = groupChats(filterChats(chats, query));
   const scroll = () => end.current?.scrollIntoView?.({ block: "end" });
@@ -408,7 +421,9 @@ export function App() {
     <div
       className={cls}
       onKeyDown={(e) => {
-        if (e.key === "Escape" && drawer) setDrawer(false);
+        if (e.key !== "Escape") return;
+        if (drawer) setDrawer(false);
+        else if (road) setRoad(false);
       }}
     >
       <aside id="chats" className="side" aria-label="Чаты">
@@ -522,6 +537,7 @@ export function App() {
         </div>
       </aside>
       {drawer && <div className="backdrop" aria-hidden="true" onClick={() => setDrawer(false)} />}
+      {road && <div className="backdrop road-backdrop" aria-hidden="true" onClick={() => setRoad(false)} />}
       <section className="main" aria-label="Чат">
         <header className="top">
           <button
@@ -535,8 +551,8 @@ export function App() {
             ☰
           </button>
           <h1 title={current?.title}>{current?.title ?? "Новая поездка"}</h1>
-          <StagePills stage={reply?.stage ?? null} />
         </header>
+        <StepCaption stage={reply?.stage ?? null} onOpen={() => setRoad(true)} />
         {reply && (
           <TripParams
             spec={reply.plan.spec}
@@ -561,12 +577,13 @@ export function App() {
             {ui.messages.flatMap((m, i) => {
               const msg =
                 m.role === "user" ? (
-                  <div key={i} className="msg user">
+                  <div key={i} className="msg user" data-msg={i}>
                     <div className="b">{m.text}</div>
                   </div>
                 ) : (
                   <div
                     key={i}
+                    data-msg={i}
                     ref={i === lastAgent ? lastMsg : undefined}
                     className="msg agent"
                     role={i === lastAgent ? "status" : undefined}
@@ -595,22 +612,6 @@ export function App() {
               </p>
             )}
             <div ref={end} />
-            <footer className="sources" aria-label="Источники данных">
-              <span>Данные:</span>
-              {SOURCES.map((x) => (
-                <span key={x.name}>
-                  {x.text}, лицензия{" "}
-                  <a href={x.url} target="_blank" rel="noreferrer">
-                    {x.licence}
-                  </a>
-                  .
-                </span>
-              ))}
-              <span>
-                Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже. Климат и
-                время в пути — оценки команды. Оплата имитируется.
-              </span>
-            </footer>
           </div>
         </div>
         {!ui.messages.length && !restoring && (
@@ -665,6 +666,36 @@ export function App() {
           <p className="composer-hint">Цены и рейсы — синтетика. Оплата имитирована.</p>
         </form>
       </section>
+      <aside id="roadmap" className="roadmap" aria-label="Путь поездки">
+        <header className="hd">
+          <b>Путь поездки</b>
+          <button
+            type="button"
+            className="icon road-close"
+            aria-label="Закрыть путь поездки"
+            onClick={() => setRoad(false)}
+          >
+            ✕
+          </button>
+        </header>
+        <Roadmap reply={reply} doneAt={doneAt} onJump={jump} />
+        <footer className="sources" aria-label="Источники данных">
+          <span>Данные:</span>
+          {SOURCES.map((x) => (
+            <span key={x.name}>
+              {x.text}, лицензия{" "}
+              <a href={x.url} target="_blank" rel="noreferrer">
+                {x.licence}
+              </a>
+              .
+            </span>
+          ))}
+          <span>
+            Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже. Климат и
+            время в пути — оценки команды. Оплата имитируется.
+          </span>
+        </footer>
+      </aside>
     </div>
   );
 }

@@ -68,6 +68,10 @@ test("S6: запрос → сравнение → план → корзина �
   await page.getByLabel("Запрос").fill(REQUEST);
   await page.getByRole("button", { name: "Отправить" }).click();
   await expect(page.getByRole("status")).not.toBeEmpty();
+  // #434: справа — путь поездки: текущий шаг «Сравнение», пройденные — с итогом из данных.
+  const road = page.getByRole("complementary", { name: "Путь поездки" });
+  await expect(road.locator("[aria-current='step']")).toContainText("Сравнение");
+  await expect(road.locator("li.done").nth(1)).toContainText("Казань");
 
   // Сравнение: ≥ 3 отеля, цены с пометкой «синтетика», транспорт со временем в пути.
   const hotels = page.getByRole("region", { name: "Сравнение отелей" });
@@ -164,6 +168,14 @@ test("ширина телефона: чат с карточками этапа �
   await expect(page.getByRole("button", { name: /План/ })).toHaveCount(0);
   // The progress is a caption with a bar on a phone: «Шаг 3 из 5 · Сравнение».
   await expect(page.locator(".step-caption")).toHaveText("Шаг 3 из 5 · Сравнение");
+  // A tap opens the roadmap of the trip as a sheet; ✕ closes it.
+  const road = page.getByRole("complementary", { name: "Путь поездки" });
+  await expect(road).toBeHidden();
+  await page.locator(".step-caption").click();
+  await expect(road.locator("[aria-current='step']")).toContainText("Сравнение");
+  expect(await noPageScroll(page)).toBe(false);
+  await page.getByRole("button", { name: "Закрыть путь поездки" }).click();
+  await expect(road).toBeHidden();
   expect(await noPageScroll(page)).toBe(false);
   // TRAP-7: every price of the tables is visible with «синтетика», inside the screen, no scroll.
   for (const name of ["Сравнение отелей", "Сравнение транспорта"]) {
