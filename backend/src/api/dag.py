@@ -19,6 +19,7 @@ import re
 from calendar import monthrange
 from datetime import date, timedelta
 
+from api.cart import keep_refusal, refused, remember_refusal
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
 from api.extract import EDIT_VERB, MONTH_NAMES, NUM, NUMS
 from api.fixtures import find_offers, rank
@@ -385,7 +386,7 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
     A plan without offers has nothing to keep: all nodes run, no changes are listed.
     """
     dirty = dirty_nodes(old.spec, spec) if old.offers else set(NODES)
-    plan = old.model_copy(update={"spec": spec, "changes": []})
+    plan = remember_refusal(old.model_copy(update={"spec": spec, "changes": []}), refused(old))
     done: list[str] = []
     lost: Change | None = None
     if "destination" in dirty:
@@ -398,6 +399,7 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
         plan.selected, plan.explanations = rank(spec, plan.offers)
         plan.bundles = bundles(spec, plan.offers)  # whole-trip options (T7, #13)
         lost = _keep_pick(old, plan) if old.offers else None
+        plan.selected = keep_refusal(plan, plan.selected)
         done.append("ranking")
     # Invariant: build_timeline reads plan.selected and plan.offers, not the spec (T8, #14).
     # The offer_id of a hotel or a leg carries dates and guests, so the same selected offers
