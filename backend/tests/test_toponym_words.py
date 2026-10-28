@@ -43,3 +43,13 @@ def test_trap_3_instrumental_of_compound_names_resolves():
     ]:
         r = catalog.resolve(written)
         assert r is not None and r["name"] == city, written
+
+
+def test_trap_3_adjective_of_krasnodar_is_not_krasnoyarsk():
+    from api.catalog import respelled
+
+    for word in ("Краснодарский", "Краснодарская", "Краснодарское"):
+        assert respelled(word) is None
+    for text in ("Хочу на Краснодарский берег в июле", "Из Краснодарский в Сочи"):
+        found = extract(text)[0]
+        assert "Красноярск" not in [*found.get("destinations", []), found.get("origin")]

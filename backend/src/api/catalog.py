@@ -232,7 +232,10 @@ def _respelled(q: str) -> dict | None:
     stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
     typo = [s for s in stems if len(s) >= TYPO_MIN_LEN and s != _stems(q) and _typo(_stems(q), s)]
     full = {_stems(k): k for k, _ in _keys() if len(k.split()) == len(q.split())}
-    typo = [s for s in typo if not _another_word(_stems(q), s, q, full[s])]
+    # A candidate that is another word makes the answer a guess: «Краснодарский» is not a typo of
+    # «Красноярск» only because «Краснодар» was dropped as an adjective (#306).
+    if any(_another_word(_stems(q), s, q, full[s]) for s in typo):
+        return None
     if len(typo) == 1 and _lead_close(_stems(q), typo[0]):
         return stems[typo[0]]
     return None
