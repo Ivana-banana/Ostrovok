@@ -31,6 +31,7 @@ from api.model import chat
 from api.partner import checkout_once, cors_options, plan_reply, require_key
 from api.store import SessionStore, db_path
 from api.travelpayouts import TravelpayoutsTransport
+from api.tutu import TutuTrains
 
 V1 = "Партнёрский API /api/v1"
 WEB = "Веб-клиент /api"
@@ -55,6 +56,10 @@ DESCRIPTION = """\
 # Built once; a chat request uses it only with real_data (#490, offers.transport()).
 token = os.environ.get("TRAVELPAYOUTS_TOKEN", "").strip()
 offers.REAL_TRANSPORT = TravelpayoutsTransport(token) if token else None
+# Real trains from tutu.ru (#569) over it, on by default, no key; LIVE_TRAINS=0 keeps them off.
+# Same gate: only a real_data request; any miss falls back to the synthetic train (TRAP-6).
+if os.environ.get("LIVE_TRAINS", "1").strip().lower() not in ("0", "false", "no", ""):
+    offers.REAL_TRANSPORT = TutuTrains(offers.REAL_TRANSPORT or offers.TRANSPORT)
 
 # Live hotel price level from 101hotels (#511), on by default; LIVE_HOTELS=0 forces synthetic.
 # The adapter falls back to the base provider on any miss or network failure (TRAP-1, TRAP-6).

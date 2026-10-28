@@ -53,11 +53,14 @@ export type BoardProps = {
 const PRICE_SOURCES: Record<string, { chip: string; hint: string }> = {
   hotel: { chip: "101hotels", hint: "итог по цене «от» 101hotels; питание и тариф — оценка" },
   transport: { chip: "Авиасейлс", hint: "самый дешёвый билет из кэша поиска Авиасейлс, не цена брони" },
+  tutu: { chip: "tutu", hint: "расписание и цена «от» поезда со страницы маршрута tutu.ru, не цена на дату" },
 };
 const OTHER_SOURCE = { chip: "реальные данные", hint: "цена не синтетическая" };
 export type PriceSource = { chip: string; hint: string };
-export const sourceOf = (items: { kind: string }[]): PriceSource => {
-  const kinds = [...new Set(items.map((o) => o.kind))];
+// A real train of the tutu.ru adapter has an offer_id ending «-tutu» (backend/src/api/tutu.py).
+const sourceKey = (o: { kind: string; offer_id?: string }) => (o.offer_id?.endsWith("-tutu") ? "tutu" : o.kind);
+export const sourceOf = (items: { kind: string; offer_id?: string }[]): PriceSource => {
+  const kinds = [...new Set(items.map(sourceKey))];
   if (kinds.length === 1) return PRICE_SOURCES[kinds[0]] ?? OTHER_SOURCE;
   const known = kinds.map((k) => PRICE_SOURCES[k] ?? OTHER_SOURCE);
   return { chip: known.map((x) => x.chip).join(" + "), hint: known.map((x) => x.hint).join("; ") };
