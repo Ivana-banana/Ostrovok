@@ -505,6 +505,24 @@ def test_trap_4_explanation_keeps_only_numbers_from_the_facts(tmp_path, fake):
         assert llm.explain(plan) is None
 
 
+def test_trap_4_day_of_a_tool_date_is_a_fact(tmp_path, fake):
+    """TRAP-4, #568: «туда 14 декабря» repeats the tool date 14.12; another day is made up."""
+    plan = _plan(tmp_path)
+    t = next(o for o in plan.offers if o.kind == "transport" and o.offer_id in plan.selected)
+    known = llm._numbers(json.dumps(llm._facts(plan), ensure_ascii=False, default=str))
+    day, other = [d for d in range(1, 29) if float(d) not in known][:2]
+    t.depart_at = t.depart_at.replace(day=day)
+    oid = plan.explanations[0].offer_id
+
+    def why(text):
+        return lambda p: answer({"explanations": [{"offer_id": oid, "why": text}]})
+
+    fake.why = why(f"Туда {day} декабря в {t.depart_at:%H:%M}")
+    assert llm.explain(plan) is not None
+    fake.why = why(f"Туда {other} декабря в {t.depart_at:%H:%M}")
+    assert llm.explain(plan) is None
+
+
 def test_explanation_rewrite_reaches_the_reply(tmp_path, store, fake):
     plan = _plan(tmp_path)
     oid = plan.explanations[0].offer_id
