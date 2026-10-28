@@ -1,19 +1,18 @@
-"""Live hotel price level for a Russian place from the 101hotels city page, at request time (#511).
+"""Live 101hotels data for a Russian place at request time: the city price level (#511) and real
+per-hotel offers (#528).
 
-The synthetic offer machine (offers._hotel) keeps building the tariffs; this adapter only replaces
-`place["level"]` and `place["free_cancel_share"]` with the live city aggregate — the same rule as
-the #119/#497 calibration, but read now instead of from a snapshot:
-
-    level = median «от N ₽» of the 3-star hotels / (STAR_FACTOR[3] * SEASON[month of the fetch])
-
-so offers._night_factor re-applies the season of the trip dates on top. Only numbers are read: no
-hotel names, descriptions or photos (rules 6.5(4), 6.9). The shown per-hotel price stays modelled
-and keeps its «синтетика» marker (TRAP-7); what is live is the price LEVEL of the city.
+The city page is fetched once per process and parsed into cards. From the cards this module gives:
+- the city price LEVEL, the #119/#497 calibration read now instead of from a snapshot —
+      level = median «от N ₽» of the 3-star hotels / (STAR_FACTOR[3] * SEASON[month of the fetch])
+  it is numbers only and may be cached to data/live/ (outside git);
+- real per-hotel offers: the real name and «от N ₽» drive offers._hotel with synthetic=False; the
+  stay total, meals and free-cancel deadline stay modelled from that real price (REAL_NOTE). Names
+  live in process memory only, never on disk or in git (rules 6.5(4), 6.9).
 
 Honest degradation (TRAP-1, TRAP-6): a non-Russian place, a missing slug, no network, a refusal or
-too few 3-star hotels fall back to the base provider (synthetic), never an error. The first network
+too few named cards fall back to the base provider (synthetic), never an error. The first network
 failure turns live off for the process, so an offline demo stays fast; a live level already written
-to data/live/ (outside git) is still served offline. Standard library only.
+to data/live/ is still served offline, but real offers need a fresh fetch. Standard library only.
 """
 
 from __future__ import annotations
@@ -40,6 +39,11 @@ UA = "Mozilla/5.0 (compatible; nedovost-live/0.1; +https://github.com/ostrovok-h
 PAUSE_S = 3.0
 TIMEOUT_S = 8
 MIN_N = 3  # a median of fewer than this many 3-star hotels is not stable enough to calibrate
+MIN_REAL = 3  # fewer named real cards than this: show the synthetic list instead, not a short one
+REAL_NOTE = (
+    "Отель и цена «от» — вживую с 101hotels. Итог за выбранные ночи, питание и срок бесплатной "
+    "отмены — оценка от этой цены."
+)
 REFUSAL = ("вы не робот", "проверяем, что вы не бот")
 CHALLENGE_MAX = 50_000
 
@@ -117,9 +121,20 @@ def refused(text: str) -> bool:
     return any(w in low for w in REFUSAL) or (len(text) < CHALLENGE_MAX and "captcha" in low)
 
 
+def _center_km(card: str) -> float | None:
+    m = re.search(r"До центра\s+([\d.,]+)\s*(м|км)", card)
+    if not m:
+        return None
+    value = float(m.group(1).replace(",", "."))
+    return round(value / 1000 if m.group(2) == "м" else value, 1)
+
+
 def parse_city(html: str) -> list[dict]:
-    """(from_rub, stars, free_cancel) per hotel card of a 101hotels city page; cards without a
-    RUB price are skipped. Only numbers (collect_prices.py parse_101hotels, trimmed)."""
+    """One dict per hotel card of a 101hotels city page; cards without a RUB price are skipped.
+
+    Numbers (from_rub, stars, free_cancel, center_km, rating) feed the #511 city level, which is
+    aggregated and may be cached to disk. Name and hotel_id serve the live per-hotel offers (#528);
+    they stay in process memory and never reach disk or git (rules 6.5(4), 6.9)."""
     out = []
     for card in re.split(
         r'<li class="item[^"]*"\s+itemscope\s+itemtype="https://schema.org/Hotel">', html
@@ -129,11 +144,18 @@ def parse_city(html: str) -> list[dict]:
         if not price or price.group(1) != "RUB":
             continue
         stars = re.search(r'class="stars stars_(\d)"', card)
+        name = re.search(r'itemprop="name"[^>]*>\s*([^<]+?)\s*<', card)
+        hotel_id = re.search(r'data-hotel-id="(\d+)"', card)
+        rating = re.search(r'itemprop="ratingValue">\s*([\d.,]+)', card)
         out.append(
             {
                 "from_rub": int(price.group(2)),
                 "stars": int(stars.group(1)) if stars else None,
                 "free_cancel": "Бесплатная отмена" in card,
+                "center_km": _center_km(card),
+                "rating": float(rating.group(1).replace(",", ".")) if rating else None,
+                "name": name.group(1).strip() if name else None,
+                "hotel_id": hotel_id.group(1) if hotel_id else None,
             }
         )
     return out
@@ -146,6 +168,9 @@ class Refused(RuntimeError):
 _robots: dict[str, str] = {}
 _last = {"t": -1e9}
 _mem: dict[tuple[str, int], dict] = {}  # (slug, month) -> aggregate; the process cache
+_cards: dict[
+    tuple[str, int], list[dict]
+] = {}  # (slug, month) -> parsed cards; names stay here only
 _offline = {"on": False}  # True after the first network failure: skip live, stay fast
 
 
@@ -218,6 +243,30 @@ def _store(slug: str, month: int, agg: dict) -> None:
         pass  # a read-only data/ must not break a request
 
 
+def _city_cards(place: Place, month: int) -> list[dict] | None:
+    """Parsed 101hotels cards for a Russian place, fetched once per process and kept in `_cards`.
+    None for a foreign place or a network failure; [] for a disallowed path. The month only keys
+    the process cache: the page is «от N ₽» as of the fetch. Names never leave process memory."""
+    if place.get("country") != "Россия":
+        return None
+    slug = slug_of(place)
+    if (slug, month) in _cards:
+        return _cards[(slug, month)]
+    if _offline["on"]:
+        return None
+    path = f"/main/cities/{slug}"
+    try:
+        if not _robots_ok(path):
+            _cards[(slug, month)] = []
+            return []
+        cards = parse_city(_get(path))
+    except Refused:
+        _offline["on"] = True  # one timeout, then every place falls back fast
+        return None
+    _cards[(slug, month)] = cards
+    return cards
+
+
 def city_level(place: Place, when: date) -> dict | None:
     """Live 101hotels aggregate for a Russian place, or None (fall back). Month of `when` drives
     both the cache key and the season divisor: the city «от N» reflects the day of the fetch."""
@@ -229,16 +278,10 @@ def city_level(place: Place, when: date) -> dict | None:
     if disk := _load(slug, month):  # a snapshot serves even when offline
         _mem[(slug, month)] = disk
         return disk
-    if _offline["on"]:
+    cards = _city_cards(place, month)
+    if not cards:
         return None
-    path = f"/main/cities/{slug}"
-    try:
-        if not _robots_ok(path):
-            return None
-        agg = _aggregate(parse_city(_get(path)), month)
-    except Refused:
-        _offline["on"] = True  # one timeout, then every place falls back fast
-        return None
+    agg = _aggregate(cards, month)
     if agg is None:
         return None
     log.info(
@@ -250,25 +293,64 @@ def city_level(place: Place, when: date) -> dict | None:
     return agg
 
 
-class Live101Hotels:
-    """The base provider, but a Russian place is re-priced from the live 101hotels city aggregate.
+def _real_bases(place: Place, cards: list[dict]) -> list[dict]:
+    """Bases for offers._hotel from real 101hotels cards: real name, «от N ₽», stars and free
+    cancellation. The page has no coordinates, so the hotel sits at the city centre and amenities
+    and pets stay empty (honest); `center_km` is the real distance when the card states it."""
+    out = []
+    for c in cards:
+        if not c.get("name") or not c.get("hotel_id"):
+            continue
+        stars = c["stars"] if c["stars"] in offers.STAR_FACTOR else 3
+        out.append(
+            {
+                "key": f"l{c['hotel_id']}",
+                "name": c["name"],
+                "title": c["name"],
+                "stars": stars,
+                "rating": c.get("rating"),
+                "lat": place["lat"],
+                "lon": place["lon"],
+                "km": c.get("center_km"),
+                "pets": False,
+                "amenities": [],
+                "note": REAL_NOTE,
+                "night_rub": c["from_rub"],
+                "free_cancel": c["free_cancel"],
+            }
+        )
+    return out
 
-    Wraps any HotelProvider (offers.OsmOrSynthetic by default); on any miss or failure it calls the
-    base unchanged, so the demo always answers (TRAP-1, TRAP-6)."""
+
+class Live101Hotels:
+    """Real 101hotels offers for a Russian place at request time, else the base provider.
+
+    Online with at least MIN_REAL named cards: build offers from the real name and «от N ₽»
+    (synthetic=False). Otherwise (foreign place, offline, a refusal or too few named cards) call
+    the base provider unchanged — with the live city level fed in when it is known — so the demo
+    always answers (TRAP-1, TRAP-6). The per-hotel stay total, meals and free-cancel deadline stay
+    modelled from the real price, so each offer keeps the REAL_NOTE provenance line."""
 
     def __init__(self, base: object) -> None:
         self.base = base
-        # No data_mode: the per-hotel price is still modelled around the live median, so /health
-        # keeps «синтетика» (TRAP-7), like the real-flight adapter. A fetched level is logged.
+        # No data_mode: the fallback list is still synthetic, so /health keeps «синтетика» (TRAP-7).
 
     def hotels(
         self, spec: TripSpec, place: Place, now: datetime
     ) -> list[tuple[HotelOffer, list[ExtraOffer]]]:
         try:
             date_in, _ = offers._dates(spec)
-            agg = city_level(place, date_in)
+            agg = city_level(place, date_in)  # live or snapshot level; also warms _city_cards
+            if agg:
+                place = {
+                    **place,
+                    "level": agg["level"],
+                    "free_cancel_share": agg["free_cancel_share"],
+                }
+            cards = _city_cards(place, date_in.month)
+            bases = _real_bases(place, cards) if cards else []
         except Exception:  # noqa: BLE001 — live pricing must never break a search
-            agg = None
-        if agg:
-            place = {**place, "level": agg["level"], "free_cancel_share": agg["free_cancel_share"]}
+            bases = []
+        if len(bases) >= MIN_REAL:
+            return [pair for b in bases for pair in offers._hotel(spec, place, b, now)]
         return self.base.hotels(spec, place, now)
