@@ -81,6 +81,7 @@ from api.extract import (
     MONTH,
     MONTH_NAMES,
     MONTHS,
+    NO_AGE_NOTE,
     NUM,
     NUMS,
     PAST_WINDOW,
@@ -363,6 +364,7 @@ AHEAD_RE = re.compile(r"\bчерез\s+\S+\s*(?:ноч|дн|сут)")  # «вы�
 OR_RE = re.compile(r"\b(?:или|либо)\b")  # cities joined by «или», «либо» are candidates
 # The adults are not named: 2 by default. With a child this becomes a question (#112).
 PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
+KIDS_UNKNOWN = "возраст ребёнка: «с детьми» — число и возраст не названы"  # #182: asked, not 7
 # #113: the refused places live in this assumption (TripSpec has no field for them).
 EXCLUDED = "исключено"
 # #451: the places of the earlier «ещё» batches; a turn without «ещё» drops the note.
@@ -804,12 +806,17 @@ def bare_origin(message: str, has_place: bool = True) -> str | None:
     return None
 
 
-def children_question(message: str, spec: TripSpec) -> list[Question]:
-    """F25 (#302): «с детьми» without a number and ages: asked, not two children of 7."""
-    if not (spec.children_ages and children_uncounted(message)):
-        return []
+def kids_ask() -> list[Question]:
     options = ["Один ребёнок, 5 лет", "Двое детей, 5 и 10 лет", "Трое детей, 3, 6 и 10 лет"]
     return [Question(text="Сколько детей едет и сколько им лет?", options=options)]
+
+
+def children_question(spec: TripSpec) -> list[Question]:
+    """F25 (#302, #182): «с детьми» without a number and ages: asked, not two children of 7.
+    The first message keeps no child in the spec; KIDS_UNKNOWN stands for them until named."""
+    if spec.children_ages or KIDS_UNKNOWN not in spec.assumptions:
+        return []
+    return kids_ask()
 
 
 def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
@@ -829,12 +836,12 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
         return [*origin, Question(text=STAY_ASK, options=[])]
     if not (spec.destinations or spec.wishes) and asks_booking(message):
         return [*origin, Question(text=BOOKING_ASK, options=[])]  # #351: tickets
-    party = party_question(spec) if spec.destinations else []
+    kids = children_question(spec)
     if spec.destinations:
-        return [*origin, *(children_question(message, spec) or party)[:1]]
+        return [*origin, *(kids or party_question(spec))[:1]]
     if spec.wishes or spec.max_travel_hours is not None:
         # #365 (C21): «недалеко» is a wish of the road: the agent shows the near places at once
-        return [*origin, *party]
+        return origin
     out = [*origin]
     if not spec.month and not spec.date_from:
         m = date.today().month
@@ -2316,6 +2323,13 @@ PLAN_STAGES = ("inspire", "select", "compare", "assemble", "checkout")
 PLAN3 = ("compare", "assemble", "checkout")  # a plan with offers exists
 
 
+def no_change(found: dict, old: ChatReply) -> bool:
+    """#182: «Сочи, если можно с детьми» at a plan to Сочи: the place named again is no edit."""
+    return not found or (
+        found.keys() == {"destinations"} and found["destinations"] == old.plan.spec.destinations
+    )
+
+
 def _text_kids_question(old: ChatReply) -> str:
     """The answer to «А дети бесплатно?» (#179): the party stays, the data has no free places."""
     spec = old.plan.spec
@@ -2598,9 +2612,10 @@ def step(
         )
     if prev and old.stage in ("assemble", "checkout") and is_question(low, asked):
         # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
-        kids_only = asking and ASKING_NOTE in rules_notes and not rules_found
+        kids_only = asking and ASKING_NOTE in rules_notes and no_change(rules_found, old)
         text = _text_kids_question(old) if kids_only else _question_answer(old, low, message)
-        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+        ask = [] if old.plan.spec.children_ages or not kids_only else kids_ask()  # #182
+        return old.model_copy(update={"reply": text, "questions": ask, "llm": False})
     # A month after dates the user named (#190): a clear request moves them below (merge);
     # a refusal or a doubt moves nothing and is never a consent («давай в январе?»).
     month_verdict, target, now = "", None, old.plan.spec
@@ -2643,8 +2658,10 @@ def step(
         old.plan.spec.adults,
         asking,
     )
-    if asking and ASKING_NOTE in notes and not found:
-        return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
+    if asking and ASKING_NOTE in notes and no_change(found, old):
+        ask = [] if old.plan.spec.children_ages else kids_ask()  # #182: no kids named: asked
+        update = {"reply": _text_kids_question(old), "questions": ask, "llm": False}
+        return old.model_copy(update=update)
     said_origin = _said_origin(old, message, found)  # #436, TRAP-3
     # #452: a country on «Откуда?» names where to go, not one place: the cards show its places
     # and the spec keeps the country (a note) until a place or another country is named.
@@ -2765,6 +2782,11 @@ def step(
         if rejected or said > MAX_NIGHTS:
             llm_found.pop("nights", None)
             llm_found.pop("date_to", None)  # derived from the length again
+    if prev is None and children_uncounted(message) and NO_AGE_NOTE in notes:
+        # #182: «с детьми» in the first message: no two children of 7, the question stands
+        found.pop("children_ages", None)
+        (llm_found or {}).pop("children_ages", None)
+        notes[:] = [KIDS_UNKNOWN if n == NO_AGE_NOTE else n for n in notes]
     if prev is None and "adults" not in found and "adults" not in (llm_found or {}):
         notes.append(PARTY_UNKNOWN)
     if old.stage in ("inspire", "select") and idx is not None:
@@ -2932,9 +2954,8 @@ def step(
                 if no_country
                 else ""
             )
-            return reply(
-                "inspire", plan, sorry + _text_inspire(plan), questions=party_question(spec)
-            )
+            ask = children_question(spec) or party_question(spec)  # next to the options
+            return reply("inspire", plan, sorry + _text_inspire(plan), questions=ask)
         gone_text = f"Убираю «{', '.join(gone)}» из плана, корзину очищаю. " if gone else ""
         question = Question(text="Куда поедем?", options=[d.name for d in dests])
         text = gone_text + _text_inspire(plan)
