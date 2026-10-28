@@ -449,11 +449,12 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     if not sea_known:
         notes.append("Данные о море не загрузились: наличие моря и температура воды неизвестны.")
     airport, line, flaky = _airport(here, fetch)
+    # #542: a country record («Новая Зеландия») has no timezone: the zone of its nearest airport.
     country = g.get("country", "")
     levels = [p["level"] for p in places() if p["country"] == country]
     place = {
         "slug": f"geo-{g['id']}", "name": g["name"], "country": country, "cc": g.get("country_code", ""), "lat": lat,
-        "lon": lon, "tz": g["timezone"], "elev": g.get("elevation"), "pop": g.get("population") or 0,
+        "lon": lon, "tz": g.get("timezone") or airport["tz"], "elev": g.get("elevation"), "pop": g.get("population") or 0,
         "geonameid": g.get("id"), "hub": False, "main": False, "sea": sea is not None,
         "tags": ["sea"] * (sea is not None) + ["swim"] * swims(sea), "aliases": [norm(name)] if norm(name) != norm(g["name"]) else [],
         "airport": airport, "airport_km": airport["km"] if line <= AIRPORT_KM else None,
