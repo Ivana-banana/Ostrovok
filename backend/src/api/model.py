@@ -46,6 +46,7 @@ from api.contracts import (
 )
 from api.dag import (
     DATE_EDIT_RE,
+    MEALS,
     SHIFT_RE,
     describe,
     dirty_nodes,
@@ -1647,14 +1648,53 @@ def missing_mode(plan: Plan) -> str:
     return f"{_cap(asked)} {way} в данных нет: предлагаю {have}."
 
 
+def _span_at(o: TransportOffer) -> str:
+    """«10.12 18:50 → 11.12 07:10 (UTC+3)»: local times of the leg, one zone when they share it."""
+    a, b = _zone(o.depart_at), _zone(o.arrive_at)
+    start = f"{o.depart_at:%d.%m %H:%M}" + ("" if a == b else f" ({a})")
+    return f"{start} → {o.arrive_at:%d.%m %H:%M} ({b})"
+
+
+def _offer_lines(plan: Plan) -> list[str]:
+    """#468: the selected trip, one line per item. Names, prices and times are the fields of
+    the selected offers (TRAP-4); «Включено» names only what an offer field says."""
+    chosen = [o for o in plan.offers if o.offer_id in plan.selected]
+    lines = ["Предлагаю:"]
+    included = []
+    for h in (o for o in chosen if isinstance(o, HotelOffer)):
+        stars = f", {h.stars}★" if h.stars else ""
+        cancel = "бесплатная отмена" if h.cancellation.refundable else "невозвратный"
+        lines.append(f"Отель: {h.title}{stars}, {MEALS[h.meal]}, {cancel} — {_rub(h.price_rub)}")
+        if h.meal != "RO":
+            included.append(MEALS[h.meal])
+        if h.cancellation.refundable:
+            until = h.cancellation.free_until
+            included.append(
+                "бесплатная отмена"
+                + (f" до {until.astimezone(ZoneInfo(h.tz)):%d.%m}" if until else "")
+            )
+    city = next((o.city for o in chosen if isinstance(o, HotelOffer)), plan.spec.destinations[0])
+    legs = [o for o in chosen if isinstance(o, TransportOffer)]
+    for o in sorted(legs, key=lambda o: o.depart_at):  # own tickets are no offers (offers.py)
+        way = "Обратно" if o.origin == city else "Туда"
+        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
+        lines.append(f"{way}: {title[:1].lower()}{title[1:]}, {_span_at(o)} — {_rub(o.price_rub)}")
+    rides = [o for o in chosen if o.kind == "transfer"]
+    if rides:
+        names = "; ".join(o.title.removeprefix("Трансфер: ") for o in rides)
+        lines.append(f"Трансферы: {names} — {_rub(sum(o.price_rub for o in rides))}")
+    if included:
+        lines.append(f"Включено: {', '.join(included)}.")
+    lines.append(f"Итого {_rub(_selected_total(plan))}.")
+    return lines
+
+
 def _text_compare(plan: Plan) -> str:
     spec = plan.spec
     kids = f" + дети {', '.join(map(str, spec.children_ages))} лет" if spec.children_ages else ""
     lines = [
-        (
-            f"{spec.destinations[0]}, {period(spec)}, "
-            f"{spec.nights} ноч., {spec.adults} взр.{kids}. Цены — синтетика."
-        ),
+        f"{spec.destinations[0]}, {period(spec)}, {spec.nights} ноч., {spec.adults} взр.{kids}.",
+        "Цены — синтетика.",
         *([_cap(line) + "."] if (line := own_tickets(spec)) else []),
         *([line] if (line := destination_line(plan)) else []),
         *([line] if (line := closed_line(plan)) else []),
@@ -1682,8 +1722,7 @@ def _text_compare(plan: Plan) -> str:
         title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
         when = f"{start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)}"
         lines.append(f"Рейс {i}. {title} — {_rub(o.price_rub)}{no_pet} · {when}")
-    chosen = [o.title for o in plan.offers if o.offer_id in plan.selected]
-    lines.append(f"Предлагаю: {', '.join(chosen)}. Итого {_rub(_selected_total(plan))}.")
+    lines += _offer_lines(plan)
     for e in plan.explanations[:1]:
         lines.append(f"Почему: {e.why}." + "".join(f" {_cap(x)}." for x in e.tradeoffs))
         lines += [f"Риск: {r}." for r in e.risks]

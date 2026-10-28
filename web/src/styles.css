@@ -984,6 +984,19 @@ button.icon {
   font-size: var(--fs-s);
 }
 
+/* #468: the proposed trip in the answer, one item per row; details folded under «Подробнее» */
+.msg.agent ul.offer {
+  margin: 0 0 10px;
+}
+
+.msg.agent ul.offer li {
+  padding: 4px 0;
+}
+
+.msg.agent .more > p {
+  margin: 0 14px 10px;
+}
+
 mark {
   background: var(--acc);
   color: var(--acc-ink);

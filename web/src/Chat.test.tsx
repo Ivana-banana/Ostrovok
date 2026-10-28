@@ -72,4 +72,34 @@ suite("чат", () => {
     expect(box.textContent).toBe(text.replace("₽", "₽синтетика"));
     act(() => root.unmount());
   });
+
+  it("#468: предложение — список, «синтетика» один раз у итога, детали свёрнуты под «Подробнее»", async () => {
+    const box = document.createElement("div");
+    const root = createRoot(box);
+    const text = [
+      "Казань, 11.12–13.12, 2 ноч., 2 взр..",
+      "Цены — синтетика.",
+      "Климат: в декабре днём ≈ -5.3 °C.",
+      "Предлагаю:",
+      "Отель: Казантель, Казань, 2★, без питания, невозвратный — 7 900 ₽",
+      "Туда: поезд Москва → Казань, 10.12 18:50 → 11.12 07:10 (UTC+3) — 7 800 ₽",
+      "Итого 15 700 ₽.",
+      "Почему: поездка целиком 15 700 ₽.",
+      "Напишите «беру» или номер отеля.",
+    ].join("\n");
+    await act(async () => root.render(<AgentText text={text} synthetic />));
+    const items = [...box.querySelectorAll("ul.offer li")].map((li) => li.textContent);
+    expect(items).toEqual([
+      "Отель: Казантель, Казань, 2★, без питания, невозвратный — 7 900 ₽",
+      "Туда: поезд Москва → Казань, 10.12 18:50 → 11.12 07:10 (UTC+3) — 7 800 ₽",
+      "Итого 15 700 ₽синтетика",
+    ]);
+    expect(box.querySelectorAll("ul.offer .synth")).toHaveLength(1);
+    const more = box.querySelector("details.more") as HTMLDetailsElement;
+    expect(more.open).toBe(false);
+    expect([...more.querySelectorAll("p")].map((p) => p.textContent?.split(" ")[0])).toEqual(["Цены", "Климат:", "Почему:"]);
+    expect(more.querySelector("mark")?.textContent).toBe("5.3 °C");
+    expect(box.lastElementChild?.textContent).toBe("Напишите «беру» или номер отеля.");
+    act(() => root.unmount());
+  });
 });

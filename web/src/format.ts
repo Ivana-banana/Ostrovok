@@ -227,3 +227,36 @@ export function brief(text: string, last = true): string {
   }
   return out.some((l) => l.trim()) ? out.join("\n") : text;
 }
+
+// #468: the compare answer (backend api/model.py _offer_lines) has the header «Предлагаю:», one
+// line per item of the trip and the line «Итого». `items` are «label: text» pairs, `more` are the
+// details that the chat folds under «Подробнее»: why, risks, climate and the note on mock prices.
+// null: the text has no such block (other stages, older answers), the chat shows it line by line.
+export type OfferParts = {
+  head: string[];
+  items: { label: string; text: string }[];
+  total: string;
+  more: string[];
+  tail: string[];
+};
+
+const ITEM = /^(Отель|Туда|Обратно|Трансферы|Включено): (.+)$/;
+const MORE = /^(Почему|Риск|Климат): |^Цены — синтетика\.$/;
+
+export function offerParts(text: string): OfferParts | null {
+  const lines = text.split("\n").filter((l) => l.trim());
+  const at = lines.findIndex((l) => l.trim() === "Предлагаю:");
+  if (at < 0) return null;
+  const items: OfferParts["items"] = [];
+  let i = at + 1;
+  for (let m; i < lines.length && (m = ITEM.exec(lines[i].trim())); i++) items.push({ label: m[1], text: m[2].replace(/\.$/, "") });
+  if (!items.length || !lines[i]?.startsWith("Итого ")) return null;
+  const rest = (part: string[]) => part.filter((l) => !MORE.test(l.trim()));
+  return {
+    head: rest(lines.slice(0, at)),
+    items,
+    total: lines[i].slice("Итого ".length).replace(/\.$/, ""),
+    more: lines.filter((l) => MORE.test(l.trim())),
+    tail: rest(lines.slice(i + 1)),
+  };
+}

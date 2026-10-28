@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { Money, Price } from "./Board";
 import { VERBS, VERB_MS } from "./brand";
 import type { ChatReply, Stage } from "./contracts";
+import { offerParts } from "./format";
 import { partyText } from "./params";
 import { Mascot } from "./Mascot";
 
@@ -160,20 +161,56 @@ export function Thinking({ variant = "banana" }: { variant?: "banana" | "plane" 
 const ASIDE = /^(Допущения|Не проверяю)/;
 const TEMP = /(\d+(?:[.,]\d+)?\s?°C)/;
 
-function Line({ text, synthetic }: { text: string; synthetic: boolean }) {
+// Highlights of a backend line: temperatures marked, prices with «синтетика» (TRAP-7).
+function Rich({ text, synthetic }: { text: string; synthetic: boolean }) {
   return (
-    <p className={ASIDE.test(text) ? "aside" : undefined}>
+    <>
       {text.split(TEMP).map((part, i) =>
         i % 2 ? <mark key={i}>{part}</mark> : <Money key={i} text={part} synthetic={synthetic} />,
       )}
+    </>
+  );
+}
+
+function Line({ text, synthetic }: { text: string; synthetic: boolean }) {
+  return (
+    <p className={ASIDE.test(text) ? "aside" : undefined}>
+      <Rich text={text} synthetic={synthetic} />
     </p>
   );
 }
 
 // The text of an agent message. It appears whole and formatted (highlights, «синтетика»):
 // until the answer is ready the chat shows only the Thinking indicator (#450).
+// #468: the proposed trip is a list, one item per line; «синтетика» stands once, on the total
+// (the cards under the answer label every price). The details are folded under «Подробнее».
 export function AgentText({ text, synthetic }: { text: string; synthetic: boolean }) {
-  return <Lines text={text} synthetic={synthetic} />;
+  const parts = offerParts(text);
+  if (!parts) return <Lines text={text} synthetic={synthetic} />;
+  const lines = (part: string[]) => part.map((l, i) => <Line key={i} text={l} synthetic={synthetic} />);
+  return (
+    <>
+      {lines(parts.head)}
+      <p>Предлагаю:</p>
+      <ul className="plain offer">
+        {parts.items.map((it, i) => (
+          <li key={i}>
+            <b>{it.label}:</b> <Rich text={it.text} synthetic={false} />
+          </li>
+        ))}
+        <li>
+          <b>Итого</b> <Rich text={parts.total} synthetic={synthetic} />
+        </li>
+      </ul>
+      {parts.more.length > 0 && (
+        <details className="more">
+          <summary>Подробнее</summary>
+          {lines(parts.more)}
+        </details>
+      )}
+      {lines(parts.tail)}
+    </>
+  );
 }
 
 function Lines({ text, synthetic }: { text: string; synthetic: boolean }) {
