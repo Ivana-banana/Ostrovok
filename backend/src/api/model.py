@@ -74,6 +74,7 @@ from api.extract import (
     CAPITAL_PLACES,
     DATE_KEYS,
     DEFAULT_NIGHTS,
+    EACH_STAY_RE,
     HOTEL_NOTE,
     MAX_NIGHTS,
     MONTH,
@@ -748,7 +749,8 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     party = party_question(spec) if spec.destinations else []
     if spec.destinations:
         return [*origin, *(children_question(message, spec) or party)[:1]]
-    if spec.wishes:
+    if spec.wishes or spec.max_travel_hours is not None:
+        # #365 (C21): «недалеко» is a wish of the road: the agent shows the near places at once
         return [*origin, *party]
     out = [*origin]
     if not spec.month and not spec.date_from:
@@ -840,7 +842,8 @@ def is_route(message: str, destinations: list[str]) -> bool:
         return False
     stays = STAY_RE.findall(AHEAD_RE.sub(" ", low))
     linked = any(_city_in_clause(message, low, m, destinations[1:]) for m in LINK_RE.finditer(low))
-    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1
+    # #365: «по 3 дня» with two cities is a stay in each: a route
+    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1 or bool(EACH_STAY_RE.search(low))
 
 
 def severals(message: str, destinations: list[str]) -> str | None:
