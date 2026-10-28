@@ -716,6 +716,13 @@ button.icon {
   display: none !important;
 }
 
+/* #551: the mode badge of the header, only when the sidebar is a drawer */
+.top-noai {
+  display: none;
+  flex: none;
+  align-self: center;
+}
+
 .backdrop {
   display: none;
 }
@@ -2590,6 +2597,19 @@ button.param.chosen {
   .drawer-close,
   .burger {
     display: inline-grid !important;
+  }
+
+  .top-noai {
+    display: inline-flex;
+  }
+
+  /* #551: a finger needs 44 px; the drawer icons were 21–31 px */
+  .burger,
+  .drawer-close,
+  .side .icon,
+  .hint summary {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .backdrop {

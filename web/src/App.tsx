@@ -639,6 +639,13 @@ export function App() {
             ☰
           </button>
           <h1 title={current?.title}>{current?.title ?? "Новая поездка"}</h1>
+          {badgeNoAi && (
+            // #551: on a phone the sidebar is hidden behind ☰; the mode stays in sight (TRAP-1)
+            <span className="badge-noai top-noai" title="Без ИИ — упрощённый режим">
+              <i />
+              Без ИИ
+            </span>
+          )}
         </header>
         <StepCaption stage={reply?.stage ?? null} onOpen={() => setRoad(true)} />
         {reply && (
