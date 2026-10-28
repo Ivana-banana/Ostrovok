@@ -314,14 +314,16 @@ CANDIDATES = "варианты"
 # A link word makes a route when a later city of the message stands in its clause:
 # «потом в Казань», «потом поедем в Казань»; not «потом решим», «потом на море».
 LINK_RE = re.compile(
-    r"\b(?:потом|затем|далее|оттуда|следом|а\s+после(?:\s+(?:этого|того|чего))?"
-    r"|после\s+(?:этого|того|чего))\b"
+    r"\b(?:потом|затем|далее|дальше|позже|оттуда|следом|а\s+после(?:\s+(?:этого|того|чего))?"
+    r"|после\s+(?:этого|того|чего)|после(?=\s+во?\s))\b"  # #273: «а дальше», «после в Казань»
     r"(?:[\s,]*(?:может быть|может|наверное|скорее всего|возможно|вероятно|пожалуй)(?=[\s,])[\s,]*)?"
     r"([^,.;!?\n]*)"
 )
 ROUTE_RE = re.compile(
-    r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
+    r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой"  # #141: «— что лучше?»
+    r"|подбер\S*|выбер\S*|сравн\S*|посоветуй\S*|предлож\S*)\b)|→|->"  # #273: «— подбери»
 )
+BACK_RE = re.compile(r"\b(?:обратно|домой|назад)\b")  # #273: «потом обратно в Москву»
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
 # #351: an unnamed origin is asked when the fit of a whole-trip budget depends on it: the round
 # trip from DEFAULT_ORIGIN costs ROAD_GAP % of the budget or more over the cheapest big hub, or
@@ -835,12 +837,22 @@ def _city_in_clause(message: str, low: str, link: re.Match, later: list[str]) ->
             found += [
                 m.start() for n, rx in CAPITAL_PLACES if n == name and (m := rx.search(message))
             ]
-        # any case of a one-word name («Ригу», «Уфу»), or the name as it is written (not known)
-        known = next((pos for pos, w in words if _known(w) == name or w == name.lower()), None)
+        # any case of a one-word name («Ригу», «Уфу»), or the name as it is written (not known).
+        # A case starts with the first letters of the name: no catalogue scan for other words (#273).
+        head = name.lower().replace("ё", "е")[:2]
+        known = next(
+            (
+                pos
+                for pos, w in words
+                if w.startswith(head) and (_known(w) == name or w == name.lower())
+            ),
+            None,
+        )
         if known is not None:
             found.append(known)
-        # the first mention is inside the clause: a city named before the link is no next stop
-        if found and start <= min(found) < end:
+        # the first mention is inside the clause: a city named before the link is no next stop.
+        # «потом обратно в Москву» is the way home, no stop.
+        if found and start <= min(found) < end and not BACK_RE.search(low, start, min(found)):
             return True
     return False
 
