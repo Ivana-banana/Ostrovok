@@ -1,13 +1,31 @@
 import { useEffect, useRef } from "react";
 import { motionOk } from "./brand";
+import type { ChatReply } from "./contracts";
 
 // The banana mascot: a flat banana with a peel facet (concept 6 of ostrovok-coord/mascot/v7-flat),
 // an inline SVG; every animation in styles.css («mascot»).
 //   idle     — sways a little, blinks; wiggles on hover
 //   hello    — the empty chat: waves, the eyes follow the pointer
 //   thinking — tossed like a boomerang: every toss has its own turns, flips and height
-//   happy    — the trip is booked: a short jump, both arms up
-export type MascotState = "idle" | "hello" | "thinking" | "happy";
+//   happy    — the trip is booked: a short jump, both arms up, eyes ^ ^
+// Moods of the last answer: no mouth, only eyes, brows and a tilt.
+//   curious  — the agent asks: head tilt, one brow up
+//   glad     — the agent found options: eyes ^ ^
+//   puzzled  — nothing found or the request failed: brows up in the middle, eyes lower
+export type MascotState = "idle" | "hello" | "thinking" | "happy" | "curious" | "glad" | "puzzled";
+
+const NOT_FOUND = /нет в каталоге|не нашёл|не найд/i;
+
+// The mood of the avatar next to the last agent answer.
+export function moodOf(r: ChatReply | null, failed: boolean): MascotState {
+  if (failed) return "puzzled";
+  if (!r) return "idle";
+  if (r.stage === "booked") return "happy";
+  const found = r.plan.offers.length > 0 || r.plan.destinations.length > 0;
+  if (NOT_FOUND.test(r.reply) && !found) return "puzzled"; // «X нет в каталоге. По вашему выбору — Y» found Y
+  if (r.questions.length) return "curious";
+  return "glad";
+}
 
 export function Mascot({ size = 30, state = "idle" }: { size?: number; state?: MascotState }) {
   const el = useRef<HTMLSpanElement>(null);
@@ -47,6 +65,11 @@ export function Mascot({ size = 30, state = "idle" }: { size?: number; state?: M
               className="outline facet"
               d="M508 148C566 210 614 323 640 429C632 474 611 535 592 587C611 629 633 684 633 742C634 799 614 855 573 909"
             />
+            <g className="brows">
+              <path className="brow brow-l" d="M450 345H501" />
+              <path className="brow brow-r" d="M534 345H585" />
+            </g>
+            <path className="joy" d="M455 408Q475.5 372 496 408M539.5 408Q560 372 580.5 408" />
             <g className="eyes">
               <ellipse cx="475.5" cy="395.5" rx="14" ry="20" />
               <ellipse cx="560" cy="395.5" rx="14" ry="20" />
