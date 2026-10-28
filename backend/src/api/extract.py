@@ -88,9 +88,13 @@ def _word_re(word: str, first: str | None = None) -> str:
     return (first or rest[0]) + rest[1:]
 
 
+# An adjective of a name is no place: «в Петербургский музей» (TRAP-3, #372). «Иркутском» is a
+# case of «Иркутск», so «-ском» stays out of the list.
+NOT_ADJECTIVE = r"(?!\w*?ск(?:ий|ая|ое|ие|ого|ой|ую|их|им|ими|ому)\b)"
 PLACE_RES = [
-    (name, re.compile(rf"\b(?:{'|'.join(c['stems'])})\w*")) for name, c in CATALOG.items()
-] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
+    (name, re.compile(rf"\b(?:{'|'.join(c['stems'])}){NOT_ADJECTIVE}\w*"))
+    for name, c in CATALOG.items()
+] + [(name, re.compile(rf"\b(?:{stem}){NOT_ADJECTIVE}\w*")) for name, stem in PLACES.items()]
 # Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not. A capitalized
 # word after it that is no «Новгород» makes another name: «Нижний Тагил» (#97, TRAP-3).
 CAPITAL_PLACES = [
@@ -1490,6 +1494,8 @@ def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
             return name_candidates(f"{word} {tail}")[0], second.end()
     if low in NOT_PLACES:
         return None  # «Новый год»: «новый» alone is no place (#538)
+    if re.search(r"ск(?:ий|ая|ое|ие|ого|ой|ую|их|им|ими|ому)$", low):
+        return None  # «в Петербургский музей»: an unknown adjective is no place (#372)
     return _nominative(word), end
 
 
