@@ -30,6 +30,26 @@ def test_not_from_x_but_from_y_gives_y(text, origin):
     assert extract(text)[0]["origin"] == origin
 
 
+@pytest.mark.parametrize(
+    ("text", "origin"),
+    [
+        ("не из Нижнего Новгорода, а из Казани", "Казань"),
+        ("не из Великого Новгорода, а из Пскова", "Псков"),
+        ("не из Нижнего, а из Казани", "Казань"),
+    ],
+)
+def test_trap_3_refused_two_word_origin_is_no_destination(text, origin):
+    """#509 review: the refused city of two words does not become a destination."""
+    found = extract(text)[0]
+    assert found["origin"] == origin
+    assert "destinations" not in found
+
+
+def test_trap_3_refused_origin_with_a_destination_keeps_only_the_destination():
+    found = extract("Сочи на 5 ночей, вылет не из Нижнего Новгорода, а из Казани")[0]
+    assert found["origin"] == "Казань" and found["destinations"] == ["Сочи"]
+
+
 def test_not_from_x_alone_is_no_origin_and_no_destination():
     found = extract("не из Москвы")[0]
     assert "origin" not in found and "destinations" not in found

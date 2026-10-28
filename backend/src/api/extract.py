@@ -1273,13 +1273,17 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
     A place after a negation is no destination (#113). Returns the refused places and countries."""
+    not_from: list[tuple[int, int]] = []  # the spans of «не из X»: X is no destination
     for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
         w = re.match(r"[а-яе-]+", t[m.end() :])
         if re.search(r"устал\w*\s+$", t[: m.start()]):
             continue  # «устали от Турции» is a refusal, not an origin
         if neg := re.search(r"\bне\s+$", t[: m.start()]):  # «не из Москвы, а из Кинешмы» (#504)
-            end = t.find(" ", m.end())
+            # #509 review: a refused city of two words («не из Нижнего Новгорода») is no destination
+            gone = _place_at(text, t, m.end()) or _capital(text, m.end()) or (w and _known(w[0]))
+            end = _origin_end(text, t, m.end(), gone)[0] if gone else t.find(" ", m.end())
             end = len(t) if end < 0 else end
+            not_from.append((neg.start(), end))
             # no origin, no destination; «не» goes too, else it negates the next place
             t = t[: neg.start()] + " " * (end - neg.start()) + t[end:]
             continue
@@ -1366,7 +1370,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     refused = list(dict.fromkeys(mentions[s][2] for s in starts if s in refused_at))
     dests = []
     for s, name, _ in sorted(hits):
-        if s in refused_at or name == found.get("origin"):
+        if s in refused_at or name == found.get("origin") or any(a <= s < e for a, e in not_from):
             continue
         # «Шри Ланка», «в Шри Ланку»: the country «Шри-Ланка» by its alias of two words (#155)
         name = next(
