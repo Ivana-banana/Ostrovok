@@ -655,6 +655,37 @@ suite("чат как в мессенджере", () => {
     expect(q).toEqual(["Сколько вас?"]);
   });
 
+  it("#464: варианты прошлой подборки остаются под своим ответом и после перезагрузки", async () => {
+    const first = { ...structuredClone(checkoutStage), stage: "inspire" as const };
+    const [d] = first.plan.destinations;
+    first.plan.destinations = [d, { ...d, name: "Кировск" }];
+    const second = structuredClone(first);
+    second.plan.destinations = [{ ...d, name: "Теберда" }, { ...d, name: "Губа" }];
+    let n = 0;
+    routes["POST /api/chat"] = () => ({ status: 200, body: n++ ? second : first });
+    routes[`GET /api/session/${first.session_id}`] = () => ({ status: 200, body: second });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const area = box.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "ещё");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("Отправить");
+    const names = () => [...box.querySelectorAll(".feed .dest h3, .feed .dest b")].map((e) => e.textContent ?? "");
+    const before = names().join(" ");
+    expect(before).toContain("Кировск");
+    expect(before).toContain("Теберда");
+    // reload: a new app on the same storage
+    act(() => root.unmount());
+    root = createRoot(box);
+    await mount();
+    const after = names().join(" ");
+    expect(after).toContain("Кировск");
+    expect(after).toContain("Теберда");
+  });
+
   it("#458: на select чипы-вопросы остаются: у карточек там нет «Выбрать»", async () => {
     const r = { ...structuredClone(checkoutStage), stage: "select" as const };
     const [d] = r.plan.destinations;
