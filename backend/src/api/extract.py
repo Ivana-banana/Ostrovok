@@ -823,6 +823,37 @@ ELLIPSIS_GAP = re.compile(r"\s*(?:,\s*(?:(?:а|и)\s+)?|(?:а|и)\s+)(?:(?:в|в
 ELLIPSIS_TAIL = re.compile(r"\s*(?:тоже|также)(?=\s*(?:[,.!?;\n]|$))")
 
 
+def _origin_end(text: str, t: str, pos: int, name: str) -> tuple[int, list[str]]:
+    """Where the origin ends in the text, to blank it (#155).
+
+    «Из Нижнего Новгорода»: all words of the name go. «Из Казани или Самары»: the other
+    origin of the «или» pair is no destination. Returns the end and the names of the other origins."""
+
+    def spaced(p: int) -> int:
+        e = t.find(" ", p)
+        return len(t) if e < 0 else e
+
+    def name_end(p: int, name: str) -> int:
+        e = spaced(p)
+        for word in name.split()[1:]:
+            stem = word.lower().replace("ё", "е")[: max(3, len(word) - 2)]
+            if (nxt := re.match(r"\s+", t[e:])) and t.startswith(stem, e + nxt.end()):
+                e = spaced(e + nxt.end())
+        return e
+
+    end = name_end(pos, name)
+    others = []
+    while m := re.match(r"\s+(?:или|либо)\s+(?:(?:из|от)\s+)?(?=\w)", t[end:]):
+        at = end + m.end()
+        w = re.match(r"[а-яе-]+", t[at:])
+        other = _place_at(text, t, at) or _capital(text, at) or (w and _known(w[0]))
+        if not other:
+            break
+        end = name_end(at, other)
+        others.append(other)
+    return end, others
+
+
 def _word_end(t: str, pos: int) -> int:
     m = re.compile(r"[\w-]+").match(t, pos)
     return m.end() if m else pos
@@ -857,6 +888,13 @@ def _adds_place(t: str, spans: list[tuple[int, int]], i: int, refused: list[bool
     )
 
 
+# #155: a clause after the comma that goes on with the refusal: «, тоже нет», «, не надо».
+CLAUSE_REFUSAL = (
+    r"\s*(?:(?:и\s+[\w-]+\s+)?(?:тоже|также)|нет\b"
+    r"|не\s+(?:хочу|хотим|хочется|надо|нужн\w*|подходит|подойд\w*|интересн\w*|нравится))"
+)
+
+
 def _wanted_pair(t: str, spans: list[tuple[int, int]], i: int) -> bool:
     """#151: «Не хочу в Египет, Турция или Кипр»: a nominative after the comma names the wish.
 
@@ -871,10 +909,16 @@ def _wanted_pair(t: str, spans: list[tuple[int, int]], i: int) -> bool:
         r"\s+(?:или|либо)\s+", t[spans[group[-1]][1] : spans[group[-1] + 1][0]]
     ):
         group.append(group[-1] + 1)
-    stop = SENTENCE_END.search(t, spans[group[-1]][1])
-    rest = t[spans[group[-1]][1] : stop.start() if stop else len(t)]
-    if len(group) < 2 or re.search(r"\b(?:тоже|также|нет|не)\b", rest):
+    last = spans[group[-1]][1]
+    stop = SENTENCE_END.search(t, last)
+    rest = t[last : stop.start() if stop else len(t)]
+    # The refusal ends at the next comma: «…Турция или Кипр, но не дороже 150 тысяч» (#155).
+    # «, тоже нет» still goes on with the refusal.
+    clause, comma, after = rest.partition(",")
+    if len(group) < 2 or re.search(r"\b(?:тоже|также|нет|не)\b", clause):
         return False  # «Турция, Кипр», «Турция или Кипр тоже»: the refused list goes on
+    if comma and re.match(CLAUSE_REFUSAL, after):
+        return False
     return any(re.match(r"[\w-]*[ая]\b", t[spans[j][0] :]) for j in group)
 
 
@@ -1013,7 +1057,7 @@ OR_PAIR = re.compile(
 NOT_PAIR_PLACE = re.compile(
     r"(?:экскурс|музе|прогулк|шопинг|театр|ресторан|развлеч|отдых|поход|рыбалк|дайвинг|серфинг"
     r"|аквапарк|зоопарк|достопримеч|концерт|фестивал|природ|взросл|реб[её]н|дет[иейяь]|малыш"
-    r"|сын|доч|внук|семь)"
+    r"|сын|доч|внук|семь|лет(?:о|ом|у)\b|выходн|каникул|праздник)"
 )
 NAME_WORD = r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*"
 # The first words of two-word names outside the catalogue (lower, «е» for «ё»): «Новый Афон».
@@ -1022,7 +1066,13 @@ NAME_LEADS = {
     "новый", "новая", "новое", "старый", "старая", "роза", "красная", "красный", "красное",
     "большой", "большая", "малый", "малая", "верхний", "великий", "белый", "белая", "черный",
     "золотой", "горный", "южный", "северный", "санта", "сан", "нью", "лас", "лос", "абу", "форт",
+    "шри", "нижний",
 }  # fmt: skip
+
+
+# The last words of names that start with a place: «Москва Сити», «Сочи Парк» (lower, #155).
+# A list: «Хочу в Турцию Аланья или Кемер» has a resort after a country.
+NAME_TAILS = {"сити", "парк", "арена", "плаза", "молл"}
 
 
 def _ordinary(word: str, low: str) -> bool:
@@ -1076,6 +1126,10 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
         def taken(s: int) -> bool:
             return any(hs <= s < he for hs, _, he in hits)  # inside «Нижний Новгород» too
 
+        def part_of_name(s: int) -> bool:
+            """The word starts a name of two words that the hit has not covered: «Нижний Тагил»."""
+            return any(hs <= s < he and " " in name for hs, name, he in hits)
+
         sure = [
             taken(s) or _known(w) or any(rx.fullmatch(t[s:e]) for _, rx in COUNTRY_RES)
             for s, e, w in words
@@ -1083,6 +1137,13 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
         if not any(sure):
             continue
         for side, (s, e, w) in enumerate(words):
+            prev = re.search(r"([А-ЯЁа-яё-]+) $", text[:s])
+            if (
+                side == 0
+                and prev
+                and (t[s:e] in NAME_TAILS or (part_of_name(prev.start(1)) and not _known(w)))
+            ):
+                continue  # «Москва Сити или Сочи»: «Сити» ends the name before it (#155)
             sides.add(s)
             if taken(s):
                 continue
@@ -1190,8 +1251,12 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         if home := catalog.respelled(name):
             name = home["name"]  # «Ебург» -> Екатеринбург (#274)
         found["origin"] = name
-        end = t.find(" ", m.end())
-        end = len(t) if end < 0 else end
+        end, others = _origin_end(text, t, m.end(), name)
+        if others:
+            notes.append(
+                f"вылет: {name}; {', '.join(others)} — второй вариант вылета,"
+                " напишите, если вылет лучше оттуда"
+            )
         t = t[: m.start()] + " " * (end - m.start()) + t[end:]  # the origin is not a destination
     hits = [(m.start(), name, m.end()) for name, rx in PLACE_RES for m in rx.finditer(t)]
     hits += [(m.start(), name, m.end()) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
@@ -1260,6 +1325,15 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     for s, name, _ in sorted(hits):
         if s in refused_at or name == found.get("origin"):
             continue
+        # «Шри Ланка», «в Шри Ланку»: the country «Шри-Ланка» by its alias of two words (#155)
+        name = next(
+            (
+                c
+                for c, al in catalog.snapshot()["countries"].items()
+                if " " in name and name.lower() in al
+            ),
+            name,
+        )
         if s in pair_sides and name in COUNTRIES and (city := resolve_place(name)):
             name = city["name"]  # «Египет или Турция»: the city of the catalogue for the country
         place = resolve_place(name)
