@@ -9,7 +9,9 @@ POST /api/cart (CartAction -> Cart), POST /api/checkout (CheckoutRequest -> Vouc
 GET /api/mode -> LlmMode (known before the first reply; consumers: web/src/api.ts getMode,
 web/src/App.tsx, web/src/Sources.tsx, web/e2e/noai-badge.spec.ts, backend/tests/test_api.py).
 ChatRequest.real_data and ChatRequest.llm (#490; consumers: api/main.py, api/offers.py
-real_data, api/llm.py allowed, web/src/App.tsx, web/src/Sources.tsx, backend/tests/test_sources.py).
+real_data, api/llm.py allowed, api/partner.py plan_reply (keeps the switches of the request),
+api/checks.py _post (eval: llm on, real_data off), web/src/api.ts, web/src/App.tsx,
+web/src/Sources.tsx, backend/tests/test_sources.py, README.md).
 GET /health stays exactly {"status": "ok"} (task/rules.md): the LLM mode lives only in /api/mode.
 
 Partner API (#289, #435): every route above also lives under /api/v1 with the same models.

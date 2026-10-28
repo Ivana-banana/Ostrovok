@@ -830,7 +830,8 @@ TRANSPORT: TransportProvider = SyntheticTransport()
 TRANSFERS: TransferProvider = SyntheticTransfers()
 # Real flights (#490): main.py builds the adapter once when TRAVELPAYOUTS_TOKEN is set. A chat
 # request uses it only with ChatRequest.real_data: a ContextVar per request, not a module swap,
-# so parallel sessions keep their own choice. Inspiration and travel_hours read TRANSPORT.
+# so parallel sessions keep their own choice. Only the live path (find_offers) asks transport();
+# inspiration and the pets check read ESTIMATE_*, travel_hours a SyntheticTransport.
 REAL_TRANSPORT: TransportProvider | None = None
 _real_data: ContextVar[bool] = ContextVar("real_data", default=False)
 

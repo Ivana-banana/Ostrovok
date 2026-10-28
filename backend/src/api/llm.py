@@ -158,7 +158,8 @@ NUM_RE = re.compile(r"(?<!\d)\d+(?:[   ]\d{3}(?!\d))*(?:[.,]\d+)?")
 
 
 # #490: POST /api/chat asks the model only with ChatRequest.llm (main.py sets it per request).
-# Default True: other callers (tests, eval) are gated by the env alone, as before.
+# Default True: callers outside the chat route (unit tests) are gated by the env alone. eval goes
+# through the route and sends llm=True (api/checks.py _post).
 _allowed: ContextVar[bool] = ContextVar("llm_allowed", default=True)
 
 

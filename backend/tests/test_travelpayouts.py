@@ -182,9 +182,12 @@ def test_trap6_tests_and_eval_never_see_the_token(monkeypatch):
     monkeypatch.setattr(offers, "REAL_TRANSPORT", None)  # restored after the test
     monkeypatch.setenv("TRAVELPAYOUTS_TOKEN", "token")
     importlib.reload(api.main)
-    importlib.reload(api.checks)
     assert isinstance(offers.REAL_TRANSPORT, TravelpayoutsTransport)
-    assert isinstance(offers.transport(), SyntheticTransport)
+    assert isinstance(offers.transport(), SyntheticTransport)  # no real_data in the request
+    importlib.reload(api.checks)  # make eval drops the real adapter: even real_data is synthetic
+    assert offers.REAL_TRANSPORT is None
+    with offers.real_data(True):
+        assert isinstance(offers.transport(), SyntheticTransport)
     monkeypatch.delenv("TRAVELPAYOUTS_TOKEN")
     importlib.reload(api.main)
 

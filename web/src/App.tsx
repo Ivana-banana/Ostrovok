@@ -707,7 +707,7 @@ export function App() {
               <span className="qmark" aria-hidden="true">?</span>
             </summary>
             <p>
-              {on.real_data
+              {reply?.plan.offers.some((o) => o.kind === "transport" && !o.synthetic)
                 ? "Перелёты — Авиасейлс (цены из кэша поиска), остальные цены — синтетика. Оплата имитирована."
                 : "Цены и рейсы — синтетика. Оплата имитирована."}
             </p>
