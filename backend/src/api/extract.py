@@ -176,7 +176,7 @@ NOT_CITY_START = re.compile(
     # replanning verbs («Сдвинь на 3 дня») and common nouns («Отдых в ноябре»), #73
     r"|" + REBUILD_VERBS + r"|отдых(?:а|у|е|ом)?\b|отдохн\w*|каникул\w*"
     r"|путевк\w*|круиз\w*|пляж(?:а|у|е|и|ем)?\b|мор[еяюь]\b"
-    r"|(?:другой|простой|большой|небольшой|выходной|мой|твой|свой|такой|мамой|папой|подругой"
+    r"|(?:другой|простой|большой|небольшой|выходной|сухой|мой|твой|свой|такой|мамой|папой|подругой"
     r"|другом|сыном|детьми|внуком|внучкой|коллегами|братом|родителями|подругами|племянником|дедушкой|отцом|дочкой|сестрой|бабушкой|мужем|женой)\b)"
 )  # fmt: skip
 # Not a city by its ending: verbs («Планируем», «Ищете»), adjectives («Тёплое»), infinitives.
@@ -665,6 +665,13 @@ def _known(word: str, exact_short: bool = False) -> str | None:
             continue
         stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
         short = len(stem) <= 3
+        if (
+            n.endswith(("ое", "ее"))
+            and re.fullmatch(  # «в Лазаревском» is «Лазаревское» (#538)
+                re.escape(n[:-2]) + "(?:ое|ого|ому|ом|ым|ее|его|ему|ем|им)", w
+            )
+        ):
+            return p["name"]
         if w == n or _stem_re(stem, short).fullmatch(w):
             if short and w != n and (exact_short or w in NOT_SHORT_FORMS):
                 continue
@@ -673,7 +680,16 @@ def _known(word: str, exact_short: bool = False) -> str | None:
 
 
 # «Нижний Тагил»: the first word is «Нижн…», the second one is a capitalized word but no «Новгород».
-NIZHNY_NAME = re.compile(r"\s*(Нижн\w*)\s+((?!Новгород)[А-ЯЁ][а-яё]+)")
+# «Новый Афон», «Старый Оскол» too, unless the second word is ordinary («Новый Год», #538).
+NIZHNY_NAME = re.compile(
+    r"\s*(Нижн\w*|Нов(?:ый|ая|ое)|Стар(?:ый|ая|ое))\s+((?!Новгород)[А-ЯЁ][а-яё]+)"
+)
+NOT_NAME_TAIL = re.compile(r"год(?:а|у|ом|е)?$")  # «Новый Год» is a holiday, not a place
+
+
+def _name_tail_ok(tail: str) -> bool:
+    low = tail.lower().replace("ё", "е")
+    return not (_ordinary(tail, low) or NOT_CITY_END.search(low) or NOT_NAME_TAIL.match(low))
 
 
 def _first_city(
@@ -684,7 +700,8 @@ def _first_city(
     A known city (places.json) is always taken. An unknown word is taken only if guess is on.
     With guess off (the plan has a city) «Ухта, 3 ночи» is no destination, but it is not silent:
     a note says the city is not in the catalogue."""
-    if nizhny := NIZHNY_NAME.match(text):  # «Нижний Тагил на 3 дня»: a name outside the catalogue
+    nizhny = NIZHNY_NAME.match(text)  # «Нижний Тагил на 3 дня»: a name outside the catalogue
+    if nizhny and (nizhny.group(1).startswith("Нижн") or _name_tail_ok(nizhny.group(2))):
         name = name_candidates(f"{nizhny.group(1)} {nizhny.group(2)}")[0]
         if guess and FIRST_NEXT.match(t, nizhny.end()):
             return nizhny.start(1), name
@@ -1238,6 +1255,20 @@ def _catalog_word(word: str) -> str | None:
     return country if country and any(p["main"] for p in catalog.by_country(country)) else None
 
 
+def _whole_word_hits(t: str, hits: list[tuple[int, str, int]]) -> list[tuple[int, str, int]]:
+    """A stem hit inside a longer word is the place of the whole word (TRAP-3, #538).
+
+    «Бакуриани» is not «Баку», «Байкальск» is not «Байкал», «Горно-Алтайск» is not «Алтай»."""
+    out = []
+    for s, name, e in hits:
+        word = next(
+            (w for w in re.finditer(r"[а-яе]+(?:-[а-яе]+)*", t) if w.start() <= s < w.end()), None
+        )
+        known = _known(word[0]) if word else None
+        out.append((word.start(), known, word.end()) if known and known != name else (s, name, e))
+    return out
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -1253,6 +1284,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     if m:
         if home := catalog.respelled(name):
             name = home["name"]  # «Ебург» -> Екатеринбург (#274)
+        else:
+            name = _genitive_name(name)
         found["origin"] = name
         end, others = _origin_end(text, t, m.end(), name)
         if others:
@@ -1262,6 +1295,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             )
         t = t[: m.start()] + " " * (end - m.start()) + t[end:]  # the origin is not a destination
     hits = [(m.start(), name, m.end()) for name, rx in PLACE_RES for m in rx.finditer(t)]
+    hits = _whole_word_hits(t, hits)
     hits += [(m.start(), name, m.end()) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
     # Exact names and aliases only: «Мальдивы на неделю», but never «Кубик льда» (#386).
     start = len(t) - len(t.lstrip())
@@ -1370,26 +1404,57 @@ def excluded_places(text: str) -> list[str]:
 ADJ_CASE = re.compile(r"(?:ую|юю|ой|ей|ого|его|ом|ем|ым|им|ая|яя|ый|ий|ое|ее)$")
 
 
+# «Краснодарский край», «Калининградской области»: the region of a known city (#306, TRAP-3)
+REGION_NEXT = re.compile(r" (?:кра[йяюе]|област[ьи]|побережь[еюя]|берег[ау]?)(?![а-яё])")
+
+
 def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
     """A capitalized name: kept as written, «Грузию» -> «Грузия»; and where it ends in the text.
 
     Two capitalized words are one name when the first is an adjective: «Старую Ладогу» ->
     «Старая Ладога» (TRAP-3). The geocoder gets the whole name, not «Старую»."""
     m = re.match(r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*", text[pos:])
-    if not m or m.group(0).lower() in NOT_PLACES or re.match(MONTH, m.group(0).lower()):
+    if not m or re.match(MONTH, m.group(0).lower()):
         return None
     word = m.group(0)
     end = pos + m.end()
     low = word.lower().replace("ё", "е")
+    if low in NOT_PLACES and low not in NAME_LEADS:
+        return None
     country = next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None)
     if known := _known(word) or country:  # «Египте» is Египет, not a new city
         return known, end
+    region = REGION_NEXT.match(text, end)
+    adj = region and re.match(r"(.+?)ск(?:ий|ая|ое|ом|ого|ой|ую)$", word)
+    if adj and (city := _known(adj.group(1))):  # «Краснодарский край» -> Краснодар (#306)
+        return city, region.end()
     second = re.compile(rf" ({NAME_WORD})(?![а-яё-])").match(text, end)
     if second and (ADJ_CASE.search(low) and len(low) > 3 or low in NAME_LEADS):
-        tail, tail_low = second.group(1), second.group(1).lower().replace("ё", "е")
-        if not (_ordinary(tail, tail_low) or NOT_CITY_END.search(tail_low) or _known(tail)):
+        tail = second.group(1)
+        if _name_tail_ok(tail) and not _known(tail):
             return name_candidates(f"{word} {tail}")[0], second.end()
+    if low in NOT_PLACES:
+        return None  # «Новый год»: «новый» alone is no place (#538)
     return _nominative(word), end
+
+
+def _genitive_name(name: str) -> str:
+    """«Нижнего Тагила» -> «Нижний Тагил», «Нового Уренгоя» -> «Новый Уренгой» (#538, TRAP-3).
+
+    After «из» a name outside the catalogue is in the genitive: the geocoder asks the nominative.
+    Only a masculine name of an adjective and a noun; any other name stays as written."""
+    lead, _, noun = name.partition(" ")
+    base = lead[:-3] if lead.endswith(("ого", "его")) else ""
+    nominative = {"нов": "ый", "стар": "ый", "нижн": "ий", "верхн": "ий", "велик": "ий"}.get(
+        base.lower()
+    )
+    if not nominative or not noun or " " in noun or not _name_tail_ok(noun):
+        return name
+    if re.search(r"[аеоуэ]я$", noun):
+        return f"{base}{nominative} {noun[:-1]}й"  # «Уренгоя» -> «Уренгой»
+    if re.search(r"[бвгджзклмнпрстфхцчшщ]а$", noun):
+        return f"{base}{nominative} {noun[:-1]}"  # «Тагила» -> «Тагил»
+    return name
 
 
 def _capital(text: str, pos: int) -> str | None:
