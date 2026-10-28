@@ -470,24 +470,32 @@ def test_trap_4_explanation_keeps_only_numbers_from_the_facts(tmp_path, fake):
     hotel.price_rub = 9_800 * plan.spec.nights  # whole stay; 9 800 ₽ per night
     price = f"{hotel.price_rub:,}".replace(",", " ")
     oid = hotel.offer_id
+    e0 = plan.explanations[0]
+    mark = next(m for t in (e0.why, *e0.tradeoffs, *e0.risks) for _, m in llm._marks(t) if m)
 
     def why(text, offer_id=oid):
         return lambda p: answer({"explanations": [{"offer_id": offer_id, "why": text}]})
 
-    fake.why = why(f"Отель за {price} ₽ с завтраком — лучший по вашим условиям.")
+    fake.why = why(f"Отель за {price} ₽ ({mark}) с завтраком — лучший по вашим условиям.")
     new = llm.explain(plan)
-    assert new[0].why == f"Отель за {price} ₽ с завтраком — лучший по вашим условиям"
+    assert new[0].why == f"Отель за {price} ₽ ({mark}) с завтраком — лучший по вашим условиям"
     assert new[0].tradeoffs == plan.explanations[0].tradeoffs
     assert new[1:] == plan.explanations[1:]
-    fake.why = why("Около 9 800 ₽ за ночь")  # derived: price ÷ nights
+    fake.why = why(f"Около 9 800 ₽ ({mark}) за ночь")  # derived: price ÷ nights
     assert llm.explain(plan) is not None
     assert plan.spec.hotel_budget_rub == 40_000 and plan.spec.budget_rub is None
-    fake.why = why(f"Ваш бюджет 40 000 ₽, отель {price} ₽")  # the budget named as the budget
+    fake.why = why(
+        f"Ваш бюджет 40 000 ₽ ({mark}), отель {price} ₽ ({mark})"
+    )  # the budget named as the budget
     assert llm.explain(plan) is not None
-    fake.why = why(f"Бюджет отеля 40 000 ₽, отель {price} ₽ в него укладывается")  # #41
+    fake.why = why(
+        f"Бюджет отеля 40 000 ₽ ({mark}), отель {price} ₽ ({mark}) в него укладывается"
+    )  # #41
     assert llm.explain(plan) is not None
     plan.spec.budget_rub = 150_000  # both budgets in one text
-    fake.why = why(f"Бюджет поездки 150 000 ₽, бюджет отеля 40 000 ₽, отель {price} ₽")
+    fake.why = why(
+        f"Бюджет поездки 150 000 ₽ ({mark}), бюджет отеля 40 000 ₽ ({mark}), отель {price} ₽ ({mark})"
+    )
     assert llm.explain(plan) is not None
     plan.spec.budget_rub = None
     for bad in (
