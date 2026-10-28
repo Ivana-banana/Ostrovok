@@ -36,6 +36,7 @@ from api.contracts import (
 from api.offers import transfer_id
 from api.store import SessionStore
 from api.timeline import build_timeline
+from api.webhook import send_booking
 
 log = logging.getLogger(__name__)
 
@@ -483,7 +484,10 @@ def checkout_reply(
     nothing new.
 
     `guest` (#367) goes into the voucher of a new booking; the provider does not get it. A
-    repeat returns the first booking with its first guest."""
+    repeat returns the first booking with its first guest.
+
+    A booking new to the session goes to BOOKING_WEBHOOK_URL (api/webhook.py, #435) after it
+    is stored; a failed webhook is logged and the booking stays."""
     sid = session_id
     seen = _known(store.get(sid))
     if _repeat(seen, confirm_total_rub):
@@ -508,6 +512,7 @@ def checkout_reply(
         store.save_voucher(sid, n, e.voucher)  # closes attempt n: the next one has a new key
         raise
     voucher = store.save_voucher(sid, n, voucher)
+    stored = []  # set by keep(): this call put the booking into the session
 
     def keep(prev: ChatReply | None) -> ChatReply:
         cur = _known(prev)
@@ -517,9 +522,13 @@ def checkout_reply(
         if cur.cart != seen.cart:  # edited during the payment: the booking is the confirmed cart
             note = " Корзину изменили во время оплаты: бронь оформлена на подтверждённую корзину."
             out = out.model_copy(update={"reply": out.reply + note})
+        stored.append(True)
         return out
 
-    return store.update(sid, keep)
+    out = store.update(sid, keep)
+    if stored and out.voucher is not None:  # one webhook per booking of the session (#435)
+        send_booking(out.voucher)
+    return out
 
 
 def checkout_route(req: CheckoutRequest, store: SessionStore) -> Voucher:

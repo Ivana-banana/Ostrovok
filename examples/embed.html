@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- Страница партнёра с виджетом «О!дин запрос» (#435).
+     Запуск: make demo, затем откройте этот файл в браузере.
+     С другого домена: python3 -m http.server 9000 -d examples → http://localhost:9000/embed.html.
+     Адрес в src — адрес вашего сервера агента. -->
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Турагентство «Пример» — виджет О!дин запрос</title>
+    <style>
+      body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #141414; background: #f6f6f6; }
+      main { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Турагентство «Пример»</h1>
+      <p>Это чужая страница. Кнопка «Спланировать поездку» справа внизу открывает чат агента.</p>
+      <p>Агент собирает план, корзину и имитированную бронь. Все цены — синтетика.</p>
+    </main>
+    <script src="http://localhost:8080/embed.js" data-partner="example-agency" async></script>
+  </body>
+</html>

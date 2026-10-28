@@ -5,9 +5,8 @@ LLM key (TRAP-1): `chat` runs on rules when no model is configured.
 """
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.offers import transfer_id
 from api.store import SessionStore
 
@@ -17,10 +16,6 @@ SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def legs(r):

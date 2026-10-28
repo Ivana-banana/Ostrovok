@@ -1,19 +1,14 @@
 """#132: «на пару дней», «на сутки», «а на неделю?» are a trip length (not the default 7 nights)."""
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.store import SessionStore
 
 
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 @pytest.mark.parametrize(
