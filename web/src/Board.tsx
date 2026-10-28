@@ -998,9 +998,25 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   const more = moreLine(reply, editable);
   // The sum of the chosen plan, before the cart exists: the same offers the cart will hold.
   const picked = cart.items.length ? cart.items : plan.offers.filter((o) => plan.selected.includes(o.offer_id));
+  // #556: on compare a plan with no selected hotel is a dead end: "беру" is off. The same rule as
+  // backend `_hotel_selected` (model.py), #532. The hint is built from the facts of the plan: the
+  // pet filtered the hotels out (#550), the hotel source gave none (#532), or none is picked.
+  const noHotel = stage === "compare" && !plan.offers.some((o) => o.kind === "hotel" && plan.selected.includes(o.offer_id));
+  const hasHotels = plan.offers.some((o) => o.kind === "hotel");
+  const noHotelHint = !hasHotels
+    ? "Отеля в плане нет — источник отелей не ответил. Повторите запрос, выберите другие даты или направление"
+    : plan.spec.pets
+      ? "В плане нет отеля — выберите отель, другой город или «Без питомца»"
+      : "Выберите отель из списка";
   const nextStep = next && (
     <section className="sec next" aria-label="Следующий шаг">
-      <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
+      <button
+        type="button"
+        className="buy"
+        disabled={busy || noHotel}
+        title={noHotel ? noHotelHint : undefined}
+        onClick={() => onSend(next.text)}
+      >
         {next.label}
         {stage === "assemble" && picked.length > 0 && (
           <>
@@ -1009,6 +1025,7 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
           </>
         )}
       </button>
+      {noHotel && <p className="muted no-hotel">{noHotelHint}</p>}
     </section>
   );
   return (
