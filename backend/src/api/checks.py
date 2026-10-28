@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from fastapi.testclient import TestClient
 
 from api import catalog, dag
+from api import main as api_main
 from api.contracts import (
     Bundle,
     Cancellation,
@@ -41,7 +42,6 @@ from api.contracts import (
     TransportOffer,
 )
 from api.fixtures import WARM_WATER_C
-from api.main import app, get_store
 from api.model import NOT_IN_CATALOG, ORIGIN_ASK
 from api.offers import _norm, find_offers, osm_hotels, resolve_place, transfer_id
 from api.optimizer import enumerate_trips, optimize, pets_ok
@@ -131,6 +131,8 @@ def _recorded(url: str, params: dict) -> dict:
 @contextmanager
 def _api() -> Iterator[tuple[TestClient, SessionStore]]:
     """A client on a temporary store and the recorded geocoder; all of it goes away after."""
+    # The module attributes at call time: a test may reload api.main (#442).
+    app, get_store = api_main.app, api_main.get_store
     with tempfile.TemporaryDirectory(prefix="eval-") as tmp:
         store = SessionStore(Path(tmp) / "eval.db")
         previous = app.dependency_overrides.get(get_store)
@@ -1228,7 +1230,7 @@ def check_S6(case: dict) -> tuple[bool, str]:
             f"ваучер: итог {_rub(v.total_rub)}, предупреждение о бюджете "
             + ("есть" if warned else "не показано до подтверждения"),
         )
-        fresh = _session(TestClient(app, raise_server_exceptions=False), sid)
+        fresh = _session(TestClient(api_main.app, raise_server_exceptions=False), sid)
         items["7"] = _need(
             fresh.voucher == v
             and fresh.stage == "booked"
