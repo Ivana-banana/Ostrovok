@@ -1,7 +1,8 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useId, useState } from "react";
 import { Money, Price } from "./Board";
 import { VERBS, VERB_MS } from "./brand";
-import type { ChatReply, Stage } from "./contracts";
+import type { ChatReply, Mode, Stage } from "./contracts";
+import { MODES, offerParts, type Point, type Ride } from "./format";
 import { partyText } from "./params";
 import { Mascot } from "./Mascot";
 
@@ -160,20 +161,187 @@ export function Thinking({ variant = "banana" }: { variant?: "banana" | "plane" 
 const ASIDE = /^(Допущения|Не проверяю)/;
 const TEMP = /(\d+(?:[.,]\d+)?\s?°C)/;
 
-function Line({ text, synthetic }: { text: string; synthetic: boolean }) {
+// Highlights of a backend line: temperatures marked, prices with «синтетика» (TRAP-7).
+function Rich({ text, synthetic }: { text: string; synthetic: boolean }) {
   return (
-    <p className={ASIDE.test(text) ? "aside" : undefined}>
+    <>
       {text.split(TEMP).map((part, i) =>
         i % 2 ? <mark key={i}>{part}</mark> : <Money key={i} text={part} synthetic={synthetic} />,
       )}
+    </>
+  );
+}
+
+function Line({ text, synthetic }: { text: string; synthetic: boolean }) {
+  return (
+    <p className={ASIDE.test(text) ? "aside" : undefined}>
+      <Rich text={text} synthetic={synthetic} />
     </p>
+  );
+}
+
+// #476: the route line ●━○ between places and times; screen readers and a copy get «→».
+// The gradient and the filter need an id that is unique on the page: many lines are drawn.
+function Arrow() {
+  const id = useId().replace(/:/g, "");
+  return (
+    <>
+      <svg className="arrow" viewBox="0 0 60 16" aria-hidden="true">
+        <defs>
+          <linearGradient id={`g${id}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" className="route-hi" />
+            <stop offset="1" className="route-lo" />
+          </linearGradient>
+          <filter id={`f${id}`} x="-20%" y="-80%" width="140%" height="260%">
+            <feDropShadow dx="0" dy="1" stdDeviation="0.8" floodColor="#000" floodOpacity=".25" />
+          </filter>
+        </defs>
+        <g filter={`url(#f${id})`}>
+          <rect x="3" y="4.75" width="54" height="6.5" rx="3.25" fill={`url(#g${id})`} />
+          <circle className="route-from" cx="6" cy="8" r="2.6" />
+          <circle className="route-to" cx="54" cy="8" r="2.6" />
+        </g>
+      </svg>
+      <span className="sr-only">→</span>
+    </>
+  );
+}
+
+// Line icons of the items, 24×24, stroke in currentColor.
+const ICONS: Record<"hotel" | Mode | "transfer" | "extra" | "included", ReactNode> = {
+  hotel: <path d="M3 6v13M3 15h18v4M21 15v-3a3 3 0 0 0-3-3h-8v6M6.5 12.5h.01" />,
+  flight: <path d="M21 4 3 11l7 2 2 7 9-16ZM10 13l5-5" />,
+  train: <path d="M7 3h10a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM5 10h14M9 13h.01M15 13h.01M8 21l2-5M16 21l-2-5" />,
+  car: <path d="M4 16v-4l2-5h12l2 5v4H4ZM4 12h16M7.5 19a1.5 1.5 0 0 0 0-3M16.5 19a1.5 1.5 0 0 0 0-3M7.5 16v3M16.5 16v3" />,
+  transfer: <path d="M3 15V9l2-3h10l4 3h2v6H3ZM3 11h18M7 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM17 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />,
+  extra: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 8v8M8 12h8" />,
+  included: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM8 12l3 3 5-6" />,
+};
+
+function Icon({ name }: { name: keyof typeof ICONS }) {
+  return (
+    <svg className="pt-ic" viewBox="0 0 24 24" aria-hidden="true">
+      {ICONS[name]}
+    </svg>
+  );
+}
+
+const facts = (list: string[]) => list.join(" · ");
+const LABELS = { hotel: "Отель", transfer: "Трансферы", extra: "Доп. услуга", included: "Включено" };
+
+// One item of the proposed trip: icon, label and price on the first row, the facts below.
+function PointRow({ point: p, synthetic }: { point: Point; synthetic: boolean }) {
+  const icon = p.kind === "leg" ? p.mode : p.kind;
+  const label = p.kind === "leg" ? p.label : LABELS[p.kind];
+  return (
+    <li className="pt">
+      <Icon name={icon} />
+      <div className="pt-body">
+        <div className="pt-row">
+          <span className="pt-name">
+            <b>{label}</b>
+            {p.kind === "hotel" && <> {p.name}</>}
+            {p.kind === "leg" && <span className="pt-mode"> · {MODES[p.mode]}</span>}
+          </span>
+          {"price" in p && (
+            <span className="pt-price">
+              <Rich text={p.price} synthetic={synthetic} />
+            </span>
+          )}
+        </div>
+        {p.kind === "hotel" && <div className="pt-sub">{facts(p.facts)}</div>}
+        {p.kind === "included" && <div className="pt-sub">{facts(p.facts)}</div>}
+        {p.kind === "extra" && <div className="pt-sub">{p.name}</div>}
+        {p.kind === "leg" && (
+          <>
+            <div className="pt-sub pt-route">
+              <span>{p.ride.from}</span>{" "}
+              <span className="pt-line">
+                <Arrow />
+              </span>{" "}
+              <span>{p.ride.to}</span>{" "}
+              <span className="pt-time">
+                {p.start}
+                {p.zones.length > 1 && ` ${p.zones[0]}`}
+              </span>{" "}
+              <span className="pt-line">
+                <Arrow />
+              </span>{" "}
+              <span className="pt-time">
+                {p.end} · {p.zones.at(-1)}
+              </span>
+            </div>
+            {p.ride.facts.length > 0 && <div className="pt-sub">{facts(p.ride.facts)}</div>}
+          </>
+        )}
+        {p.kind === "transfer" && (
+          <div className="pt-sub pt-route">
+            {p.rides.map((r, i) => (
+              <Fragment key={i}>
+                <span>{r.from}</span>{" "}
+                <span className="pt-line">
+                  <Arrow />
+                </span>{" "}
+                <span>
+                  {r.to} · {facts(r.facts)}
+                </span>{" "}
+              </Fragment>
+            ))}
+          </div>
+        )}
+      </div>
+    </li>
   );
 }
 
 // The text of an agent message. It appears whole and formatted (highlights, «синтетика»):
 // until the answer is ready the chat shows only the Thinking indicator (#450).
+// #468: the proposed trip is a list, one item per line; every price has a small «синтетика»
+// chip (TRAP-7). The details are folded under «Подробнее».
 export function AgentText({ text, synthetic }: { text: string; synthetic: boolean }) {
-  return <Lines text={text} synthetic={synthetic} />;
+  const parts = offerParts(text);
+  if (!parts) return <Lines text={text} synthetic={synthetic} />;
+  const lines = (part: string[]) => part.map((l, i) => <Line key={i} text={l} synthetic={synthetic} />);
+  return (
+    <>
+      {lines(parts.head)}
+      <p>Предлагаю:</p>
+      {parts.points ? (
+        <ul className="plain offer points">
+          {parts.points.map((p, i) => (
+            <PointRow key={i} point={p} synthetic={synthetic} />
+          ))}
+          <li className="pt sum">
+            <span className="pt-ic" />
+            <div className="pt-row">
+              <b>Итого</b>
+              <span className="pt-price">
+                <Rich text={parts.total} synthetic={synthetic} />
+              </span>
+            </div>
+          </li>
+        </ul>
+      ) : (
+        <ul className="plain offer">
+          {parts.items.map((it, i) => (
+            <li key={i}>
+              <b>{it.label}:</b> <Rich text={it.text} synthetic={synthetic} />
+            </li>
+          ))}
+          <li>
+            <b>Итого</b> <Rich text={parts.total} synthetic={synthetic} />
+          </li>
+        </ul>
+      )}
+      {parts.more.length > 0 && (
+        <details className="more">
+          <summary>Подробнее</summary>
+          {lines(parts.more)}
+        </details>
+      )}
+      {lines(parts.tail)}
+    </>
+  );
 }
 
 function Lines({ text, synthetic }: { text: string; synthetic: boolean }) {

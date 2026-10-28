@@ -1,6 +1,7 @@
 """FastAPI: /api/* for the web client, /api/v1/* for partners (#289, #435), /embed.js and the
 built frontend (web/dist) on /. Partner keys, CORS and idempotency — api/partner.py."""
 
+import logging
 import os
 from functools import cache
 from pathlib import Path
@@ -11,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from api import offers
+from api import offers, ops
 from api.cart import cart_route, checkout_route
 from api.contracts import Cart, CartAction, ChatReply, ChatRequest, CheckoutRequest, Voucher
 from api.guards import llm_available
@@ -42,6 +43,8 @@ DESCRIPTION = """\
 if token := os.environ.get("TRAVELPAYOUTS_TOKEN", "").strip():
     offers.TRANSPORT = TravelpayoutsTransport(token)
 
+ops.setup_logging()
+log = logging.getLogger(__name__)
 app = FastAPI(title="О!дин запрос — API агента путешествий", version="1.0", description=DESCRIPTION)
 if cors := cors_options():
     app.add_middleware(CORSMiddleware, **cors)
@@ -66,18 +69,20 @@ IdempotencyKey = Annotated[
 ]
 
 
-@app.get("/health", tags=["Служебное"], summary="Проверка живости")
-@app.get("/api/health", tags=[WEB], summary="Проверка живости")
-@app.get("/api/v1/health", tags=[V1], summary="Проверка живости (без ключа)")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+@app.get("/health", tags=["Служебное"], summary="Проверка живости и режимы")
+@app.get("/api/health", tags=[WEB], summary="Проверка живости и режимы")
+@app.get("/api/v1/health", tags=[V1], summary="Проверка живости и режимы (без ключа)")
+def health() -> dict[str, object]:
+    """Liveness and the modes (#290): data (синтетика, снапшот, реальный) and LLM (правила or
+    the model name). No key, no address."""
+    return ops.health()
 
 
 @app.get("/api/mode", tags=[WEB], summary="Режим: с LLM или по правилам")
 @app.get("/api/v1/mode", tags=[V1], summary="Режим: с LLM или по правилам (без ключа)")
 def mode() -> dict[str, bool]:
     # llm: false — агент отвечает по правилам (TRAP-1); фронт показывает «Без ИИ» до первого ответа.
-    # /health остаётся ровно {"status":"ok"}: так требуют правила хакатона.
+    # /health тоже показывает режимы (#290), но с ключом "status": "ok" из правил хакатона.
     return {"llm": llm_available()}
 
 
@@ -113,7 +118,8 @@ def chat_route(req: ChatRequest, store: Store) -> ChatReply:
     "/api/v1/session/{session_id}", tags=[V1], dependencies=KEY, summary="Последний ответ сессии"
 )
 def session_route(session_id: str, store: Store) -> ChatReply:
-    reply = store.get(session_id)
+    with ops.session(session_id):
+        reply = store.get(session_id)
     if reply is None:
         raise HTTPException(status_code=404, detail="сессия не найдена")
     return reply
@@ -124,7 +130,10 @@ def session_route(session_id: str, store: Store) -> ChatReply:
     "/api/v1/cart", tags=[V1], dependencies=KEY, summary="Добавить или убрать позицию корзины"
 )
 def cart_edit_route(req: CartAction, store: Store) -> Cart:
-    return cart_route(req, store)
+    with ops.session(req.session_id):
+        cart = cart_route(req, store)
+        log.info("cart %s items=%d total=%d", req.action, len(cart.items), cart.total_rub)
+        return cart
 
 
 @app.post("/api/checkout", tags=[WEB], summary="Имитированная бронь корзины")
@@ -139,7 +148,10 @@ def cart_edit_route(req: CartAction, store: Store) -> Cart:
 def checkout_post_route(
     req: CheckoutRequest, store: Store, idempotency_key: IdempotencyKey = None
 ) -> Voucher:
-    return checkout_once(req, store, idempotency_key, lambda: checkout_route(req, store))
+    with ops.session(req.session_id):
+        voucher = checkout_once(req, store, idempotency_key, lambda: checkout_route(req, store))
+        log.info("checkout booking=%s total=%d", voucher.booking_id, voucher.total_rub)
+        return voucher
 
 
 EMBED = Path(__file__).with_name("embed.js")

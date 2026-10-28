@@ -20,9 +20,14 @@
   --text: #141414;
   --text-2: #3d3d39;
   --muted: #6b6b66;
+  --text-sub: #2b2b28; /* facts under an item of the answer (#476) */
+  --route-hi: #ffe866; /* the route line between places (#476) */
+  --route-lo: #f0c400;
   --side-text: #eeeeee;
   --side-muted: #9a9a92;
   --side-group: #8a8a84;
+  --synth-soft: #efe9fb; /* the «синтетика» chip of a price in the chat answer (#468) */
+  --synth-ink: #5b3f99; /* 7:1 on --synth-soft */
   --ok: #1f8a4c;
   --warn: #8a5200; /* 5.9:1 on white, 5.6:1 on --warn-soft */
   --warn-dot: #b26a00;
@@ -32,10 +37,14 @@
   --noai: #f0a020;
   --backdrop: rgb(20 20 20 / 55%);
 
-  --font: "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font: "Nunito", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-head: "Comfortaa", "Nunito", "Segoe UI", Roboto, Arial, sans-serif;
   --fs: 15px;
   --fs-s: 13px;
   --fs-xs: 11.5px;
+  --fs-sub: 17px;
+  --fs-title: 18px;
+  --fs-sum: 19px;
 
   --r: 14px;
   --r-sm: 10px;
@@ -982,6 +991,158 @@ button.icon {
 .msg.agent p.aside {
   color: var(--muted);
   font-size: var(--fs-s);
+}
+
+/* #468: the proposed trip in the answer, one item per row; details folded under «Подробнее» */
+.msg.agent ul.offer {
+  margin: 0 0 10px;
+}
+
+.msg.agent ul.offer li {
+  padding: 4px 0;
+}
+
+.msg.agent .more > p {
+  margin: 0 14px 10px;
+}
+
+/* #468: an item of the proposed trip: icon, label and price, the facts below in a muted line */
+.msg.agent ul.points li.pt {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.pt-ic {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pt-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.pt-row {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.pt-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-title);
+}
+
+.pt-name b {
+  font-size: var(--fs-title);
+}
+
+.pt-mode {
+  color: var(--muted);
+}
+
+.pt-price {
+  flex: none;
+  font-size: var(--fs-title);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.pt-sub {
+  color: var(--text-sub);
+  font-size: var(--fs-sub);
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.msg.agent ul.points li.sum {
+  font-size: var(--fs-sum);
+  font-weight: 700;
+}
+
+.msg.agent ul.offer .synth {
+  padding: 0 5px;
+  border-color: transparent;
+  background: var(--synth-soft);
+  color: var(--synth-ink);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* #478: route and time of a leg are two rows of one grid: both lines stand in one column */
+.pt-route {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) auto minmax(0, max-content);
+  justify-content: start;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-route .pt-line {
+  display: flex;
+}
+
+.arrow {
+  width: 52px;
+  height: 14px;
+  margin: 0 8px;
+  vertical-align: -1px;
+}
+
+.arrow .route-hi {
+  stop-color: var(--route-hi);
+}
+
+.arrow .route-lo {
+  stop-color: var(--route-lo);
+}
+
+.arrow .route-from {
+  fill: var(--ink);
+}
+
+.arrow .route-to {
+  fill: var(--card);
+  stroke: var(--ink);
+  stroke-width: 1.6;
+}
+
+@media (max-width: 480px) {
+  .pt-row {
+    flex-wrap: wrap;
+  }
+
+  .pt-name {
+    flex: 1 1 0;
+    min-width: 9em;
+    font-size: 16px;
+  }
+
+  .pt-name b,
+  .pt-mode {
+    font-size: 16px;
+    white-space: nowrap;
+  }
+
+  .pt-sub {
+    font-size: 15px;
+  }
+
+  .arrow {
+    width: 40px;
+    height: 12px;
+    margin: 0 5px;
+  }
 }
 
 mark {
@@ -2452,4 +2613,57 @@ button.param.assumed {
 .foot .qmark {
   color: var(--side-muted);
   border-color: var(--ink-3);
+}
+
+/* ---------- fonts: files in web/public/fonts (OFL.txt), no external requests ---------- */
+
+@font-face {
+  font-family: "Comfortaa";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("/fonts/comfortaa-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: "Comfortaa";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("/fonts/comfortaa-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116;
+}
+
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 300 1000;
+  font-display: swap;
+  src: url("/fonts/nunito-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 300 1000;
+  font-display: swap;
+  src: url("/fonts/nunito-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116;
+}
+
+/* Comfortaa 700: brand, headings, item names, prices, total. Nunito: all other text. */
+.brand b,
+h1,
+h2,
+h3,
+.pt-name,
+.pt-name b,
+.pt-price,
+.price,
+.total b,
+.msg.agent ul.points li.sum {
+  font-family: var(--font-head);
+  font-weight: 700;
 }
