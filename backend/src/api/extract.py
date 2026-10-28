@@ -1030,6 +1030,30 @@ def _transit_dropped(t: str, hits: list) -> list:
     return out or hits
 
 
+VIA_LIST = re.compile(r"\bчерез\s+(?=[А-ЯЁ])")
+LIST_SEP = re.compile(r"\s*,\s*(?:и\s+)?|\s+и\s+")
+
+
+def _via_list(text: str, t: str, hits: list) -> None:
+    """«Через Ярославль, Кострому и Плёс» (#305): every capitalized name of the list is a route stop.
+
+    One name after «через» stays as it is («через Booking» is no place). Two or more names are a
+    list of stops: the ones the other rules miss are added with the form of the name fixed."""
+    for m in VIA_LIST.finditer(text):
+        items, pos = [], m.end()
+        while t[pos : pos + 1] != " " and (span := _capital_span(text, pos)):
+            items.append((pos, *span))
+            sep = LIST_SEP.match(text, span[1])
+            if not sep or not text[sep.end() : sep.end() + 1].isupper():
+                break
+            pos = sep.end()
+        if len(items) < 2:
+            continue
+        for start, name, end in items:
+            if not any(hs <= start < he for hs, _, he in hits):
+                hits.append((start, name, end))
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -1066,6 +1090,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n, m.end(1)))
+    _via_list(text, t, hits)
     pair_sides = _or_pairs(text, t, hits)
     if switch := _switch_city(text):
         hits.append((*switch, _word_end(t, switch[0])))

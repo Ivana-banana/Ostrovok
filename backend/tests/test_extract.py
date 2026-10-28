@@ -859,13 +859,18 @@ def test_trap_3_c15_full_turn_has_no_missing_catalogue_reply(tmp_path):
     [("из Москвы в Казань, потом через Нижний в Сочи", ["Казань", "Нижний Новгород", "Сочи"]),
      ("хочу проехать через Карелию и Мурманск", ["Карелия", "Мурманск"]),
      ("из Москвы через Казань в Екатеринбург, по 3 ночи в каждом", ["Казань", "Екатеринбург"]),
-     ("маршрут через Ярославль, Кострому и Плёс в июле", ["Ярославль"]),
+     ("маршрут через Ярославль, Кострому и Плёс в июле", ["Ярославль", "Кострома", "Плёс"]),
      ("из Москвы в Санкт-Петербург через Великий Новгород на 5 дней",
       ["Санкт-Петербург", "Великий Новгород"])],
 )  # fmt: skip
 def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
     found, _ = extract(text)
     assert found["destinations"] == dests
+
+
+def test_trap_3_one_name_after_cherez_is_no_list_of_stops():
+    found, _ = extract("Хочу в Сочи, оплата через Островок")
+    assert found["destinations"] == ["Сочи"]
 
 
 # #362: «в конце января» is the end of the month, not its first days.
