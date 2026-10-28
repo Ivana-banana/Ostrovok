@@ -220,10 +220,24 @@ def test_both_readings_of_a_recent_past_date_give_one_note(today, model, store):
     assert len(past_notes(r.plan.spec)) == 1
 
 
+def test_a_partial_model_date_in_the_past_gives_no_note_when_the_rules_keep_theirs(
+    today, model, store
+):
+    """#303: the model date_from alone is dropped; the plan stays 11-13.12, so no past note."""
+    model.patch = {"date_from": "2026-10-11"}
+    r = say(store, DEC)
+    assert (r.plan.spec.date_from, r.plan.spec.date_to) == (date(2026, 12, 11), date(2026, 12, 13))
+    assert not past_notes(r.plan.spec)
+    assert "уже прошло" not in r.reply
+
+
 def test_the_model_does_not_overwrite_a_destination_chosen_by_number(today, model, store):
-    r = say(store, "Хочу куда-нибудь на море в январе из Москвы, нас двое")
-    names = [d.name for d in r.plan.destinations]
-    assert len(names) >= 2 and r.stage in ("inspire", "select")
+    """#303: stage select (the model reads this turn, unlike inspire); the number wins."""
+    model.patch = {"destinations": ["Урюпинск"]}
+    r = say(store, "Хочу в Урюпинск из Москвы в декабре, двое")
+    r = say(store, "Россия", r.session_id)  # the place is unknown: the country gives the variants
+    names = r.questions[0].options
+    assert r.stage == "select" and len(names) >= 2
     model.patch = {"destinations": ["Мурманск"]}
-    r2 = say(store, "второй вариант", r.session_id)
+    r2 = say(store, "второй", r.session_id)
     assert r2.plan.spec.destinations == [names[1]]
