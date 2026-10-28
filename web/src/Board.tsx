@@ -666,13 +666,9 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
                 return (
                   <li key={id}>
                     {o.title}
-                    {o && (
-                      <>
-                        {" — "}
-                        <Price value={o.price_rub} synthetic={o.synthetic} source={sourceOf([o])} />
-                      </>
-                    )}
-                    {o && canAdd && (
+                    {" — "}
+                    <Price value={o.price_rub} synthetic={o.synthetic} source={sourceOf([o])} />
+                    {canAdd && (
                       <button type="button" disabled={busy} onClick={() => onCart("add", id)}>
                         В корзину
                       </button>

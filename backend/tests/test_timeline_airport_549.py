@@ -39,3 +39,13 @@ def test_trap5_far_airport_is_named_by_its_city_and_code():
 def test_trap5_own_airport_keeps_the_place_name():
     got = titles("Казань", "Москва")
     assert "Прилёт: Казань" in got
+
+
+def test_trap5_closed_airport_names_the_replacement_not_the_catalogue_one():
+    # Белгород has VOZ in the catalogue; VOZ is closed, the offers fly through DME
+    got = titles("Белгород", "Владивосток")
+    assert not any("VOZ" in t for t in got)
+    assert any(t.startswith("Прилёт:") and "DME" in t for t in got)
+    got = titles("Воронеж", "Владивосток")
+    assert not any("VOZ" in t for t in got)
+    assert any(t.startswith("Прилёт:") and "DME" in t for t in got)

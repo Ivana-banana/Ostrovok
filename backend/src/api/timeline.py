@@ -42,6 +42,7 @@ from api.contracts import (
 from api.offers import (
     FAR_AIRPORT_KM,
     MAX_DRIVE,
+    _complete,
     drive_time,
     km_between,
     own_legs,
@@ -430,13 +431,15 @@ def _end_name(leg: TransportOffer, name: str) -> str:
     """Where a flight lands or starts: a place far from its airport (#123) has none of its own,
     so the event names the airport (and its city, when the catalogue has one next to it): not
     «Прилёт: Бакуриани» for a landing in Кутаиси (#549, TRAP-5)."""
-    port = ((resolve_place(name) or {}).get("airport") or {}) if leg.mode == "flight" else {}
+    place = resolve_place(name) if leg.mode == "flight" else None
+    # As the offers see the place: a closed airport is already replaced (_complete, C8).
+    port = (_complete(place).get("airport") or {}) if place else {}
     if not port or port.get("km", 0) <= FAR_AIRPORT_KM:
         return name
     row = next((a for a in catalog.snapshot()["airports"] if a[0] == port["iata"]), None)
-    if row is None:
+    here = port if "lat" in port else {"lat": row[1], "lon": row[2]} if row else None
+    if here is None:
         return f"аэропорт {port['iata']}"
-    here = {"lat": row[1], "lon": row[2]}
     city = min(catalog.places(), key=lambda p: km_between(here, p), default=None)
     if city is None or km_between(here, city) > AIRPORT_CITY_KM:
         return f"аэропорт {port['iata']}"
