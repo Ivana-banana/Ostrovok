@@ -54,10 +54,34 @@ def test_trap3_accusative_ukhta_is_named_in_the_nominative(text):
         ("Малибу", "Малибу"),
         ("Баку", "Баку"),
         ("Бонну", "Бонну"),
+        ("Турку", "Турку"),
+        ("Мачу-Пикчу", "Мачу-Пикчу"),
+        ("Тарту", "Тарту"),
+        ("Тимбукту", "Тимбукту"),
+        ("Омску", "Омск"),
+        ("Оренбургу", "Оренбург"),
     ],
 )
-def test_trap3_accusative_u_only_after_two_consonants(word, name):
+def test_trap3_accusative_u_only_after_hta_and_lta(word, name):
     assert _nominative(word) == name
+
+
+@pytest.mark.parametrize("city", ["Турку", "Тарту", "Омск", "Оренбург"])
+def test_trap3_u_names_stay_as_written_in_a_phrase(city):
+    assert extract(f"Хочу в {city}")[0]["destinations"] == [city]
+
+
+@pytest.mark.parametrize(
+    "text, city",
+    [
+        ("Нижнекамск на 3 дня", "Нижнекамск"),
+        ("Хочу в Нижнекамск", "Нижнекамск"),
+        ("Нижневартовск на 3 дня", "Нижневартовск"),
+    ],
+)
+def test_trap3_nizhnekamsk_is_no_nizhny_novgorod(text, city):
+    found, _ = extract(text)
+    assert "Нижний Новгород" not in found.get("destinations", [])
 
 
 @pytest.mark.parametrize(

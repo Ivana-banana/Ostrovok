@@ -93,7 +93,12 @@ PLACE_RES = [
 ] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
 # Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not. A capitalized
 # word after it that is no «Новгород» makes another name: «Нижний Тагил» (#97, TRAP-3).
-CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)(?!\s+(?!Новгород)[А-ЯЁ])"))]
+CAPITAL_PLACES = [
+    (
+        "Нижний Новгород",
+        re.compile(r"Нижн(?:ий|его|ем|ему|им)\b(?!\s+этаж)(?!\s+(?!Новгород)[А-ЯЁ])"),
+    )
+]
 # Two-word cities of places.json not listed above (TRAP-3): «Великий Новгород в мае». Their
 # words are common («лечение минеральными водами»), so a name counts only with a capital first
 # letter (original text) or right after «в/во/из/до» (lower text).
@@ -1321,9 +1326,8 @@ def _nominative(word: str) -> str:
     Other endings stay: «Малибу», «Сан-Паулу» are no accusative. The geocoder asks the name as
     written first and then the nominative guesses (catalog.lookup_online, TRAP-3)."""
     word = re.sub(r"и[ию]$", "ия", word)
-    cons = "бвгджзклмнпрстфхцчшщ"
-    if re.search(rf"[{cons}][{cons}]у$", word) and word[-2] != word[-3]:
-        return word[:-1] + "а"  # «Ухту» -> «Ухта»; «Баку», «Малибу», «Бонну» stay (#97)
+    if re.search(r"[хл]ту$", word):
+        return word[:-1] + "а"  # «Ухту» -> «Ухта»; «Тарту», «Тимбукту», «Турку», «Баку» stay (#97)
     if re.search(r"[аеёиоуыэюя]ск[еу]$", word):
         return word[:-1] + "а"  # «Аляске» -> «Аляска»; «Иркутске» has a consonant before «ск»
     return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
