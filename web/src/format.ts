@@ -256,9 +256,10 @@ export type Point =
       price: string;
     }
   | { kind: "transfer"; rides: Ride[]; price: string }
+  | { kind: "extra"; name: string; price: string } // a paid extra of the hotel: «Ранний заезд …»
   | { kind: "included"; facts: string[] };
 
-const ITEM = /^(Отель|Туда|Обратно|Трансферы|Включено): (.+)$/;
+const ITEM = /^(Отель|Туда|Обратно|Трансферы|Доп\. услуга|Включено): (.+)$/;
 const MORE = /^(Почему|Риск|Климат): |^Цены — синтетика\.$/;
 
 export function offerParts(text: string): OfferParts | null {
@@ -309,6 +310,7 @@ function point({ label, text }: { label: string; text: string }): Point | null {
   const p = priced(text);
   if (!p) return null;
   const [body, price] = p;
+  if (label === "Доп. услуга") return { kind: "extra", name: body, price };
   if (label === "Отель") {
     // «Казантель, Казань, 2★, без питания, невозвратный»: the name may hold commas, the stars may miss
     const parts = body.split(", ");

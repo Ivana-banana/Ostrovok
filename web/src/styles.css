@@ -23,6 +23,8 @@
   --side-text: #eeeeee;
   --side-muted: #9a9a92;
   --side-group: #8a8a84;
+  --synth-soft: #efe9fb; /* the «синтетика» chip of a price in the chat answer (#468) */
+  --synth-ink: #5b3f99; /* 7:1 on --synth-soft */
   --ok: #1f8a4c;
   --warn: #8a5200; /* 5.9:1 on white, 5.6:1 on --warn-soft */
   --warn-dot: #b26a00;
@@ -1050,6 +1052,15 @@ button.icon {
 
 .msg.agent ul.points li.sum {
   font-weight: 700;
+}
+
+.msg.agent ul.offer .synth {
+  padding: 0 5px;
+  border-color: transparent;
+  background: var(--synth-soft);
+  color: var(--synth-ink);
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .arrow {

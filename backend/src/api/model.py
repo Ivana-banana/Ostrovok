@@ -1683,6 +1683,8 @@ def _offer_lines(plan: Plan) -> list[str]:
     if rides:
         names = "; ".join(o.title.removeprefix("Трансфер: ") for o in rides)
         lines.append(f"Трансферы: {names} — {_rub(sum(o.price_rub for o in rides))}")
+    # paid extras of the hotel («Ранний заезд …»): the items sum to «Итого»
+    lines += [f"Доп. услуга: {o.title} — {_rub(o.price_rub)}" for o in chosen if o.kind == "extra"]
     if included:
         lines.append(f"Включено: {', '.join(included)}.")
     lines.append(f"Итого {_rub(_selected_total(plan))}.")
@@ -1693,7 +1695,8 @@ def _text_compare(plan: Plan) -> str:
     spec = plan.spec
     kids = f" + дети {', '.join(map(str, spec.children_ages))} лет" if spec.children_ages else ""
     lines = [
-        f"{spec.destinations[0]}, {period(spec)}, {spec.nights} ноч., {spec.adults} взр.{kids}.",
+        f"{spec.destinations[0]}, {period(spec)}, {spec.nights} ноч., {spec.adults} взр.{kids}"
+        + ("." if kids else ""),
         "Цены — синтетика.",
         *([_cap(line) + "."] if (line := own_tickets(spec)) else []),
         *([line] if (line := destination_line(plan)) else []),
