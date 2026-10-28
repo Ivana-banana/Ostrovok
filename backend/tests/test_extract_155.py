@@ -137,7 +137,20 @@ def test_trap_3_shri_lanka_spelling_is_the_country(text):
 
 
 @pytest.mark.parametrize(
-    "text", ["Нижний Тагил или Екатеринбург", "Хочу в Нижний Тагил или Екатеринбург"]
+    "text, dests",
+    [
+        ("Нижний Тагил или Екатеринбург", ["Нижний Тагил", "Екатеринбург"]),
+        ("Хочу в Нижний Тагил или Екатеринбург", ["Нижний Тагил", "Екатеринбург"]),
+        ("Екатеринбург или Нижний Тагил", ["Екатеринбург", "Нижний Тагил"]),
+        ("Нижний Новгород или Казань", ["Нижний Новгород", "Казань"]),
+    ],
 )
-def test_trap_3_second_word_of_a_name_is_no_place(text):
-    assert "Тагилы" not in extract(text)[0]["destinations"]
+def test_trap_3_two_word_name_outside_the_catalogue_in_a_pair(text, dests):
+    """«Нижний Тагил» is no «Тагилы» of Azerbaijan, the geocoder guess of the bare second word."""
+    assert extract(text)[0]["destinations"] == dests
+
+
+def test_trap_3_origin_of_two_words_in_genitive_is_no_destination():
+    found, notes = extract("Из Нижнего Тагила или Екатеринбурга в Сочи")
+    assert found["destinations"] == ["Сочи"]
+    assert any("Екатеринбург — второй вариант вылета" in n for n in notes)
