@@ -404,6 +404,16 @@ suite("приложение", () => {
     expect(chips).toEqual(["1. отмена", "2. цена"]);
   });
 
+  it("подписи про хранение чатов и синтетику спрятаны под «?» и есть в разметке", async () => {
+    await mount();
+    const hints = [...box.querySelectorAll("details.hint")] as HTMLDetailsElement[];
+    expect(hints.map((h) => h.open)).toEqual([false, false]);
+    expect(hints.map((h) => h.textContent)).toEqual([
+      "?Список чатов хранится только в этом браузере.",
+      "?Цены и рейсы — синтетика. Оплата имитирована.",
+    ]);
+  });
+
   it("подвал: атрибуция OpenStreetMap (ODbL) есть и без поездки, под «Данные ?» в один клик", async () => {
     await mount();
     const foot = box.querySelector("footer[aria-label='Источники данных']");

@@ -534,7 +534,12 @@ export function App() {
               Без ИИ — упрощённый режим
             </span>
           )}
-          <span>Список чатов хранится только в этом браузере.</span>
+          <details className="hint">
+            <summary aria-label="Где хранятся чаты">
+              <span className="qmark" aria-hidden="true">?</span>
+            </summary>
+            <p>Список чатов хранится только в этом браузере.</p>
+          </details>
         </div>
       </aside>
       {drawer && <div className="backdrop" aria-hidden="true" onClick={() => setDrawer(false)} />}
@@ -662,7 +667,12 @@ export function App() {
               ↑
             </button>
           </div>
-          <p className="composer-hint">Цены и рейсы — синтетика. Оплата имитирована.</p>
+          <details className="hint composer-hint">
+            <summary aria-label="Откуда цены">
+              <span className="qmark" aria-hidden="true">?</span>
+            </summary>
+            <p>Цены и рейсы — синтетика. Оплата имитирована.</p>
+          </details>
         </form>
       </section>
       <aside id="roadmap" className="roadmap" aria-label="Путь поездки">

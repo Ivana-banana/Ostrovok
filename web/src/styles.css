@@ -1372,9 +1372,51 @@ mark {
 .composer-hint {
   max-width: var(--thread-w);
   margin: 6px auto 0;
-  text-align: center;
+  text-align: right;
   font-size: var(--fs-xs);
   color: var(--muted);
+}
+
+/* a quiet «?»: the note opens above it on click (details/summary, keyboard works) */
+.hint {
+  position: relative;
+}
+
+.hint summary {
+  display: inline-flex;
+  cursor: pointer;
+  list-style: none;
+}
+
+.hint summary::-webkit-details-marker {
+  display: none;
+}
+
+.hint p {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  width: max-content;
+  max-width: 260px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--ink);
+  color: #fff;
+  font-size: 12px;
+  text-align: left;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+}
+
+.foot .hint p {
+  left: 0;
+  right: auto;
+  border: 1px solid var(--ink-3);
+}
+
+.foot .hint {
+  align-self: flex-start;
 }
 
 .empty {
@@ -2059,7 +2101,7 @@ li.chip button {
   display: none;
 }
 
-.sources .qmark {
+.qmark {
   display: inline-grid;
   place-items: center;
   width: 18px;
@@ -2071,7 +2113,8 @@ li.chip button {
   color: var(--text);
 }
 
-.sources details[open] .qmark {
+.sources details[open] .qmark,
+.hint[open] .qmark {
   background: var(--ink);
   border-color: var(--ink);
   color: var(--acc);
@@ -2414,4 +2457,9 @@ button.param.assumed {
 
 .more-dests:hover:not(:disabled) {
   background: var(--chip);
+}
+
+.foot .qmark {
+  color: var(--side-muted);
+  border-color: var(--ink-3);
 }
