@@ -370,16 +370,25 @@ def _hotel(
     # Free cancellation only from 3 stars (team estimate), in the share of 3+ star hotels with it
     # on the 101hotels city page (#119), else in 80% (team estimate).
     share = place.get("free_cancel_share", 0.8)
-    refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 1 - share
+    real_cancel = base.get("free_cancel")  # a real 101hotels card states it (#528); else model it
+    if real_cancel is None:
+        refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 1 - share
+    else:
+        refundable_rate = real_cancel
     free_until = None
     if refundable_rate:
         days = (7, 3, 1)[int(_rand(place["name"], key, "deadline") * 3)]
         free_until = datetime.combine(date_in - timedelta(days=days), time(12, 0), tz)
     has_refundable = free_until is not None and free_until > now
-    room = place["level"] * STAR_FACTOR[base["stars"]] * _room_factor(spec)
-    jitter = _between(0.9, 1.12, place["name"], key, date_in, nights, _guests_tag(spec))
+    # A real 101hotels «от N ₽» per night (#528) is the price anchor: not jittered or re-seasoned.
+    real = base.get("night_rub")
+    room = (real or place["level"] * STAR_FACTOR[base["stars"]]) * _room_factor(spec)
+    season = (lambda _d: 1.0) if real else _night_factor
+    jitter = (
+        1.0 if real else _between(0.9, 1.12, place["name"], key, date_in, nights, _guests_tag(spec))
+    )
     people = spec.adults + 0.5 * sum(a >= 2 for a in spec.children_ages)
-    rooms = [room * _night_factor(date_in + timedelta(days=k)) * jitter for k in range(nights)]
+    rooms = [room * season(date_in + timedelta(days=k)) * jitter for k in range(nights)]
     night = sum(rooms) / nights
     before = date_in - timedelta(days=1)
     out = []
@@ -414,6 +423,7 @@ def _hotel(
                 pets_allowed=base["pets"],
                 amenities=base["amenities"],
                 description=base["note"],
+                synthetic=real is None,
             )
             extras = [
                 ("early", time(6, 0), f"Ранний заезд с 06:00 — {base['title']}", 0.5 * night),
@@ -422,7 +432,7 @@ def _hotel(
                     "prev",
                     None,
                     f"Ночь накануне, {before:%d.%m} — {base['title']}",
-                    (room * _night_factor(before) * jitter + meal_night) * tariff,
+                    (room * season(before) * jitter + meal_night) * tariff,
                 ),
             ]
             out.append(
