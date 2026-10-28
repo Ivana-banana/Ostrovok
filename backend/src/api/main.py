@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.cart import cart_route
+from api.cart import cart_route, checkout_route
 from api.contracts import Cart, CartAction, ChatReply, ChatRequest, CheckoutRequest, Voucher
 from api.guards import llm_available
 from api.model import chat
@@ -137,7 +137,7 @@ def cart_edit_route(req: CartAction, store: Store) -> Cart:
 def checkout_post_route(
     req: CheckoutRequest, store: Store, idempotency_key: IdempotencyKey = None
 ) -> Voucher:
-    return checkout_once(req, store, idempotency_key)
+    return checkout_once(req, store, idempotency_key, lambda: checkout_route(req, store))
 
 
 EMBED = Path(__file__).with_name("embed.js")

@@ -14,12 +14,12 @@
 
 import os
 import secrets
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 
-from api.cart import checkout_route
 from api.contracts import ChatReply, ChatRequest, CheckoutRequest, Voucher
 from api.model import chat
 from api.store import SessionStore
@@ -82,10 +82,13 @@ def plan_reply(req: ChatRequest, store: SessionStore) -> ChatReply:
     return reply
 
 
-def checkout_once(req: CheckoutRequest, store: SessionStore, key: str | None) -> Voucher:
-    """POST /api/checkout with an optional Idempotency-Key: a repeat returns the first voucher."""
+def checkout_once(
+    req: CheckoutRequest, store: SessionStore, key: str | None, book: Callable[[], Voucher]
+) -> Voucher:
+    """POST /api/checkout with an optional Idempotency-Key: a repeat returns the first voucher.
+    `book` is the checkout of main.py (cart.checkout_route)."""
     if not key:
-        return checkout_route(req, store)
+        return book()
     body = req.model_dump_json()
     first, voucher = store.claim_key(key, body)
     if first != body:
@@ -96,4 +99,4 @@ def checkout_once(req: CheckoutRequest, store: SessionStore, key: str | None) ->
     if voucher is not None:
         return voucher
     # A 409 leaves the key without a voucher: the same request with the same key may try again.
-    return store.keep_key(key, checkout_route(req, store))
+    return store.keep_key(key, book())
