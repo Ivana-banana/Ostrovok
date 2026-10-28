@@ -27,6 +27,7 @@ import re
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from api import catalog
 from api.contracts import (
     ExtraOffer,
     HotelOffer,
@@ -39,6 +40,7 @@ from api.contracts import (
     TripSpec,
 )
 from api.offers import (
+    FAR_AIRPORT_KM,
     MAX_DRIVE,
     drive_time,
     km_between,
@@ -75,6 +77,7 @@ TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
 KM_RE = re.compile(r"≈\s*(\d+(?:[.,]\d+)?)\s*км")  # the distance in a transfer title (offers.py)
 # #532: offers.transport_offers finds no legs closer than this: such a trip has no road to buy.
 NEAR_KM = 30
+AIRPORT_CITY_KM = 40  # a catalogue place this close to an airport names it in the timeline (#549)
 NO_ROAD = "Транспорта в плане нет"  # the start of the issue text; model.py names the block by it
 
 
@@ -423,6 +426,23 @@ def _drive_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[Tim
     return [TimelineIssue(severity="warn", text=text, fixes=_alt(t, leg, _drive_issues, fixes))]
 
 
+def _end_name(leg: TransportOffer, name: str) -> str:
+    """Where a flight lands or starts: a place far from its airport (#123) has none of its own,
+    so the event names the airport (and its city, when the catalogue has one next to it): not
+    «Прилёт: Бакуриани» for a landing in Кутаиси (#549, TRAP-5)."""
+    port = ((resolve_place(name) or {}).get("airport") or {}) if leg.mode == "flight" else {}
+    if not port or port.get("km", 0) <= FAR_AIRPORT_KM:
+        return name
+    row = next((a for a in catalog.snapshot()["airports"] if a[0] == port["iata"]), None)
+    if row is None:
+        return f"аэропорт {port['iata']}"
+    here = {"lat": row[1], "lon": row[2]}
+    city = min(catalog.places(), key=lambda p: km_between(here, p), default=None)
+    if city is None or km_between(here, city) > AIRPORT_CITY_KM:
+        return f"аэропорт {port['iata']}"
+    return f"{city['name']} ({port['iata']})"
+
+
 def _leg_events(leg: TransportOffer, t: _Trip) -> list[TimelineEvent]:
     start, end = VERBS[leg.mode]
     depart = _at_place(leg.depart_at, leg.origin)
@@ -433,9 +453,13 @@ def _leg_events(leg: TransportOffer, t: _Trip) -> list[TimelineEvent]:
         arrive = leg.arrive_at.astimezone(t.room()[1])
     return [
         TimelineEvent(
-            at=depart, title=f"{start}: {leg.origin} → {leg.destination}", offer_id=leg.offer_id
+            at=depart,
+            title=f"{start}: {_end_name(leg, leg.origin)} → {_end_name(leg, leg.destination)}",
+            offer_id=leg.offer_id,
         ),
-        TimelineEvent(at=arrive, title=f"{end}: {leg.destination}", offer_id=leg.offer_id),
+        TimelineEvent(
+            at=arrive, title=f"{end}: {_end_name(leg, leg.destination)}", offer_id=leg.offer_id
+        ),
     ]
 
 

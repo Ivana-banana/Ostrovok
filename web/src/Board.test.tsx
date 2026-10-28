@@ -184,12 +184,29 @@ suite("доска поездки", () => {
     expect(changeValue("2026-12-11")).toBe("11.12.2026");
   });
 
-  it("ваучер: номер брони, позиции с offer_id, итог и пометка об имитации", () => {
+  it("ваучер: номер брони, названия позиций, итог и пометка об имитации", () => {
     const v = render(base).querySelector("[aria-label='Ваучер']")?.textContent ?? "";
     expect(v).toContain("OST-0001");
-    expect(v).toContain("x1");
+    expect(v).toContain("Ранний заезд");
     expect(v).toContain("2 500 ₽");
     expect(v).toContain("имитирован");
+  });
+
+  it("#549: внутренние offer_id не видны в тексте ваучера, таймлайна, корзины и вариантов", () => {
+    const ids = { h1: "h-ayt-s0-ROn-20261107-7n-2ac5", t1: "t-spb-kut-flight-202702100830-2a", x1: "x-1cfd00a6119a" };
+    let json = JSON.stringify(hotelBought);
+    for (const [short, long] of Object.entries(ids)) json = json.replaceAll(`"${short}"`, `"${long}"`);
+    const r = JSON.parse(json) as typeof hotelBought;
+    r.plan.issues[0].fixes.push("x-not-in-plan-0001"); // a fix outside the plan: no raw id either
+    r.plan.bundles[0].offer_ids.push("x-not-in-plan-0002");
+    const doc = render(r);
+    for (const label of ["Ваучер", "Таймлайн", "Корзина"]) {
+      expect(doc.querySelector(`[aria-label='${label}']`)).not.toBeNull();
+    }
+    const text = doc.body.textContent ?? "";
+    for (const id of [...Object.values(ids), "x-not-in-plan"]) expect(text).not.toContain(id);
+    expect(doc.querySelector("[aria-label='Ваучер']")?.textContent).toContain("Ранний заезд");
+    expect(doc.querySelector(`[data-offer-id='${ids.x1}']`)).not.toBeNull(); // the id stays a data attribute
   });
 
   it("#348: питомец и возраст детей — в «Гости» ваучера и в корзине", () => {
