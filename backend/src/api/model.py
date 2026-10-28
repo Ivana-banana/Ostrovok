@@ -1656,7 +1656,14 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
 
 # #311: «дешевле, чем в Турции?», «это дешевле, чем в среднем?» ask for a comparison. They name no
 # new place and no «недорого» wish; the plan stays. A request («хочу дешевле, чем сейчас») is an edit.
-PRICE_VERSUS_RE = re.compile(r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?")
+# #390: «а в Турции дешевле?» asks the same without «чем». Only the whole message «[а] в <place in
+# the prepositional case> дешевле?»: «поехали в Египет, там дешевле?» and «в Турцию, там дешевле?»
+# move the trip, as on main.
+PRICE_VERSUS_RE = re.compile(
+    r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?"
+    r"|^\s*(?:а\s+)?(?:в|на)\s+(?:\w+\s+)?\w*[^\Wую]\s+(?:будет\s+|вс[её]\s+же\s+)?"
+    r"(?:дешевле|дороже|выгоднее)\s*\?\s*$"
+)
 VERSUS_ORDER_RE = re.compile(
     r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
 )
@@ -2140,6 +2147,7 @@ def _said_origin(old: ChatReply, message: str, found: dict) -> str | None:
 
 
 SAME_PLACE = "— это и место поездки."
+ORIGIN_DEFAULT_LINE = "Город вылета не назван — беру Москву."  # #453, DEFAULT_ORIGIN
 
 
 def _trip_places(old: ChatReply, found: dict) -> set[str]:
@@ -2371,6 +2379,13 @@ def step(
     if asking and ASKING_NOTE in notes and not found:
         return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
     said_origin = _said_origin(old, message, found)  # #436, TRAP-3
+    # #453: the place abroad named again on «Откуда?» is no origin either: Москва, said aloud
+    origin_default = (
+        not said_origin
+        and old.stage == "clarify"
+        and any(SAME_PLACE in q.text for q in old.questions)
+        and not found.get("origin")
+    )
     if said_origin and (again := same_place_question(old, said_origin, found)):
         # The other fields of the answer («Казань, трое взрослых») stay in the trip.
         rest = {k: v for k, v in found.items() if k != "origin" and k in TripSpec.model_fields}
@@ -2578,6 +2593,8 @@ def step(
         return f"{text}\n{line}", [*chips, *questions]
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
+        if origin_default and plan.spec.origin == DEFAULT_ORIGIN:
+            text = f"{ORIGIN_DEFAULT_LINE}\n{text}"
         text, kw["questions"] = with_month(plan.spec, text, kw.get("questions", []))
         return ChatReply(
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
