@@ -287,6 +287,7 @@ FRIENDS_RE = re.compile(
 WITH_BEFORE = re.compile(r"\bсо?\s+$")
 WHOLE_BEFORE = re.compile(
     r"\b(?:мы|едем|летим|поедем|полетим|отправимся|собираемся)\s+(?:\w+\s+)?$"
+    r"|\bмы\b[^.!?;]*?(?<!\bя )(?<!\bи )$"  # «Мы едем в Сочи, трое друзей» (#196)
 )
 WHOLE_AFTER = re.compile(
     r"\s*,?\s*(?:едем|летим|поедем|полетим|хотим|собираемся|планируем|отдыхаем)\b"
@@ -2011,6 +2012,10 @@ def _holiday(t: str, found: dict, notes: list[str]) -> str | None:
         found["month"] = today.month if today.month in months else months[0]
         why = "текущий месяц сезона" if today.month in months else "первый месяц сезона"
     elif m := ANY_HOLIDAY_RE.search(t):
+        if today.month == 12:  # «каникулы» in December are the New Year break (#196)
+            found["date_from"] = _new_year_window(today)[0]
+            found["month"] = 12
+            return m.group(0)
         found["month"] = today.month % 12 + 1
         why = "сезон не назван, взят ближайший месяц"
     else:

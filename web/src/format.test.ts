@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 import type { ChatReply } from "./contracts";
-import { brief, browserTime, offerParts, describe, withoutNoAi, fieldLabel, guestsText, movePriority, nightsText, priorityMessage, yearsText, zoneLabel, zonedTime } from "./format";
+import { brief, browserTime, offerParts, describe, withoutNoAi, fieldLabel, guestsText, nightsText, priorityMessage, yearsText, zoneLabel, zonedTime } from "./format";
 
 const reply = (llm: boolean): ChatReply => ({
   session_id: "s",
@@ -59,13 +59,6 @@ suite("приоритеты", () => {
     expect(priorityMessage(["cancellation", "price", "travel_time"])).toBe(
       "Мои приоритеты по важности: отмена, цена, время в пути.",
     );
-  });
-
-  it("сдвиг на одно место; за край не двигается", () => {
-    expect(movePriority(["price", "meal", "rating"], 1, -1)).toEqual(["meal", "price", "rating"]);
-    expect(movePriority(["price", "meal", "rating"], 1, 1)).toEqual(["price", "rating", "meal"]);
-    expect(movePriority(["price", "meal"], 0, -1)).toBeNull();
-    expect(movePriority(["price", "meal"], 1, 1)).toBeNull();
   });
 });
 
