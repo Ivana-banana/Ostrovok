@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 from api import catalog, llm
 from api.answers import (
     closed_line,
+    consent_fact,
     destination_line,
     is_hotel_compare,
     plan_fact,
@@ -1566,6 +1567,12 @@ def _question_answer(
     return f"{head}\n{cart}\n{edit} {HINTS['checkout']}"
 
 
+def _with_tail(text: str, plan: Plan, low: str, message: str, found: dict) -> str:
+    """#212: a consent with a question («беру, а что с визой?») gets the fact line before the text."""
+    fact = consent_fact(plan, low, message, found)
+    return f"{fact}\n{text}" if fact else text
+
+
 def _tail(spec: TripSpec, hint: str, extra: list[str] | None = None) -> list[str]:
     # #458: the note «уже показаны» is internal state, not text for the user
     said = [*(a for a in spec.assumptions if _label(a) != SHOWN), *(extra or [])]
@@ -2571,14 +2578,14 @@ def step(
         plan.timeline, plan.issues = build_timeline(plan)
         if any(i.severity == "error" for i in plan.issues):
             return reply("compare", plan, _text_blocked(plan))  # #276: no cart with an error
-        return reply("assemble", plan, _text_assemble(plan))
+        return reply("assemble", plan, _with_tail(_text_assemble(plan), plan, low, message, found))
     if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
         text = (
             f"В корзине {len(cart.items)} поз. на {_rub(cart.total_rub)} "
             f"(синтетика, оплата имитируется). {HINTS['checkout']}"
         )
-        return reply("checkout", plan, text, cart)
+        return reply("checkout", plan, _with_tail(text, plan, low, message, found), cart)
     if booking:  # chat() books outside the session lock; the user saw the stored cart total
         raise _Confirm(old.cart.total_rub)
     text = HINTS.get(old.stage, "Уточните запрос.")
