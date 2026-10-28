@@ -1725,15 +1725,17 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         ):
             which, wd, month = m.group(1) or "", WEEKDAYS.index(m.group(2)), found.get("month")
             ahead = (wd - today.weekday()) % 7
-            if month and month != (today + timedelta(days=1)).month:
-                base = future_date(month, 1)  # first such weekday of the named month
-                found["date_from"] = base + timedelta(days=(wd - base.weekday()) % 7)
-            elif which.startswith("эт"):  # #351: «на эту пятницу» on a Friday is today
-                found["date_from"] = today + timedelta(days=ahead)
+            if which.startswith("эт"):  # #351: «на эту пятницу» on a Friday is today
+                near = today + timedelta(days=ahead)
             elif which.startswith("следующ"):  # the same weekday of the next week
-                found["date_from"] = today + timedelta(days=ahead + 7)
+                near = today + timedelta(days=ahead + 7)
             else:
-                found["date_from"] = today + timedelta(days=ahead or 7)
+                near = today + timedelta(days=ahead or 7)
+            if month and (month != (today + timedelta(days=1)).month or near.month != month):
+                base = future_date(month, 1, today)  # #152: first such weekday of the named month
+                found["date_from"] = base + timedelta(days=(wd - base.weekday()) % 7)
+            else:
+                found["date_from"] = near
             notes.append(f"даты: {found['date_from']:%d.%m} («{m.group(0)}», ближайший)")
         elif re.search(r"\bследующ\w*\s+недел", t):
             found["date_from"] = today + timedelta(days=7 - today.weekday())  # Monday
@@ -2069,11 +2071,23 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
         found["nights"] = 2
         if "date_from" not in found:
             month, tomorrow = found.get("month"), date.today() + timedelta(days=1)
-            base = future_date(month, 1) if month and month != tomorrow.month else tomorrow
+            base = (
+                future_date(month, 1, date.today())
+                if month and month != tomorrow.month
+                else tomorrow
+            )
             start = base + timedelta(days=(4 - base.weekday()) % 7)  # Friday
             end = start + timedelta(days=2)
+            if base == tomorrow and date.today().weekday() in (5, 6):
+                # #152: on Saturday or Sunday the weekend is under way: it starts today
+                start, end = date.today(), tomorrow
+                found["nights"] = 1
+                notes.append(
+                    f"даты: {start:%d.%m}–{end:%d.%m} (выходные уже идут, осталась 1 ночь)"
+                )
+            else:
+                notes.append(f"даты: выходные {start:%d.%m}–{end:%d.%m} (ближайшие)")
             found["date_from"], found["date_to"], found["month"] = start, end, start.month
-            notes.append(f"даты: выходные {start:%d.%m}–{end:%d.%m} (ближайшие)")
     if found.get("nights", 0) > MAX_NIGHTS:
         found.pop("nights")
         notes.append(too_long_note(m.group(0), kept))
