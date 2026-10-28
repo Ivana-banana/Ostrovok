@@ -32,7 +32,15 @@ from api.answers import (
     span,
     without_plan_fields,
 )
-from api.cart import CartRefusal, checkout_reply, edit_cart, fill_cart, keep_refusal, sync_plan
+from api.cart import (
+    CartRefusal,
+    checkout_reply,
+    edit_cart,
+    fill_cart,
+    keep_refusal,
+    remember_refusal,
+    sync_plan,
+)
 from api.contracts import (
     Cart,
     ChatReply,
@@ -1920,6 +1928,7 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
     checkout also the cart); the timeline is built again (TRAP-5). The stage stays: a plain
     consent fills the cart. The model does not read the message; the prices stay from the plan."""
     plan = plan or old.plan
+    plan = remember_refusal(plan, {"out", "back"})
     gone = [o for o in plan.offers if o.kind == "transfer" and o.offer_id in plan.selected]
     if not gone:
         text = f"Трансфера в плане нет, менять нечего. {HINTS[old.stage]}"
@@ -1929,9 +1938,8 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
         for o in gone:
             cart = edit_cart(plan, cart, "remove", o.offer_id)
         plan = sync_plan(plan, old.cart, cart)
-    else:
-        plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
-        plan.timeline, plan.issues = build_timeline(plan)
+    plan = plan.model_copy(update={"selected": [i for i in plan.selected if i not in ids]})
+    plan.timeline, plan.issues = build_timeline(plan)
     rows = "; ".join(f"{o.title} — {_rub(o.price_rub)} (синтетика)" for o in gone)
     head = f"Убираю трансфер из плана: {rows}."
     if old.stage == "assemble":
@@ -2606,7 +2614,9 @@ def step(
             return reply(stage, plan, text, questions=questions)
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
-            plan.selected = pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
+            plan.selected = keep_refusal(
+                plan, pick_hotel(plan.selected, plan.offers, hotels[idx].offer_id)
+            )
             # «Почему» and the bundles name the picked hotel, not the ranked one (#58).
             plan.explanations = explain(plan.spec, plan.offers, plan.selected)
             plan.bundles = bundles(plan.spec, plan.offers, plan.selected)
