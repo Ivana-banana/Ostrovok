@@ -36,6 +36,8 @@ def at(store, stage):
         "дешевле, чем в Турции?",
         "это дешевле, чем в среднем?",
         "а дороже, чем в Египте?",
+        "а в Турции дешевле?",  # #390: no «чем»
+        "в Египте дороже?",
     ],
 )
 def test_price_versus_question_changes_nothing(store, stage, question):
@@ -59,6 +61,14 @@ def test_price_versus_answer_is_honest(store):
     assert "синтетика" in after.reply  # TRAP-7
     average = say(store, "это дешевле, чем в среднем?", before.session_id)
     assert "по рынку" in average.reply
+
+
+@pytest.mark.parametrize("order", ["давай в Турцию", "давай в Турцию, там дешевле?"])
+def test_price_versus_a_choice_of_the_place_still_moves_the_plan(store, order):
+    """#390: «давай в Турцию» is a choice, not a question; the plan goes to Turkey."""
+    before = at(store, "compare")
+    after = say(store, order, before.session_id)
+    assert after.plan.spec.destinations == ["Турция"]
 
 
 BUDGET = ["можно уложиться дешевле, чем в 50 тысяч?", "а дешевле, чем 30 тысяч на человека?"]
