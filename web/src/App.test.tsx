@@ -619,7 +619,7 @@ suite("чат как в мессенджере", () => {
     r.plan.destinations = [d, { ...d, name: "Сочи", est_total_rub: d.est_total_rub + 1000, travel_hours: d.travel_hours + 1 }];
     r.plan.spec.budget_rub = d.est_total_rub + 500;
     routes["POST /api/chat"] = (b) =>
-      (b as { message: string }).message.startsWith("первый")
+      (b as { message: string }).message === d.name
         ? { status: 200, body: checkoutStage }
         : { status: 200, body: r };
     await mount();
@@ -636,7 +636,35 @@ suite("чат как в мессенджере", () => {
     for (const c of cards) expect(c.querySelector(".price .synth")?.textContent).toBe("синтетика");
     await act(async () => (cards[0].querySelector("button") as HTMLButtonElement).click());
     await flush();
-    expect(calls.at(-1)?.body).toMatchObject({ message: `первый: ${d.name}` });
+    expect(calls.at(-1)?.body).toMatchObject({ message: d.name });
+  });
+
+  it("#458: вопрос-чипы, что повторяют имена карточек, скрыты; другие вопросы остаются", async () => {
+    const r = { ...structuredClone(checkoutStage), stage: "inspire" as const };
+    const [d] = r.plan.destinations;
+    r.plan.destinations = [d, { ...d, name: "Сочи" }];
+    r.questions = [
+      { text: "Куда поедем?", options: [d.name, "Сочи"] },
+      { text: "Сколько вас?", options: ["двое", "трое"] },
+    ];
+    routes["POST /api/chat"] = () => ({ status: 200, body: r });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const q = [...box.querySelectorAll(".questions p")].map((p) => p.textContent);
+    expect(q).toEqual(["Сколько вас?"]);
+  });
+
+  it("#458: на select чипы-вопросы остаются: у карточек там нет «Выбрать»", async () => {
+    const r = { ...structuredClone(checkoutStage), stage: "select" as const };
+    const [d] = r.plan.destinations;
+    r.plan.destinations = [d, { ...d, name: "Сочи" }];
+    r.questions = [{ text: "Какой город берём?", options: [d.name, "Сочи"] }];
+    routes["POST /api/chat"] = () => ({ status: 200, body: r });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    expect([...box.querySelectorAll(".questions p")].map((p) => p.textContent)).toEqual(["Какой город берём?"]);
   });
 
   it("строки «Допущения» и «Не проверяю» ответа — приглушённой строкой", async () => {
