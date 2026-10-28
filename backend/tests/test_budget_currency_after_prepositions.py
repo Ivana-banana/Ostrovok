@@ -92,3 +92,37 @@ def test_a_new_budget_in_the_same_turn_wins(store):
     first = say(store, "Сочи в ноябре на 4 ночи, до 3000 рублей в сутки")
     spec = say(store, "на 6 ночей, бюджет 50 тысяч", first.session_id).plan.spec
     assert spec.nights == 6 and spec.budget_rub == 50_000
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "а виза за 80 евро нужна",
+        "а там кофе по 3 евро?",
+        "Стамбул, экскурсия по 30 долларов",
+        "Сочи, виза за 80 евро",
+        "билет в музей за 15 евро",
+        "такси из аэропорта за 40 евро",
+        "сколько стоит страховка около 50 евро за неделю",
+        "отель за 100 долларов",
+    ],
+)
+def test_price_of_an_item_is_no_budget(text):
+    found, notes = extract(text)
+    assert "budget_rub" not in found and not budget_notes(notes)
+
+
+def test_item_price_keeps_the_session_budget(store):
+    first = say(store, "Сочи в ноябре на 4 ночи, бюджет 100 тысяч")
+    assert first.plan.spec.budget_rub == 100_000
+    for text in ("а виза за 80 евро нужна", "а там кофе по 3 евро?"):
+        spec = say(store, text, first.session_id).plan.spec
+        assert spec.budget_rub == 100_000
+        assert not any("не пересчитываю" in a for a in spec.assumptions)
+
+
+def test_per_night_budget_of_one_night_follows_new_nights(store):
+    first = say(store, "Сочи в ноябре на 1 ночь, 3000 ₽ в сутки")
+    assert first.plan.spec.nights == 1 and first.plan.spec.budget_rub == 3_000
+    spec = say(store, "на 5 ночей", first.session_id).plan.spec
+    assert spec.nights == 5 and spec.budget_rub == 15_000

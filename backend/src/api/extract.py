@@ -2400,6 +2400,12 @@ def _rub(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 
 
+# #167: a price of a thing, not the budget of the trip: «виза за 80 евро», «кофе по 3 евро».
+ITEM_RE = re.compile(
+    r"\b(?:виз|кофе|капучино|чай|билет|такси|экскурс|обед|ужин|завтрак|вход|музе|трансфер|страховк"
+    r"|сувенир|напит|пиво|вино|еда|еду|аренд|прокат|отел|гостиниц|номер|хостел|метро|проезд"
+    r"|парковк|чаев|симк|пицц|шашлык|обмен|стои|цен|услуг|налог|сбор|депозит|залог)\w*"
+)
 GROUP_TAIL = rf"(?:на|для)\s+(?:{'|'.join(GROUP)})\b"
 
 
@@ -2424,7 +2430,11 @@ def _standalone_currency(t: str) -> str | None:
         # #167: «за 2000 евро», «по 500 евро на каждого», «1000 евро в сутки», «1000 евро на двоих»
         by_prep = rf"\b(?:за|на|по)\s+{AMOUNT_UNIT}(?:{words})(?!\w)"
         by_tail = rf"{AMOUNT_UNIT}(?:{words})(?!\w)\s*(?:{PER_PERSON}|{PER_NIGHT}|{GROUP_TAIL})"
-        if any(re.search(q, t) for q in (by_symbol, by_word, by_prep, by_tail)):
+        if re.search(by_symbol, t) or any(
+            not ITEM_RE.search(_fragment(t, m.start(), m.end())[0])
+            for q in (by_word, by_prep, by_tail)
+            for m in re.finditer(q, t)
+        ):
             return label
     return None
 
@@ -2512,7 +2522,7 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
                 notes.append(line)  # nights unknown: the total comes when they are
             continue
         stay = found.get("nights", nights)
-        if per_night and stay > 1:
+        if per_night:  # 1 night too: a later «на 5 ночей» recounts it (#167)
             total *= stay
             plan = "" if "nights" in found else " (длительность из плана)"
             factors.append(f"{stay} {_night_word(stay)}{plan}")
