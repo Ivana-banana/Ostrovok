@@ -298,6 +298,12 @@ export function Destinations({ plan, stage, busy, onSend }: {
           );
         })}
       </div>
+      {/* #451: the next places of the same pool, without the shown ones (api/model.py MORE_RE) */}
+      {stage === "inspire" && (
+        <button type="button" className="more" disabled={busy} onClick={() => onSend("ещё")}>
+          Показать ещё
+        </button>
+      )}
     </section>
   );
 }

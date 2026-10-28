@@ -205,6 +205,13 @@ OTHER_RE = re.compile(
     r"|\bне\s+(?:хочу|нравится|подходит)\s+(?:это|этот|эта)\s+(?:направлен|город|мест)"
 )
 OTHER_VARIANTS_RE = re.compile(r"\bдруг(?:ие|их|ой)\s+вариант\w*")
+# #451: «ещё», «а ещё?», «покажи другие варианты» at inspire: the next places of the same pool.
+# The whole message only (read with ё -> е): «и ещё ребёнок 5 лет» is an edit, not this.
+MORE_RE = re.compile(
+    r"\s*(?:(?:а|и|ну|давай(?:те)?)\s+)?(?:(?:покажи(?:те)?|предложи(?:те)?|есть|что)\s+)?"
+    r"(?:еще|други[ех])(?:\s+(?:что-?нибудь|вариант\w*|направлен\w*|мест\w*|город\w*|есть))?"
+    r"\s*[?!.…]*\s*$"
+)
 # «второй половине ноября» is a part of a month, not the second offer.
 ORDINAL_RE = re.compile(
     r"\b(перв(?:ый|ая|ое|ую|ого)|втор(?:ой|ая|ое|ую|ого)|трет(?:ий|ья|ье|ью|ьего)"
@@ -300,6 +307,8 @@ OR_RE = re.compile(r"\b(?:или|либо)\b")  # cities joined by «или», �
 PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
 # #113: the refused places live in this assumption (TripSpec has no field for them).
 EXCLUDED = "исключено"
+# #451: the places of the earlier «ещё» batches; a turn without «ещё» drops the note.
+SHOWN = "уже показаны"
 
 
 def _label(assumption: str) -> str:
@@ -466,6 +475,28 @@ def refused_before(spec: TripSpec) -> list[str]:
         if _label(a) == EXCLUDED
         for p in a.split(": ", 1)[1].split(", ")
     ]
+
+
+def shown_before(spec: TripSpec) -> list[str]:
+    """#451: the places shown in the earlier batches of «ещё»."""
+    return [
+        p for a in spec.assumptions if _label(a) == SHOWN for p in a.split(": ", 1)[1].split(", ")
+    ]
+
+
+def with_shown(spec: TripSpec, shown: list[str]) -> TripSpec:
+    kept = [a for a in spec.assumptions if _label(a) != SHOWN]
+    note = [f"{SHOWN}: {', '.join(shown)}"] if shown else []
+    return spec.model_copy(update={"assumptions": kept + note})
+
+
+def relax_hint(spec: TripSpec) -> str:
+    """#451: the conditions the user may relax when no other place is left."""
+    parts = ["увеличить бюджет"] if spec.budget_rub is not None else []
+    if spec.max_travel_hours:
+        parts.append(f"разрешить дорогу дольше {spec.max_travel_hours:g} ч")
+    parts.append("выбрать другой месяц")
+    return f"Других направлений под эти условия нет. Ослабьте одно условие: {', '.join(parts)}."
 
 
 def with_refused(spec: TripSpec, refused: list[str]) -> TripSpec:
@@ -2155,12 +2186,18 @@ def step(
     )
     new_refused = excluded_places(message)  # #113: «кроме Турции», «в Египте уже были»
     # «Другое направление»: the city goes, the rest of the trip stays; no model reads it.
-    other = (
+    # #451: at inspire and select «ещё», «другие варианты» show the next places of the same pool.
+    more = (
+        prev is not None
+        and old.stage in ("inspire", "select")
+        and "destinations" not in found
+        and bool(MORE_RE.match(low) or OTHER_RE.search(low) or OTHER_VARIANTS_RE.search(low))
+    )
+    other = more or (
         prev is not None
         and "destinations" not in found
         and bool(
             OTHER_RE.search(low)
-            or (OTHER_VARIANTS_RE.search(low) and old.stage in ("inspire", "select"))
             or any(is_excluded(d, new_refused) for d in old.plan.spec.destinations)
         )
     )
@@ -2257,6 +2294,20 @@ def step(
         if not any(is_excluded(d, [r]) for d in named)
     ]
     spec = with_refused(spec, refused)
+    seen = (
+        list(
+            dict.fromkeys(
+                [
+                    *shown_before(spec),
+                    *(d.name for d in old.plan.destinations),
+                    *old.plan.spec.destinations,
+                ]
+            )
+        )
+        if more
+        else []
+    )
+    spec = with_shown(spec, [])  # the note is set again below, by a «ещё» batch only
     route = severals(message, found.get("destinations", []))
     if route:  # the lost city stays visible (#128, #139)
         spec = spec.model_copy(
@@ -2292,8 +2343,21 @@ def step(
         return reply("clarify", Plan(spec=spec), _text_clarify(questions), questions=questions)
     spec = assume(spec)
     if not spec.destinations:
-        dests = suggest_destinations(spec, 5, refused)  # 5: four are left without the origin
-        if other:
+        # 5: four are left without the origin. #451: «ещё» — the same spec, the pool without
+        # every place shown in this session.
+        dests = suggest_destinations(spec, 5, [*refused, *seen])
+        if more:
+            gone = old.plan.spec.destinations
+            dests = [d for d in dests if d.name != spec.origin][:4]
+            if not dests:
+                # Nothing is left: the trip and the shown cards stay, «номер» picks from them.
+                kept = with_shown(old.plan.spec, seen)
+                plan = old.plan.model_copy(update={"spec": kept, "changes": []})
+                options = [d.name for d in plan.destinations]
+                question = Question(text="Куда поедем?", options=options)
+                return reply("inspire", plan, relax_hint(spec), old.cart, questions=[question])
+            spec = with_shown(spec, [*seen, *(d.name for d in dests)])
+        elif other:
             gone = old.plan.spec.destinations
             ranked = suggest_destinations(spec, len(CATALOG), refused)
             shown = [d.name for d in old.plan.destinations] if old.stage == "inspire" else []

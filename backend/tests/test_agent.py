@@ -177,12 +177,12 @@ def test_destination_equal_to_origin_is_said_honestly_before_confirmation(store)
     assert not [i for i in r.plan.selected if i.startswith("t-")]
 
 
-def test_other_destination_keeps_two_or_three_options_without_the_origin(store):
+def test_other_destination_keeps_options_without_the_origin(store):
     r = say(store, "на море в ноябре из Сочи")
     for text in ("другое направление", "другие варианты"):
         r = say(store, text, r.session_id)
         names = [d.name for d in r.plan.destinations]
-        assert 2 <= len(names) <= 3 and "Сочи" not in names
+        assert 2 <= len(names) <= 4 and "Сочи" not in names  # #451: a batch of up to 4
         assert "Сочи" not in r.questions[0].options
 
 
