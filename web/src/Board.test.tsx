@@ -277,13 +277,13 @@ suite("доска поездки", () => {
     expect(cart?.textContent).toContain("(часть цен — синтетика) · оплата имитируется");
   });
 
-  it("TRAP-7 (#567): смешанный вариант поездки — итог «часть цен», суммы в минусах с «синтетика»", () => {
+  it("TRAP-7 (#567): смешанный вариант поездки — итог «часть цен», у каждой суммы в минусах своя пометка бэкенда", () => {
     const r = structuredClone(base);
     r.plan.offers = r.plan.offers.map((o) => (o.kind === "hotel" ? { ...o, synthetic: false } : o));
-    r.plan.bundles = r.plan.bundles.map((b) => ({ ...b, tradeoffs: ["дороже на 2 000 ₽ (отель, 9 000 ₽)"] }));
+    r.plan.bundles = r.plan.bundles.map((b) => ({ ...b, tradeoffs: ["дороже на 2 000 ₽ (часть цен — синтетика) (отель, 9 000 ₽ (101hotels))"] }));
     const card = render(r).querySelector("[aria-label='Варианты поездки целиком'] .card");
     const marks = [...(card?.querySelectorAll(".price") ?? [])].map((p) => p.querySelector(".synth")?.textContent);
-    expect(marks).toEqual(["часть цен — синтетика", "синтетика", "синтетика"]);
+    expect(marks).toEqual(["часть цен — синтетика", "часть цен — синтетика", "101hotels"]);
   });
 
   it("#41: бюджет отеля — своя строка в параметрах, не «Бюджет» на поездку", () => {

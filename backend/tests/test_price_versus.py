@@ -183,3 +183,16 @@ def test_mode_versus_without_chem_next_to_a_wish(store, stage, text):
     assert spec.modes == before.plan.spec.modes
     assert "санаторий" in spec.wishes and "недорого" not in spec.wishes
     assert spec.budget_rub == before.plan.spec.budget_rub
+
+
+def test_mode_versus_names_the_source_of_a_real_flight_TRAP_7(store):
+    from api.model import _mode_versus_reply
+
+    r = at(store, "compare")
+    plane = [o for o in r.plan.offers if getattr(o, "mode", None) == "flight"]
+    assert plane
+    assert "(синтетика)" in _mode_versus_reply(r, ["flight"])
+    live = [o.model_copy(update={"synthetic": False}) if o in plane else o for o in r.plan.offers]
+    r = r.model_copy(update={"plan": r.plan.model_copy(update={"offers": live})})
+    text = _mode_versus_reply(r, ["flight"])
+    assert "(Авиасейлс)" in text and "синтетика" not in text, text

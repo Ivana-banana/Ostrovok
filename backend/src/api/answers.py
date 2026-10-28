@@ -23,7 +23,7 @@ from api.offers import (
     resolve_place,
     rooms_label,
 )
-from api.optimizer import hotel_rows
+from api.optimizer import hotel_rows, price_mark
 
 WEATHER_RE = re.compile(
     r"погод|климат|температур|градус|дожд|осадк|снег|ливн|холодн|тепл|жарк|купа|вода\s+в\s+мор"
@@ -85,21 +85,6 @@ MODES = {
     "car": re.compile(r"\bмашин\w*|\bавтомобил\w*"),
 }
 NO_DATA = "нет данных"
-
-
-# TRAP-7 (#567): the source of a real price by kind and mode (web/src/Board.tsx PRICE_SOURCES).
-PRICE_SOURCES = {"hotel": "101hotels", "flight": "Авиасейлс", "train": "tutu"}
-
-
-def price_mark(offers) -> str:
-    """The label of a sum of these offers: «синтетика» when all are synthetic or there are none,
-    the real sources when none is, «часть цен — синтетика» for a mix (TRAP-7)."""
-    if all(o.synthetic for o in offers):
-        return "синтетика"
-    if any(o.synthetic for o in offers):
-        return "часть цен — синтетика"
-    names = (PRICE_SOURCES.get(getattr(o, "mode", o.kind), "реальные данные") for o in offers)
-    return " + ".join(dict.fromkeys(names))
 
 
 def _rub(n: int, *offers) -> str:

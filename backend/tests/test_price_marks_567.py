@@ -53,3 +53,23 @@ def test_all_synthetic_keeps_the_label_TRAP_7(compare):
     text = _text_compare(compare.plan)
     assert "Цены — синтетика." in text
     assert all("(синтетика)" in x for x in text.split("\n") if x.startswith(("Отель: ", "Итого ")))
+
+
+def test_each_sum_of_the_explanation_has_its_own_mark_TRAP_7(compare):
+    from api.optimizer import optimize
+
+    offers = [o.model_copy(update={"synthetic": o.kind != "hotel"}) for o in compare.plan.offers]
+    ranked = optimize(compare.plan.spec, offers)
+    why = ranked.explanations[0].why
+    assert "отель " in why and "(101hotels)" in why, why
+    hotel_sum = why.split("отель ", 1)[1].split(" + ")[0]
+    assert hotel_sum.endswith("(101hotels)"), why
+    assert "(часть цен — синтетика)" in why  # the whole trip: a real hotel and synthetic legs
+    for text in [
+        why,
+        *ranked.explanations[0].tradeoffs,
+        *(t for b in ranked.bundles for t in b.tradeoffs),
+    ]:
+        assert all(seg[:1] == "(" for seg in text.split(" ₽ ")[1:]), (
+            text
+        )  # every sum has a mark after it

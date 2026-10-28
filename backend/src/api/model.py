@@ -1758,7 +1758,7 @@ def _question_fact(old: ChatReply, low: str) -> str:
     if topic == "delay":
         return (
             "Данных о задержках рейсов нет, прогноз не даю: время в плане — по расписанию "
-            "каталога (синтетика)."
+            f"источника ({price_mark([o for o in chosen if o.kind == 'transport'])})."
         )
     if topic == "cancel":
         hotel = next((o for o in chosen if o.kind == "hotel"), None)
@@ -1853,10 +1853,13 @@ def _mode_versus_reply(old: ChatReply, modes: list[str]) -> str:
     """«поезд дешевле, чем самолёт?»: the cheapest offer of each mode in the plan (TRAP-4)."""
     rows = []
     for mode in modes:
-        prices = [o.price_rub for o in old.plan.offers if getattr(o, "mode", None) == mode]
+        found = [o for o in old.plan.offers if getattr(o, "mode", None) == mode]
         name = MODE_NAMES[mode].capitalize()
+        cheapest = min(found, key=lambda o: o.price_rub, default=None)
         rows.append(
-            f"{name}: от {_rub(min(prices))} (синтетика)" if prices else f"{name}: в плане нет"
+            f"{name}: от {_priced(cheapest.price_rub, [cheapest])}"
+            if cheapest
+            else f"{name}: в плане нет"
         )
     return f"Это вопрос: план не меняю. {'; '.join(rows)}. {HINTS[old.stage]}"
 
@@ -1872,7 +1875,7 @@ def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
     if not others and len(modes := [m for m, rx in MODES if re.search(rx, low)]) == 2:
         return _mode_versus_reply(old, modes)  # #483: «а поезд дешевле, чем самолёт?»
     if not (others or MARKET_RE.search(low)):
-        return ""  # «а поезд дешевле, чем самолёт?»: not this question, the old rules read it
+        return ""  # no other place and no market: not a price comparison, the old rules read it
     items = old.cart.items or _chosen(old.plan)
     total = old.cart.total_rub or sum(o.price_rub for o in items)
     place = f"в направлении «{', '.join(others)}»" if others else "в среднем по рынку"
