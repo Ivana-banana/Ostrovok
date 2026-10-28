@@ -1072,6 +1072,7 @@ def _transit_dropped(t: str, hits: list) -> list:
 # is a name as written, not a case form: «…, Милана» is a person, not «Милан». «не ради Турции»
 # names no place.
 TAIL_PLACE = re.compile(r",\s*([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)(?=\s*(?:[.!?;)\n]|$))")
+TAIL_LOWER = re.compile(r",\s*([а-яе]+(?:-[а-яе]+)*)(?=\s*(?:[.!?;)\n]|$))")
 FOR_PLACE = re.compile(r"(?<!\bне )\bради\s+([а-яе]+(?:-[а-яе]+)*)")
 
 
@@ -1137,6 +1138,11 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         ):
             hits.append((m.start(1), n, m.end(1)))
     tails = [m.span(1) for m in TAIL_PLACE.finditer(text)]
+    # «в Тайланд, пхукет»: after a country a lowercase place at the end counts too (#345).
+    for m in TAIL_LOWER.finditer(t):
+        head = t[: m.start()]
+        if any(c.end() == len(head) for _, rx in COUNTRY_RES for c in rx.finditer(head)):
+            tails.append(m.span(1))
     for s, e in [*tails, *(m.span(1) for m in FOR_PLACE.finditer(t))]:  # «…, Бали», «ради Бали»
         taken = t[s] == " " or any(hs <= s < he for hs, _, he in hits)  # " ": the origin span
         name = None if taken else _catalog_word(text[s:e])
@@ -1190,6 +1196,9 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             name = alt
         if name not in dests:
             dests.append(name)
+    # A place inside a named country wins over the country (#345): «в Тайланд на Пхукет» is Пхукет.
+    inside = {p["country"] for d in dests if d not in COUNTRIES and (p := resolve_place(d))}
+    dests = [d for d in dests if d not in COUNTRIES or d not in inside]
     if dests:
         found["destinations"] = dests
     return refused
