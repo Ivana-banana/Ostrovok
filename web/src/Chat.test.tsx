@@ -96,7 +96,9 @@ suite("чат", () => {
     ]);
     expect(items.map((li) => li.querySelector("svg.pt-ic") !== null)).toEqual([true, true, false]);
     // #478: route and time are one grid of 2 rows × 3 columns, the lines stand in one column
-    expect(items[1].querySelectorAll(".pt-route > .pt-line")).toHaveLength(2);
+    const grid = items[1].querySelectorAll(".pt-route");
+    expect(grid).toHaveLength(1);
+    expect([...grid[0].children].map((c) => c.className || "cell")).toEqual(["cell", "pt-line", "cell", "pt-time", "pt-line", "pt-time"]);
     // the arrow is a drawing; the text «→» stays for a screen reader and a copy
     expect(items[1].querySelectorAll("svg.arrow[aria-hidden='true']")).toHaveLength(2);
     // TRAP-7: one chip at each price of the list, none at the facts

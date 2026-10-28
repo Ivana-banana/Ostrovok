@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useId, useState } from "react";
 import { Money, Price } from "./Board";
 import { VERBS, VERB_MS } from "./brand";
 import type { ChatReply, Mode, Stage } from "./contracts";
@@ -226,14 +226,6 @@ function Icon({ name }: { name: keyof typeof ICONS }) {
   );
 }
 
-function Route({ ride }: { ride: Ride }) {
-  return (
-    <>
-      {ride.from} <Arrow /> {ride.to}
-    </>
-  );
-}
-
 const facts = (list: string[]) => list.join(" · ");
 const LABELS = { hotel: "Отель", transfer: "Трансферы", extra: "Доп. услуга", included: "Включено" };
 
@@ -282,12 +274,21 @@ function PointRow({ point: p, synthetic }: { point: Point; synthetic: boolean })
             {p.ride.facts.length > 0 && <div className="pt-sub">{facts(p.ride.facts)}</div>}
           </>
         )}
-        {p.kind === "transfer" &&
-          p.rides.map((r, i) => (
-            <div key={i} className="pt-sub">
-              <Route ride={r} /> · {facts(r.facts)}
-            </div>
-          ))}
+        {p.kind === "transfer" && (
+          <div className="pt-sub pt-route">
+            {p.rides.map((r, i) => (
+              <Fragment key={i}>
+                <span>{r.from}</span>{" "}
+                <span className="pt-line">
+                  <Arrow />
+                </span>{" "}
+                <span>
+                  {r.to} · {facts(r.facts)}
+                </span>{" "}
+              </Fragment>
+            ))}
+          </div>
+        )}
       </div>
     </li>
   );

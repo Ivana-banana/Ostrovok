@@ -1091,10 +1091,6 @@ button.icon {
   display: flex;
 }
 
-.pt-route .arrow {
-  vertical-align: baseline;
-}
-
 .arrow {
   width: 52px;
   height: 14px;
