@@ -113,7 +113,6 @@ from api.optimizer import (
     pick_hotel,
 )
 from api.store import SessionStore
-from api.timeline import VERBS
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
@@ -1638,6 +1637,38 @@ def _per_head_reply(old: ChatReply, low: str) -> str:
     return ""
 
 
+# #311: «дешевле, чем в Турции?», «это дешевле, чем в среднем?» ask for a comparison. They name no
+# new place and no «недорого» wish; the plan stays. A request («хочу дешевле, чем сейчас») is an edit.
+PRICE_VERSUS_RE = re.compile(r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?")
+VERSUS_ORDER_RE = re.compile(
+    r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
+)
+MARKET_RE = re.compile(r"\bв\s+среднем\b|рынк|\bобычно\b")  # «дешевле, чем в среднем?»
+
+
+def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
+    """The reply to a price comparison question, from the plan only (TRAP-4); "" if it is none.
+    The plan has the price of its own trip only: the price of the other place and the market
+    average are not in the data, and we say so."""
+    if not PRICE_VERSUS_RE.search(low) or CHOICE_RE.search(low) or VERSUS_ORDER_RE.search(low):
+        return ""
+    spec = old.plan.spec
+    others = [d for d in found.get("destinations", []) if d not in spec.destinations]
+    if not (others or MARKET_RE.search(low)):
+        return ""  # «а поезд дешевле, чем самолёт?»: not this question, the old rules read it
+    total = old.cart.total_rub or sum(
+        o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
+    )
+    place = f"в направлении «{', '.join(others)}»" if others else "в среднем по рынку"
+    mine = ", ".join(spec.destinations) or "текущее направление"
+    now = f"Сейчас в плане: {mine}, итого {_rub(total)} (синтетика). " if total else ""
+    ask = f"«{others[0]}»" if others else "«подешевле»"
+    return (
+        f"Это вопрос: план не меняю. {now}Цен {place} для сравнения в данных нет — "
+        f"цифр не выдумываю. Чтобы собрать такой план, напишите: {ask}. {HINTS[old.stage]}"
+    )
+
+
 def _question_answer(
     old: ChatReply, low: str = "", message: str = "", found: dict | None = None
 ) -> str:
@@ -1786,7 +1817,12 @@ def _offer_lines(plan: Plan) -> list[str]:
     for o in sorted(legs, key=lambda o: o.depart_at):  # own tickets are no offers (offers.py)
         way = "Обратно" if o.origin == city else "Туда"
         title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
-        lines.append(f"{way}: {title[:1].lower()}{title[1:]}, {_span_at(o)} — {_rub(o.price_rub)}")
+        # C14 (TRAP-5): the duration stands as a fact of the leg, so the chat shows it next to
+        # local times of different zones (web/src/format.ts reads it as a fact of the ride)
+        lines.append(
+            f"{way}: {title[:1].lower()}{title[1:]}, в пути {span(o)}, {_span_at(o)}"
+            f" — {_rub(o.price_rub)}"
+        )
     rides = [o for o in chosen if o.kind == "transfer"]
     if rides:
         names = "; ".join(o.title.removeprefix("Трансфер: ") for o in rides)
@@ -1802,6 +1838,7 @@ def _offer_lines(plan: Plan) -> list[str]:
 def _text_compare(plan: Plan) -> str:
     spec = plan.spec
     kids = f" + дети {', '.join(map(str, spec.children_ages))} лет" if spec.children_ages else ""
+    rows = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
     lines = [
         f"{spec.destinations[0]}, {period(spec)}, {spec.nights} ноч., {spec.adults} взр.{kids}"
         + ("." if kids else ""),
@@ -1811,28 +1848,15 @@ def _text_compare(plan: Plan) -> str:
         *([line] if (line := closed_line(plan)) else []),
         *([line] if (line := missing_mode(plan)) else []),
         *([line] if (line := rooms_line(spec)) else []),
-        "Отели:",
+        # #349: the hotels and legs are on the board; the chat keeps a short summary.
+        (
+            "Отели и рейсы — на доске: детали и номера там. "
+            f"Отелей: {len(rows)}, вариантов транспорта: {sum(o.kind == 'transport' for o in plan.offers)}."
+        ),
     ]
-    hotels = hotel_rows(plan.offers, plan.selected)  # one row per hotel, not per tariff
-    pet = spec.pets
-    for i, h in enumerate(hotels, 1):
-        cancel = "бесплатная отмена" if h.cancellation.refundable else "невозвратный"
-        lines.append(
-            f"{i}. {h.title} — {h.stars}★, рейтинг {h.rating}, {h.meal}, {cancel} — "
-            f"{_rub(h.price_rub)}"
-            + (" · нет отметки о животных" if pet and not h.pets_allowed else "")
-        )
-    legs = [o for o in plan.offers if o.kind == "transport"]
-    if legs:
-        lines.append("Транспорт:")
-    for i, o in enumerate(legs, 1):
-        no_pet = " · животных не берут" if pet and not o.pets_allowed else ""
-        # C14 (#364, TRAP-5): local times with their zones, the verbs of the mode and the
-        # duration; the start time leaves the title so it is not shown twice.
-        start, end = (v.lower() for v in VERBS[o.mode])
-        title = o.title.replace(f", {o.depart_at:%d.%m %H:%M}", "", 1)
-        when = f"{start} {_at(o.depart_at)} → {end} {_at(o.arrive_at)}, в пути {span(o)}"
-        lines.append(f"Рейс {i}. {title} — {_rub(o.price_rub)}{no_pet} · {when}")
+    if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
+        lines.append(f"Нет отметки о животных: у {n} из {len(rows)} отелей.")
+    # C14 (#364, TRAP-5): the chosen legs keep local times with zones (_offer_lines, #468).
     lines += _offer_lines(plan)
     for e in plan.explanations[:1]:
         lines.append(f"Почему: {e.why}." + "".join(f" {_cap(x)}." for x in e.tradeoffs))
@@ -2198,6 +2222,14 @@ def step(
         and not rules_found  # an edit in the same message is a rebuild, as before
         and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
         and (reply := _per_head_reply(old, low))
+    ):
+        return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
+    if (
+        prev
+        and old.stage in PLAN3
+        and set(rules_found) <= {"destinations", "wishes"}  # «дешевле, чем 50 тысяч?» is a budget
+        and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
+        and (reply := _price_versus_reply(old, low, rules_found))
     ):
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:

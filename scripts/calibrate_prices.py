@@ -37,9 +37,10 @@ from build_catalog import write  # one place a line, the format of the builder
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / "backend" / "src" / "api" / "catalog.json"
 AGGREGATE = ROOT / "backend" / "src" / "api" / "prices_101hotels.json"
+FOREIGN = ROOT / "backend" / "src" / "api" / "prices_offers.json"  # Booking/Agoda, #497
 MIN_N = 5
 STAR3 = 0.95  # api/offers.py STAR_FACTOR[3]; the test checks it
-SEASON = {10: 0.95}  # api/offers.py SEASON for the months of the runs; the test checks it
+SEASON = {10: 0.95, 11: 0.9}  # api/offers.py SEASON for the months of the runs; the test checks it
 SOURCE_RE = re.compile(r" Калибровка цен \(scripts/calibrate_prices\.py.*$")
 
 
@@ -65,6 +66,41 @@ def city_row(facts: dict, fetched_at: str) -> dict:
     }
 
 
+def foreign_rows() -> list[dict]:
+    """Aggregate of Booking offers per foreign place: the 3-star median night and the free
+    cancellation of 3+ star rows, numbers only (prices_offers.json, #497). Booking prices are in
+    roubles for the dates of a run; the same shape and rule as city_row/level_of. A place has a
+    run per month (November, December); only a month SEASON knows is kept, and of those the
+    earliest run wins, so the result is deterministic. Agoda rows (EUR) are skipped: no star
+    breakdown and no committed rate, so they do not calibrate."""
+    offers = json.loads(FOREIGN.read_text("utf-8"))
+    by_run: dict[tuple[str, str], dict[int, dict]] = {}  # (place, check_in) -> stars -> row
+    for o in offers:
+        if o["source"] != "booking" or o["currency"] != "RUB" or o.get("stars") is None:
+            continue
+        if int(o["check_in"][5:7]) not in SEASON:
+            continue
+        by_run.setdefault((o["place"], o["check_in"]), {})[o["stars"]] = o
+    best: dict[str, dict] = {}  # place -> earliest run with a 3-star row
+    for (place, check_in), stars in by_run.items():
+        if 3 not in stars or (place in best and best[place]["fetched_at"] <= check_in):
+            continue
+        upper = [s for s in stars.values() if s["stars"] >= 3]
+        n_upper = sum(s["n"] for s in upper)
+        best[place] = {
+            "city": place,
+            "fetched_at": check_in,
+            "n3": stars[3]["n"],
+            "median3_rub": stars[3]["median_night"],
+            "free_cancel_share3plus": (
+                round(sum(s["n"] * s["free_cancel_share"] for s in upper) / n_upper, 2)
+                if n_upper
+                else None
+            ),
+        }
+    return sorted(best.values(), key=lambda r: r["city"])
+
+
 def level_of(row: dict) -> int | None:
     """Calibrated level of a city, None when it has fewer than MIN_N 3-star hotels."""
     if row["n3"] < MIN_N:
@@ -73,13 +109,18 @@ def level_of(row: dict) -> int | None:
     return int(round(row["median3_rub"] / (STAR3 * SEASON[month]), -2))
 
 
-def calibrate(places: list[dict], rows: list[dict]) -> list[tuple[str, int, int]]:
-    """Apply the rule in place; (name, old level, new level) of the calibrated places."""
+def calibrate(
+    places: list[dict], rows: list[dict], *, foreign: bool = False
+) -> list[tuple[str, int, int]]:
+    """Apply the rule in place; (name, old level, new level) of the calibrated places. foreign:
+    calibrate places outside Russia (Booking rows), else places in Russia (101hotels rows)."""
     by_city = {r["city"]: r for r in rows}
     changed = []
     for p in places:
+        if (p["country"] != "Россия") != foreign:
+            continue
         row = by_city.get(p["name"])
-        level = level_of(row) if row and p["country"] == "Россия" else None
+        level = level_of(row) if row else None
         if level is None:
             continue
         old, p["level"] = p["level"], level
@@ -116,24 +157,29 @@ def aggregate(facts_dir: Path) -> None:
 
 def apply() -> None:
     rows = json.loads(AGGREGATE.read_text("utf-8"))
+    foreign = foreign_rows()
     snap = json.loads(CATALOG.read_text("utf-8"))
-    changed = calibrate(snap["places"], rows)
+    ru = calibrate(snap["places"], rows)
+    fr = calibrate(snap["places"], foreign, foreign=True)
+    changed = ru + fr
     days = sorted({r["fetched_at"] for r in rows if level_of(r) is not None})
     when = days[0] if len(days) == 1 else f"{days[0]}…{days[-1]}"
+    fdays = sorted({r["fetched_at"] for r in foreign if level_of(r) is not None})
+    fwhen = fdays[0] if len(fdays) == 1 else f"{fdays[0]}…{fdays[-1]}"
     snap["_source"] = SOURCE_RE.sub("", snap["_source"]) + (
-        f" Калибровка цен (scripts/calibrate_prices.py, #119): у {len(changed)} мест России, где"
-        f" на странице города 101hotels.com не меньше {MIN_N} отелей 3★ с ценой (снято {when}),"
-        " level подобран так, что синтетическая ночь 3★ в месяц съёмки равна медиане «от N ₽»"
-        " этих отелей (без дат; допущение — номер на двоих); free_cancel_share — доля отелей"
-        " 3★+ с бесплатной отменой там же. Агрегат — prices_101hotels.json. Цены предложений"
-        " остаются синтетикой."
+        f" Калибровка цен (scripts/calibrate_prices.py, #119, #497): у {len(ru)} мест России, где"
+        f" на странице города 101hotels.com не меньше {MIN_N} отелей 3★ с ценой (снято {when}), и"
+        f" у {len(fr)} мест за рубежом, где агрегат Booking.com даёт не меньше {MIN_N} отелей 3★"
+        f" (снято {fwhen}), level подобран так, что синтетическая ночь 3★ в месяц съёмки равна"
+        " медиане этих отелей (без дат; допущение — номер на двоих); free_cancel_share — доля"
+        " отелей 3★+ с бесплатной отменой там же. Агрегаты — prices_101hotels.json и"
+        " prices_offers.json. Цены предложений остаются синтетикой."
     )
     write(CATALOG, snap)
-    print(
-        f"откалибровано мест: {len(changed)}, level изменён: {sum(o != n for _, o, n in changed)}"
-    )
+    print(f"откалибровано: Россия {len(ru)}, зарубежье {len(fr)}; всего {len(changed)}")
+    print(f"level изменён: {sum(o != n for _, o, n in changed)}")
     if len(changed) > 1:
-        print("новый level / прежний:", _q([n / o for _, o, n in changed]))
+        print("новый level / прежний:", _q([n / o for _, o, n in changed if o]))
 
 
 if __name__ == "__main__":
