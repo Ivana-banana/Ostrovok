@@ -12,6 +12,8 @@ os.environ.pop("TRAVELPAYOUTS_TOKEN", None)
 # (on by default). The suite stays offline and deterministic; the adapter is tested directly in
 # test_live_hotels.py.
 os.environ["LIVE_HOTELS"] = "0"
+# Same for the live tutu.ru trains (#569); the adapter is tested directly in test_tutu.py.
+os.environ["LIVE_TRAINS"] = "0"
 
 
 @pytest.fixture(autouse=True)

@@ -56,7 +56,7 @@ export type BoardProps = {
 const PRICE_SOURCES: Record<string, { chip: string; hint: string }> = {
   hotel: { chip: "101hotels", hint: "итог по цене «от» 101hotels; питание и тариф — оценка" },
   flight: { chip: "Авиасейлс", hint: "самый дешёвый билет из кэша поиска Авиасейлс, не цена брони" },
-  train: { chip: "tutu", hint: "цена и расписание поезда с tutu.ru, не цена брони" },
+  train: { chip: "tutu", hint: "расписание и цена «от» поезда со страницы маршрута tutu.ru, не цена на дату" },
 };
 const OTHER_SOURCE = { chip: "реальные данные", hint: "цена не синтетическая" };
 // A sum of real and synthetic prices (TRAP-7, #567): neither «синтетика» nor a source alone.
