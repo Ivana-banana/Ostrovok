@@ -109,15 +109,21 @@ from api.offers import SyntheticTransport, _complete, find_offers, resolve_place
 from api.optimizer import (
     bundles,
     dead_end_text,
+    enumerate_trips,
     explain,
     hotel_rows,
+    pets_ok,
     pets_possible,
     pick_hotel,
 )
 from api.store import SessionStore
+from api.timeline import NO_ROAD
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
+NO_PET_HOTEL = (
+    "Внимание: у отеля нет отметки о приёме животных — уточните у отеля до брони."  # #556
+)
 NO_PET_MARK = "Нет отметки о животных:"  # the count line of the compare reply (#475)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
@@ -278,6 +284,12 @@ LEG_NONE = {
 LEG_THERE_RE = re.compile(r"\bтуда\b|\bв\s+одну\s+сторону\b")
 LEG_BACK_RE = re.compile(r"\bобратно\b|\bназад\b|\bобратн\w+")
 LEG_CLAUSE_RE = re.compile(r"[,;]|\bа\b|\bи\b")
+# C12 (#366): «возьми рейс в 06:15» picks the leg by its local departure time. The time stands
+# right after the noun: «давай поезд чтобы прибыть к 18:00» names no departure.
+LEG_TIME_RE = re.compile(
+    r"\b(рейс\w*|перел[её]т\w*|поезд\w*|вылет\w*|самол[её]т\w*)\s+"
+    r"(?:(?:с\s+)?(?:вылет\w*|отправлени\w*)\s+)?(?:в|на)\s+([01]?\d|2[0-3])[:.]([0-5]\d)\b"
+)
 # #316: the mark in the note of a budget the agent set after «подешевле».
 AGENT_BUDGET = "задан агентом"
 # A new date, length or party ends that budget: it was fitted to the old trip.
@@ -909,7 +921,8 @@ def named_in(text: str, names: list[str]) -> str | None:
     return min(hits)[2] if hits else None
 
 
-LegCommand = tuple[str, str | int, str | None]
+# A «time» command holds (HH:MM, mode of the noun or None) as its second item.
+LegCommand = tuple[str, str | int | tuple[str, str | None], str | None]
 # «второй отель и поезд»: the hotel row named in a pick of transport (same rows as «беру 2»).
 HOTEL_ROW_RES = (
     re.compile(rf"\b({LEG_ORDINAL})\s+отел\w*"),
@@ -961,6 +974,14 @@ def leg_commands(text: str) -> list[LegCommand]:
     verb = bool(LEG_PICK_RE.search(t)) or hotel_row(t) is not None  # #388: «отель 1 и поезд»
     out: list[LegCommand] = []
     for clause in LEG_CLAUSE_RE.split(t):
+        if verb and (m := LEG_TIME_RE.search(clause)):
+            direction = "there" if LEG_THERE_RE.search(clause) else None
+            direction = "back" if LEG_BACK_RE.search(clause) else direction
+            noun = m.group(1)
+            mode = "train" if noun.startswith("поезд") else None
+            mode = "flight" if noun.startswith(("перел", "самол")) else mode
+            out.append(("time", (f"{int(m.group(2)):02d}:{m.group(3)}", mode), direction))
+            continue
         if row := _leg_row(clause):
             out.append(("row", row[0], row[1]))
             continue
@@ -976,6 +997,25 @@ def leg_commands(text: str) -> list[LegCommand]:
 
 def _cheapest(legs: list[TransportOffer]) -> TransportOffer | None:
     return min(legs, key=lambda x: (x.price_rub, x.offer_id), default=None)
+
+
+def _no_time(
+    table: list[TransportOffer], dirs: dict, ways: list[str], hhmm: str, mode: str | None
+) -> str:
+    """C12: «Рейса в 06:15 нет. Туда: 08:00 (рейс 1), 15:10 (рейс 2).» The times and rows are
+    those of the plan offers (TRAP-4); the row is the one «рейс N» takes."""
+    lines = []
+    for d in ways:
+        have = [
+            f"{x.depart_at:%H:%M} (рейс {table.index(x) + 1})"
+            for x in dirs[d]
+            if x.mode != "car" and mode in (None, x.mode)
+        ]
+        if have:
+            lines.append(f"{'Туда' if d == 'there' else 'Обратно'}: {', '.join(have)}.")
+    tail = " ".join(lines) if lines else "Других рейсов в данных нет."
+    what = {"train": "Поезда", "flight": "Перелёта"}.get(mode or "", "Рейса")
+    return f"{what} в {hhmm} нет. {tail}"
 
 
 def switch_transport(
@@ -1017,9 +1057,25 @@ def switch_transport(
     for kind, what, direction in commands:
         # The spec filtered this mode out of the offers (offers.py): «возьми поезд» then
         # is a new constraint, and the caller re-plans the trip instead.
-        want = direction if kind == "row" else what  # the mode asked for, if any
+        hhmm, mode = what if isinstance(what, tuple) else ("", None)
+        want = (
+            direction if kind == "row" else mode if kind == "time" else what
+        )  # the mode asked for
         if want and plan.spec.modes and want not in plan.spec.modes:
             return None, ""
+        if kind == "time":
+            ways = [direction] if direction else ["there", "back"]
+            hit = [
+                (d, x)
+                for d in ways
+                for x in dirs[d]
+                if x.mode != "car" and mode in (None, x.mode) and f"{x.depart_at:%H:%M}" == hhmm
+            ]
+            if not hit:
+                return None, _no_time(table, dirs, ways, hhmm, mode)
+            d, new[d] = hit[0]
+            touched.add(d)
+            continue
         if kind == "row":
             rows = [x for x in table if direction in (None, x.mode)]
             if not 0 <= what < len(rows):
@@ -1226,6 +1282,24 @@ def end_agent_budget(old: TripSpec, spec: TripSpec, found: dict) -> TripSpec:
         return spec
     kept = [a for a in spec.assumptions if _label(a) != "бюджет"]
     return spec.model_copy(update={"budget_rub": None, "assumptions": kept})
+
+
+def refit_agent_budget(old: Plan, cart: Cart, spec: TripSpec) -> tuple[TripSpec, str]:
+    """#550: new dates alone (the party is the same) keep the wish of «подешевле»: the budget is
+    the same step again, under the total of the new dates (lower_budget), not the stale sum.
+    `spec` comes from end_agent_budget, without the budget. Nothing cheaper: no budget."""
+    trial, _, _ = replan(old, spec, cart)
+    found: dict = {}
+    notes: list[str] = []
+    if trial.offers:
+        lower_budget(trial, cart, found, notes)
+    if "budget_rub" not in found:
+        return spec, ""
+    line = (
+        f"Бюджет «подешевле» пересчитан под новые даты: {_rub(found['budget_rub'])} "
+        f"вместо {_rub(old.spec.budget_rub or 0)} (синтетика)."
+    )
+    return merge(spec, {"budget_rub": found["budget_rub"]}, notes), line
 
 
 def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
@@ -1802,6 +1876,11 @@ def _selected_total(plan: Plan) -> int:
 # #114: the mode the user asked for, when the data has none: «Поезда … в данных нет».
 NO_MODE = {"train": "поезда", "flight": "перелёта", "car": "поездки на машине"}
 OFFER_MODE = {"train": "поезд", "flight": "перелёт", "car": "машину"}
+# #532: «беру» on a plan without a hotel (the hotel source failed): no cart of the road alone.
+NO_HOTEL = (
+    "В корзину пока не кладу: отеля в плане нет — источник отелей не ответил или ни один "
+    "отель не подошёл. Можно повторить запрос, выбрать другие даты или другое направление."
+)
 
 
 def missing_mode(plan: Plan) -> str:
@@ -1924,6 +2003,9 @@ def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
     lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
     lines += [f"Внимание: {i.text.rstrip('.')}." for i in plan.issues]
+    chosen = [o for o in plan.offers if o.kind == "hotel" and o.offer_id in plan.selected]
+    if plan.spec.pets and any(not h.pets_allowed for h in chosen):
+        lines.append(NO_PET_HOTEL)  # #556: the reminder stays on «Оформляем?»
     lines += _unchecked_lines(plan.spec)
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
@@ -1934,7 +2016,9 @@ def _text_blocked(plan: Plan) -> str:
     the plan (TRAP-4): a leg is named by its row in the compare table («рейс N»)."""
     by_id = {o.offer_id: o for o in plan.offers}
     rows = [o.offer_id for o in plan.offers if o.kind == "transport"]
-    lines = ["В корзину пока не кладу: в расписании ошибка стыковки."]
+    road = all(i.text.startswith(NO_ROAD) for i in plan.issues if i.severity == "error")
+    why = "в плане нет дороги." if road else "в расписании ошибка стыковки."
+    lines = [f"В корзину пока не кладу: {why}"]  # #532: no leg there or back is no docking
     for i in plan.issues:
         if i.severity != "error":
             continue
@@ -1968,8 +2052,50 @@ def _pet_dead_cities(spec: TripSpec) -> list[str]:
     return [
         d.name
         for d in suggest_destinations(spec, len(CATALOG))
-        if not pets_possible(spec, find_offers(spec, d.name))
+        if not pets_possible(spec, find_offers(spec, d.name, estimate=True))
     ]
+
+
+# #550: the pets dead end offers this many nearest places, and the trip without the pet.
+PET_NEAR = 3
+PET_DROP = "Без питомца"
+
+
+def _pet_neighbours(spec: TripSpec) -> list[tuple[float, dict]]:
+    """#550: the catalogue places nearest to the chosen one (catalog.km_between) where some trip
+    takes the pet, up to 3, with the distance. Without the origin and the refused places."""
+    here = resolve_place(spec.destinations[0])
+    if here is None:
+        return []
+    refused = refused_before(spec)
+    skip = {*spec.destinations, here["name"], spec.origin, *refused}
+    out = []
+    for p in sorted(catalog.places(), key=lambda p: catalog.km_between(here, p)):
+        if p["name"] in skip or p.get("country") in refused:
+            continue
+        trips = enumerate_trips(find_offers(spec, p["name"], estimate=True))
+        if any(pets_ok(t) for t in trips):  # no trips is no way out (pets_possible says yes)
+            out.append((catalog.km_between(here, p), p))
+        if len(out) == PET_NEAR:
+            break
+    return out
+
+
+def _pet_exits(plan: Plan, text: str) -> tuple[str, list[Question]]:
+    """#550: the way out of a pets dead end: the nearest places where the pet goes (code, never
+    invented; the cards are the options) and the same trip without the pet."""
+    near = _pet_neighbours(plan.spec)
+    if not near:
+        text, questions = _no_offers(plan, text, _pet_dead_cities(plan.spec))
+    else:
+        hub, note = catalog.origin_hub(plan.spec.origin or DEFAULT_ORIGIN)
+        plan.destinations = [card(plan.spec, hub, p, note) for _, p in near]  # «1» picks by order
+        names = [p["name"] for _, p in near]
+        where = ", ".join(f"{p['name']} (≈{round(km)} км)" for km, p in near)
+        text += f" Ближайшие места, куда поездка с питомцем собирается: {where}."
+        questions = [Question(text="Куда поедем вместо этого?", options=names)]
+    text += f" Или напишите «{PET_DROP.lower()}» — соберу ту же поездку без него."
+    return text, [*questions, Question(text="Едем без питомца?", options=[PET_DROP])]
 
 
 def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
@@ -1983,8 +2109,18 @@ def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
         # #475: the dead end paragraph says it about the pets; no count line before it
         head = [x for x in head if not x.startswith(NO_PET_MARK)]
         text = "\n".join(head) + "\n" + text
-    text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
+        if not _hotel_selected(plan):
+            text += "\n" + PET_NO_HOTEL
+    text, questions = _pet_exits(plan, text)
     return ("compare" if plan.selected else "select"), plan, text, questions
+
+
+# #550: a plan without a hotel is no plan to take: the reply says it plainly.
+PET_NO_HOTEL = "Отеля в плане нет, поэтому «беру» не положит план в корзину."
+PET_TODO = (
+    "Что можно сделать: выбрать отель по номеру, сначала уточнив у отеля приём животных; "
+    "поехать в другой город рядом; поехать без питомца."
+)
 
 
 def with_offers(names: list[str]) -> list[str]:
@@ -2147,6 +2283,7 @@ def _said_origin(old: ChatReply, message: str, found: dict) -> str | None:
 
 
 SAME_PLACE = "— это и место поездки."
+ORIGIN_DEFAULT_LINE = "Город вылета не назван — беру Москву."  # #453, DEFAULT_ORIGIN
 
 
 def _trip_places(old: ChatReply, found: dict) -> set[str]:
@@ -2378,6 +2515,13 @@ def step(
     if asking and ASKING_NOTE in notes and not found:
         return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
     said_origin = _said_origin(old, message, found)  # #436, TRAP-3
+    # #453: the place abroad named again on «Откуда?» is no origin either: Москва, said aloud
+    origin_default = (
+        not said_origin
+        and old.stage == "clarify"
+        and any(SAME_PLACE in q.text for q in old.questions)
+        and not found.get("origin")
+    )
     if said_origin and (again := same_place_question(old, said_origin, found)):
         # The other fields of the answer («Казань, трое взрослых») stay in the trip.
         rest = {k: v for k, v in found.items() if k != "origin" and k in TripSpec.model_fields}
@@ -2585,6 +2729,8 @@ def step(
         return f"{text}\n{line}", [*chips, *questions]
 
     def reply(stage: Stage, plan: Plan, text: str, cart: Cart = old.cart, **kw) -> ChatReply:
+        if origin_default and plan.spec.origin == DEFAULT_ORIGIN:
+            text = f"{ORIGIN_DEFAULT_LINE}\n{text}"
         text, kw["questions"] = with_month(plan.spec, text, kw.get("questions", []))
         return ChatReply(
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
@@ -2675,7 +2821,20 @@ def step(
                 f"Сейчас {period(spec)}. {HINTS.get(old.stage, '')}"
             )
             return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    said = found.get("origin")
+    # C25 (#504): «из Кинешмы» maps to the same hub; the reply says so, not only the hint
+    if (
+        said
+        and spec.origin == old.plan.spec.origin != said
+        and (why := catalog.origin_hub(said)[1])
+    ):
+        lines.append(f"{why} План не меняю.")
     spec = end_agent_budget(old.plan.spec, spec, found)
+    was = old.plan.spec
+    party = (was.adults, was.children_ages) == (spec.adults, spec.children_ages)
+    if party and agent_budget(was) and not agent_budget(spec) and "budget_rub" not in found:
+        spec, line = refit_agent_budget(old.plan, old.cart, spec)  # #550: dates alone
+        lines += [line] if line else []
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     plan_dirty = bool(dirty_nodes(old.plan.spec, spec) or not plan.offers)
@@ -2783,8 +2942,14 @@ def step(
             idx = next(i for i, h in enumerate(hotels) if h.title == by_title)  # #458: name wins
         picks = idx is not None and idx < len(hotels)
         if not picks and not pets_possible(spec, plan.offers) and not _hotel_selected(plan):
-            stage, plan, text, questions = _pets_dead_end(plan)  # «беру» is no consent (#131)
-            return reply(stage, plan, text, questions=questions)
+            # «беру» is no consent (#131); #550: not the same refusal again, but what to do
+            if not plan.selected:  # no leg takes the pet: the reason is the dead end itself
+                stage, plan, text, questions = _pets_dead_end(plan)
+                return reply(stage, plan, text, questions=questions)
+            why = f"В корзину пока не кладу. Направление «{spec.destinations[0]}»: на эти даты "
+            why += f"ни у одного отеля нет отметки о приёме животных. {PET_NO_HOTEL} {PET_TODO}"
+            text, questions = _pet_exits(plan, why)
+            return reply("compare", plan, text, questions=questions)
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
             plan.selected = keep_refusal(
@@ -2796,6 +2961,8 @@ def step(
         plan.timeline, plan.issues = build_timeline(plan)
         if any(i.severity == "error" for i in plan.issues):
             return reply("compare", plan, _text_blocked(plan))  # #276: no cart with an error
+        if not _hotel_selected(plan):  # #532: a failed hotel source leaves nothing to stay in
+            return reply("compare", plan, f"{NO_HOTEL} {HINTS['compare']}")
         return reply("assemble", plan, _with_tail(_text_assemble(plan), plan, low, message, found))
     if old.stage == "assemble" and yes:
         cart = fill_cart(plan)
@@ -2808,7 +2975,10 @@ def step(
         raise _Confirm(old.cart.total_rub)
     text = HINTS.get(old.stage, "Уточните запрос.")
     if old.stage == "select":
-        text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
+        if plan.offers and not pets_possible(spec, plan.offers):  # #550: near the pet's dead end
+            text, questions = _pet_exits(plan, text)
+        else:
+            text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
         return reply("select", plan, text, questions=questions)
     return reply(old.stage, plan, text)
 

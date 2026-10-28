@@ -7,9 +7,9 @@ catalogue (api/catalog.py, #8) and the transport formula of api/offers.py.
 
 from datetime import date
 
-from api import offers as ports  # TRANSPORT is read at call time: a test may swap it
+from api import offers as ports  # ESTIMATE_TRANSPORT is read at call time: a test may swap it
 from api import ops
-from api.contracts import Offer, TripSpec
+from api.contracts import Offer, TransportOffer, TripSpec
 from api.offers import find_offers  # noqa: F401  find_offers: api/dag.py
 from api.optimizer import rank  # noqa: F401  T7 (#13): the seam is the optimizer now
 from api.timeline import build_timeline  # noqa: F401  # T8 (#14) lives in api/timeline.py
@@ -64,15 +64,24 @@ def trip_cost(spec: TripSpec, offers: list[Offer]) -> int:
     )
 
 
-def travel_hours(spec: TripSpec, origin: dict, place: dict) -> float:
-    """The fastest way there by the transport port (offers.TRANSPORT), hours; 0 at the origin."""
+def probe_legs(spec: TripSpec, origin: dict, place: dict) -> list[TransportOffer]:
+    """The legs there of the estimate path (offers.ESTIMATE_TRANSPORT, synthetic; ADR-0002):
+    inspiration ranks many places, the live port is only for the chosen one. A spec without
+    dates gets the 15th of its month (else of January) as a probe date."""
     probe = (
         spec
         if spec.date_from
         else spec.model_copy(update={"date_from": future_date(spec.month or 1, 15)})
     )
-    found = ops.guarded("transport", lambda: ports.TRANSPORT.legs(probe, origin, place), [])
-    legs = [x for x in found if x.origin == origin["name"]]
+    found = ops.guarded(
+        "transport", lambda: ports.ESTIMATE_TRANSPORT.legs(probe, origin, place), []
+    )
+    return [x for x in found if x.origin == origin["name"]]
+
+
+def travel_hours(spec: TripSpec, origin: dict, place: dict) -> float:
+    """The fastest way there on the estimate path (probe_legs), hours; 0 at the origin."""
+    legs = probe_legs(spec, origin, place)
     return min(
         (round((x.arrive_at - x.depart_at).total_seconds() / 3600, 1) for x in legs), default=0
     )

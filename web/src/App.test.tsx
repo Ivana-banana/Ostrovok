@@ -2,9 +2,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe as suite, expect, it, vi } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { App, SESSION_KEY } from "./App";
+import { App, MODE_RETRY_MS, SESSION_KEY } from "./App";
 import { VERBS } from "./brand";
 import { HISTORY_KEY } from "./history";
+import { LOADING_NOTE, NO_MODE_NOTE, SWITCHES_KEY } from "./Sources";
 import type { ChatReply } from "./contracts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -153,15 +154,67 @@ suite("приложение", () => {
   });
 
   it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/mode сообщает llm=false", async () => {
-    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false } });
+    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: false } });
     await mount();
     expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
   });
 
-  it("с моделью пометки до первого сообщения нет", async () => {
-    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true } });
+  it("#534: /api/mode не ответил с первого раза — повтор включает переключатели", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let n = 0;
+      routes["GET /api/mode"] = () =>
+        ++n === 1 ? { status: 503 } : { status: 200, body: { llm: true, real_data: true } };
+      await act(async () => root.render(<App />));
+      await act(async () => vi.advanceTimersByTimeAsync(MODE_RETRY_MS + 10));
+      expect(n).toBe(2);
+      const sw = [...box.querySelectorAll<HTMLInputElement>("aside input[role='switch']")];
+      expect(sw.every((x) => !x.disabled)).toBe(true);
+      expect(box.querySelector(".switches-note")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#534: /api/mode не ответил дважды — подпись «не загрузились», а не «нет ключа»", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      routes["GET /api/mode"] = () => ({ status: 503 });
+      await act(async () => root.render(<App />));
+      expect(box.querySelector(".switches-note")?.textContent).toBe(LOADING_NOTE); // not «нет ключа»
+      await act(async () => vi.advanceTimersByTimeAsync(MODE_RETRY_MS + 10));
+      expect(calls.filter((c) => c.key === "GET /api/mode")).toHaveLength(2);
+      expect(box.querySelector(".switches-note")?.textContent).toBe(NO_MODE_NOTE);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#490: модель есть, но GigaChat выключен (по умолчанию) — пометка «Без ИИ»", async () => {
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: true } });
+    await mount();
+    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
+  });
+
+  it("с моделью и включённым GigaChat пометки до первого сообщения нет", async () => {
+    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: false } });
     await mount();
     expect(box.querySelector(".badge-noai")).toBeNull();
+  });
+
+  it("#490: переключатель уходит с запросом и хранится в браузере; без ключа — false", async () => {
+    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: true } });
+    routes["POST /api/chat"] = () => ({ status: 200, body: checkoutStage });
+    await mount();
+    const real = box.querySelector<HTMLInputElement>("aside input[role='switch']");
+    await act(async () => real?.click());
+    expect(JSON.parse(localStorage.getItem(SWITCHES_KEY) ?? "{}")).toEqual({ real_data: true, llm: true });
+    await click("Выходные в Казани");
+    await click("Отправить");
+    expect(calls.at(-1)?.body).toMatchObject({ real_data: true, llm: false });
   });
 
   it("ошибка сервера: понятный текст без трассировки", async () => {
@@ -417,6 +470,18 @@ suite("приложение", () => {
     expect(hints[1].open).toBe(true);
   });
 
+  it("TRAP-7: справка «Откуда цены» берёт источники из предложений плана (#547)", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const real = structuredClone(booked);
+    real.plan.offers = real.plan.offers.map((o) => (o.kind === "hotel" ? { ...o, synthetic: false } : o));
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: real });
+    await mount();
+    const help = box.querySelector("summary[aria-label='Откуда цены']")?.parentElement?.textContent ?? "";
+    expect(help).toContain("Отели — 101hotels (цена «от» на сегодня), остальные цены — синтетика.");
+    expect(help).not.toContain("Цены и рейсы — синтетика");
+    expect(box.querySelector("footer[aria-label='Источники данных']")?.textContent).toContain("Отели — 101hotels");
+  });
+
   it("подвал: атрибуция OpenStreetMap (ODbL) есть и без поездки, под «Данные ?» в один клик", async () => {
     await mount();
     const foot = box.querySelector("footer[aria-label='Источники данных']");
@@ -485,8 +550,8 @@ suite("список чатов слева", () => {
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     await say("Сочи с детьми");
     expect(calls.filter((c) => c.key === "POST /api/chat").map((c) => c.body)).toEqual([
-      { session_id: null, message: "Казань на выходные" },
-      { session_id: null, message: "Сочи с детьми" },
+      { session_id: null, message: "Казань на выходные", real_data: false, llm: false },
+      { session_id: null, message: "Сочи с детьми", real_data: false, llm: false },
     ]);
     expect(titles()).toEqual(["Сочи с детьми", "Казань на выходные"]);
     await open("Казань на выходные");
@@ -605,6 +670,8 @@ suite("чат как в мессенджере", () => {
   });
 
   it("TRAP-1: ответ без модели — пометка «Без ИИ» в списке чатов", async () => {
+    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: false } });
     routes["POST /api/chat"] = () => ({ status: 200, body: { ...checkoutStage, llm: false } });
     await mount();
     expect(box.querySelector(".badge-noai")).toBeNull();

@@ -1,6 +1,6 @@
 import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useId, useState } from "react";
 import { Alternatives, type Choice, optionsOf } from "./Alternatives";
-import { Money, Price } from "./Board";
+import { Money, Price, sourceOf } from "./Board";
 import { VERBS, VERB_MS } from "./brand";
 import type { ChatReply, Mode, Stage } from "./contracts";
 import { MODES, offerParts, type Point, type Ride } from "./format";
@@ -51,7 +51,7 @@ function outcome(i: number, r: ChatReply): ReactNode {
     const items = r.cart.items.length ? r.cart.items : offers.filter((o) => selected.includes(o.offer_id));
     if (!items.length) return null;
     const total = r.cart.items.length ? r.cart.total_rub : items.reduce((a, o) => a + o.price_rub, 0);
-    return <Price value={total} synthetic={items.some((o) => o.synthetic)} />;
+    return <Price value={total} synthetic={items.some((o) => o.synthetic)} source={sourceOf(items)} />;
   }
   return r.voucher ? `Бронь ${r.voucher.booking_id}` : null;
 }
@@ -233,6 +233,8 @@ const LABELS = { hotel: "Отель", transfer: "Трансферы", extra: "Д
 function PointRow({ point: p, synthetic, choice }: { point: Point; synthetic: boolean; choice?: Choice }) {
   const icon = p.kind === "leg" ? p.mode : p.kind;
   const label = p.kind === "leg" ? p.label : LABELS[p.kind];
+  // #508: the name «Отель «Панорама»» already says it: no second label
+  const named = p.kind === "hotel" && p.name.toLowerCase().startsWith(label.toLowerCase());
   const [open, setOpen] = useState(false);
   const altId = useId();
   const more = choice ? optionsOf(label, choice.reply).length : 0;
@@ -254,8 +256,8 @@ function PointRow({ point: p, synthetic, choice }: { point: Point; synthetic: bo
       <div className="pt-body" {...toggle}>
         <div className="pt-row">
           <span className="pt-name">
-            <b>{label}</b>
-            {p.kind === "hotel" && <> {p.name}</>}
+            {!named && <b>{label}</b>}
+            {p.kind === "hotel" && <>{named ? "" : " "}{p.name}</>}
             {p.kind === "leg" && <span className="pt-mode"> · {MODES[p.mode]}</span>}
           </span>
           {"price" in p && (

@@ -11,6 +11,7 @@ unknown climate values and an absent sea hint (TRAP-2, TRAP-6).
 
 import difflib
 import json
+import logging
 import math
 import re
 import statistics
@@ -68,6 +69,9 @@ PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _deadline: ContextVar[float | None] = ContextVar("geocode_deadline", default=None)
 _online: dict[str, dict | None] = {}
+# #534: a place without climate or sea (flaky) is kept only FAILED_S, then asked again.
+_flaky_at: dict[str, float] = {}
+log = logging.getLogger(__name__)
 _failed: dict[str, float] = {}  # name -> time.monotonic() of the last network error
 
 
@@ -116,10 +120,22 @@ def _lead_close(q: str, k: str) -> bool:
     return b[0] in VOWELS and len(b) > 2 and b[1:3] == a[:2]
 
 
+def _another_word(q: str, k: str, q_full: str, k_full: str) -> bool:
+    """The stem q is not a typo of the stem k but a longer or a cut word (#306): «Петербургский»
+    is an adjective built on «Петербург», «Выбора» is «выбор» (choice), not «Выборг». A word cut by
+    a letter from a long name stays a typo: «Кисловодс». The tail is measured on the whole written
+    names, not on stems: «Лазаревскоее» has a tail of one letter over «лазаревское»."""
+    if len(q_full) - len(k_full) >= 2:
+        return q.startswith(k)
+    if len(q) > len(k):
+        return False
+    return len(q) < TYPO_MIN_LEN and k.startswith(q)
+
+
 def _same_words(query: list[str], key: list[str]) -> bool:
     """Same words up to a Russian case ending: «нижнем новгороде» = «нижний новгород»."""
     return len(query) == len(key) and all(
-        q.startswith(_stem(k)) and q[len(_stem(k)) :] in CASES
+        q == k or (q.startswith(_stem(k)) and q[len(_stem(k)) :] in CASES)
         for q, k in zip(query, key, strict=True)
     )
 
@@ -197,9 +213,12 @@ def resolve(text: str) -> dict | None:
     if len(q) < 4:
         return None
     stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
+    full = {_stems(k): k for k, _ in _keys() if len(k.split()) == len(q.split())}
     close = difflib.get_close_matches(_stems(q), stems, n=1, cutoff=FUZZY)
     # Only the best match counts: if it fails _lead_close, the answer is None, not the second
     # best. «Гагра» is not «Агра»; «Емал» is close to «Чемал», so it is not «Мале» (#267).
+    if close and _another_word(_stems(q), close[0], q, full[close[0]]):
+        return None
     if close and _lead_close(_stems(q), close[0]):
         return stems[close[0]]
     return None if close else _respelled(q)
@@ -216,6 +235,11 @@ def _respelled(q: str) -> dict | None:
     # A wrong letter or two in a long name. Only one such place, else it is a guess.
     stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
     typo = [s for s in stems if len(s) >= TYPO_MIN_LEN and s != _stems(q) and _typo(_stems(q), s)]
+    full = {_stems(k): k for k, _ in _keys() if len(k.split()) == len(q.split())}
+    # A candidate that is another word makes the answer a guess: «Краснодарский» is not a typo of
+    # «Красноярск» only because «Краснодар» was dropped as an adjective (#306).
+    if any(_another_word(_stems(q), s, q, full[s]) for s in typo):
+        return None
     if len(typo) == 1 and _lead_close(_stems(q), typo[0]):
         return stems[typo[0]]
     return None
@@ -287,7 +311,9 @@ def origin_hub(name: str, fetch: Callable[[str, dict], dict] | None = None) -> t
     """Departure hub for a city the user named, and a note to say aloud when it is another city."""
     place = resolve(name) or lookup_online(name, fetch)
     if place is None:
-        return resolve("Москва"), f"Город вылета «{name.strip()}» не нашёл: считаю вылет из Москвы."
+        return resolve("Москва"), (
+            f"Город вылета «{name.strip()}» не нашёл (или нет сети): считаю вылет из Москвы."
+        )
     if place["hub"]:
         return place, ""
     hub = nearest(place, hubs())
@@ -355,6 +381,46 @@ def _airport(here: dict, fetch: Callable[[str, dict], dict]) -> tuple[dict, floa
     return {"iata": port["iata"], "km": km, "tz": port["tz"], "road": road}, line, failed
 
 
+# #548: GOST-like Latin letters of the Russian ones, for a place the geocoder knows only by its
+# Latin name («Ушуайя» is not found, «Ushuaia» is).
+LATIN = dict(zip(
+    "абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+    ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s",
+     "t", "u", "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya"],
+    strict=True,
+))  # fmt: skip
+
+
+def _latin(text: str) -> str:
+    return "".join(LATIN.get(c, c) for c in norm(text))
+
+
+def latin_variants(name: str) -> list[str]:
+    """Latin spellings of a Russian name to ask the geocoder, likeliest first (at most two).
+
+    «Ушуайя» -> Ushuaia (я after a vowel or й is «ia», as in English maps), Ushuayya.
+    Empty when the name has no Cyrillic letter."""
+    if not re.search("[а-яё]", norm(name)):
+        return []
+    plain = _latin(name)
+    soft = re.sub(r"(?<=[aeiouy])y?ya", "ia", plain)
+    return [v.title() for v in dict.fromkeys([soft, plain])]
+
+
+def _skeleton(name: str) -> str:
+    """Latin skeleton of a Russian name: «Ушуайя» and «Ушуая» are one: ushuaia (#548).
+
+    «ь» stays as an apostrophe: «Ривьера» is not «Ривера»."""
+    s = re.sub(r"y(?=[aeuo])", "i", _latin(name.replace("ь", "'"))).replace("y", "i")
+    return re.sub(r"(.)\1+", r"\1", s.replace("j", "i"))
+
+
+def _russian(name: str) -> bool:
+    """The record name is Cyrillic: «Ушуая» is, «Marriott» and «River» are no Russian name."""
+    low = norm(name)
+    return bool(re.search("[а-яё]", low)) and not re.search("[a-z]", low)
+
+
 def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     """The geocoder's answer for a name in any case (TRAP-3), or None: never another place.
 
@@ -364,8 +430,11 @@ def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
       not a case of «Малиба». The answer must be the same words up to a case ending;
     - then the nominative guesses: «Старую Ладогу» asks «Старая Ладога», «Бледе» asks «Блед»,
       «Бледа», «Бледь». The answer to a guess must be the guess itself, letter for letter;
-    - last, when the first answer was another place, a longer list for the name as written:
-      «Тарту» is the second record after Тартус.
+    - then, when the first answer was another place, a longer list for the name as written:
+      «Тарту» is the second record after Тартус;
+    - last, a Latin spelling of the name (#548): «Ушуайя» is unknown, «Ushuaia» is Ушуая. Two
+      asks at most. The answer is the place only when its name is Russian (not «Marriott») and
+      has the same Latin skeleton as the name asked: «Тарту» never becomes Тартус.
     All of it fits GEOCODE_BUDGET_S: the first network error or the end of the time stops it.
     """
     ask = {"count": 1, "language": "ru", "format": "json"}
@@ -390,7 +459,17 @@ def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
                     return g
         # Written name: the first record was another place. A longer list may have the right one.
         wide = search(written, WIDE_COUNT)
-        return next((g for g in wide if _same_words(words, norm(g["name"]).split())), None)
+        if hit := next((g for g in wide if _same_words(words, norm(g["name"]).split())), None):
+            return hit
+        # The name as written and its first nominative guess: «Ушуайе» -> «Ушуай». Two asks.
+        bases = list(dict.fromkeys([written, name_candidates(name)[0]]))
+        wanted = {_skeleton(b) for b in bases}
+        asks = dict.fromkeys(v for i in (0, 1) for b in bases for v in latin_variants(b)[i : i + 1])
+        for latin in list(asks)[:2]:
+            for g in search(latin, 3):
+                if _russian(g["name"]) and _skeleton(g["name"]) in wanted:
+                    return g
+        return None
     finally:
         _deadline.reset(token)
 
@@ -423,11 +502,12 @@ def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     if not sea_known:
         notes.append("Данные о море не загрузились: наличие моря и температура воды неизвестны.")
     airport, line, flaky = _airport(here, fetch)
+    # #542: a country record («Новая Зеландия») has no timezone: the zone of its nearest airport.
     country = g.get("country", "")
     levels = [p["level"] for p in places() if p["country"] == country]
     place = {
         "slug": f"geo-{g['id']}", "name": g["name"], "country": country, "cc": g.get("country_code", ""), "lat": lat,
-        "lon": lon, "tz": g["timezone"], "elev": g.get("elevation"), "pop": g.get("population") or 0,
+        "lon": lon, "tz": g.get("timezone") or airport["tz"], "elev": g.get("elevation"), "pop": g.get("population") or 0,
         "geonameid": g.get("id"), "hub": False, "main": False, "sea": sea is not None,
         "tags": ["sea"] * (sea is not None) + ["swim"] * swims(sea), "aliases": [norm(name)] if norm(name) != norm(g["name"]) else [],
         "airport": airport, "airport_km": airport["km"] if line <= AIRPORT_KM else None,
@@ -451,7 +531,8 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
     key = norm(name)
     if not key:
         return None
-    if key in _online:
+    at = _flaky_at.get(key)
+    if key in _online and (at is None or time.monotonic() - at < FAILED_S):
         return _online[key]
     try:
         disk = json.loads(ONLINE_CACHE.read_text(encoding="utf-8"))
@@ -464,14 +545,23 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
         return None  # offline demo: one timeout per city a minute, not one per call
     try:
         place = _online_place(name.strip(), fetch or _get)
-    except Exception:  # noqa: BLE001  TRAP-6: no network, a timeout or a strange answer
+    except Exception as e:  # noqa: BLE001  TRAP-6: no network, a timeout or a strange answer
+        log.warning("geocoder failed for %r: %s: %s", name.strip(), type(e).__name__, e)
         _failed[key] = time.monotonic()
+        if (old := _online.get(key)) is not None:  # a flaky place asked again: keep it (#534)
+            _flaky_at[key] = time.monotonic()
+            return old
         return None  # not in _online: after FAILED_S the geocoder is asked again
     flaky = place is not None and place.pop("_flaky", False)  # OSRM failed: not frozen on disk
     _online[key] = place
     if place is not None:
         keys = {key, norm(place["name"])}  # «Бледе» and «Блед» are one place
         _online.update(dict.fromkeys(keys, place))
+        for k in keys:
+            if flaky:
+                _flaky_at[k] = time.monotonic()
+            else:
+                _flaky_at.pop(k, None)
     if place is not None and not flaky:
         try:
             ONLINE_CACHE.parent.mkdir(parents=True, exist_ok=True)

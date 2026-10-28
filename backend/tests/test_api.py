@@ -23,7 +23,7 @@ def test_mode_known_before_first_reply(monkeypatch):
     for k in ("LLM_API_KEY", "GIGACHAT_AUTH_KEY", "LLM_BASE_URL", "LLM_MODEL"):
         monkeypatch.delenv(k, raising=False)
     for path in ("/api/mode", "/api/v1/mode"):
-        assert client.get(path).json() == {"llm": False}
+        assert client.get(path).json() == {"llm": False, "real_data": False}
 
 
 def test_chat_follows_contract():
