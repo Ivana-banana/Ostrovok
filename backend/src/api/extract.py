@@ -1097,6 +1097,33 @@ def _transit_dropped(t: str, hits: list) -> list:
     return out or hits
 
 
+VIA_LIST = re.compile(r"\b[Чч]ерез\s+(?=[А-ЯЁ])")
+LIST_SEP = re.compile(r"\s*,\s*(?:и\s+)?|\s+и\s+")
+
+
+def _via_list(text: str, t: str, hits: list) -> None:
+    """«Через Ярославль, Кострому и Плёс» (#305): every known place of the list is a route stop.
+
+    One name after «через» stays as it is. Two or more known places are a list of stops: the ones
+    the other rules miss are added with the form of the name fixed. The list ends at the first name
+    that is no known place: «через Островок и Яндекс», «через Казань, Бюджет 100 тысяч»."""
+    for m in VIA_LIST.finditer(text):
+        items, pos = [], m.end()
+        while t[pos : pos + 1] != " " and (span := _capital_span(text, pos)):
+            if not (_known(span[0]) or span[0] in COUNTRIES or _place_at(text, t, pos)):
+                break
+            items.append((pos, *span))
+            sep = LIST_SEP.match(text, span[1])
+            if not sep or not text[sep.end() : sep.end() + 1].isupper():
+                break
+            pos = sep.end()
+        if len(items) < 2:
+            continue
+        for start, name, end in items:
+            if not any(hs <= start < he for hs, _, he in hits):
+                hits.append((start, name, end))
+
+
 # #381: a bare place closes a clause after a comma («Не боюсь летать, Бали») or follows «ради»
 # («но ради Бали готов»). Only a place of the catalogue counts (_catalog_word). The tail word
 # is a name as written, not a case form: «…, Милана» is a person, not «Милан». «не ради Турции»
@@ -1166,6 +1193,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n, m.end(1)))
+    _via_list(text, t, hits)
     tails = [m.span(1) for m in TAIL_PLACE.finditer(text)]
     for s, e in [*tails, *(m.span(1) for m in FOR_PLACE.finditer(t))]:  # «…, Бали», «ради Бали»
         taken = t[s] == " " or any(hs <= s < he for hs, _, he in hits)  # " ": the origin span
