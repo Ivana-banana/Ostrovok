@@ -2248,14 +2248,22 @@ def _named_again(
 
 
 def _people(
-    t: str, found: dict, notes: list[str], asking: bool = False, built: bool = False
+    t: str,
+    found: dict,
+    notes: list[str],
+    asking: bool = False,
+    built: bool = False,
+    kept_ages: list[int] | None = None,
 ) -> None:
     """Adults, children with ages; «нас четверо» counts children out.
 
     built: the plan exists; «на 1 человека» near a price word is then a unit, not a party (#369).
 
     asking: the message is a question at a built plan; a child without a number or an age in
-    it adds nobody (#179)."""
+    it adds nobody (#179).
+
+    kept_ages: the ages of the children in the plan. A child named with no number and no age
+    («с дочкой», «без дочери не поедем») is one of them: the ages stay (#205)."""
     ages: list[int] = []
     seen: list[tuple[str, list[int], int]] = []  # (kind, ages said, position in ages) (#359)
     last: int | None = None  # the end of the previous child word (#359)
@@ -2317,6 +2325,8 @@ def _people(
         last = m.end()
         if single and not new and len(said) <= 1 and _named_again(seen, kind, said, ages, notes):
             continue  # #359: «дети: 5 и 8 лет, сын любит море»: the same child again
+        if kept_ages and not said and not m.group(1) and not m.group("twin") and not new:
+            continue  # #205: the child of the plan is named again, no age changes
         if asking and len(said) < count:  # no age for every counted child: nobody is added
             if ASKING_NOTE not in notes:
                 notes.append(ASKING_NOTE)
@@ -2575,13 +2585,15 @@ def extract(
     nights: int = 7,
     adults: int = 2,
     asking: bool = False,
+    kept_ages: list[int] | None = None,
 ) -> tuple[dict, list[str]]:
     """TripSpec fields stated in one message, plus assumptions made while reading it.
 
     has_destination: the plan has a city already; an unknown first word is then never a city.
     nights, adults: the plan's values (TripSpec defaults); only a «в сутки» or «на каждого»
     budget reads them (#158).
-    asking: a question at a built plan; a child without a number or an age adds nobody (#179)."""
+    asking: a question at a built plan; a child without a number or an age adds nobody (#179).
+    kept_ages: the ages of the children in the plan; a child without a number or an age keeps them (#205)."""
     t = text.lower().replace("ё", "е")  # same length: positions match the original text
     found: dict = {}
     notes: list[str] = []
@@ -2601,7 +2613,7 @@ def extract(
     if november:
         _november_end(*november, found, notes)
     _own_tickets(t, found)
-    _people(t, found, notes, asking, has_destination)
+    _people(t, found, notes, asking, has_destination, kept_ages)
     _budget(t, found, notes, nights, adults)
     if (pets := _pets(t)) is not None:
         found["pets"] = pets
