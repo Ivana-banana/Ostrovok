@@ -2,8 +2,9 @@
 
 import logging
 
-from api import catalog
 from test_catalog import _bled_with_roads
+
+from api import catalog
 
 
 def test_trap_6_geocoder_failure_is_logged(caplog):
