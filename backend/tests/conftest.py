@@ -25,6 +25,7 @@ def no_network(monkeypatch, tmp_path):
     monkeypatch.setattr(catalog, "ONLINE_CACHE", tmp_path / "online_places.json")
     monkeypatch.setattr(catalog, "_online", {})
     monkeypatch.setattr(catalog, "_failed", {})
+    monkeypatch.setattr(catalog, "_flaky_at", {})
 
 
 @pytest.fixture

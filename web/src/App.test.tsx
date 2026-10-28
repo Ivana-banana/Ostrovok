@@ -2,10 +2,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe as suite, expect, it, vi } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { App, SESSION_KEY } from "./App";
+import { App, MODE_RETRY_MS, SESSION_KEY } from "./App";
 import { VERBS } from "./brand";
 import { HISTORY_KEY } from "./history";
-import { SWITCHES_KEY } from "./Sources";
+import { NO_KEY_NOTE, NO_MODE_NOTE, SWITCHES_KEY } from "./Sources";
 import type { ChatReply } from "./contracts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -158,6 +158,37 @@ suite("приложение", () => {
     routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: false } });
     await mount();
     expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
+  });
+
+  it("#534: /api/mode не ответил с первого раза — повтор включает переключатели", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let n = 0;
+      routes["GET /api/mode"] = () =>
+        ++n === 1 ? { status: 503 } : { status: 200, body: { llm: true, real_data: true } };
+      await act(async () => root.render(<App />));
+      await act(async () => vi.advanceTimersByTimeAsync(MODE_RETRY_MS + 10));
+      expect(n).toBe(2);
+      const sw = [...box.querySelectorAll<HTMLInputElement>("aside input[role='switch']")];
+      expect(sw.every((x) => !x.disabled)).toBe(true);
+      expect(box.querySelector(".switches-note")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#534: /api/mode не ответил дважды — подпись «не загрузились», а не «нет ключа»", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      routes["GET /api/mode"] = () => ({ status: 503 });
+      await act(async () => root.render(<App />));
+      expect(box.querySelector(".switches-note")?.textContent).toBe(NO_KEY_NOTE); // not known yet
+      await act(async () => vi.advanceTimersByTimeAsync(MODE_RETRY_MS + 10));
+      expect(calls.filter((c) => c.key === "GET /api/mode")).toHaveLength(2);
+      expect(box.querySelector(".switches-note")?.textContent).toBe(NO_MODE_NOTE);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("#490: модель есть, но GigaChat выключен (по умолчанию) — пометка «Без ИИ»", async () => {

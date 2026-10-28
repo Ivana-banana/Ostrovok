@@ -11,6 +11,7 @@ unknown climate values and an absent sea hint (TRAP-2, TRAP-6).
 
 import difflib
 import json
+import logging
 import math
 import re
 import statistics
@@ -68,6 +69,9 @@ PREPOSITION = re.compile(r"^(?:в|во|на|к|ко|до|из|по)\s+")
 
 _deadline: ContextVar[float | None] = ContextVar("geocode_deadline", default=None)
 _online: dict[str, dict | None] = {}
+# #534: a place without climate or sea (flaky) is kept only FAILED_S, then asked again.
+_flaky_at: dict[str, float] = {}
+log = logging.getLogger(__name__)
 _failed: dict[str, float] = {}  # name -> time.monotonic() of the last network error
 
 
@@ -287,7 +291,9 @@ def origin_hub(name: str, fetch: Callable[[str, dict], dict] | None = None) -> t
     """Departure hub for a city the user named, and a note to say aloud when it is another city."""
     place = resolve(name) or lookup_online(name, fetch)
     if place is None:
-        return resolve("Москва"), f"Город вылета «{name.strip()}» не нашёл: считаю вылет из Москвы."
+        return resolve("Москва"), (
+            f"Город вылета «{name.strip()}» не нашёл (или нет сети): считаю вылет из Москвы."
+        )
     if place["hub"]:
         return place, ""
     hub = nearest(place, hubs())
@@ -451,7 +457,8 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
     key = norm(name)
     if not key:
         return None
-    if key in _online:
+    at = _flaky_at.get(key)
+    if key in _online and (at is None or time.monotonic() - at < FAILED_S):
         return _online[key]
     try:
         disk = json.loads(ONLINE_CACHE.read_text(encoding="utf-8"))
@@ -464,7 +471,8 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
         return None  # offline demo: one timeout per city a minute, not one per call
     try:
         place = _online_place(name.strip(), fetch or _get)
-    except Exception:  # noqa: BLE001  TRAP-6: no network, a timeout or a strange answer
+    except Exception as e:  # noqa: BLE001  TRAP-6: no network, a timeout or a strange answer
+        log.warning("geocoder failed for %r: %s: %s", name.strip(), type(e).__name__, e)
         _failed[key] = time.monotonic()
         return None  # not in _online: after FAILED_S the geocoder is asked again
     flaky = place is not None and place.pop("_flaky", False)  # OSRM failed: not frozen on disk
@@ -472,6 +480,11 @@ def lookup_online(name: str, fetch: Callable[[str, dict], dict] | None = None) -
     if place is not None:
         keys = {key, norm(place["name"])}  # «Бледе» and «Блед» are one place
         _online.update(dict.fromkeys(keys, place))
+        for k in keys:
+            if flaky:
+                _flaky_at[k] = time.monotonic()
+            else:
+                _flaky_at.pop(k, None)
     if place is not None and not flaky:
         try:
             ONLINE_CACHE.parent.mkdir(parents=True, exist_ok=True)

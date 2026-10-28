@@ -9,6 +9,8 @@ const NO_KEY = "нет ключа в .env";
 // #262: the jury runs without keys, so the reason is visible, not only in a tooltip.
 export const NO_KEY_NOTE =
   "Недоступно в этой сборке: нет ключа API в .env. В демо команды работает с реальными данными.";
+// #534: /api/mode did not answer twice — the keys are unknown, not missing.
+export const NO_MODE_NOTE = "Режимы не загрузились: обновите страницу.";
 const NOTE_ID = "switches-no-key";
 const LABELS: [keyof Switches, string][] = [
   ["real_data", "Реальные данные (Авиасейлс)"],
@@ -45,16 +47,18 @@ export function requested(on: Switches, can: LlmMode): Switches {
 export function SourceSwitches({
   on,
   can,
+  failed = false,
   onChange,
 }: {
   on: Switches;
   can: LlmMode;
+  failed?: boolean; // GET /api/mode failed: the note says so instead of «нет ключа»
   onChange: (next: Switches) => void;
 }) {
   return (
     <div className="switches" role="group" aria-label="Источники данных и модель">
       {LABELS.map(([key, label]) => (
-        <label key={key} className="switch" title={can[key] ? undefined : NO_KEY}>
+        <label key={key} className="switch" title={can[key] || failed ? undefined : NO_KEY}>
           <input
             type="checkbox"
             role="switch"
@@ -68,7 +72,7 @@ export function SourceSwitches({
       ))}
       {LABELS.some(([key]) => !can[key]) && (
         <small id={NOTE_ID} className="switches-note">
-          {NO_KEY_NOTE}
+          {failed ? NO_MODE_NOTE : NO_KEY_NOTE}
         </small>
       )}
     </div>
