@@ -868,9 +868,18 @@ def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
     assert found["destinations"] == dests
 
 
-def test_trap_3_one_name_after_cherez_is_no_list_of_stops():
-    found, _ = extract("Хочу в Сочи, оплата через Островок")
-    assert found["destinations"] == ["Сочи"]
+@pytest.mark.parametrize(
+    ("text", "dests"),
+    [("Хочу в Сочи, оплата через Островок", ["Сочи"]),
+     ("Хочу в Сочи, забронирую через Островок и Яндекс", ["Сочи"]),
+     ("Хочу в Сочи, оплата через Сбербанк и Тинькофф", ["Сочи"]),
+     ("в Сочи через Казань, Бюджет 100 тысяч", ["Сочи", "Казань"]),
+     ("в Сочи через Казань, Мы вдвоём", ["Сочи", "Казань"]),
+     ("Через Ярославль, Кострому и Плёс в июле", ["Ярославль", "Кострома", "Плёс"])],
+)  # fmt: skip
+def test_trap_3_cherez_list_holds_only_known_places(text, dests):  # #305
+    found, _ = extract(text)
+    assert found["destinations"] == dests
 
 
 # #293: a range by weekdays («со среды по пятницу») is a date range, not an assumption.
