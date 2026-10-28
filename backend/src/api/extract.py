@@ -1971,8 +1971,12 @@ PET_RE = re.compile(
 # the pet only a possessive or a list with «и»: «без нашей собаки». Any other word keeps the pet:
 # «без доплаты за собаку», «без детей с собакой», «без пересадок кошка плохо переносит перелёты».
 _PET_BEFORE = re.compile(
-    r"\b(?:без|нет|не\s+(?:берем|возьмем|везем|берут|возьмут))\s+(?:у\s+нас\s+)?"
+    r"\b(?:без|нет|не\s+(?:берем|возьмем|везем|берут|возьмут))\s+(?:с\s+собой\s+)?(?:у\s+нас\s+)?"
     r"(?:(?:наш|ваш|мо[ейи]|сво|тво)\w*\s+|\w+\s+и\s+(?:без\s+)?){0,2}$"
+)
+# After a list with «и» a pet in the nominative goes: «без детей и собака», «без пересадок и кот».
+_PET_NOMINATIVE = re.compile(
+    r"(?:собака|кошка|кот|пес|питомец|щенок|котенок|щенки|котята|животное|животные)\b"
 )
 _PET_AFTER = re.compile(
     r"\w*\s+(?:у\s+нас\s+)?(?:нет\b|не\s+(?:берем|возьмем|везем|берут|возьмут)"
@@ -1990,7 +1994,10 @@ def _pets(t: str) -> bool | None:
     A pet that is not refused wins: «с собакой, без кошек»."""
     refused = False
     for m in PET_RE.finditer(t):
-        no = _PET_BEFORE.search(t[: m.start()]) or _PET_AFTER.match(t, m.end())
+        before = _PET_BEFORE.search(t[: m.start()])
+        if before and " и " in before.group() and _PET_NOMINATIVE.match(t, m.start()):
+            before = None
+        no = before or _PET_AFTER.match(t, m.end())
         if no and not _DOUBLE_NO.match(t, m.end()):
             refused = True
         elif m.group() != "животн":
