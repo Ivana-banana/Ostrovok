@@ -856,6 +856,15 @@ def real_data(on: bool) -> Iterator[None]:
         _real_data.reset(token)
 
 
+def hotel_port() -> HotelProvider:
+    """The hotel port of this request: HOTELS with real_data, else HOTELS without its live layers
+    (#566: the «Синтетика» switch; a live layer keeps its fallback port in `base`)."""
+    port = HOTELS
+    while not _real_data.get() and hasattr(port, "base"):
+        port = port.base
+    return port
+
+
 def transport() -> TransportProvider:
     """The transport port of this request: REAL_TRANSPORT when asked and built, else TRANSPORT."""
     return REAL_TRANSPORT if _real_data.get() and REAL_TRANSPORT is not None else TRANSPORT
@@ -900,7 +909,7 @@ def offers_for_place(
     hp, tp, xp = (
         (ESTIMATE_HOTELS, ESTIMATE_TRANSPORT, ESTIMATE_TRANSFERS)
         if estimate
-        else (HOTELS, transport(), TRANSFERS)
+        else (hotel_port(), transport(), TRANSFERS)
     )
     # A port that raises gives [] and a mark in the reply (ops.guarded, #290), not a 500.
     pairs = ops.guarded("hotels", lambda: hp.hotels(spec, place, now), [])
