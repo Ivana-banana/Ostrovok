@@ -864,6 +864,25 @@ function moreLine(reply: ChatReply, editable: boolean): string {
   return parts.join(" · ");
 }
 
+// The choices of an older answer stay under it, folded: the user can scroll up and pick an earlier
+// option without retyping (#450). Same cards and buttons as in the block of the stage.
+export function EarlierChoices({ reply, busy, onSend }: { reply: ChatReply; busy: boolean; onSend: (t: string) => void }) {
+  const { plan, stage } = reply;
+  const n = plan.destinations.length + plan.offers.filter((o) => o.kind === "hotel" || o.kind === "transport").length;
+  if (!n || stage === "checkout" || stage === "booked") return null;
+  return (
+    <details className="more options earlier">
+      <summary>
+        <b>Варианты</b>
+        <span>выбор из прошлого ответа</span>
+      </summary>
+      {plan.destinations.length > 0 && <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />}
+      <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
+    </details>
+  );
+}
+
 // The block of the current stage under the last agent message (#434): the cards of the stage
 // first, then the compact «Подробнее» (priorities, assumptions, changes, reasons). The options
 // the user already chose from fold into «Варианты» after the cart is built. Every section stays
@@ -907,14 +926,16 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   );
   const editable = stage === "compare" || stage === "assemble";
   const more = moreLine(reply, editable);
+  // The sum of the chosen plan, before the cart exists: the same offers the cart will hold.
+  const picked = cart.items.length ? cart.items : plan.offers.filter((o) => plan.selected.includes(o.offer_id));
   const nextStep = next && (
     <section className="sec next" aria-label="Следующий шаг">
       <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
         {next.label}
-        {stage === "assemble" && cart.items.length > 0 && (
+        {stage === "assemble" && picked.length > 0 && (
           <>
             {" · "}
-            <Price value={cart.total_rub} synthetic={isSynthetic(cart.items)} />
+            <Price value={picked.reduce((t, o) => t + o.price_rub, 0)} synthetic={isSynthetic(picked)} />
           </>
         )}
       </button>

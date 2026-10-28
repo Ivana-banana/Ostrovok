@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
-import { Board, TripParams } from "./Board";
+import { Board, EarlierChoices, TripParams } from "./Board";
 import { MIN_THINK_MS, PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
 import type { ChatReply, Guest, Offer, Stage } from "./contracts";
@@ -121,6 +121,8 @@ export function App() {
   const [road, setRoad] = useState(false); // the roadmap sheet below 1100 px
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [query, setQuery] = useState("");
+  // Replies of the earlier agent messages, by "session:index" (in memory): their choices stay clickable.
+  const [earlier, setEarlier] = useState<Record<string, ChatReply>>({});
   const [thinking, setThinking] = useState(false);
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
   const [healthNoAi, setHealthNoAi] = useState(false); // /api/mode says no model: known before the first reply
@@ -242,6 +244,7 @@ export function App() {
       if (motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
       writeSid(r.session_id);
       setReply(r);
+      setEarlier((e) => ({ ...e, [`${r.session_id}:${withUser.messages.length}`]: r }));
       setNoAi(!r.llm);
       update(
         { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage }] },
@@ -598,6 +601,8 @@ export function App() {
                   </div>
                 );
               // One key for the block: it moves under a new last answer without losing its state.
+              const old = m.role === "agent" && i !== lastAgent ? earlier[`${sid}:${i}`] : undefined;
+              if (old) return [msg, <EarlierChoices key={`earlier-${i}`} reply={old} busy={busy} onSend={send} />];
               return i === lastAgent && block ? [msg, block] : [msg];
             })}
             {lastAgent < 0 && block}

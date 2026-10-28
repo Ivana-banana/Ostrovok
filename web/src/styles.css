@@ -1233,6 +1233,8 @@ mark {
   font-size: var(--fs-s);
   transition: transform 0.15s, box-shadow 0.15s;
   animation: rise 0.4s ease both;
+  display: flex;
+  flex-direction: column;
 }
 
 .card:hover {
@@ -1267,7 +1269,7 @@ mark {
 }
 
 .card button {
-  margin-top: 8px;
+  margin-top: auto; /* the buttons of a row of cards sit on one line (#450) */
   width: 100%;
   border: 0;
   border-radius: var(--r-sm);
@@ -1278,12 +1280,16 @@ mark {
 }
 
 .tags {
-  margin: 6px 0 0;
+  margin: 6px 0 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .tag {
   display: inline-block;
-  margin: 2px 4px 0 0;
+  white-space: nowrap;
+  margin: 0;
   padding: 2px 7px;
   border-radius: var(--r-pill);
   background: var(--chip);

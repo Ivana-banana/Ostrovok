@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { Board, TripParams } from "./Board";
+import { Board, EarlierChoices, TripParams } from "./Board";
 import type { ChatReply } from "./contracts";
 import { changeValue, localTime } from "./format";
 
@@ -404,5 +404,18 @@ suite("доска поездки", () => {
     expect(c.at("Таймлайн")).toBeLessThan(c.main);
     const o = order("checkout", "Подтвердить бронь");
     expect(o.at("Таймлайн")).toBeLessThan(o.at("Корзина"));
+  });
+
+  it("#450: варианты прошлого ответа остаются под ним, свёрнутые, кнопки выбора живые", () => {
+    const r = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
+    const doc = new DOMParser().parseFromString(
+      renderToStaticMarkup(<EarlierChoices reply={r} busy={false} onSend={noop} />),
+      "text/html",
+    );
+    const d = doc.querySelector("details.earlier");
+    expect(d?.hasAttribute("open")).toBe(false);
+    expect(d?.querySelectorAll("button[aria-label^='Выбрать направление']").length).toBe(r.plan.destinations.length);
+    const booked = renderToStaticMarkup(<EarlierChoices reply={{ ...r, stage: "booked" }} busy={false} onSend={noop} />);
+    expect(booked).toBe("");
   });
 });
