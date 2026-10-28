@@ -1,5 +1,5 @@
 {
- "about": "Real dated hotel offers (Booking RUB, Agoda EUR) for the check of the agent, #263. No names, ids, urls. `market`: night price of all Booking offers of the stay by stars.",
+ "about": "Real dated hotel offers (Booking RUB, Agoda EUR) and real transport for the check of the agent, #263, #607. No names, ids, urls, train or flight numbers. `market`: night price of all Booking offers of the stay by stars. `transport`: one row per leg, price in RUB for one adult; trains are tutu «от» prices (no date), flights are cached Aviasales tickets.",
  "requests": [
   {
    "id": "R1",
@@ -771,6 +771,146 @@
    "meal": "BB",
    "free_cancel": false,
    "source": "agoda",
+   "collected_at": "2026-10-27"
+  }
+ ],
+ "transport_requests": [
+  {
+   "id": "T1",
+   "case": "S6",
+   "message": "Казань, 11-13 декабря, 2 взрослых, из Москвы",
+   "city": "Казань",
+   "origin": "Москва",
+   "check_in": "2026-12-11",
+   "check_out": "2026-12-13",
+   "adults": 2
+  },
+  {
+   "id": "T2",
+   "case": "S7",
+   "message": "Сочи, 14-19 ноября, 2 взрослых, из Москвы",
+   "city": "Сочи",
+   "origin": "Москва",
+   "check_in": "2026-11-14",
+   "check_out": "2026-11-19",
+   "adults": 2
+  },
+  {
+   "id": "T3",
+   "case": "S11",
+   "message": "Санкт-Петербург, 20-22 ноября, 2 взрослых, из Москвы",
+   "city": "Санкт-Петербург",
+   "origin": "Москва",
+   "check_in": "2026-11-20",
+   "check_out": "2026-11-22",
+   "adults": 2
+  }
+ ],
+ "transport": [
+  {
+   "request": "T1",
+   "mode": "train",
+   "origin": "Москва",
+   "destination": "Казань",
+   "date": null,
+   "price_kind": "from",
+   "n": 13,
+   "price_rub": {
+    "min": 1557,
+    "median": 1747,
+    "max": 4150
+   },
+   "duration_min": {
+    "min": 680,
+    "median": 757,
+    "max": 787
+   },
+   "transfers": 0,
+   "source": "tutu",
+   "collected_at": "2026-10-27"
+  },
+  {
+   "request": "T1",
+   "mode": "flight",
+   "origin": "Москва",
+   "destination": "Казань",
+   "date": "2026-12-11",
+   "price_kind": "ticket",
+   "n": 1,
+   "price_rub": {
+    "min": 5834,
+    "median": 5834,
+    "max": 5834
+   },
+   "duration_min": {
+    "min": 100,
+    "median": 100,
+    "max": 100
+   },
+   "transfers": 0,
+   "source": "travelpayouts",
+   "collected_at": "2026-10-28"
+  },
+  {
+   "request": "T1",
+   "mode": "flight",
+   "origin": "Казань",
+   "destination": "Москва",
+   "date": "2026-12-13",
+   "price_kind": "ticket",
+   "n": 1,
+   "price_rub": {
+    "min": 4765,
+    "median": 4765,
+    "max": 4765
+   },
+   "duration_min": {
+    "min": 105,
+    "median": 105,
+    "max": 105
+   },
+   "transfers": 0,
+   "source": "travelpayouts",
+   "collected_at": "2026-10-28"
+  },
+  {
+   "request": "T2",
+   "mode": "train",
+   "origin": "Москва",
+   "destination": "Сочи",
+   "date": null,
+   "price_kind": "from",
+   "n": 13,
+   "price_rub": {
+    "min": 2226,
+    "median": 3409,
+    "max": 11813
+   },
+   "duration_min": null,
+   "transfers": 0,
+   "source": "tutu",
+   "collected_at": "2026-10-27"
+  },
+  {
+   "request": "T3",
+   "mode": "train",
+   "origin": "Москва",
+   "destination": "Санкт-Петербург",
+   "date": null,
+   "price_kind": "from",
+   "n": 56,
+   "price_rub": {
+    "min": 801,
+    "median": 1613,
+    "max": 13326
+   },
+   "duration_min": {
+    "min": 231,
+    "median": 478,
+    "max": 654
+   },
+   "transfers": 0,
+   "source": "tutu",
    "collected_at": "2026-10-27"
   }
  ]
