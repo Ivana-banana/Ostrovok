@@ -74,6 +74,7 @@ from api.extract import (
     CAPITAL_PLACES,
     DATE_KEYS,
     DEFAULT_NIGHTS,
+    EACH_STAY_RE,
     HOTEL_NOTE,
     MAX_NIGHTS,
     MONTH,
@@ -117,6 +118,7 @@ from api.store import SessionStore
 
 log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
+NO_PET_MARK = "Нет отметки о животных:"  # the count line of the compare reply (#475)
 CONFIRM_RE = re.compile(
     r"\b(да|ок|окей|хорошо|подходит|давай\w*|бер[уиё]\w*|оформ\w*|собер\w*|корзин\w*)\b"
 )
@@ -748,7 +750,8 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     party = party_question(spec) if spec.destinations else []
     if spec.destinations:
         return [*origin, *(children_question(message, spec) or party)[:1]]
-    if spec.wishes:
+    if spec.wishes or spec.max_travel_hours is not None:
+        # #365 (C21): «недалеко» is a wish of the road: the agent shows the near places at once
         return [*origin, *party]
     out = [*origin]
     if not spec.month and not spec.date_from:
@@ -840,7 +843,8 @@ def is_route(message: str, destinations: list[str]) -> bool:
         return False
     stays = STAY_RE.findall(AHEAD_RE.sub(" ", low))
     linked = any(_city_in_clause(message, low, m, destinations[1:]) for m in LINK_RE.finditer(low))
-    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1
+    # #365: «по 3 дня» with two cities is a stay in each: a route
+    return linked or bool(ROUTE_RE.search(low)) or len(stays) > 1 or bool(EACH_STAY_RE.search(low))
 
 
 def severals(message: str, destinations: list[str]) -> str | None:
@@ -1874,7 +1878,7 @@ def _text_compare(plan: Plan) -> str:
         ),
     ]
     if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
-        lines.append(f"Нет отметки о животных: у {n} из {len(rows)} отелей.")
+        lines.append(f"{NO_PET_MARK} у {n} из {len(rows)} отелей.")
     # C14 (#364, TRAP-5): the chosen legs keep local times with zones (_offer_lines, #468).
     lines += _offer_lines(plan)
     for e in plan.explanations[:1]:
@@ -1968,7 +1972,10 @@ def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
     spec = plan.spec
     text = dead_end_text(spec, plan.offers)
     if plan.selected:  # the hotels, as the user must see them to pick one
-        text = _text_compare(plan).split("\nПредлагаю:")[0] + "\n" + text
+        head = _text_compare(plan).split("\nПредлагаю:")[0].split("\n")
+        # #475: the dead end paragraph says it about the pets; no count line before it
+        head = [x for x in head if not x.startswith(NO_PET_MARK)]
+        text = "\n".join(head) + "\n" + text
     text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
     return ("compare" if plan.selected else "select"), plan, text, questions
 
