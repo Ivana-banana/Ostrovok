@@ -196,7 +196,7 @@ suite("приложение", () => {
     expect(box.querySelector(".badge-noai")).toBeNull();
   });
 
-  it("#566: «Синтетика» уходит с запросом и хранится в браузере; без ключа llm — false", async () => {
+  it("#566: «Синтетика» уходит с запросом и хранится в браузере", async () => {
     routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: true } });
     routes["POST /api/chat"] = () => ({ status: 200, body: checkoutStage });
     await mount();
@@ -205,7 +205,7 @@ suite("приложение", () => {
     expect(JSON.parse(localStorage.getItem(SWITCHES_KEY) ?? "{}")).toEqual({ synthetic: true });
     await click("Выходные в Казани");
     await click("Отправить");
-    expect(calls.at(-1)?.body).toMatchObject({ real_data: false, llm: false });
+    expect(calls.at(-1)?.body).toMatchObject({ real_data: false, llm: true });
   });
 
   it("ошибка сервера: понятный текст без трассировки", async () => {
@@ -541,8 +541,8 @@ suite("список чатов слева", () => {
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     await say("Сочи с детьми");
     expect(calls.filter((c) => c.key === "POST /api/chat").map((c) => c.body)).toEqual([
-      { session_id: null, message: "Казань на выходные", real_data: true, llm: false },
-      { session_id: null, message: "Сочи с детьми", real_data: true, llm: false },
+      { session_id: null, message: "Казань на выходные", real_data: true, llm: true },
+      { session_id: null, message: "Сочи с детьми", real_data: true, llm: true },
     ]);
     expect(titles()).toEqual(["Сочи с детьми", "Казань на выходные"]);
     await open("Казань на выходные");

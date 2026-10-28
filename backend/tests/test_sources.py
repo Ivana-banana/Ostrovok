@@ -53,6 +53,8 @@ def transport(reply: dict) -> list[dict]:
 class LiveHotels:
     """A live hotel layer stand-in: counts the calls, falls back to `base` like Live101Hotels."""
 
+    live_layer = True
+
     def __init__(self, base) -> None:
         self.base = base
         self.calls = 0
@@ -70,9 +72,13 @@ def test_trap7_real_data_off_gives_synthetic_even_with_token(client, real, monke
     assert real.calls == 0 and live.calls == 0  # #566: «Синтетика» drops the live hotels too
 
 
-def test_trap7_real_data_by_default_uses_the_real_adapter_for_this_request_only(client, real):
+def test_trap7_real_data_by_default_uses_the_real_adapter_for_this_request_only(
+    client, real, monkeypatch
+):
+    live = LiveHotels(offers.HOTELS)
+    monkeypatch.setattr(offers, "HOTELS", live)
     reply = client.post("/api/chat", json={"message": SOCHI}).json()  # #566: on by default
-    assert real.calls > 0
+    assert real.calls > 0 and live.calls > 0
     assert transport(reply) and not any(o["synthetic"] for o in transport(reply))
     assert offers.transport() is offers.TRANSPORT  # no global swap after the request
 

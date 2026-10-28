@@ -313,7 +313,7 @@ export function App() {
     const no = loadNo.current;
     try {
       const t0 = Date.now();
-      const r = await chat({ session_id: sid, message: m, ...requested(switches, can) });
+      const r = await chat({ session_id: sid, message: m, ...requested(switches) });
       // A fast offline reply still shows the thinking indicator for a moment (not with reduced motion).
       const rest = MIN_THINK_MS - (Date.now() - t0);
       if (motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
@@ -447,9 +447,8 @@ export function App() {
 
   const lastAgent = ui.messages.map((m) => m.role).lastIndexOf("agent");
   const asked = ui.messages.filter((m) => m.role === "user").length; // the thinking banana and plane take turns
-  const on = requested(switches, can);
   // The «Без ИИ» badge of the sidebar (TRAP-1): no model key, or the last reply was rule-based.
-  const badgeNoAi = !on.llm || (!!reply && noAi);
+  const badgeNoAi = !can.llm || (!!reply && noAi);
   // A done step links to the first answer after which the trip was past it.
   const doneAt = STEPS.map((_, i) => {
     const n = ui.messages.findIndex(

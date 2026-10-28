@@ -858,9 +858,9 @@ def real_data(on: bool) -> Iterator[None]:
 
 def hotel_port() -> HotelProvider:
     """The hotel port of this request: HOTELS with real_data, else HOTELS without its live layers
-    (#566: the «Синтетика» switch; a live layer keeps its fallback port in `base`)."""
+    (#566: the «Синтетика» switch; a live layer has `live_layer` and its fallback port in `base`)."""
     port = HOTELS
-    while not _real_data.get() and hasattr(port, "base"):
+    while not _real_data.get() and getattr(port, "live_layer", False):
         port = port.base
     return port
 

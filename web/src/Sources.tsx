@@ -36,9 +36,10 @@ export function saveSwitches(s: Switches) {
   }
 }
 
-// What a chat request asks for: real data unless «Синтетика»; the model when /api/mode has a key.
-export function requested(on: Switches, can: LlmMode): { real_data: boolean; llm: boolean } {
-  return { real_data: !on.synthetic, llm: can.llm };
+// What a chat request asks for: real data unless «Синтетика»; always the model — the backend
+// answers by rules without a key (TRAP-1), and a message sent before /api/mode keeps the model.
+export function requested(on: Switches): { real_data: boolean; llm: boolean } {
+  return { real_data: !on.synthetic, llm: true };
 }
 
 export function SourceSwitches({

@@ -102,7 +102,7 @@ def health() -> dict[str, object]:
 def mode() -> LlmMode:
     # false — переключатель в вебе недоступен: в .env нет ключа (TRAP-1). Включает их запрос:
     # ChatRequest.llm и ChatRequest.real_data (#490). /health тоже показывает режимы (#290).
-    live = offers.REAL_TRANSPORT is not None or hasattr(offers.HOTELS, "base")
+    live = offers.REAL_TRANSPORT is not None or getattr(offers.HOTELS, "live_layer", False)
     return LlmMode(llm=llm_available(), real_data=live)
 
 

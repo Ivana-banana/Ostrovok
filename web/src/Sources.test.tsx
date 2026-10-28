@@ -42,9 +42,9 @@ it("TRAP-1: без ключа модели причина видна подпи�
   expect(box.querySelector(".switches-note")?.textContent).toBe(NO_KEY_NOTE);
 });
 
-it("#566: запрос — реальные данные без «Синтетики», модель — когда есть ключ", () => {
-  expect(requested({ synthetic: false }, { real_data: true, llm: true })).toEqual({ real_data: true, llm: true });
-  expect(requested({ synthetic: true }, { real_data: true, llm: false })).toEqual({ real_data: false, llm: false });
+it("#566: запрос — реальные данные без «Синтетики», модель всегда (без ключа backend отвечает правилами)", () => {
+  expect(requested({ synthetic: false })).toEqual({ real_data: true, llm: true });
+  expect(requested({ synthetic: true })).toEqual({ real_data: false, llm: true });
 });
 
 it("включение отдаёт новое состояние", () => {
