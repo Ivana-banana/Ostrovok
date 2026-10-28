@@ -18,6 +18,7 @@ import type {
 import {
   MEALS,
   MODES,
+  browserTime,
   changeValue,
   clock,
   duration,
@@ -807,7 +808,7 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
         </div>
         <div>
           <dt>Оформлено</dt>
-          <dd>{localTime(voucher.created_at)}</dd>
+          <dd>{browserTime(voucher.created_at)}</dd>
         </div>
       </dl>
       <p className="guest-line">

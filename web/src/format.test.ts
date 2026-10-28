@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 import type { ChatReply } from "./contracts";
-import { describe, fieldLabel, guestsText, movePriority, priorityMessage, yearsText } from "./format";
+import { browserTime, describe, fieldLabel, guestsText, movePriority, priorityMessage, yearsText } from "./format";
 
 const reply = (llm: boolean): ChatReply => ({
   session_id: "s",
@@ -73,6 +73,22 @@ suite("подписи полей", () => {
   it("#41: бюджет отеля и бюджет поездки — разные подписи", () => {
     expect(fieldLabel("hotel_budget_rub")).toBe("бюджет отеля");
     expect(fieldLabel("budget_rub")).toBe("бюджет");
+  });
+});
+
+suite("browserTime", () => {
+  it("#161: время ваучера в UTC показано в поясе браузера", () => {
+    const tz = process.env.TZ;
+    process.env.TZ = "Europe/Moscow";
+    try {
+      expect(browserTime("2026-10-27T01:17:29+00:00")).toBe("27.10 04:17");
+    } finally {
+      process.env.TZ = tz;
+    }
+  });
+
+  it("не дата — строка как есть", () => {
+    expect(browserTime("скоро")).toBe("скоро");
   });
 });
 

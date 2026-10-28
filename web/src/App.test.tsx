@@ -193,6 +193,26 @@ suite("приложение", () => {
     expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
   });
 
+  it("#161: корзина изменилась, а план не обновился — ошибка вместо тихого устаревшего плана", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    let reads = 0;
+    routes["GET /api/session/s1"] = () => (++reads === 1 ? { status: 200, body: checkoutStage } : { status: 500 });
+    routes["POST /api/cart"] = () => ({ status: 200, body: { items: [], total_rub: 0 } });
+    await mount();
+    await click("Убрать");
+    expect(box.querySelector("[role='alert']")?.textContent).toContain("Не удалось обновить план");
+  });
+
+  it("#161: бронь оформлена, а план не обновился — ошибка про перезагрузку", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    let reads = 0;
+    routes["GET /api/session/s1"] = () => (++reads === 1 ? { status: 200, body: checkoutStage } : { status: 500 });
+    routes["POST /api/checkout"] = () => ({ status: 200, body: booked.voucher });
+    await mount();
+    await click("Подтвердить бронь");
+    expect(box.querySelector("[role='alert']")?.textContent).toContain("перезагрузите страницу");
+  });
+
   it("подтверждение: отправляет итог, который видел пользователь, и показывает ваучер", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     let session: ChatReply = checkoutStage;

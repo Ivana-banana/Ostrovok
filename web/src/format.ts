@@ -72,6 +72,14 @@ export function localTime(iso: string): string {
   return m ? `${m[3]}.${m[2]} ${m[4]}:${m[5]}` : iso;
 }
 
+// A moment of the service itself (voucher time, written in UTC): shown in the browser zone.
+export function browserTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export function localDate(iso: string | null): string {
   const m = iso ? /^(\d{4})-(\d{2})-(\d{2})/.exec(iso) : null;
   return m ? `${m[3]}.${m[2]}.${m[1]}` : "—";
