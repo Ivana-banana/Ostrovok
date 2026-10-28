@@ -680,7 +680,11 @@ export function App() {
         </header>
         <Roadmap reply={reply} doneAt={doneAt} onJump={jump} />
         <footer className="sources" aria-label="Источники данных">
-          <span>Данные:</span>
+          {/* the attribution stays one click away (ODbL), the panel stays quiet */}
+          <details>
+            <summary>
+              Данные <span className="qmark" aria-hidden="true">?</span>
+            </summary>
           {SOURCES.map((x) => (
             <span key={x.name}>
               {x.text}, лицензия{" "}
@@ -694,6 +698,7 @@ export function App() {
             Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже. Климат и
             время в пути — оценки команды. Оплата имитируется.
           </span>
+          </details>
         </footer>
       </aside>
     </div>

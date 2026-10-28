@@ -404,7 +404,7 @@ suite("приложение", () => {
     expect(chips).toEqual(["1. отмена", "2. цена"]);
   });
 
-  it("подвал: атрибуция OpenStreetMap (ODbL) видна и без поездки", async () => {
+  it("подвал: атрибуция OpenStreetMap (ODbL) есть и без поездки, под «Данные ?» в один клик", async () => {
     await mount();
     const foot = box.querySelector("footer[aria-label='Источники данных']");
     expect(foot?.textContent).toContain("© участники OpenStreetMap");
@@ -412,6 +412,10 @@ suite("приложение", () => {
     expect(link.textContent).toBe("ODbL");
     expect(link.href).toBe("https://www.openstreetmap.org/copyright");
     expect(foot?.textContent).toContain("синтетика");
+    // hidden under «Данные ?» until opened, one click away
+    const more = foot?.querySelector("details");
+    expect(more?.open).toBe(false);
+    expect(more?.querySelector("summary")?.textContent).toContain("Данные");
   });
 
   it("TRAP-7: подвал называет всю синтетику и оценки команды", async () => {
