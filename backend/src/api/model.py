@@ -634,14 +634,17 @@ def bare_origin(message: str, has_place: bool = True) -> str | None:
     """The answer to the origin question without «из»: «Питер», «мск, вдвоём». A clause with «в»,
     «на», «до» names a destination or a sum, not the origin. A country is never the origin.
 
-    has_place: the trip has its place already. Without it, a place abroad («Анталья») names
-    where the user goes, not where from (#442); with it, «Минск» is the origin as before."""
+    has_place: the trip has its place already; then any city is the origin (abroad: the nearest
+    hub, as before). Without a place (#442), a catalogue city abroad without a sea («Минск»,
+    «Алматы») is the origin too; a sea place abroad («Анталья», «Дубай») or a place only the
+    geocoder knows («Бодрум») names where the user goes, not where from."""
     for clause in re.split(r"[,;.!?\n]+", message):
         c = clause.strip()
         if not c or re.match(r"(?i)(?:в|во|на|до|к|ко|по|за)\s", c) or catalog.country_of(c):
             continue
         if name := origin_name(c):
-            if not has_place and _abroad(catalog.resolve(name)):
+            place = catalog.resolve(name)
+            if not has_place and _abroad(place) and place["sea"]:
                 continue  # «Анталья» on «Хочу отдохнуть»: the destination, read by extract
             return name
         words = c.split()

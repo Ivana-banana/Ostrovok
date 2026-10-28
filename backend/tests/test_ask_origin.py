@@ -328,3 +328,26 @@ def test_origin_compared_with_the_new_destination(store):
     r = say(store, "Казань, едем в Сочи", first.session_id)
     assert not any(SAME_PLACE in q.text for q in r.questions)
     assert r.plan.spec.origin == "Казань" and r.plan.spec.destinations == ["Сочи"]
+
+
+@pytest.mark.parametrize("answer", ["Минск", "Алматы", "Ереван"])
+def test_city_abroad_without_a_sea_is_the_origin(store, answer):
+    """#442 review: «Минск» on «Хочу отдохнуть» became the place. A catalogue city abroad without
+    a sea is where the user lives: the nearest hub and the reason are in the plan, as on main."""
+    first = say(store, "Хочу отдохнуть")
+    r = say(store, answer, first.session_id)
+    s = r.plan.spec
+    assert answer not in s.destinations
+    assert any(a.startswith("откуда") and answer in a for a in s.assumptions)
+    assert ORIGIN_NOTE not in s.assumptions
+
+
+@pytest.mark.parametrize("answer", ["Анталья", "Дубай"])
+def test_sea_place_abroad_without_a_trip_place_is_the_destination(store, answer):
+    from api import catalog
+
+    first = say(store, "Хочу отдохнуть")
+    r = say(store, answer, first.session_id)
+    s = r.plan.spec
+    assert [catalog.resolve(d)["name"] for d in s.destinations] == [catalog.resolve(answer)["name"]]
+    assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
