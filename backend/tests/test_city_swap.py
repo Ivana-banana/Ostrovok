@@ -7,11 +7,11 @@ of a clarify question, then «1» / «беру» / «да» / «подтверж
 """
 
 import pytest
+from talk import say
 
 from api import catalog
-from api.contracts import ChatRequest, HotelOffer
+from api.contracts import HotelOffer
 from api.extract import extract
-from api.model import chat
 from api.store import SessionStore
 
 
@@ -44,10 +44,6 @@ OFF_CATALOG = [
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def walk(store, text, limit=8):

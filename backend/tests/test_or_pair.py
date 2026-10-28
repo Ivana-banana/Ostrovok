@@ -7,20 +7,15 @@ name; the second one is the chip «План: …» (#139).
 """
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
 from api.extract import excluded_places
-from api.model import chat
 from api.store import SessionStore
 
 
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 @pytest.mark.parametrize(

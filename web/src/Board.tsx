@@ -18,6 +18,7 @@ import type {
 import {
   MEALS,
   MODES,
+  browserTime,
   changeValue,
   clock,
   duration,
@@ -31,6 +32,8 @@ import {
   PRIORITIES,
   priorityMessage,
   rub,
+  zonedTime,
+  zoneLabel,
 } from "./format";
 import { ParamsBar } from "./ParamsBar";
 import { otherAssumptions } from "./params";
@@ -87,8 +90,9 @@ const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
 
-// Origin, dates, guests and budget are the chips of ParamsBar; the rows keep the rest.
-function SpecSummary({ spec, locked, onSend }: {
+// The strip of trip parameters above the chat (#434). Origin, dates, guests and budget are the
+// editable chips of ParamsBar; the other fields of the spec are read-only chips after them.
+export function TripParams({ spec, locked, onSend }: {
   spec: TripSpec;
   locked: boolean;
   onSend: (text: string) => void;
@@ -108,27 +112,34 @@ function SpecSummary({ spec, locked, onSend }: {
   if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
   if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);
   return (
-    <section className="sec" aria-label="Параметры поездки">
-      <h2>Параметры</h2>
+    <section className="strip" aria-label="Параметры поездки">
+      <h2 className="sr-only">Параметры поездки</h2>
       <ParamsBar spec={spec} disabled={locked} onSend={onSend} />
-      <dl className="spec">
-        {rows.map(([k, v]) => (
-          <div key={k}>
-            <dt>{k}</dt>
-            <dd>{v}</dd>
-          </div>
-        ))}
-      </dl>
-      {otherAssumptions(spec).length > 0 && (
-        <div className="assumptions">
-          <h3>Допущения агента</h3>
-          <ul>
-            {otherAssumptions(spec).map((a) => (
-              <li key={a}>{a}</li>
-            ))}
-          </ul>
-        </div>
+      {rows.length > 0 && (
+        <dl className="spec">
+          {rows.map(([k, v]) => (
+            <div key={k}>
+              <dt>{k}</dt>
+              <dd>{v}</dd>
+            </div>
+          ))}
+        </dl>
       )}
+    </section>
+  );
+}
+
+function Assumptions({ spec }: { spec: TripSpec }) {
+  const list = otherAssumptions(spec);
+  if (!list.length) return null;
+  return (
+    <section className="sec assumptions" aria-label="Допущения агента">
+      <h2>Допущения агента</h2>
+      <ul>
+        {list.map((a) => (
+          <li key={a}>{a}</li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -206,7 +217,7 @@ function PriorityChips({ order, stage, busy, onSend }: {
   );
 }
 
-// Before a destination is picked the cards live in the chat, after it — on the plan panel.
+// Before a destination is picked its cards are open under the answer, after it — folded in «Варианты».
 export const destinationsInChat = (stage: Stage) => stage === "inspire" || stage === "select";
 
 // Tags of a card: only facts of the reply (the cheapest, the fastest, over the user budget).
@@ -221,12 +232,22 @@ function destTags(d: Destination, all: Destination[], budget: number | null) {
   return tags;
 }
 
-export function Destinations({ plan, stage, busy, onSend }: {
+// #458: the places of the earlier «ещё» batches (the note «уже показаны» of the spec) that the
+// current cards do not show. The note is internal state: it never goes to the text.
+export function earlierNames(plan: Plan): string[] {
+  const note = plan.spec.assumptions.find((a) => a.startsWith("уже показаны:"));
+  const now = plan.destinations.map((d) => d.name);
+  return note ? note.split(": ", 2)[1].split(", ").filter((n) => !now.includes(n)) : [];
+}
+
+export function Destinations({ plan, stage, busy, onSend, more = true }: {
   plan: Plan;
   stage: Stage;
   busy: boolean;
   onSend: (t: string) => void;
+  more?: boolean; // false in an older answer: «ещё» is understood only in the current block
 }) {
+  const before = more && stage === "inspire" ? earlierNames(plan) : [];
   return (
     <section className="dests" aria-label="Направления">
       <h2>Направления</h2>
@@ -240,6 +261,7 @@ export function Destinations({ plan, stage, busy, onSend }: {
           return (
             <article key={d.name} className="card dest">
               <h3>
+                <span className="dest-no">{i + 1}. </span>
                 {d.name} <small>{d.country}</small>
               </h3>
               <p>
@@ -277,7 +299,7 @@ export function Destinations({ plan, stage, busy, onSend }: {
                   type="button"
                   disabled={busy}
                   aria-label={`Выбрать направление ${d.name}`}
-                  onClick={() => onSend(`${word}: ${d.name}`)}
+                  onClick={() => onSend(d.name)}
                 >
                   Выбрать
                 </button>
@@ -286,8 +308,30 @@ export function Destinations({ plan, stage, busy, onSend }: {
           );
         })}
       </div>
+      {before.length > 0 && (
+        <p className="earlier-names muted">
+          Ранее предлагал:{" "}
+          {before.map((n) => (
+            <button key={n} type="button" className="chip" disabled={busy} onClick={() => onSend(n)}>
+              {n}
+            </button>
+          ))}
+        </p>
+      )}
+      {/* #451: the next places of the same pool, without the shown ones (api/model.py MORE_RE) */}
+      {stage === "inspire" && more && (
+        <button type="button" className="more-dests" disabled={busy} onClick={() => onSend("ещё")}>
+          Показать ещё
+        </button>
+      )}
     </section>
   );
+}
+
+// Zone of a transport end: smaller text that may wrap apart from the time (TRAP-5, #455).
+function zoneTag(iso: string) {
+  const zone = zoneLabel(iso);
+  return zone ? <span className="zone"> ({zone})</span> : null;
 }
 
 // One row per hotel, as in the chat: the selected tariff of the hotel, else its first one.
@@ -320,6 +364,7 @@ function Hotels({ plan, stage, busy, onSend }: {
         <table className="grid-table">
           <thead>
             <tr>
+              <th className="num">№</th>
               <th>Отель</th>
               <th className="num">Цена за всё</th>
               <th className="num">Звёзды</th>
@@ -340,6 +385,7 @@ function Hotels({ plan, stage, busy, onSend }: {
               const word = ordinal(i);
               return (
                 <tr key={h.offer_id} className={chosen ? "chosen" : undefined}>
+                  <td className="num no">{i + 1}</td>
                   <td className="name">
                     {h.title}
                     {chosen && <span className="tag">выбран</span>}
@@ -427,10 +473,10 @@ function Transport({ plan, stage, busy, onSend }: {
                   </td>
                   <td>{MODES[t.mode]}</td>
                   <td data-label="Отправление">
-                    <span className="when">{localTime(t.depart_at)}</span> <small>{t.origin}</small>
+                    <span className="when">{localTime(t.depart_at)}</span> <small>{t.origin}</small>{zoneTag(t.depart_at)}
                   </td>
                   <td data-label="Прибытие">
-                    <span className="when">{localTime(t.arrive_at)}</span> <small>{t.destination}</small>
+                    <span className="when">{localTime(t.arrive_at)}</span> <small>{t.destination}</small>{zoneTag(t.arrive_at)}
                   </td>
                   <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
                   <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
@@ -574,7 +620,7 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
       <ol className="timeline">
         {plan.timeline.map((e, i) => (
           <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined} style={{ "--i": i } as CSSProperties}>
-            <time>{localTime(e.at)}</time> <span className="gone-title">
+            <time>{zonedTime(e.at)}</time> <span className="gone-title">
               <Money text={e.title} synthetic={isSynthetic(plan.offers)} />
             </span>
             {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}
@@ -807,7 +853,7 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
         </div>
         <div>
           <dt>Оформлено</dt>
-          <dd>{localTime(voucher.created_at)}</dd>
+          <dd>{browserTime(voucher.created_at)}</dd>
         </div>
       </dl>
       <p className="guest-line">
@@ -838,9 +884,113 @@ const NEXT: Partial<Record<Stage, { label: string; text: string }>> = {
   assemble: { label: "Положить в корзину", text: "да" },
 };
 
+// What the compact block «Подробнее» holds, in one line for its summary.
+function moreLine(reply: ChatReply, editable: boolean): string {
+  const { spec, changes, explanations } = reply.plan;
+  const parts: string[] = [];
+  if (changes.length) parts.push(`изменено: ${changes.length}`);
+  if (spec.priorities.length) parts.push(`важнее: ${spec.priorities.map((p) => PRIORITIES[p]).join(" → ")}`);
+  else if (editable) parts.push("что для вас важнее");
+  const assumed = otherAssumptions(spec).length;
+  if (assumed) parts.push(`допущений: ${assumed}`);
+  if (explanations.length) parts.push("почему так");
+  return parts.join(" · ");
+}
+
+// The choices of an older answer stay under it, folded: the user can scroll up and pick an earlier
+// option without retyping (#450). Same cards and buttons as in the block of the stage.
+export function EarlierChoices({ reply, current, busy, onSend }: {
+  reply: ChatReply;
+  current: ChatReply;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
+  const { plan, stage } = reply;
+  const rows = (r: ChatReply) =>
+    r.plan.offers.filter((o) => o.kind === "hotel" || o.kind === "transport").map((o) => o.offer_id).join();
+  const n = plan.destinations.length + plan.offers.filter((o) => o.kind === "hotel" || o.kind === "transport").length;
+  if (!n || stage === "checkout" || stage === "booked") return null;
+  // «беру второй» and «третий: Сочи» are parsed against the CURRENT list by the row number: a button
+  // is live only while the stage and the rows (the destination names) are the same as in the current plan.
+  const rowsLive = stage === current.stage && rows(reply) === rows(current);
+  // #458: a destination is sent by its NAME, which the agent finds in the whole pool shown in the
+  // session: an old batch stays live while the trip is still at the choice of a place.
+  const destLive = stage === "inspire" && (current.stage === "inspire" || current.stage === "select");
+  const stale = (!rowsLive && rows(reply) !== "") || (!destLive && plan.destinations.length > 0 && stage === "inspire");
+  return (
+    <details className="more options earlier" open={destLive && plan.destinations.length > 0 ? true : undefined}>
+      <summary>
+        <b>Варианты</b>
+        <span>выбор из прошлого ответа</span>
+      </summary>
+      {stale && <p className="muted">План изменился — выберите в текущем блоке.</p>}
+      {plan.destinations.length > 0 && (
+        <Destinations plan={plan} stage={destLive ? stage : "booked"} busy={busy} onSend={onSend} more={false} />
+      )}
+      <Hotels plan={plan} stage={rowsLive ? stage : "booked"} busy={busy} onSend={onSend} />
+      <Transport plan={plan} stage={rowsLive ? stage : "booked"} busy={busy} onSend={onSend} />
+    </details>
+  );
+}
+
+// The block of the current stage under the last agent message (#434): the cards of the stage
+// first, then the compact «Подробнее» (priorities, assumptions, changes, reasons). The options
+// the user already chose from fold into «Варианты» after the cart is built. Every section stays
+// in the DOM: a folded one is in a closed <details>.
 export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: BoardProps) {
   const { plan, stage, cart, voucher } = reply;
   const next = NEXT[stage];
+  const past = stage === "checkout" || stage === "booked";
+  const destinations = plan.destinations.length > 0 && (
+    <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />
+  );
+  const choices = (
+    <>
+      <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      <Bundles plan={plan} />
+    </>
+  );
+  // Folded: the destinations after one is picked; after the cart, the hotels and transport too.
+  const folded = !destinationsInChat(stage) && (destinations || past);
+  const timeline = (
+    <Timeline
+      plan={plan}
+      cart={cart}
+      marked={past}
+      canAdd={stage === "checkout"}
+      busy={busy}
+      onCart={onCart}
+    />
+  );
+  const cartView = (
+    <CartView
+      cart={cart}
+      spec={plan.spec}
+      stage={stage}
+      removed={removed}
+      busy={busy}
+      onCart={onCart}
+      onCheckout={onCheckout}
+    />
+  );
+  const editable = stage === "compare" || stage === "assemble";
+  const more = moreLine(reply, editable);
+  // The sum of the chosen plan, before the cart exists: the same offers the cart will hold.
+  const picked = cart.items.length ? cart.items : plan.offers.filter((o) => plan.selected.includes(o.offer_id));
+  const nextStep = next && (
+    <section className="sec next" aria-label="Следующий шаг">
+      <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
+        {next.label}
+        {stage === "assemble" && picked.length > 0 && (
+          <>
+            {" · "}
+            <Price value={picked.reduce((t, o) => t + o.price_rub, 0)} synthetic={isSynthetic(picked)} />
+          </>
+        )}
+      </button>
+    </section>
+  );
   return (
     <div className="board">
       {!reply.llm && (
@@ -848,45 +998,53 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
           без ИИ — упрощённый режим: модель недоступна, агент работает по правилам
         </p>
       )}
+      {destinationsInChat(stage) && destinations}
       {voucher && <VoucherView voucher={voucher} />}
-      <SpecSummary
-        spec={plan.spec}
-        locked={busy || stage === "clarify" || stage === "booked"}
-        onSend={onSend}
-      />
-      <PriorityChips order={plan.spec.priorities} stage={stage} busy={busy} onSend={onSend} />
-      <Changes plan={plan} />
-      {plan.destinations.length > 0 && !destinationsInChat(stage) && (
-        <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      {past && (
+        <>
+          {timeline}
+          {cartView}
+        </>
       )}
-      <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
-      <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
-      <Bundles plan={plan} />
-      <Explanations plan={plan} />
-      <Timeline
-        plan={plan}
-        cart={cart}
-        marked={stage === "checkout" || stage === "booked"}
-        canAdd={stage === "checkout"}
-        busy={busy}
-        onCart={onCart}
-      />
-      {next && (
-        <section className="sec next" aria-label="Следующий шаг">
-          <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
-            {next.label}
-          </button>
-        </section>
+      {/* The plan is built: its timeline, the options, the cart; the main action is last (#450). */}
+      {stage === "assemble" && (
+        <>
+          {timeline}
+          {choices}
+          {cartView}
+          {nextStep}
+        </>
       )}
-      <CartView
-        cart={cart}
-        spec={plan.spec}
-        stage={stage}
-        removed={removed}
-        busy={busy}
-        onCart={onCart}
-        onCheckout={onCheckout}
-      />
+      {!past && stage !== "assemble" && (
+        <>
+          {choices}
+          {timeline}
+          {cartView}
+          {nextStep}
+        </>
+      )}
+      {(more || editable) && (
+        <details className="more" open={plan.changes.length > 0 || undefined}>
+          <summary>
+            <b>Подробнее</b>
+            {more && <span>{more}</span>}
+          </summary>
+          <Changes plan={plan} />
+          <PriorityChips order={plan.spec.priorities} stage={stage} busy={busy} onSend={onSend} />
+          <Assumptions spec={plan.spec} />
+          <Explanations plan={plan} />
+        </details>
+      )}
+      {folded && (
+        <details className="more options">
+          <summary>
+            <b>Варианты</b>
+            <span>{past ? "направления, отели и транспорт, из которых выбирали" : "другие направления"}</span>
+          </summary>
+          {destinations}
+          {past && choices}
+        </details>
+      )}
     </div>
   );
 }

@@ -4,11 +4,10 @@ Without a model (TRAP-1). A wrong guest count is a wrong price and a wrong booki
 """
 
 import pytest
+from talk import say
 
 from api import llm
-from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import chat
 from api.store import SessionStore
 
 FIRST = "Сочи из Москвы с 3 по 8 декабря, двое взрослых"
@@ -17,10 +16,6 @@ FIRST = "Сочи из Москвы с 3 по 8 декабря, двое взр�
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 @pytest.mark.parametrize(

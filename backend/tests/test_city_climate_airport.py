@@ -6,10 +6,10 @@ city is a question, not an edit: the plan, the cart and the stage stay and it is
 """
 
 import pytest
+from talk import say
 
 from api import answers, catalog, llm
-from api.contracts import ChatRequest, Plan, TripSpec
-from api.model import chat
+from api.contracts import Plan, TripSpec
 from api.offers import resolve_place
 from api.store import SessionStore
 
@@ -27,10 +27,6 @@ OTHER_CITY_WEATHER = [
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def at(store, stage, start=SOCHI):
