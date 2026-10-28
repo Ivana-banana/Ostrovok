@@ -91,12 +91,25 @@ def _word_re(word: str, first: str | None = None) -> str:
 PLACE_RES = [
     (name, re.compile(rf"\b(?:{'|'.join(c['stems'])})\w*")) for name, c in CATALOG.items()
 ] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
-# Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not.
-CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)"))]
+# Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not. A capitalized
+# word after it that is no «Новгород» makes another name: «Нижний Тагил» (#97, TRAP-3).
+CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)(?!\s+(?!Новгород)[А-ЯЁ])"))]
 # Two-word cities of places.json not listed above (TRAP-3): «Великий Новгород в мае». Their
 # words are common («лечение минеральными водами»), so a name counts only with a capital first
 # letter (original text) or right after «в/во/из/до» (lower text).
 AFTER_PREPOSITION = r"(?:(?<=\bв )|(?<=\bво )|(?<=\bиз )|(?<=\bдо ))"
+
+
+# The end of the last word of a name: a case ending and then the word ends. «Новгородский» is
+# an adjective, not «Новгород» (#97).
+NAME_END = r"(?:[аяыиеуюь]|ом|ем|ой|ею|ов|ев|ам|ям|ах|ях|ами|ями)?(?![\w-])"
+# What may follow a name written with a lower case second word: «Минеральные воды в мае», but
+# «Минеральные воды полезны» is a phrase about the water.
+AFTER_NAME = r"(?=\s*(?:[,.!?;]|$)|\s+(?:в|во|на|с|со|из|до|по|для|к|и|\d)\b)"
+
+
+def _closed(word_re: str) -> str:
+    return word_re[:-3] + NAME_END if word_re.endswith(r"\w*") else word_re
 
 
 def _two_word_places() -> None:
@@ -105,10 +118,11 @@ def _two_word_places() -> None:
             continue
         words = p["name"].split()
         # the original text may have «ё»; the lower text has none
-        cap = [w[0].upper() + _word_re(w)[1:].replace("е", "[её]") for w in words]
-        cap[1:] = [f"[{w[0]}{w[0].lower()}]{w[1:]}" for w in cap[1:]]
-        CAPITAL_PLACES.append((p["name"], re.compile(r"\b" + r"\s+".join(cap))))
-        low = r"\s+".join(_word_re(w) for w in words)
+        first = words[0][0].upper() + _word_re(words[0])[1:].replace("е", "[её]")
+        stem = _closed(_word_re(words[-1])[1:].replace("е", "[её]"))
+        last = f"(?:{words[-1][0].upper()}{stem}|{words[-1][0].lower()}{stem}{AFTER_NAME})"
+        CAPITAL_PLACES.append((p["name"], re.compile(rf"\b{first}\s+{last}")))
+        low = r"\s+".join([*(_word_re(w) for w in words[:-1]), _closed(_word_re(words[-1]))])
         PLACE_RES.append((p["name"], re.compile(AFTER_PREPOSITION + low)))
 
 
@@ -650,6 +664,10 @@ def _known(word: str, exact_short: bool = False) -> str | None:
     return None
 
 
+# «Нижний Тагил»: the first word is «Нижн…», the second one is a capitalized word but no «Новгород».
+NIZHNY_NAME = re.compile(r"\s*(Нижн\w*)\s+((?!Новгород)[А-ЯЁ][а-яё]+)")
+
+
 def _first_city(
     text: str, t: str, guess: bool, notes: list[str] | None = None
 ) -> tuple[int, str] | None:
@@ -658,6 +676,13 @@ def _first_city(
     A known city (places.json) is always taken. An unknown word is taken only if guess is on.
     With guess off (the plan has a city) «Ухта, 3 ночи» is no destination, but it is not silent:
     a note says the city is not in the catalogue."""
+    if nizhny := NIZHNY_NAME.match(text):  # «Нижний Тагил на 3 дня»: a name outside the catalogue
+        name = name_candidates(f"{nizhny.group(1)} {nizhny.group(2)}")[0]
+        if guess and FIRST_NEXT.match(t, nizhny.end()):
+            return nizhny.start(1), name
+        if notes is not None and LENGTH_NEXT.match(t, nizhny.end()):
+            notes.append(f"направление: «{name}» нет в каталоге, направление прежнее")
+        return None
     m = re.match(r"\s*([А-ЯЁа-яё][а-яё]+(?:-[А-ЯЁа-яё]+)*)", text)
     if not m:
         return None
@@ -1296,6 +1321,9 @@ def _nominative(word: str) -> str:
     Other endings stay: «Малибу», «Сан-Паулу» are no accusative. The geocoder asks the name as
     written first and then the nominative guesses (catalog.lookup_online, TRAP-3)."""
     word = re.sub(r"и[ию]$", "ия", word)
+    cons = "бвгджзклмнпрстфхцчшщ"
+    if re.search(rf"[{cons}][{cons}]у$", word) and word[-2] != word[-3]:
+        return word[:-1] + "а"  # «Ухту» -> «Ухта»; «Баку», «Малибу», «Бонну» stay (#97)
     if re.search(r"[аеёиоуыэюя]ск[еу]$", word):
         return word[:-1] + "а"  # «Аляске» -> «Аляска»; «Иркутске» has a consonant before «ск»
     return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
