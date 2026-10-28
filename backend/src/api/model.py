@@ -109,8 +109,10 @@ from api.offers import SyntheticTransport, _complete, find_offers, resolve_place
 from api.optimizer import (
     bundles,
     dead_end_text,
+    enumerate_trips,
     explain,
     hotel_rows,
+    pets_ok,
     pets_possible,
     pick_hotel,
 )
@@ -1279,6 +1281,24 @@ def end_agent_budget(old: TripSpec, spec: TripSpec, found: dict) -> TripSpec:
     return spec.model_copy(update={"budget_rub": None, "assumptions": kept})
 
 
+def refit_agent_budget(old: Plan, cart: Cart, spec: TripSpec) -> tuple[TripSpec, str]:
+    """#550: new dates alone (the party is the same) keep the wish of «подешевле»: the budget is
+    the same step again, under the total of the new dates (lower_budget), not the stale sum.
+    `spec` comes from end_agent_budget, without the budget. Nothing cheaper: no budget."""
+    trial, _, _ = replan(old, spec, cart)
+    found: dict = {}
+    notes: list[str] = []
+    if trial.offers:
+        lower_budget(trial, cart, found, notes)
+    if "budget_rub" not in found:
+        return spec, ""
+    line = (
+        f"Бюджет «подешевле» пересчитан под новые даты: {_rub(found['budget_rub'])} "
+        f"вместо {_rub(old.spec.budget_rub or 0)} (синтетика)."
+    )
+    return merge(spec, {"budget_rub": found["budget_rub"]}, notes), line
+
+
 def lower_budget(plan: Plan, cart: Cart, found: dict, notes: list[str]) -> None:
     """«Бюджет поменьше» at a built plan: the trip budget is one step (15 %) under the current
     total, rounded down to 100 ₽. The DAG then re-plans the ranking only (#278).
@@ -2030,6 +2050,48 @@ def _pet_dead_cities(spec: TripSpec) -> list[str]:
     ]
 
 
+# #550: the pets dead end offers this many nearest places, and the trip without the pet.
+PET_NEAR = 3
+PET_DROP = "Без питомца"
+
+
+def _pet_neighbours(spec: TripSpec) -> list[tuple[float, dict]]:
+    """#550: the catalogue places nearest to the chosen one (catalog.km_between) where some trip
+    takes the pet, up to 3, with the distance. Without the origin and the refused places."""
+    here = resolve_place(spec.destinations[0])
+    if here is None:
+        return []
+    refused = refused_before(spec)
+    skip = {*spec.destinations, here["name"], spec.origin, *refused}
+    out = []
+    for p in sorted(catalog.places(), key=lambda p: catalog.km_between(here, p)):
+        if p["name"] in skip or p.get("country") in refused:
+            continue
+        trips = enumerate_trips(find_offers(spec, p["name"], estimate=True))
+        if any(pets_ok(t) for t in trips):  # no trips is no way out (pets_possible says yes)
+            out.append((catalog.km_between(here, p), p))
+        if len(out) == PET_NEAR:
+            break
+    return out
+
+
+def _pet_exits(plan: Plan, text: str) -> tuple[str, list[Question]]:
+    """#550: the way out of a pets dead end: the nearest places where the pet goes (code, never
+    invented; the cards are the options) and the same trip without the pet."""
+    near = _pet_neighbours(plan.spec)
+    if not near:
+        text, questions = _no_offers(plan, text, _pet_dead_cities(plan.spec))
+    else:
+        hub, note = catalog.origin_hub(plan.spec.origin or DEFAULT_ORIGIN)
+        plan.destinations = [card(plan.spec, hub, p, note) for _, p in near]  # «1» picks by order
+        names = [p["name"] for _, p in near]
+        where = ", ".join(f"{p['name']} (≈{round(km)} км)" for km, p in near)
+        text += f" Ближайшие места, куда поездка с питомцем собирается: {where}."
+        questions = [Question(text="Куда поедем вместо этого?", options=names)]
+    text += f" Или напишите «{PET_DROP.lower()}» — соберу ту же поездку без него."
+    return text, [*questions, Question(text="Едем без питомца?", options=[PET_DROP])]
+
+
 def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
     """No trip takes the pet (#131): the reason, other cities where it can go, no cart.
 
@@ -2041,8 +2103,18 @@ def _pets_dead_end(plan: Plan) -> tuple[Stage, Plan, str, list[Question]]:
         # #475: the dead end paragraph says it about the pets; no count line before it
         head = [x for x in head if not x.startswith(NO_PET_MARK)]
         text = "\n".join(head) + "\n" + text
-    text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
+        if not _hotel_selected(plan):
+            text += "\n" + PET_NO_HOTEL
+    text, questions = _pet_exits(plan, text)
     return ("compare" if plan.selected else "select"), plan, text, questions
+
+
+# #550: a plan without a hotel is no plan to take: the reply says it plainly.
+PET_NO_HOTEL = "Отеля в плане нет, поэтому «беру» не положит план в корзину."
+PET_TODO = (
+    "Что можно сделать: выбрать отель по номеру, сначала уточнив у отеля приём животных; "
+    "поехать в другой город рядом; поехать без питомца."
+)
 
 
 def with_offers(names: list[str]) -> list[str]:
@@ -2752,6 +2824,11 @@ def step(
     ):
         lines.append(f"{why} План не меняю.")
     spec = end_agent_budget(old.plan.spec, spec, found)
+    was = old.plan.spec
+    party = (was.adults, was.children_ages) == (spec.adults, spec.children_ages)
+    if party and agent_budget(was) and not agent_budget(spec) and "budget_rub" not in found:
+        spec, line = refit_agent_budget(old.plan, old.cart, spec)  # #550: dates alone
+        lines += [line] if line else []
     # «Было → стало» belongs to the reply of the re-plan only, not to the next steps.
     plan = old.plan.model_copy(update={"spec": spec, "changes": []})
     plan_dirty = bool(dirty_nodes(old.plan.spec, spec) or not plan.offers)
@@ -2859,8 +2936,14 @@ def step(
             idx = next(i for i, h in enumerate(hotels) if h.title == by_title)  # #458: name wins
         picks = idx is not None and idx < len(hotels)
         if not picks and not pets_possible(spec, plan.offers) and not _hotel_selected(plan):
-            stage, plan, text, questions = _pets_dead_end(plan)  # «беру» is no consent (#131)
-            return reply(stage, plan, text, questions=questions)
+            # «беру» is no consent (#131); #550: not the same refusal again, but what to do
+            if not plan.selected:  # no leg takes the pet: the reason is the dead end itself
+                stage, plan, text, questions = _pets_dead_end(plan)
+                return reply(stage, plan, text, questions=questions)
+            why = f"В корзину пока не кладу. Направление «{spec.destinations[0]}»: на эти даты "
+            why += f"ни у одного отеля нет отметки о приёме животных. {PET_NO_HOTEL} {PET_TODO}"
+            text, questions = _pet_exits(plan, why)
+            return reply("compare", plan, text, questions=questions)
         if idx is not None and idx < len(hotels):
             # The hotel brings its own transfers for the selected legs (T7, #13).
             plan.selected = keep_refusal(
@@ -2886,7 +2969,10 @@ def step(
         raise _Confirm(old.cart.total_rub)
     text = HINTS.get(old.stage, "Уточните запрос.")
     if old.stage == "select":
-        text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
+        if plan.offers and not pets_possible(spec, plan.offers):  # #550: near the pet's dead end
+            text, questions = _pet_exits(plan, text)
+        else:
+            text, questions = _no_offers(plan, text, _pet_dead_cities(spec))
         return reply("select", plan, text, questions=questions)
     return reply(old.stage, plan, text)
 
