@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { Board, Destinations, destinationsInChat } from "./Board";
+import { Board, TripParams } from "./Board";
 import type { ChatReply } from "./contracts";
 import { changeValue, localTime } from "./format";
 
@@ -12,10 +12,10 @@ const hotelBought = structuredClone(base);
 hotelBought.cart.items = [...base.cart.items, ...base.plan.offers.filter((o) => o.offer_id === "h1")];
 
 function render(r: ChatReply): Document {
-  // Before a destination is picked its cards live in the chat (App): render them as there.
+  // As in the chat (App, #434): the strip of parameters above, the block of the stage below.
   const html = renderToStaticMarkup(
     <>
-      {destinationsInChat(r.stage) && <Destinations plan={r.plan} stage={r.stage} busy={false} onSend={noop} />}
+      <TripParams spec={r.plan.spec} locked={false} onSend={noop} />
       <Board reply={r} busy={false} removed={[]} onSend={noop} onCart={noop} onCheckout={noop} />
     </>,
   );
@@ -343,5 +343,33 @@ suite("доска поездки", () => {
     };
     expect(hint("assemble")).toContain("вернёт вас к сравнению");
     expect(hint("compare")).not.toContain("вернёт");
+  });
+
+  it("#434: блок этапа — карточки этапа открыты, уже выбранное свёрнуто в «Варианты»", () => {
+    const at = (stage: ChatReply["stage"]) => render({ ...structuredClone(base), stage, voucher: null });
+    const folded = (doc: Document, label: string) =>
+      doc.querySelector(`[aria-label='${label}']`)?.closest("details") ?? null;
+    const compare = at("compare");
+    expect(folded(compare, "Сравнение отелей")).toBeNull();
+    expect(folded(compare, "Сравнение транспорта")).toBeNull();
+    expect(folded(compare, "Направления")?.querySelector("summary")?.textContent).toContain("Варианты");
+    const checkout = at("checkout");
+    expect(folded(checkout, "Корзина")).toBeNull();
+    expect(folded(checkout, "Таймлайн")).toBeNull();
+    expect(folded(checkout, "Сравнение отелей")?.hasAttribute("open")).toBe(false);
+    expect(folded(checkout, "Сравнение транспорта")?.hasAttribute("open")).toBe(false);
+    const inspire = at("inspire");
+    expect(folded(inspire, "Направления")).toBeNull();
+  });
+
+  it("#434: приоритеты, допущения и «Что изменилось» — в компактном блоке «Подробнее»", () => {
+    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    const more = render(r).querySelector("details.more:not(.options)");
+    expect(more?.querySelector("summary")?.textContent).toContain("важнее: цена → отмена");
+    for (const label of ["Приоритеты", "Что изменилось"]) expect(more?.querySelector(`[aria-label='${label}']`)).not.toBeNull();
+    // A replanned trip opens the block: the user sees what changed without a click.
+    expect(more?.hasAttribute("open")).toBe(r.plan.changes.length > 0);
+    r.plan.changes = [];
+    expect(render(r).querySelector("details.more:not(.options)")?.hasAttribute("open")).toBe(false);
   });
 });

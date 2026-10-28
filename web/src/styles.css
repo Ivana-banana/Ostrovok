@@ -11,7 +11,7 @@
   --acc-soft: #fffbe0; /* picked row */
 
   --paper: #fbfaf6; /* chat pane */
-  --panel: #f6f4ee; /* plan pane */
+  --panel: #f6f4ee; /* folded blocks under the answer */
   --card: #ffffff;
   --chip: #f2f0e9;
   --pill: #f0eee7;
@@ -47,8 +47,8 @@
   --shadow-lg: 0 12px 40px rgb(20 20 20 / 28%);
 
   --side-w: 268px;
-  --plan-w: clamp(380px, 33vw, 500px);
-  --thread-w: 760px;
+  --road-w: 300px;
+  --thread-w: 840px; /* the one window: the chat with the cards of the stage (#434) */
   --bar-h: 54px;
 
   color-scheme: light;
@@ -153,17 +153,13 @@ button.icon {
   font-size: var(--fs-s);
 }
 
-/* ---------- layout: chats | chat | plan ---------- */
+/* ---------- layout: chats | chat | trip roadmap ---------- */
 
 .app {
   display: grid;
-  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  grid-template-columns: var(--side-w) minmax(0, 1fr) var(--road-w);
   height: 100vh;
   height: 100dvh;
-}
-
-.app.plan-open {
-  grid-template-columns: var(--side-w) minmax(0, 1fr) var(--plan-w);
 }
 
 /* ---------- sidebar ---------- */
@@ -674,34 +670,263 @@ button.icon {
   text-overflow: ellipsis;
 }
 
-.stage {
+/* the trip roadmap: the right column (#434). Steps of the trip, not the plan data. */
+
+.roadmap {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.roadmap .hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  height: var(--bar-h);
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.road-close {
+  display: none !important;
+}
+
+.road {
   margin: 0;
-  padding: 0;
+  padding: 18px 18px 8px;
   list-style: none;
-  font-size: var(--fs-xs);
+}
+
+.road li {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  padding-bottom: 18px;
   color: var(--muted);
 }
 
-.stage li {
-  padding: 3px 8px;
+/* the line from a step to the next one */
+.road li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 30px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--line);
+}
+
+.road li.done:not(:last-child)::before {
+  background: var(--ink);
+}
+
+.road .dot {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 2px solid #c9c6bb;
+  border-radius: 50%;
+  background: var(--paper);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.road li.done .dot {
+  border-color: var(--ink);
+  background: var(--ink);
+  font-size: 0; /* the ✓ of the text is drawn by ::after: the same in every font */
+}
+
+.road li.done .dot::after {
+  content: "";
+  width: 5px;
+  height: 10px;
+  margin-top: -3px;
+  border: solid var(--acc);
+  border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg);
+}
+
+.road li.now .dot {
+  border-color: var(--ink);
+  background: var(--acc);
+  color: var(--acc-ink);
+  box-shadow: 0 0 0 4px rgb(255 216 0 / 35%);
+}
+
+.road li.now.done .dot {
+  background: var(--ink);
+}
+
+.road-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 4px;
+  font-size: var(--fs-s);
+  overflow-wrap: anywhere;
+}
+
+.road .label {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  color: inherit;
+  text-align: left;
+}
+
+.road li.done,
+.road li.now {
+  color: var(--text);
+}
+
+.road button.label {
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 3px;
+}
+
+.road button.label:hover {
+  text-decoration-color: var(--ink);
+}
+
+.road .what {
+  color: var(--muted);
+}
+
+.road li:not(.done, .now) .what {
+  color: #9a9a92;
+}
+
+.road .result {
+  justify-self: start;
+  margin-top: 2px;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.road .nowline {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 4px 9px;
+  border-radius: var(--r-xs);
+  background: var(--ink);
+  color: var(--acc);
+  font-weight: 600;
+}
+
+.roadmap .sources {
+  margin: auto 18px 0;
+  padding: 12px 0 16px;
+}
+
+/* below 1100 px: the step under the header, a tap opens the roadmap */
+.step-caption {
+  display: none;
+}
+
+.step-bar {
+  display: block;
+  height: 3px;
+  margin-top: 5px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.step-bar i {
+  display: block;
+  height: 100%;
+  background: var(--acc);
+  box-shadow: inset 0 -1px 0 rgb(20 20 20 / 25%);
+}
+
+/* trip parameters: one strip of chips under the header (#434) */
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 8px max(20px, calc((100% - var(--thread-w)) / 2 + 20px));
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  font-size: 12.5px;
+}
+
+.strip .params,
+.strip .params ul,
+.strip .spec,
+.strip .params li {
+  display: contents;
+}
+
+.strip button.param,
+.strip .spec > div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-height: 30px;
+  padding: 5px 10px;
   border-radius: var(--r-pill);
-  background: var(--pill);
   white-space: nowrap;
 }
 
-.stage li.done {
-  background: #e9e7df;
-  color: #444444;
+.strip .spec > div {
+  border: 1px solid var(--line);
+  background: var(--card);
 }
 
-.stage li.now {
-  background: var(--ink);
-  color: var(--acc);
+.strip .param-name,
+.strip .spec dt {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.strip .spec dd {
+  margin: 0;
+  font-weight: 600;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.strip .param-tag {
+  display: none; /* the dashed border and the title say it; the hint line explains it */
+}
+
+.strip .params > .muted {
+  order: 10;
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.strip .editor {
+  order: 11;
+  flex-basis: 100%;
+  margin: 4px 0 2px;
 }
 
 .feed {
+  position: relative; /* hidden labels (.sr-only) stay inside the scroll, not under the page */
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -714,6 +939,7 @@ button.icon {
 }
 
 .msg {
+  scroll-margin-top: 16px;
   margin: 0 0 22px;
   animation: rise 0.35s ease both;
 }
@@ -770,9 +996,65 @@ mark {
   border-radius: 4px;
 }
 
+/* the block of the current stage under the last answer: as wide as the chat (#434) */
 .attach {
-  margin: -10px 0 22px 42px;
+  margin: -8px 0 22px;
+  container: plan / inline-size;
   animation: rise 0.4s ease both;
+}
+
+.attach .questions {
+  margin: 0 0 12px 42px;
+}
+
+.attach .cards {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+.more {
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+  font-size: var(--fs-s);
+}
+
+.more > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.more > summary::before {
+  content: "▸";
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+
+.more[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.more > summary span {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.more > .sec,
+.more > .dests {
+  margin: 0 10px 10px;
+}
+
+.more > .sec {
+  animation: none;
 }
 
 .questions p {
@@ -1038,10 +1320,6 @@ mark {
   color: var(--text-2);
 }
 
-.plan-sheet-open {
-  display: none;
-}
-
 .composer {
   flex: none;
   padding: 0 20px 18px;
@@ -1096,44 +1374,6 @@ mark {
   text-align: center;
   font-size: var(--fs-xs);
   color: var(--muted);
-}
-
-/* ---------- plan panel ---------- */
-
-.plan {
-  display: none;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--line);
-  background: var(--panel);
-}
-
-.plan-open .plan {
-  display: flex;
-  animation: slideIn 0.25s ease both;
-}
-
-.plan .hd {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: none;
-  height: var(--bar-h);
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
-}
-
-.plan .hd b {
-  font-size: 14px;
-}
-
-.plan .bd {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 14px 16px 20px;
-  container: plan / inline-size;
 }
 
 .empty {
@@ -1263,7 +1503,7 @@ mark {
 /* tables: hotels, transport */
 
 .sec .scroll {
-  overflow-x: auto; /* wide table on a wide panel; a narrow panel gets compact rows */
+  overflow-x: auto; /* wide table on a wide block; a narrow block gets compact rows */
 }
 
 .board .dests {
@@ -1382,9 +1622,10 @@ tr .tag {
   font-weight: 600;
 }
 
-/* A narrow panel: a row is a compact block. Name on top, price with «синтетика» at the right,
-   the other cells as one muted line. All cells stay in the DOM (e2e reads them by column). */
-@container plan (max-width: 720px) {
+/* The block in the chat (up to 800 px): a row is a compact block. Name on top, price with
+   «синтетика» at the right, the other cells as one muted line. All cells stay in the DOM (e2e
+   reads them by column). A wider block gets the full table. */
+@container plan (max-width: 860px) {
   .grid-table thead {
     position: absolute;
     width: 1px;
@@ -1574,8 +1815,8 @@ ul.plain li:last-child {
 
 .timeline li {
   position: relative;
-  margin-left: 4px;
-  padding: 5px 0 5px 12px;
+  margin-left: 6px;
+  padding: 5px 0 5px 16px;
   border-left: 2px solid var(--line);
   animation: rise 0.35s ease both;
   animation-delay: calc(var(--i, 0) * 90ms);
@@ -1584,10 +1825,10 @@ ul.plain li:last-child {
 .timeline li::before {
   content: "";
   position: absolute;
-  left: -7px;
-  top: 10px;
-  width: 12px;
-  height: 12px;
+  left: -6px;
+  top: 9px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--card);
   border: 2px solid var(--ink);
@@ -1762,7 +2003,7 @@ li.chip button {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 8px;
-  margin-top: 20px;
+  margin-top: 28px;
   padding-top: 10px;
   border-top: 1px solid var(--line);
   color: var(--muted);
@@ -1953,15 +2194,19 @@ button.param.assumed {
   }
 }
 
+/* The sidebar shows the «Без ИИ» badge on a wide screen: the stage block does not repeat it.
+   Without the sidebar (tablet, phone) the block keeps the note (TRAP-1). */
+@media (min-width: 1100px) {
+  .attach .board > .badge {
+    display: none;
+  }
+}
+
 /* ---------- tablet: the chat list slides in from the left ---------- */
 
 @media (max-width: 1099px) {
   .app {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .app.plan-open {
-    grid-template-columns: minmax(0, 1fr) var(--plan-w);
   }
 
   .side {
@@ -1998,60 +2243,71 @@ button.param.assumed {
     gap: 8px;
   }
 
-  .stage li:not(.now) {
-    display: none;
-  }
-}
-
-/* ---------- phone: the plan is a bottom sheet over the chat ---------- */
-
-@media (max-width: 759px) {
-  .app.plan-open {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .plan {
+  .roadmap {
     position: fixed;
-    inset: 48px 0 0 0;
-    z-index: 15;
-    border-left: 0;
-    border-radius: 18px 18px 0 0;
+    inset: 0 0 0 auto;
+    z-index: 30;
+    width: min(340px, 90vw);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform 0.2s ease, visibility 0.2s;
     box-shadow: var(--shadow-lg);
   }
 
-  .plan-open .plan {
-    animation: sheetUp 0.25s ease both;
+  .road-open .roadmap {
+    transform: none;
+    visibility: visible;
   }
 
-  .plan-open .main::after {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 14;
-    background: var(--backdrop);
+  .road-close {
+    display: inline-grid !important;
   }
 
-  .plan .bd {
-    padding: 12px;
+  .step-caption::after {
+    content: "Путь поездки ›"; /* a tap opens the roadmap; the text of the button stays the step */
+    position: absolute;
+    top: 7px;
+    right: 20px;
+    color: var(--muted);
+    font-weight: 500;
   }
 
-  .plan-toggle,
-  .stage {
-    display: none;
-  }
-
-  .plan-sheet-open {
+  .step-caption {
+    position: relative;
     display: block;
-    align-self: center;
-    margin: 0 0 8px;
-    padding: 7px 16px;
+    flex: none;
+    width: 100%;
+    padding: 7px 20px 6px;
     border: 0;
-    border-radius: var(--r-pill);
-    background: var(--ink);
-    color: var(--acc);
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+    font-size: var(--fs-xs);
     font-weight: 600;
-    font-size: var(--fs-s);
-    box-shadow: var(--shadow-card);
+    color: var(--text-2);
+    text-align: left;
+  }
+}
+
+/* ---------- phone: the step caption with a thin bar, chips in one scrolling row ---------- */
+
+@media (max-width: 759px) {
+  .step-caption {
+    padding: 6px 12px 5px;
+  }
+
+  .strip {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 6px 12px;
+    scrollbar-width: none;
+  }
+
+  .strip:has(.editor) {
+    flex-wrap: wrap; /* the editor needs the whole width */
+  }
+
+  .strip .params > .muted {
+    display: none;
   }
 
   .thread {
@@ -2074,7 +2330,7 @@ button.param.assumed {
     max-width: 85%;
   }
 
-  .attach {
+  .attach .questions {
     margin-left: 0;
   }
 }

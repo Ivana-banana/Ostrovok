@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
-import { Board, Destinations, destinationsInChat } from "./Board";
+import { Board, TripParams } from "./Board";
 import { PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
-import { AgentText, StagePills, Thinking } from "./Chat";
-import type { ChatReply, Guest, Offer } from "./contracts";
-import { SOURCES, cartLine, describe } from "./format";
+import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
+import type { ChatReply, Guest, Offer, Stage } from "./contracts";
+import { SOURCES, brief, cartLine, describe, withoutNoAi } from "./format";
 import {
   type ChatEntry,
   filterChats,
@@ -17,7 +17,8 @@ import {
 } from "./history";
 import { Mascot } from "./Mascot";
 
-type Msg = { role: "user" | "agent"; text: string };
+// stage: the stage after an agent message; the roadmap links a done step to it (#434).
+type Msg = { role: "user" | "agent"; text: string; stage?: Stage };
 type Ui = { messages: Msg[]; removed: Offer[] };
 
 const STALE_PLAN = "Не удалось обновить план — перезагрузите страницу";
@@ -94,15 +95,6 @@ function dropUi(sid: string) {
   }
 }
 
-// The plan panel starts open where it fits next to the chat (the breakpoint of styles.css).
-function wideScreen(): boolean {
-  try {
-    return window.matchMedia("(min-width: 760px)").matches;
-  } catch {
-    return true; // no matchMedia (tests, old browsers): show the plan
-  }
-}
-
 function saveUi(sid: string, ui: Ui) {
   try {
     localStorage.setItem(uiKey(sid), JSON.stringify(ui));
@@ -126,7 +118,7 @@ export function App() {
   const [restoring, setRestoring] = useState(() => !!readSid());
   const [chats, setChats] = useState<ChatEntry[]>(loadChats);
   const [drawer, setDrawer] = useState(false);
-  const [planOpen, setPlanOpen] = useState(wideScreen);
+  const [road, setRoad] = useState(false); // the roadmap sheet below 1100 px
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [query, setQuery] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -135,6 +127,7 @@ export function App() {
   const [healthNoAi, setHealthNoAi] = useState(false); // /api/mode says no model: known before the first reply
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
+  const lastMsg = useRef<HTMLDivElement>(null); // the last agent message: its block sits under it
   // Every chat load gets a number: an answer of an older load is dropped.
   const loadNo = useRef(0);
   const chatsNow = useRef(chats);
@@ -181,7 +174,7 @@ export function App() {
       const saved = loadUi(id);
       const messages = saved.messages.length
         ? saved.messages
-        : [{ role: "agent" as const, text: describe(r) }];
+        : [{ role: "agent" as const, text: describe(r), stage: r.stage }];
       writeSid(id);
       setReply(r);
       setNoAi(!r.llm);
@@ -226,8 +219,12 @@ export function App() {
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [text]);
 
+  // A new answer: its top is in view, the stage block under it is read downwards.
+  // A new user message: the end of the chat, where the agent will answer.
   useEffect(() => {
-    end.current?.scrollIntoView?.({ block: "end" });
+    const last = ui.messages.at(-1);
+    if (last?.role === "agent") lastMsg.current?.scrollIntoView?.({ block: "start" });
+    else end.current?.scrollIntoView?.({ block: "end" });
   }, [ui.messages.length]);
 
   async function send(message: string) {
@@ -246,7 +243,7 @@ export function App() {
       setNoAi(!r.llm);
       if (motionOk()) setTyping(withUser.messages.length);
       update(
-        { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r) }] },
+        { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage }] },
         r.session_id,
       );
       const first = withUser.messages.find((x) => x.role === "user")?.text ?? m;
@@ -293,7 +290,7 @@ export function App() {
       const fresh = await getSession(id).catch(() => null);
       if (!fresh) setError(STALE_PLAN);
       // The old chat line with the cart sum is stale now: say the real count and total.
-      update({ ...ui, removed, messages: [...ui.messages, { role: "agent", text: cartLine(cart) }] });
+      update({ ...ui, removed, messages: [...ui.messages, { role: "agent", text: cartLine(cart), stage: (fresh ?? reply).stage }] });
       setReply({ ...(fresh ?? reply), cart });
       editChats((list) => touchChat(list, id, ""));
     } catch (e) {
@@ -318,7 +315,7 @@ export function App() {
       if (!fresh?.voucher) setError(STALE_PLAN);
       setReply(fresh?.voucher ? fresh : { ...reply, stage: "booked", voucher });
       const text = `Бронь ${voucher.booking_id} оформлена. ${voucher.simulated ? "Оплата имитирована." : "Оплата принята."}`;
-      update({ ...ui, messages: [...ui.messages, { role: "agent", text }] });
+      update({ ...ui, messages: [...ui.messages, { role: "agent", text, stage: "booked" }] });
       editChats((list) => touchChat(list, id, ""));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -372,10 +369,53 @@ export function App() {
 
   const lastAgent = ui.messages.map((m) => m.role).lastIndexOf("agent");
   const asked = ui.messages.filter((m) => m.role === "user").length; // the thinking banana and plane take turns
-  const cls = ["app", planOpen && "plan-open", drawer && "drawer-open"].filter(Boolean).join(" ");
+  const badgeNoAi = reply ? noAi : healthNoAi; // the «Без ИИ» badge of the sidebar (TRAP-1)
+  // A done step links to the first answer after which the trip was past it.
+  const doneAt = STEPS.map((_, i) => {
+    const n = ui.messages.findIndex(
+      (m) => m.role === "agent" && m.stage && (stepOf(m.stage) > i || (i === STEPS.length - 1 && m.stage === "booked")),
+    );
+    return n < 0 ? null : n;
+  });
+  const jump = (n: number) => {
+    setRoad(false);
+    document.querySelector(`[data-msg="${n}"]`)?.scrollIntoView?.({ block: "start", behavior: motionOk() ? "smooth" : "auto" });
+  };
+  const cls = ["app", drawer && "drawer-open", road && "road-open"].filter(Boolean).join(" ");
   const synthetic = !reply || !reply.plan.offers.length || reply.plan.offers.some((o) => o.synthetic);
   const groups = groupChats(filterChats(chats, query));
   const scroll = () => end.current?.scrollIntoView?.({ block: "end" });
+  // The cards of the current stage under the last answer; hidden while the agent thinks or types.
+  const block = reply && typing === null && !thinking && (
+    <div key="stage-block" className="attach">
+      {reply.questions.length > 0 && (
+        <div className="questions">
+          {reply.questions.map((q) => (
+            <div key={q.text}>
+              <p>{q.text}</p>
+              <div className="chips">
+                {q.options.map((o) => (
+                  <button key={o} type="button" className="chip" disabled={busy} onClick={() => send(o)}>
+                    {o}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <Board
+        reply={reply}
+        busy={busy}
+        removed={ui.removed.filter(
+          (o) => o.kind !== "extra" || !ui.removed.some((p) => p.offer_id === o.for_offer_id),
+        )}
+        onSend={send}
+        onCart={onCart}
+        onCheckout={onCheckout}
+      />
+    </div>
+  );
 
   return (
     <div
@@ -383,7 +423,7 @@ export function App() {
       onKeyDown={(e) => {
         if (e.key !== "Escape") return;
         if (drawer) setDrawer(false);
-        else if (planOpen && !wideScreen()) setPlanOpen(false);
+        else if (road) setRoad(false);
       }}
     >
       <aside id="chats" className="side" aria-label="Чаты">
@@ -487,7 +527,7 @@ export function App() {
           {chats.length > 0 && !groups.length && <p className="side-empty">Не нашёл чатов по запросу.</p>}
         </nav>
         <div className="foot">
-          {(reply ? noAi : healthNoAi) && (
+          {badgeNoAi && (
             <span className="badge-noai">
               <i />
               Без ИИ — упрощённый режим
@@ -497,6 +537,7 @@ export function App() {
         </div>
       </aside>
       {drawer && <div className="backdrop" aria-hidden="true" onClick={() => setDrawer(false)} />}
+      {road && <div className="backdrop road-backdrop" aria-hidden="true" onClick={() => setRoad(false)} />}
       <section className="main" aria-label="Чат">
         <header className="top">
           <button
@@ -510,17 +551,15 @@ export function App() {
             ☰
           </button>
           <h1 title={current?.title}>{current?.title ?? "Новая поездка"}</h1>
-          <StagePills stage={reply?.stage ?? null} />
-          <button
-            type="button"
-            className="iconbtn plan-toggle"
-            aria-controls="plan"
-            aria-expanded={planOpen}
-            onClick={() => setPlanOpen(!planOpen)}
-          >
-            ◧ План
-          </button>
         </header>
+        <StepCaption stage={reply?.stage ?? null} onOpen={() => setRoad(true)} />
+        {reply && (
+          <TripParams
+            spec={reply.plan.spec}
+            locked={busy || reply.stage === "clarify" || reply.stage === "booked"}
+            onSend={send}
+          />
+        )}
         <div className="feed" role="log" aria-live="polite">
           <div className="thread">
             {note && (
@@ -535,54 +574,37 @@ export function App() {
               </div>
             )}
             {restoring && <p className="muted">Восстанавливаю поездку…</p>}
-            {ui.messages.map((m, i) =>
-              m.role === "user" ? (
-                <div key={i} className="msg user">
-                  <div className="b">{m.text}</div>
-                </div>
-              ) : (
-                <div
-                  key={i}
-                  className="msg agent"
-                  role={i === lastAgent ? "status" : undefined}
-                  aria-busy={typing === i || undefined}
-                >
-                  <Mascot size={30} state={i === lastAgent && reply?.stage === "booked" ? "happy" : "idle"} />
-                  <div className="b">
-                    <AgentText
-                      text={m.text}
-                      synthetic={synthetic}
-                      typing={typing === i}
-                      onTick={scroll}
-                      onDone={() => setTyping(null)}
-                    />
+            {ui.messages.flatMap((m, i) => {
+              const msg =
+                m.role === "user" ? (
+                  <div key={i} className="msg user" data-msg={i}>
+                    <div className="b">{m.text}</div>
                   </div>
-                </div>
-              ),
-            )}
-            {reply && typing === null && !thinking && (
-              <div className="attach">
-                {destinationsInChat(reply.stage) && reply.plan.destinations.length > 0 && (
-                  <Destinations plan={reply.plan} stage={reply.stage} busy={busy} onSend={send} />
-                )}
-                {reply.questions.length > 0 && (
-                  <div className="questions">
-                    {reply.questions.map((q) => (
-                      <div key={q.text}>
-                        <p>{q.text}</p>
-                        <div className="chips">
-                          {q.options.map((o) => (
-                            <button key={o} type="button" className="chip" disabled={busy} onClick={() => send(o)}>
-                              {o}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                ) : (
+                  <div
+                    key={i}
+                    data-msg={i}
+                    ref={i === lastAgent ? lastMsg : undefined}
+                    className="msg agent"
+                    role={i === lastAgent ? "status" : undefined}
+                    aria-busy={typing === i || undefined}
+                  >
+                    <Mascot size={30} state={i === lastAgent && reply?.stage === "booked" ? "happy" : "idle"} />
+                    <div className="b">
+                      <AgentText
+                        text={badgeNoAi ? withoutNoAi(brief(m.text)) : brief(m.text)}
+                        synthetic={synthetic}
+                        typing={typing === i}
+                        onTick={scroll}
+                        onDone={() => setTyping(null)}
+                      />
+                    </div>
                   </div>
-                )}
-              </div>
-            )}
+                );
+              // One key for the block: it moves under a new last answer without losing its state.
+              return i === lastAgent && block ? [msg, block] : [msg];
+            })}
+            {lastAgent < 0 && block}
             {thinking && <Thinking variant={asked % 2 ? "banana" : "plane"} />}
             {error && (
               <p className="error" role="alert">
@@ -592,11 +614,6 @@ export function App() {
             <div ref={end} />
           </div>
         </div>
-        {reply && !planOpen && (
-          <button type="button" className="plan-sheet-open" aria-controls="plan" onClick={() => setPlanOpen(true)}>
-            План поездки
-          </button>
-        )}
         {!ui.messages.length && !restoring && (
           <div className="starters" aria-label="Примеры для начала">
             {EXAMPLES.map((ex) => (
@@ -649,45 +666,35 @@ export function App() {
           <p className="composer-hint">Цены и рейсы — синтетика. Оплата имитирована.</p>
         </form>
       </section>
-      <aside id="plan" className="plan" aria-label="Доска поездки">
+      <aside id="roadmap" className="roadmap" aria-label="Путь поездки">
         <header className="hd">
-          <b>План поездки</b>
-          <button type="button" className="iconbtn" aria-label="Свернуть план" onClick={() => setPlanOpen(false)}>
+          <b>Путь поездки</b>
+          <button
+            type="button"
+            className="icon road-close"
+            aria-label="Закрыть путь поездки"
+            onClick={() => setRoad(false)}
+          >
             ✕
           </button>
         </header>
-        <div className="bd">
-          {reply ? (
-            <Board
-              reply={reply}
-              busy={busy}
-              removed={ui.removed.filter(
-                (o) => o.kind !== "extra" || !ui.removed.some((p) => p.offer_id === o.for_offer_id),
-              )}
-              onSend={send}
-              onCart={onCart}
-              onCheckout={onCheckout}
-            />
-          ) : (
-            <p className="muted empty">Здесь появится доска поездки: варианты, сравнение, план и корзина.</p>
-          )}
-          <footer className="sources" aria-label="Источники данных">
-            <span>Данные:</span>
-            {SOURCES.map((s) => (
-              <span key={s.name}>
-                {s.text}, лицензия{" "}
-                <a href={s.url} target="_blank" rel="noreferrer">
-                  {s.licence}
-                </a>
-                .
-              </span>
-            ))}
-            <span>
-              Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже. Климат и
-              время в пути — оценки команды. Оплата имитируется.
+        <Roadmap reply={reply} doneAt={doneAt} onJump={jump} />
+        <footer className="sources" aria-label="Источники данных">
+          <span>Данные:</span>
+          {SOURCES.map((x) => (
+            <span key={x.name}>
+              {x.text}, лицензия{" "}
+              <a href={x.url} target="_blank" rel="noreferrer">
+                {x.licence}
+              </a>
+              .
             </span>
-          </footer>
-        </div>
+          ))}
+          <span>
+            Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже. Климат и
+            время в пути — оценки команды. Оплата имитируется.
+          </span>
+        </footer>
       </aside>
     </div>
   );
