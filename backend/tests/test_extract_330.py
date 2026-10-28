@@ -15,6 +15,8 @@ from api.extract import extract
         ("из Москвы, перелет не дольше 6 ч", 6.0),
         ("из Москвы, в пути не более двух суток", 48.0),
         ("из Москвы, не больше 20 часов в пути", 20.0),  # the old form stays
+        ("из Москвы, не больше пяти часов в дороге", 5.0),
+        ("из Москвы, до десяти часов в дороге", 10.0),
     ],
 )
 def test_travel_limit_phrases_set_max_travel_hours(text, hours):
@@ -28,6 +30,13 @@ def test_travel_limit_phrases_set_max_travel_hours(text, hours):
         "из Москвы, вылет до 10 часов утра",
         "дорога до Сочи, 5 ночей",
         "Сочи на сутки",
+        # a time of day, not a duration (reviewer #500)
+        "в дороге до 10 часов утра",
+        "перелет до 10 часов утра",
+        "перелет до 6 часов вечера",
+        "дорога до 2 часов дня",
+        "переезд до 3 часов дня",
+        "в пути до часа ночи",
     ],
 )
 def test_no_travel_limit_without_a_limit_phrase(text):
