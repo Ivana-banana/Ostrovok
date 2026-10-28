@@ -67,8 +67,22 @@ export type TransportOffer = Priced & {
   pets_allowed: boolean;
 };
 
-export type TransferOffer = Priced & { kind: "transfer"; depart_at: string; arrive_at: string };
-export type ExtraOffer = Priced & { kind: "extra"; for_offer_id: string };
+// Pair of the ride and the provider id (ADR-0002, #307); the web does not read them yet.
+export type TransferOffer = Priced & {
+  kind: "transfer";
+  depart_at: string;
+  arrive_at: string;
+  hotel_offer_id?: string | null;
+  leg_offer_id?: string | null;
+  ref?: string | null;
+};
+// tag: "early" | "late" | "prev" or another add-on; at: local time "HH:MM:SS" (#307).
+export type ExtraOffer = Priced & {
+  kind: "extra";
+  for_offer_id: string;
+  tag?: string | null;
+  at?: string | null;
+};
 export type Offer = HotelOffer | TransportOffer | TransferOffer | ExtraOffer;
 
 export type Destination = {

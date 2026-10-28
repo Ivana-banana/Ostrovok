@@ -26,6 +26,7 @@ from api.contracts import (
     Voucher,
 )
 from api.guards import llm_available
+from api.live_hotels import Live101Hotels
 from api.model import chat
 from api.partner import checkout_once, cors_options, plan_reply, require_key
 from api.store import SessionStore, db_path
@@ -54,6 +55,11 @@ DESCRIPTION = """\
 # Built once; a chat request uses it only with real_data (#490, offers.transport()).
 token = os.environ.get("TRAVELPAYOUTS_TOKEN", "").strip()
 offers.REAL_TRANSPORT = TravelpayoutsTransport(token) if token else None
+
+# Live hotel price level from 101hotels (#511), on by default; LIVE_HOTELS=0 forces synthetic.
+# The adapter falls back to the base provider on any miss or network failure (TRAP-1, TRAP-6).
+if os.environ.get("LIVE_HOTELS", "1").strip().lower() not in ("0", "false", "no", ""):
+    offers.HOTELS = Live101Hotels(offers.HOTELS)
 
 ops.setup_logging()
 log = logging.getLogger(__name__)

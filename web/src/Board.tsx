@@ -35,6 +35,7 @@ import {
   zonedTime,
   zoneLabel,
 } from "./format";
+import { HotelFilters } from "./HotelFilters";
 import { ParamsBar } from "./ParamsBar";
 import { otherAssumptions } from "./params";
 
@@ -91,7 +92,7 @@ const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
 
 // The strip of trip parameters above the chat (#434). Origin, dates, guests and budget are the
-// editable chips of ParamsBar; the other fields of the spec are read-only chips after them.
+// editable chips of ParamsBar, then the hotel filters (#431); the other fields of the spec are read-only chips after them.
 export function TripParams({ spec, locked, onSend }: {
   spec: TripSpec;
   locked: boolean;
@@ -108,13 +109,12 @@ export function TripParams({ spec, locked, onSend }: {
     ].filter(Boolean);
     rows.push(["Билеты", ["свои", ...times].join(", ")]);
   }
-  if (spec.hotel_budget_rub !== null) rows.push(["Бюджет отеля", rub(spec.hotel_budget_rub)]);
-  if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
   if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);
   return (
     <section className="strip" aria-label="Параметры поездки">
       <h2 className="sr-only">Параметры поездки</h2>
       <ParamsBar spec={spec} disabled={locked} onSend={onSend} />
+      <HotelFilters spec={spec} disabled={locked} onSend={onSend} />
       {rows.length > 0 && (
         <dl className="spec">
           {rows.map(([k, v]) => (
@@ -336,7 +336,7 @@ function zoneTag(iso: string) {
 
 // One row per hotel, as in the chat: the selected tariff of the hotel, else its first one.
 // The backend orders the tariffs of a hotel best first for the spec (optimizer.hotel_rows).
-function hotelRows(plan: Plan): HotelOffer[] {
+export function hotelRows(plan: Plan): HotelOffer[] {
   const rows = new Map<string, HotelOffer>();
   for (const o of plan.offers) {
     if (o.kind !== "hotel") continue;
@@ -455,6 +455,7 @@ function Transport({ plan, stage, busy, onSend }: {
               <th>Прибытие</th>
               <th className="num">В пути</th>
               <th className="num">Пересадки</th>
+              <th>Питомцы</th>
               <th className="num">Цена</th>
               <th className="act">
                 <span className="sr-only">Действие</span>
@@ -480,6 +481,8 @@ function Transport({ plan, stage, busy, onSend }: {
                   </td>
                   <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
                   <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
+                  {/* #475: the pet mark of a leg, as for the hotels */}
+                  <td data-label="Питомцы">{t.pets_allowed ? "можно" : "нет отметки"}</td>
                   <td className="num cost">
                     <Price value={t.price_rub} synthetic={t.synthetic} />
                   </td>

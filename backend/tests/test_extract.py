@@ -859,13 +859,42 @@ def test_trap_3_c15_full_turn_has_no_missing_catalogue_reply(tmp_path):
     [("из Москвы в Казань, потом через Нижний в Сочи", ["Казань", "Нижний Новгород", "Сочи"]),
      ("хочу проехать через Карелию и Мурманск", ["Карелия", "Мурманск"]),
      ("из Москвы через Казань в Екатеринбург, по 3 ночи в каждом", ["Казань", "Екатеринбург"]),
-     ("маршрут через Ярославль, Кострому и Плёс в июле", ["Ярославль"]),
+     ("маршрут через Ярославль, Кострому и Плёс в июле", ["Ярославль", "Кострома", "Плёс"]),
      ("из Москвы в Санкт-Петербург через Великий Новгород на 5 дней",
       ["Санкт-Петербург", "Великий Новгород"])],
 )  # fmt: skip
 def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
     found, _ = extract(text)
     assert found["destinations"] == dests
+
+
+@pytest.mark.parametrize(
+    ("text", "dests"),
+    [("Хочу в Сочи, оплата через Островок", ["Сочи"]),
+     ("Хочу в Сочи, забронирую через Островок и Яндекс", ["Сочи"]),
+     ("Хочу в Сочи, оплата через Сбербанк и Тинькофф", ["Сочи"]),
+     ("в Сочи через Казань, Бюджет 100 тысяч", ["Сочи", "Казань"]),
+     ("в Сочи через Казань, Мы вдвоём", ["Сочи", "Казань"]),
+     ("Через Ярославль, Кострому и Плёс в июле", ["Ярославль", "Кострома", "Плёс"])],
+)  # fmt: skip
+def test_trap_3_cherez_list_holds_only_known_places(text, dests):  # #305
+    found, _ = extract(text)
+    assert found["destinations"] == dests
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Казань на выходные, без питомцев", "едем без собаки", "питомцев у нас нет",
+     "собаку не берём", "без животных", "без детей и без кошки", "поедем без нашей собаки",
+     "без детей и собаки", "у нас нет собаки", "собаки не будет", "нет у нас питомцев",
+     "мы не берём с собой собаку"],
+)  # fmt: skip
+def test_pets_negation_gives_false(text):  # #294
+    found, _ = extract(text)
+    assert found["pets"] is False
+
+
+# --- #73: replanning verbs and common nouns are not a first-word city (TRAP-3) ---
 
 
 # #293: a range by weekdays («со среды по пятницу») is a date range, not an assumption.
@@ -953,6 +982,167 @@ def test_weekday_range_names_a_conflicting_length(tuesday):
     found, notes = extract("Казань со среды по пятницу, на 5 ночей")
     assert found["nights"] == 2
     assert any(n.startswith("даты:") and "5 ночей" in n for n in notes), notes
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["едем с собакой", "с нами кот", "без детей, с собакой", "без питомцев не поедем",
+     "с собакой, без кошек", "без детей с собакой", "без собаки никуда не поедем",
+     "без собаки не едем", "мы без собаки не путешествуем", "без кошки не полетим",
+     "без питомца никак", "без собаки ни за что", "собака не будет проблемой",
+     "Сочи в ноябре, отель без доплаты за собаку", "отель без ограничений для собак",
+     "нет запрета на собак", "летим без пересадок кошка плохо переносит перелёты",
+     "нет детей есть собака", "двое взрослых без детей и собака", "без пересадок и собака с нами",
+     "едем вдвоём без детей и наша собака"],
+)  # fmt: skip
+def test_pets_positive_mention_stays_true(text):  # #294
+    found, _ = extract(text)
+    assert found["pets"] is True
+
+
+def test_pets_negation_clears_a_flag_set_earlier(tmp_path):  # #294
+    store = SessionStore(tmp_path / "s.db")
+    first = chat(ChatRequest(session_id=None, message="Казань на выходные, с собакой"), store)
+    assert first.plan.spec.pets is True
+    second = chat(ChatRequest(session_id=first.session_id, message="без питомцев"), store)
+    assert second.plan.spec.pets is False
+
+
+def test_pets_unrelated_text_does_not_touch_the_flag():  # #294
+    found, _ = extract("Казань на выходные, без детей")
+    assert "pets" not in found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сдвинь на 3 дня",
+        "Перенеси на 2 дня позже",
+        "Поменяй на 4 дня",
+        "Замени на 3 дня",
+        "Добавь на 2 дня",
+        "Убери на 1 день",
+        "Отдых в ноябре",
+        "Отдыха в ноябре",
+        "Путёвка в мае",
+        "Путевка в мае",
+        "Пляжи в июне",
+        "Пляж в июне",
+        "Поездка в декабре",
+        "Отпуск в мае",
+        "Тур в июне",
+        "Море в ноябре",
+        "Давай на 5 дней",
+        "Покажи в мае",
+    ],
+)
+def test_trap3_verb_or_common_noun_at_the_start_is_not_a_city(text):
+    assert "destinations" not in extract(text)[0]
+
+
+REBUILD_VERB_FORMS = [  # imperative sg/pl, «мы» form, infinitive, «-ка» (#73)
+    "Сдвинь Сдвиньте Сдвинем Сдвинуть Сдвинь-ка",
+    "Перенеси Перенесите Перенесём Перенести Перенеси-ка Переносим Переносить",
+    "Поменяй Поменяйте Поменяем Поменять Поменяй-ка",
+    "Замени Замените Заменим Заменить Замени-ка Заменяй",
+    "Добавь Добавьте Добавим Добавить Добавь-ка Добавляй",
+    "Убери Уберите Уберём Убрать Убери-ка Убирай",
+    "Удали Удалите Удалим Удалить Удали-ка Удаляй",
+    "Измени Измените Изменим Изменить Измени-ка Изменяй",
+    "Увеличь Увеличьте Увеличим Увеличить Увеличь-ка",
+    "Уменьши Уменьшите Уменьшим Уменьшить Уменьши-ка",
+    "Продли Продлите Продлим Продлить Продли-ка",
+    "Сократи Сократите Сократим Сократить Сократи-ка",
+    "Исправь Исправьте Исправим Исправить Исправь-ка",
+    "Пересобери Пересоберите Пересоберём Пересобрать Пересобери-ка",
+    "Подвинь Подвиньте Подвинем Подвинуть Подвинь-ка",
+    "Передвинь Передвиньте Передвинем Передвинуть Передвинь-ка",
+    "Смени Смените Сменим Сменить Смени-ка Сменяй",
+    "Верни Верните Вернём Вернуть Верни-ка",
+    "Растяни Растяните Растянем Растянуть Растяни-ка",
+    "Укороти Укоротите Укоротим Укоротить Укороти-ка",
+    "Отмени Отмените Отменим Отменить Отмени-ка Отменяй",
+    "Поставь Поставьте Поставим Поставить Поставь-ка",
+]
+REBUILD_WORDS = [w for row in REBUILD_VERB_FORMS for w in row.split()]
+
+
+@pytest.mark.parametrize("word", REBUILD_WORDS)
+@pytest.mark.parametrize("has_destination", [False, True])
+def test_trap3_every_rebuild_verb_form_is_not_a_city(word, has_destination):
+    found, notes = extract(f"{word} на 2 дня", has_destination)
+    assert "destinations" not in found and not any("каталоге" in n for n in notes)
+
+
+@pytest.mark.parametrize(
+    "word",
+    ["Сдвинь", "Перенести", "Перенеси", "Отдых", "Подвиньте", "Смени", "Верни", "Растяни",
+     "Укороти", "Отмени", "Поставь", "Передвинь", "Путёвка", "Пляжи", "Отдыха"],
+)  # fmt: skip
+def test_trap3_verb_at_the_start_gives_no_unknown_destination_reply(word):
+    r = step(None, "s", f"{word} на 3 дня")
+    assert r.plan.spec.destinations == []
+    assert not any("каталоге" in m for m in [r.reply, *r.questions])
+
+
+def test_trap3_rebuild_verb_after_inspiration_keeps_no_fake_city():
+    first = step(None, "s", "Хочу на море в ноябре")
+    words = ["Сдвинь", "Перенести", "Перенеси", "Заменить", "Подвиньте", "Передвинь", "Смени",
+             "Верни", "Растяни", "Укороти", "Отмени", "Поставь", "Отдых"]  # fmt: skip
+    for word in words:
+        r = step(first, "s", f"{word} на 3 дня")
+        assert r.plan.spec.destinations == first.plan.spec.destinations
+        assert not any("каталоге" in m for m in [r.reply, *r.questions])
+
+
+def test_trap3_common_noun_as_the_first_message_gives_no_fake_city():
+    assert step(None, "s", "Отдых в ноябре").plan.spec.destinations == []
+
+
+@pytest.mark.parametrize(
+    "text, city",
+    [
+        ("Иркутск на неделю в декабре", "Иркутск"),
+        ("Калининград в мае", "Калининград"),
+        ("Мурманск, северное сияние", "Мурманск"),
+        ("Ухта, 3 ночи", "Ухта"),
+        ("Калуга в мае", "Калуга"),
+        ("Уберландия в мае", "Уберландия"),
+        ("Заменград на 3 дня", "Заменград"),
+        ("Добавск в мае", "Добавск"),
+        ("Убераба в мае", "Убераба"),
+        ("Удомля на 3 дня", "Удомля"),
+        ("Моршанск в мае", "Моршанск"),
+        ("Морозовск в мае", "Морозовск"),
+        ("Измаил в мае", "Измаил"),
+        ("Сдвинск на 3 дня", "Сдвинск"),
+        ("Поставы в мае", "Поставы"),
+        ("Вернадовка в мае", "Вернадовка"),
+        ("Смоленск в мае", "Смоленск"),
+        ("Отменск на 3 дня", "Отменск"),
+        ("Подвинск на 3 дня", "Подвинск"),
+    ],
+)
+def test_trap3_real_first_word_city_survives_the_veto(text, city):
+    assert extract(text)[0]["destinations"] == [city]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Владимир! Хочу на море в ноябре",
+        "Владимир!  Подбери отель на море",
+        "Владимир! Привет, нужен отель",
+    ],
+)
+@pytest.mark.parametrize("has_destination", [False, True])
+def test_trap3_name_with_exclamation_is_an_address(text, has_destination):
+    assert "destinations" not in extract(text, has_destination)[0]
+
+
+@pytest.mark.parametrize("text", ["Владимир! 3 ночи", "Владимир на неделю"])
+def test_trap3_vladimir_without_a_request_verb_is_still_the_city(text):
+    assert extract(text)[0]["destinations"] == ["Владимир"]
 
 
 @pytest.mark.parametrize(
