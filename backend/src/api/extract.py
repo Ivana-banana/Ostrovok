@@ -869,7 +869,7 @@ NEG_AFTER = re.compile(
     AFTER_LEAD + r"(?:надоел\w*|надоест"
     r"|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|ненавид\w+|табу|отпада\w+"
     r"|не\s+(?:хочу|хотим|хочется|хотелось|надо|нужн\w*|подходит|подойд\w*|нравится|нравятся"
-    r"|интересует|вариант|едем|поедем|поеду|летим|полетим|рассматрива\w*|любим|люблю))"
+    r"|понравил\w*|интересует|вариант|едем|поедем|поеду|летим|полетим|рассматрива\w*|любим|люблю))"
 )
 # Places in one list share the refusal: «кроме Турции и Египта», «Турцию и Египет отвергает».
 LIST_FORWARD = re.compile(r"\s*(?:,\s*(?:ни\s+)?|\s+и\s+|\s+или\s+|\s+ни\s+)(?:(?:в|во|на)\s+)?")
@@ -878,6 +878,9 @@ SENTENCE_END = re.compile(r"[.!?;\n]")
 # #127: «Турцию не хочу, Египет тоже»: the verb is dropped, the refusal goes on.
 ELLIPSIS_GAP = re.compile(r"\s*(?:,\s*(?:(?:а|и)\s+)?|(?:а|и)\s+)(?:(?:в|во|на)\s+)?")
 ELLIPSIS_TAIL = re.compile(r"\s*(?:тоже|также)(?=\s*(?:[,.!?;\n]|$))")
+# #172: «Не Турция, а Египет тоже»: after a bare «не X» the «а» turns to Y, «тоже» is no refusal.
+BARE_NOT = re.compile(r"не\s+(?:(?:в|во|на)\s+)?")
+CONTRAST_GAP = re.compile(r"\s*,\s*а\s+(?:(?:в|во|на)\s+)?")
 
 
 def _origin_end(text: str, t: str, pos: int, name: str) -> tuple[int, list[str]]:
@@ -1027,9 +1030,11 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
                     weak[i] = True
     # «Турцию не хочу, Египет тоже»: «тоже» with no verb goes on the refusal of the mention before.
     for i in range(1, n):
-        gap = ELLIPSIS_GAP.fullmatch(t[anchor[i - 1] : spans[i][0]]) if anchor[i - 1] else None
+        said = t[anchor[i - 1] : spans[i][0]] if anchor[i - 1] else ""
+        gap = ELLIPSIS_GAP.fullmatch(said)
         tail = ELLIPSIS_TAIL.match(t, spans[i][1]) if gap else None
-        if tail and not strong[i]:
+        contrast = bool(own[i - 1]) and BARE_NOT.fullmatch(t[slice(*own[i - 1][0])])
+        if tail and not strong[i] and not (contrast and CONTRAST_GAP.fullmatch(said)):
             strong[i] = True
             anchor[i] = tail.end()
             own[i].append((spans[i][1], tail.end()))
@@ -1044,7 +1049,7 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
         )
         weak[i] = weak[i] or (in_list and weak[i - 1])
         if in_list and neg[i - 1] and not own[i]:
-            own[i] = own[i - 1]
+            own[i] = list(own[i - 1])
     for i, (s, e) in enumerate(spans):
         if weak[i] and not neg[i]:
             base, stop = _sentence_span(t, s, e)
