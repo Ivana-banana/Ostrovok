@@ -1059,7 +1059,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             for country, aliases in catalog.snapshot()["countries"].items()
             for alias in (country.lower().replace("ё", "е"), *aliases)
             if (m := re.match(re.escape(alias) + r"(?![\w-])", t[start:]))
-            and re.search(r"\w", t[start + m.end() :])  # a bare «Аргентина» answers «which country?»
+            # A bare «Аргентина» answers «which country?»: it is no destination.
+            and re.search(r"\w", t[start + m.end() :])
         ),
         None,
     )

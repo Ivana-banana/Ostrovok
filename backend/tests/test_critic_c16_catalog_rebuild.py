@@ -26,6 +26,7 @@ def test_TRAP_3_country_prefix_in_an_ordinary_word_is_not_a_destination(text):
 @pytest.mark.parametrize(
     ("text", "dests"),
     [("Россия, море в августе с ребёнком из Москвы, неделя", None),
+     ("Мальдивы", None), ("Аргентина", None),
      ("Россия, хочу в Сочи на неделю", ["Сочи"])],
 )  # fmt: skip
 def test_TRAP_3_leading_country_yields_to_a_city_or_inspiration(text, dests):
