@@ -367,6 +367,8 @@ PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
 EXCLUDED = "исключено"
 # #451: the places of the earlier «ещё» batches; a turn without «ещё» drops the note.
 SHOWN = "уже показаны"
+# #452: the country the user named on «Откуда?»; its places are shown until a place is named.
+COUNTRY = "страна"
 
 
 def _label(assumption: str) -> str:
@@ -580,6 +582,19 @@ def shown_before(spec: TripSpec) -> list[str]:
     return [
         p for a in spec.assumptions if _label(a) == SHOWN for p in a.split(": ", 1)[1].split(", ")
     ]
+
+
+def country_before(spec: TripSpec) -> str | None:
+    """#452: the country kept from an earlier message while the trip has no place."""
+    if spec.destinations:
+        return None
+    return next((a.split(": ", 1)[1] for a in spec.assumptions if _label(a) == COUNTRY), None)
+
+
+def with_country(spec: TripSpec, country: str | None) -> TripSpec:
+    kept = [a for a in spec.assumptions if _label(a) != COUNTRY]
+    note = [f"{COUNTRY}: {country}"] if country and not spec.destinations else []
+    return spec.model_copy(update={"assumptions": kept + note})
 
 
 def with_shown(spec: TripSpec, shown: list[str]) -> TripSpec:
@@ -2631,6 +2646,20 @@ def step(
     if asking and ASKING_NOTE in notes and not found:
         return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
     said_origin = _said_origin(old, message, found)  # #436, TRAP-3
+    # #452: a country on «Откуда?» names where to go, not one place: the cards show its places
+    # and the spec keeps the country (a note) until a place or another country is named.
+    country_pool = None
+    if (
+        not said_origin
+        and old.stage == "clarify"
+        and any(q.text.startswith(ORIGIN_ASK) for q in old.questions)
+        and (c := catalog.country_of(message))
+        and len(dests := found.get("destinations") or []) == 1
+        and (place := catalog.resolve(dests[0]))
+        and place["country"] == c  # «Египет» extracts as Хургада: the one place of the country
+        and catalog.by_country(c)
+    ):
+        found["destinations"], country_pool = [], c
     # #453: the place abroad named again on «Откуда?» is no origin either: Москва, said aloud
     origin_default = (
         not said_origin
@@ -2819,6 +2848,10 @@ def step(
         else []
     )
     spec = with_shown(spec, [])  # the note is set again below, by a «ещё» batch only
+    country_pool = country_pool or country_before(old.plan.spec)  # #452: kept till a place is named
+    if country_pool in refused:
+        country_pool = None  # «не хочу в Турцию»: a refused country is no filter
+    spec = with_country(spec, country_pool)  # a place named now drops the note
     route = severals(message, found.get("destinations", []))
     if route:  # the lost city stays visible (#128, #139)
         spec = spec.model_copy(
@@ -2858,7 +2891,16 @@ def step(
     if not spec.destinations:
         # 5: four are left without the origin. #451: «ещё» — the same spec, the pool without
         # every place shown in this session.
-        dests = suggest_destinations(spec, 5, [*refused, *seen])
+        # #452: every other country is excluded, as a refused one is (#113)
+        skip = [c for c in catalog.snapshot()["countries"] if c != country_pool]
+        skip = skip if country_pool else []
+        dests = suggest_destinations(spec, 5, [*refused, *seen, *skip])
+        no_country = None
+        if country_pool and not dests and not more and not other:
+            # Nothing of that country fits: say it, show the other places, drop the country.
+            no_country, country_pool, skip = country_pool, None, []
+            dests = suggest_destinations(spec, 5, [*refused, *seen])
+        spec = with_country(spec, country_pool)
         if more:
             gone = old.plan.spec.destinations
             dests = [d for d in dests if d.name != spec.origin][:4]
@@ -2872,7 +2914,7 @@ def step(
             spec = with_shown(spec, [*seen, *(d.name for d in dests)])
         elif other:
             gone = old.plan.spec.destinations
-            ranked = suggest_destinations(spec, len(CATALOG), refused)
+            ranked = suggest_destinations(spec, len(CATALOG), [*refused, *skip])
             shown = [d.name for d in old.plan.destinations] if old.stage == "inspire" else []
             # Without the options already shown, if enough others are left.
             # The origin is no destination: a stay in the city of departure has no transport (#94).
@@ -2885,7 +2927,14 @@ def step(
         dests = [d for d in dests if d.name != spec.origin][:4]
         plan = Plan(spec=spec, destinations=dests)
         if not other:
-            return reply("inspire", plan, _text_inspire(plan), questions=party_question(spec))
+            sorry = (
+                f"Под ваши условия в стране «{no_country}» мест нет. Показываю другие страны.\n"
+                if no_country
+                else ""
+            )
+            return reply(
+                "inspire", plan, sorry + _text_inspire(plan), questions=party_question(spec)
+            )
         gone_text = f"Убираю «{', '.join(gone)}» из плана, корзину очищаю. " if gone else ""
         question = Question(text="Куда поедем?", options=[d.name for d in dests])
         text = gone_text + _text_inspire(plan)
