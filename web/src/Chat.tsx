@@ -197,9 +197,9 @@ function Arrow() {
           </filter>
         </defs>
         <g filter={`url(#f${id})`}>
-          <rect x="8" y="5" width="44" height="6" rx="3" fill={`url(#g${id})`} />
-          <circle className="route-from" cx="6" cy="8" r="5" />
-          <circle className="route-to" cx="54" cy="8" r="4.2" />
+          <rect x="3" y="4.75" width="54" height="6.5" rx="3.25" fill={`url(#g${id})`} />
+          <circle className="route-from" cx="6" cy="8" r="2.6" />
+          <circle className="route-to" cx="54" cy="8" r="2.6" />
         </g>
       </svg>
       <span className="sr-only">→</span>
@@ -262,12 +262,22 @@ function PointRow({ point: p, synthetic }: { point: Point; synthetic: boolean })
         {p.kind === "extra" && <div className="pt-sub">{p.name}</div>}
         {p.kind === "leg" && (
           <>
-            <div className="pt-sub">
-              <Route ride={p.ride} />
-            </div>
-            <div className="pt-sub">
-              {p.start}
-              {p.zones.length > 1 && ` ${p.zones[0]}`} <Arrow /> {p.end} · {p.zones.at(-1)}
+            <div className="pt-sub pt-route">
+              <span>{p.ride.from}</span>{" "}
+              <span className="pt-line">
+                <Arrow />
+              </span>{" "}
+              <span>{p.ride.to}</span>{" "}
+              <span className="pt-time">
+                {p.start}
+                {p.zones.length > 1 && ` ${p.zones[0]}`}
+              </span>{" "}
+              <span className="pt-line">
+                <Arrow />
+              </span>{" "}
+              <span className="pt-time">
+                {p.end} · {p.zones.at(-1)}
+              </span>
             </div>
             {p.ride.facts.length > 0 && <div className="pt-sub">{facts(p.ride.facts)}</div>}
           </>
