@@ -252,7 +252,7 @@ flowchart LR
 | `GIGACHAT_SCOPE` | `GIGACHAT_API_PERS` | область доступа GigaChat |
 | `GIGACHAT_OAUTH_URL` | пусто → адрес выдачи токена Сбера | адрес выдачи токена GigaChat |
 | `LLM_BASE_URL` | `https://api.giga.chat/v1` | адрес API |
-| `LLM_MODEL` | `GigaChat-3-Lightning` | имя модели (D-022) |
+| `LLM_MODEL` | `GigaChat-3-Ultra` | имя модели (D-022) |
 | `LLM_TIMEOUT_S` | `8` | ожидание ответа модели, секунды |
 | `SESSIONS_DB` | пусто → `data/sessions.db`; в Docker `/app/data/sessions.db` | файл сессий |
 | `APP_PORT` | `8080` (задан в `Dockerfile`) | порт внутри контейнера |
