@@ -85,6 +85,7 @@ from api.extract import (
     NO_AGE_NOTE,
     NUM,
     NUMS,
+    OWN_KEYS,
     PAST_WINDOW,
     PER_NIGHT_NOTE_RE,
     PLACE_RES,
@@ -2543,6 +2544,9 @@ def step(
     # #179: «А дети бесплатно?» at a built plan is a question, not a party: nobody is added.
     asking = old.stage in PLAN_STAGES and is_child_question(message)
     rules_found, rules_notes = extract(message, bool(old.plan.spec.destinations), asking=asking)
+    if not old.plan.spec.own_transport and rules_found.get("own_transport") is False:
+        for k in OWN_KEYS:  # #424: «купите билеты» ends own tickets only where they are
+            rules_found.pop(k)
     # #193: «без трансфера» is an edit even with «давай» in it; it never reaches the cart as a consent.
     no_transfer = (
         prev
@@ -2699,6 +2703,9 @@ def step(
         old.plan.spec.adults,
         asking,
     )
+    if not old.plan.spec.own_transport and found.get("own_transport") is False:
+        for k in OWN_KEYS:
+            found.pop(k)
     if asking and ASKING_NOTE in notes and no_change(found, old):
         ask = [] if old.plan.spec.children_ages else kids_ask()  # #182: no kids named: asked
         update = {"reply": _text_kids_question(old), "questions": ask, "llm": False}

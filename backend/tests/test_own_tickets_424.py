@@ -10,6 +10,7 @@ from talk import say
 
 from api import llm
 from api.contracts import ChatReply
+from api.extract import extract
 from api.fixtures import future_date
 from api.store import SessionStore
 
@@ -66,3 +67,30 @@ def test_fixture_round_trips_a_set_arrival():
     fixture = json.loads(path.read_text(encoding="utf-8"))
     spec = ChatReply.model_validate(fixture).plan.spec
     assert spec.arrive_at is not None and spec.arrive_at.date() == date(2026, 12, 11)
+
+
+@pytest.mark.parametrize("text", ["купите билеты на самолёт", "найди рейс"])
+def test_ticket_request_without_own_tickets_keeps_the_cart(store, text):
+    """Review of #624: no own tickets — «купите билеты» keeps the transport switch at checkout."""
+    r = say(store, "Сочи, 10-15 ноября, из Москвы, двое взрослых")
+    for t in ("1", "беру"):
+        r = say(store, t, r.session_id)
+    assert r.stage == "checkout"
+    again = say(store, text, r.session_id)
+    assert again.stage == "checkout" and again.cart == r.cart
+
+
+def test_trap_5_shift_across_dst_keeps_the_local_clock(store):
+    r = say(
+        store,
+        "Билеты уже есть, прилетаем в Рим 20 марта в 10:00, улетаем 25-го в 15:00, из Москвы, двое взрослых",
+    )
+    assert r.plan.spec.arrive_at.utcoffset().total_seconds() == 3600  # CET
+    spec = say(store, "сдвинь на 10 дней позже", r.session_id).plan.spec
+    assert spec.arrive_at.time() == time(10, 0) and spec.leave_at.time() == time(15, 0)
+    assert spec.arrive_at.utcoffset().total_seconds() == 7200  # CEST after 28 March
+
+
+def test_question_about_a_train_keeps_own_tickets():
+    """«нужно … поездом?» is a question, not a request for tickets: own tickets stay."""
+    assert "own_transport" not in extract("нам нужно ехать поездом до отеля?")[0]

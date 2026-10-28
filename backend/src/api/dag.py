@@ -18,12 +18,14 @@ Plan.changes are "before -> after" lines from spec fields and tool data, not the
 
 import re
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from api.cart import keep_refusal, refused, remember_refusal
 from api.contracts import Cart, Change, Explanation, HotelOffer, Offer, Plan, TripSpec
 from api.extract import EDIT_VERB, MONTH_NAMES, NUM, NUMS
 from api.fixtures import find_offers, rank
+from api.offers import resolve_place
 from api.optimizer import BEST_LABELS, bundles, order_tariffs, pick_hotel
 from api.timeline import build_timeline
 
@@ -232,6 +234,15 @@ def _months(m: re.Match) -> int:
     return 6 if unit.startswith("пол") else n * 12 if unit.startswith("год") else n
 
 
+def _moved(at: datetime | None, delta: timedelta, places: list[str]) -> datetime | None:
+    """The same local clock time delta days on, at the offset of that day (TRAP-5: DST)."""
+    if at is None:
+        return None
+    place = resolve_place(places[0]) if places else None
+    tz = ZoneInfo(place["tz"]) if place else at.tzinfo
+    return (at.astimezone(tz).replace(tzinfo=None) + delta).replace(tzinfo=tz)
+
+
 def shift_dates(spec: TripSpec, text: str, planned: bool = True) -> TripSpec:
     """The spec with its dates moved by «на N дней/месяцев позже/раньше»; unchanged without it.
 
@@ -290,8 +301,8 @@ def shift_dates(spec: TripSpec, text: str, planned: bool = True) -> TripSpec:
             "month": start.month,
             "assumptions": kept,
             # Own tickets move with their end of the stay, the clock time stays (#424)
-            "arrive_at": spec.arrive_at and spec.arrive_at + (start - spec.date_from),
-            "leave_at": spec.leave_at and spec.leave_at + (end - spec.date_to),
+            "arrive_at": _moved(spec.arrive_at, start - spec.date_from, spec.destinations),
+            "leave_at": _moved(spec.leave_at, end - spec.date_to, spec.destinations),
         }
     )
 

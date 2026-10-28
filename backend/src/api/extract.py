@@ -2052,10 +2052,11 @@ OWN_TICKETS_RE = re.compile(
 )
 # «подбери перелёт», «нужны билеты», «без своих билетов»: the transport is ours again (#424).
 NOT_OWN_RE = re.compile(
-    r"\b(?:подбер\w*|найд\w*|найти|(?<!не )нужн\w*|купи(?:те)?)\s+(?:\w+\s+)?"
-    r"(?:перел|рейс|билет|поезд|самол|авиабил)\w*"
+    r"\b(?:подбер\w*|найди\w*|купи(?:те)?)\s+(?:\w+\s+)?(?:перел|рейс|билет|поезд|самол|авиабил)\w*"
+    r"|(?<!не )\bнужн[ыо]\s+(?:\w+\s+)?билет\w*"
     r"|\b(?:без|нет)\s+сво\w+\s+билет\w*|\bсво\w+\s+билет\w*\s+нет\b"
 )
+OWN_KEYS = ("own_transport", "arrive_at", "leave_at")
 # The clock time of the own arrival and departure in one clause: «прилетаем 14 ноября в 01:30».
 # A dot between digits («14.11») does not end the clause; that day is read from it.
 CLOCK = r"(?P<clause>(?:[^.,;!?]|(?<=\d)\.(?=\d))*?)\bв\s+(?P<h>\d{1,2})[:.](?P<mi>\d{2})\b"
@@ -2090,7 +2091,7 @@ def own_clock(text: str, destinations: list[str], start: date | None, end: date 
 def _own_tickets(t: str, found: dict) -> None:
     """Own tickets and their times at the destination of this message (offers.own_legs)."""
     if NOT_OWN_RE.search(t):
-        found.update(own_transport=False, arrive_at=None, leave_at=None)
+        found.update(dict.fromkeys(OWN_KEYS[1:]), own_transport=False)
         return
     if not OWN_TICKETS_RE.search(t):
         return
