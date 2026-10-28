@@ -336,7 +336,7 @@ function zoneTag(iso: string) {
 
 // One row per hotel, as in the chat: the selected tariff of the hotel, else its first one.
 // The backend orders the tariffs of a hotel best first for the spec (optimizer.hotel_rows).
-function hotelRows(plan: Plan): HotelOffer[] {
+export function hotelRows(plan: Plan): HotelOffer[] {
   const rows = new Map<string, HotelOffer>();
   for (const o of plan.offers) {
     if (o.kind !== "hotel") continue;

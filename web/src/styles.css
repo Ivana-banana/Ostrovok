@@ -1079,42 +1079,61 @@ button.icon {
   line-height: 1.4;
 }
 
-/* #478: route and time of a leg are two rows of one grid: both lines stand in one column */
+/* #478, #488: route and time rows form one grid: the right words stand in one column;
+   each line starts 8px after its own left word and ends 8px before the right word */
 .pt-route {
   display: grid;
-  grid-template-columns: minmax(0, max-content) auto minmax(0, max-content);
+  grid-template-columns: minmax(0, max-content) minmax(0, max-content);
   justify-content: start;
   align-items: center;
   font-variant-numeric: tabular-nums;
 }
 
-.pt-route .pt-line {
+.pt-from {
   display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
-.arrow {
-  width: 52px;
-  height: 14px;
+.pt-word {
+  min-width: 0;
+}
+
+.pt-line {
+  position: relative;
+  flex: 1;
+  min-width: 28px;
+  height: 6px;
   margin: 0 8px;
-  vertical-align: -1px;
+  filter: drop-shadow(0 1px 0.8px rgb(0 0 0 / 0.25));
 }
 
-.arrow .route-hi {
-  stop-color: var(--route-hi);
+.pt-line .bar {
+  position: absolute;
+  inset: 0.25px 3px;
+  border-radius: 3px;
+  background: linear-gradient(var(--route-hi), var(--route-lo));
 }
 
-.arrow .route-lo {
-  stop-color: var(--route-lo);
+.pt-line .route-from,
+.pt-line .route-to {
+  position: absolute;
+  top: 0.4px;
+  box-sizing: border-box;
+  width: 5.2px;
+  height: 5.2px;
+  border-radius: 50%;
 }
 
-.arrow .route-from {
-  fill: var(--ink);
+.pt-line .route-from {
+  left: 0.4px;
+  background: var(--ink);
 }
 
-.arrow .route-to {
-  fill: var(--card);
-  stroke: var(--ink);
-  stroke-width: 1.6;
+.pt-line .route-to {
+  right: 0.4px;
+  background: var(--card);
+  border: 1.2px solid var(--ink);
 }
 
 @media (max-width: 480px) {
@@ -1138,9 +1157,8 @@ button.icon {
     font-size: 15px;
   }
 
-  .arrow {
-    width: 40px;
-    height: 12px;
+  .pt-line {
+    min-width: 22px;
     margin: 0 5px;
   }
 }
@@ -2674,4 +2692,139 @@ h3,
 .msg.agent ul.points li.sum {
   font-family: var(--font-head);
   font-weight: 700;
+}
+
+/* #489: an item of the answer opens the other options of its kind, with badges of the best */
+.msg.agent ul.points li.pt-alt {
+  flex-wrap: wrap;
+}
+
+.pt-alt > .pt-body {
+  cursor: pointer;
+  border-radius: var(--r-xs);
+}
+
+.pt-alt > .pt-body:hover .pt-more {
+  text-decoration: underline;
+}
+
+.pt-more {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--fs-s);
+}
+
+.pt-more::after {
+  content: " ▾";
+}
+
+.pt-alt > .pt-body[aria-expanded="true"] .pt-more::after {
+  content: " ▴";
+}
+
+.msg.agent ul.alts {
+  flex: none;
+  width: calc(100% - 34px); /* under the text of the item, past the icon */
+  margin: 6px 0 0 34px;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--card);
+}
+
+.msg.agent ul.alts li.alt {
+  display: flex;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line-2);
+}
+
+.msg.agent ul.alts li.alt:first-child {
+  border-top: none;
+}
+
+.msg.agent ul.alts li.alt.chosen {
+  background: var(--acc-soft);
+}
+
+.alt-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.alt-title {
+  font-weight: 700;
+}
+
+.alt-facts {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.alt-end {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.alt-mark {
+  font-size: var(--fs-s);
+  font-weight: 700;
+}
+
+/* pills as on Aviasales: each badge its own colour, none purple as the «синтетика» chip */
+.alt-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
+.alt-badge.cheap {
+  background: #e2f4e8;
+  color: #176b3a; /* 6.2:1 */
+}
+
+.alt-badge.fast {
+  background: #e3effc;
+  color: #0b56a3; /* 6.6:1 */
+}
+
+.alt-badge.rating {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.alt-badge.center {
+  background: #def3f2;
+  color: #0d5f61; /* 6.6:1 */
+}
+
+@media (max-width: 480px) {
+  .msg.agent ul.alts {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .alt-body {
+    flex-basis: 100%;
+  }
+
+  .msg.agent ul.alts li.alt {
+    flex-wrap: wrap;
+  }
+
+  .alt-end {
+    margin-left: auto;
+  }
 }
