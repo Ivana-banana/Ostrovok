@@ -180,20 +180,11 @@ button.icon {
   padding: 4px 8px 14px;
 }
 
-.brand > div {
+.brand b {
   flex: 1;
   min-width: 0;
-}
-
-.brand b {
   font-size: 17px;
   letter-spacing: 0.2px;
-}
-
-.brand small {
-  display: block;
-  color: var(--side-muted);
-  font-size: 11px;
 }
 
 /* ---------- the banana mascot (Mascot.tsx) ---------- */
