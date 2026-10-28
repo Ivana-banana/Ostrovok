@@ -2029,7 +2029,7 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     starts = rf"\bчерез\s+(?:{NUM}\s*)?(?:дн\w*|день|недел\w*)|\bследующ\w*\s+недел\w*"
     # «Сдвинь на 3 дня», «Продли на 2 дня»: an edit of the current trip, not a new length (#36)
     # «Сократить расходы на 3 дня» names a cost, not the trip: the object word is no edit
-    starts += rf"|\b{EDIT_VERB}\w*(?:\s+(?!расход|бюджет|затрат|цен)\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*|месяц\w*)"
+    starts += rf"|\b{EDIT_VERB}\w*(?:\s+(?!расход|бюджет|затрат|трат|цен)\w+)?\s+на\s+(?:(?:{NUM}|пар[уы])\s*)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*|месяц\w*)"
     t = re.sub(starts, lambda m: " " * len(m.group(0)), t)  # a start, not a duration
     if m := re.search(r"\bна\s+(\d{3,})\s*(?:ноч\w*|дн(?:я|ей)|день|сут\w*)", t):
         found["nights"] = MAX_NIGHTS + 1  # too long, the 3 digits are no number the rules read
@@ -2056,7 +2056,11 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     elif m := re.search(r"\bна\s+сутки\b", t):
         found["nights"] = 1
         notes.append(f"длительность: 1 ноч. («{m.group(0)}»)")
-    elif m := re.search(r"\bна\s+пар[уы]\s+(?:дн\w*|день|суток)", t):
+    # #146 (D-038): «пара» is a short trip of 2 nights; a number of days is N−1 nights.
+    # «на пару дней позже» is a shift, not a length.
+    elif m := re.search(
+        r"\bна\s+пар[уы]\s+(?:ноч\w*|суток|(?:дн\w*|день)\b(?!\s*(?:позже|раньше|спустя)))", t
+    ):
         found["nights"] = 2
         notes.append(f"длительность: 2 ноч. («{m.group(0)}»)")
     elif m := re.search(rf"\bна\s+пол\s?года\b{NOT_A_MOVE}", t):
@@ -2071,8 +2075,11 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
             notes.append(f"длительность: «{m.group(0)}» — {found['nights']} ночей")
     elif m := re.search(rf"\b(?:{NUM}\s+)?недел\w*", t):
         found["nights"] = 7 * (_num(m.group(1)) if m.group(1) else 1)
-    elif m := re.search(rf"\bдн(?:я|ей)\s+(\d{{1,2}})\b{NOT_LENGTH_AFTER}", t):
-        # «дней 10» (#114): after every named length; «день 3» is a day of a programme
+    elif m := re.search(
+        rf"\bдн(?:я|ей)\s+(?:на\s+)?(\d{{1,2}})\b{NOT_LENGTH_AFTER}(?!\s*(?:взр|дет|реб|персон|гост))",
+        t,
+    ):
+        # «дней 10» (#114), «дней на 5» (#302): after every named length; «день 3» is a day of a programme
         found["nights"] = max(int(m.group(1)) - 1, 1)
         notes.append(f"длительность: {found['nights']} ноч. («{m.group(0)}»)")
     elif m := re.search(rf"(?<!\bin )\b{NUM_EN}[\s-]*nights?\b", t):
