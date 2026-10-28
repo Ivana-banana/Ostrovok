@@ -318,10 +318,11 @@ function point({ label, text }: { label: string; text: string }): Point | null {
     return parts.length && facts.length ? { kind: "hotel", name: parts.join(", "), facts, price } : null;
   }
   if (label === "Трансферы") {
-    // «вокзал → Казантель, Казань, ≈2.6 км; …»: the hotel name holds commas, the facts start at «≈»
+    // «вокзал → Казантель, Казань, ≈2.6 км; …»: the hotel name holds commas, the facts start at «≈»;
+    // without «≈ … км» the whole part is the route and there are no facts
     const rides = body.split("; ").map((r) => {
       const at = r.indexOf(", ≈");
-      return at > 0 ? ride(r.slice(0, at), r.slice(at + 2).split(", ")) : null;
+      return at > 0 ? ride(r.slice(0, at), r.slice(at + 2).split(", ")) : ride(r, []);
     });
     return rides.every((r) => r) ? { kind: "transfer", rides: rides as Ride[], price } : null;
   }
