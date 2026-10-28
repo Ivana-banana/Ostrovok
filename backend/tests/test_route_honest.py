@@ -9,10 +9,10 @@ import json
 from pathlib import Path
 
 import pytest
+from talk import say
 
 from api import catalog, checks, model
-from api.contracts import ChatRequest
-from api.model import CANDIDATES, ROUTE, chat, is_route, severals
+from api.model import CANDIDATES, ROUTE, is_route, severals
 from api.offers import places
 from api.store import SessionStore
 
@@ -88,7 +88,7 @@ def test_link_before_a_city_is_a_route(text, dests):
     ],
 )
 def test_candidates_get_no_route_notice(store, text):
-    r = chat(ChatRequest(session_id=None, message=text), store)
+    r = say(store, text)
     assert r.plan.spec.destinations == ["Сочи", "Анапа"]
     assert not [a for a in r.plan.spec.assumptions if a.startswith("маршрут:")]
     assert [a for a in r.plan.spec.assumptions if a.startswith("варианты:")]
@@ -137,7 +137,7 @@ def test_trap_6_is_route_does_not_ask_the_geocoder(monkeypatch, geo, text):
 
 def test_trap_6_the_sea_after_the_link_is_still_candidates(store, monkeypatch, geo):
     monkeypatch.setattr(catalog, "_get", geo("море"))
-    r = chat(ChatRequest(session_id=None, message="Сочи и Анапа на 5 ночей, потом на море"), store)
+    r = say(store, "Сочи и Анапа на 5 ночей, потом на море")
     assert [a for a in r.plan.spec.assumptions if a.startswith("варианты:")]
     assert not [a for a in r.plan.spec.assumptions if a.startswith("маршрут:")]
     assert "В плане только:" not in r.reply

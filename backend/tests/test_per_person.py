@@ -1,10 +1,9 @@
 """#369: «на 1 человека» is a unit of price, not a party. Without a model (TRAP-1)."""
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import chat
 from api.store import SessionStore
 
 FAMILY = "Едем с женой и сыном 6 лет в Сочи на 5 ночей с 1 июля"
@@ -13,10 +12,6 @@ FAMILY = "Едем с женой и сыном 6 лет в Сочи на 5 но�
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 @pytest.mark.parametrize(

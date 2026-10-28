@@ -6,10 +6,9 @@ cart. Each phrase runs with a stub model and without a model (no key, TRAP-1).
 """
 
 import pytest
+from talk import say
 
 from api import llm
-from api.contracts import ChatRequest
-from api.model import chat
 from api.store import SessionStore
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч, нужен завтрак"
@@ -18,10 +17,6 @@ SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, о�
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def at(store, stage):

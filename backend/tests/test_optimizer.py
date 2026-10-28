@@ -6,12 +6,12 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from talk import say
 
 from api import dag
 from api.contracts import (
     Cancellation,
     Cart,
-    ChatRequest,
     ExtraOffer,
     HotelOffer,
     Plan,
@@ -19,7 +19,6 @@ from api.contracts import (
     TransportOffer,
     TripSpec,
 )
-from api.model import chat
 from api.offers import find_offers, transfer_id
 from api.optimizer import (
     DEFAULT_WEIGHTS,
@@ -496,10 +495,6 @@ S6 = "Выходные в Казани, из Москвы, 2 взрослых, 1
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def _itogo(reply):

@@ -1,7 +1,9 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { Board, Destinations, destinationsInChat } from "./Board";
+import { Board, EarlierChoices, TripParams } from "./Board";
 import type { ChatReply } from "./contracts";
 import { changeValue, localTime } from "./format";
 
@@ -12,10 +14,10 @@ const hotelBought = structuredClone(base);
 hotelBought.cart.items = [...base.cart.items, ...base.plan.offers.filter((o) => o.offer_id === "h1")];
 
 function render(r: ChatReply): Document {
-  // Before a destination is picked its cards live in the chat (App): render them as there.
+  // As in the chat (App, #434): the strip of parameters above, the block of the stage below.
   const html = renderToStaticMarkup(
     <>
-      {destinationsInChat(r.stage) && <Destinations plan={r.plan} stage={r.stage} busy={false} onSend={noop} />}
+      <TripParams spec={r.plan.spec} locked={false} onSend={noop} />
       <Board reply={r} busy={false} removed={[]} onSend={noop} onCart={noop} onCheckout={noop} />
     </>,
   );
@@ -108,12 +110,22 @@ suite("доска поездки", () => {
     try {
       expect(localTime("2026-12-11T07:10:00+03:00")).toBe("11.12 07:10");
       const text = render(hotelBought).querySelector("[aria-label='Таймлайн']")?.textContent ?? "";
-      expect(text).toContain("11.12 07:10");
+      expect(text).toContain("11.12 07:10 (UTC+3)");
       expect(text).toContain("прибытие 07:10 раньше заезда 14:00");
       expect(text).toContain("Ранний заезд"); // the fix offer is shown by its offer_id
     } finally {
       process.env.TZ = tz;
     }
+  });
+
+  it("#439: у отелей и направлений есть номера, у рейсов — зона времени", () => {
+    const doc = render(base);
+    const hotels = doc.querySelector("[aria-label='Сравнение отелей']");
+    expect(hotels?.querySelector("th.num")?.textContent).toBe("№");
+    expect(hotels?.querySelector("tbody td.no")?.textContent).toBe("1");
+    const dest = doc.querySelector("[aria-label='Направления']");
+    if (dest) expect(dest.querySelector(".dest-no")?.textContent).toBe("1. ");
+    expect(doc.body.textContent).toMatch(/\(UTC[+-]\d/);
   });
 
   it("#39: у отеля несколько тарифов — в таблице одна строка, выбранный тариф виден", () => {
@@ -258,6 +270,13 @@ suite("доска поездки", () => {
     expect(card?.querySelector("button")?.textContent).toBe("Выбрать");
   });
 
+  it("#451: под карточками направлений — «Показать ещё», только на этапе inspire", () => {
+    const more = (stage: ChatReply["stage"]) =>
+      render({ ...base, stage, voucher: null }).querySelector("[aria-label='Направления'] > button.more-dests");
+    expect(more("inspire")?.textContent).toBe("Показать ещё");
+    expect(more("compare")).toBeNull();
+  });
+
   it("таймлайн: события убранной из корзины позиции помечены, после «Вернуть» — обычный вид", () => {
     const r = structuredClone(base);
     r.stage = "checkout";
@@ -343,5 +362,159 @@ suite("доска поездки", () => {
     };
     expect(hint("assemble")).toContain("вернёт вас к сравнению");
     expect(hint("compare")).not.toContain("вернёт");
+  });
+
+  it("#434: блок этапа — карточки этапа открыты, уже выбранное свёрнуто в «Варианты»", () => {
+    const at = (stage: ChatReply["stage"]) => render({ ...structuredClone(base), stage, voucher: null });
+    const folded = (doc: Document, label: string) =>
+      doc.querySelector(`[aria-label='${label}']`)?.closest("details") ?? null;
+    const compare = at("compare");
+    expect(folded(compare, "Сравнение отелей")).toBeNull();
+    expect(folded(compare, "Сравнение транспорта")).toBeNull();
+    expect(folded(compare, "Направления")?.querySelector("summary")?.textContent).toContain("Варианты");
+    const checkout = at("checkout");
+    expect(folded(checkout, "Корзина")).toBeNull();
+    expect(folded(checkout, "Таймлайн")).toBeNull();
+    expect(folded(checkout, "Сравнение отелей")?.hasAttribute("open")).toBe(false);
+    expect(folded(checkout, "Сравнение транспорта")?.hasAttribute("open")).toBe(false);
+    const inspire = at("inspire");
+    expect(folded(inspire, "Направления")).toBeNull();
+  });
+
+  it("#434: приоритеты, допущения и «Что изменилось» — в компактном блоке «Подробнее»", () => {
+    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    const more = render(r).querySelector("details.more:not(.options)");
+    expect(more?.querySelector("summary")?.textContent).toContain("важнее: цена → отмена");
+    for (const label of ["Приоритеты", "Что изменилось"]) expect(more?.querySelector(`[aria-label='${label}']`)).not.toBeNull();
+    // A replanned trip opens the block: the user sees what changed without a click.
+    expect(more?.hasAttribute("open")).toBe(r.plan.changes.length > 0);
+    r.plan.changes = [];
+    expect(render(r).querySelector("details.more:not(.options)")?.hasAttribute("open")).toBe(false);
+  });
+
+  it("#450: главное действие этапа — последнее в блоке, после отелей и транспорта, с суммой и «синтетика»", () => {
+    const order = (stage: ChatReply["stage"], mainLabel: string) => {
+      const doc = render({ ...hotelBought, stage, voucher: null });
+      const all = [...doc.querySelectorAll(".board > *")];
+      const at = (label: string) => all.findIndex((e) => e.getAttribute("aria-label") === label);
+      return { doc, all, at, main: all.findIndex((e) => e.textContent?.includes(mainLabel) && e.querySelector("button.buy, button.primary")) };
+    };
+    const a = order("assemble", "Положить в корзину");
+    expect(a.at("Таймлайн")).toBeLessThan(a.at("Сравнение отелей"));
+    expect(a.at("Сравнение отелей")).toBeLessThan(a.at("Сравнение транспорта"));
+    expect(a.at("Сравнение транспорта")).toBeLessThan(a.main);
+    expect(a.at("Корзина")).toBeLessThan(a.main);
+    expect(a.main).toBe(a.all.length - ([...a.doc.querySelectorAll(".board > details")].length) - 1);
+    const buy = a.doc.querySelector(".board > .next button.buy");
+    expect(buy?.textContent).toContain("Положить в корзину · ");
+    expect(buy?.querySelector(".price .synth")?.textContent).toBe("синтетика");
+    const c = order("compare", "Беру этот план");
+    expect(c.at("Сравнение транспорта")).toBeLessThan(c.main);
+    expect(c.at("Таймлайн")).toBeLessThan(c.main);
+    const o = order("checkout", "Подтвердить бронь");
+    expect(o.at("Таймлайн")).toBeLessThan(o.at("Корзина"));
+    expect(o.at("Корзина")).toBe(o.all.findIndex((e) => e.textContent?.includes("Подтвердить бронь")));
+    expect(o.main).toBe(o.at("Корзина"));
+  });
+
+  it("#450: варианты прошлого ответа остаются под ним, кнопки выбора живые", () => {
+    const r = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
+    const doc = new DOMParser().parseFromString(
+      renderToStaticMarkup(<EarlierChoices reply={r} current={r} busy={false} onSend={noop} />),
+      "text/html",
+    );
+    const d = doc.querySelector("details.earlier");
+    expect(d?.hasAttribute("open")).toBe(true) // #458: destination batches stay open;
+    expect(d?.querySelectorAll("button[aria-label^='Выбрать направление']").length).toBe(r.plan.destinations.length);
+    // «ещё» is understood only in the current block: an older block has no such button
+    expect(doc.querySelector("button.more-dests")).toBeNull();
+    const booked = renderToStaticMarkup(<EarlierChoices reply={{ ...r, stage: "booked" }} current={r} busy={false} onSend={noop} />);
+    expect(booked).toBe("");
+  });
+
+  it("#450: кнопки старого блока живы только при том же этапе и тех же строках; иначе подпись и ни одной кнопки", () => {
+    const old = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    old.plan.selected = []; // nothing chosen yet: every row has its pick button
+    const html = (cur: ChatReply, sent: string[] = []) =>
+      new DOMParser().parseFromString(
+        renderToStaticMarkup(<EarlierChoices reply={old} current={cur} busy={false} onSend={(t) => sent.push(t)} />),
+        "text/html",
+      );
+    const picks = (d: Document) => d.querySelectorAll("details.earlier button").length;
+    // the same stage and rows: the buttons are live
+    expect(picks(html(old))).toBeGreaterThan(0);
+    expect(html(old).querySelector("details.earlier .muted")?.textContent ?? "").not.toContain("План изменился");
+    // the current stage is assemble: nothing to press, the caption sends the user to the current block
+    const now = html({ ...structuredClone(old), stage: "assemble" });
+    expect(picks(now)).toBe(0);
+    expect(now.querySelector("details.earlier")?.textContent).toContain("План изменился — выберите в текущем блоке");
+    // the same stage, other rows
+    const other = structuredClone(old);
+    other.plan.offers = [...other.plan.offers].reverse();
+    expect(picks(html(other))).toBe(0);
+  });
+
+  it("TRAP-5: зона (UTC±N) стоит внутри строки транспорта, после города", () => {
+    const doc = render({ ...structuredClone(base), stage: "compare", voucher: null });
+    const rows = [...doc.querySelectorAll("[aria-label='Сравнение транспорта'] tbody tr")];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const tr of rows) {
+      const ends = [...tr.querySelectorAll("td[data-label='Отправление'], td[data-label='Прибытие']")];
+      expect(ends).toHaveLength(2);
+      for (const td of ends) expect(td.querySelector("small + .zone")?.textContent).toMatch(/\(UTC[+-]\d/);
+    }
+  });
+
+  it("#450/#458: старый блок направлений жив, пока выбор места идёт; после выбора — подпись и 0 кнопок", () => {
+    const old = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
+    const cur = { ...structuredClone(old), stage: "compare" as const };
+    const d = new DOMParser().parseFromString(
+      renderToStaticMarkup(<EarlierChoices reply={old} current={cur} busy={false} onSend={noop} />),
+      "text/html",
+    );
+    expect(d.querySelectorAll("details.earlier button").length).toBe(0);
+    expect(d.querySelector("details.earlier")?.textContent).toContain("План изменился — выберите в текущем блоке");
+  });
+
+  it("#450: клик по живой кнопке старого блока шлёт текст строки, которая в текущем плане та же", async () => {
+    const old = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
+    const sent: string[] = [];
+    const box = document.createElement("div");
+    document.body.append(box);
+    const root = createRoot(box);
+    await act(async () =>
+      root.render(<EarlierChoices reply={old} current={structuredClone(old)} busy={false} onSend={(t) => sent.push(t)} />),
+    );
+    const btn = box.querySelectorAll<HTMLButtonElement>("details.earlier button[aria-label^='Выбрать направление']")[0];
+    await act(async () => btn.click());
+    // #458: the name only, no number
+    expect(sent).toEqual([old.plan.destinations[0].name]);
+    act(() => root.unmount());
+    box.remove();
+  });
+  it("#458: «Ранее предлагал» — имена прошлых пачек кнопками; клик шлёт имя; старый блок открыт и жив", async () => {
+    const cur = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
+    cur.plan.spec.assumptions = [...cur.plan.spec.assumptions, "уже показаны: Кировск, Губаха, " + cur.plan.destinations[0].name];
+    const sent: string[] = [];
+    const box = document.createElement("div");
+    document.body.append(box);
+    const root = createRoot(box);
+    await act(async () => root.render(<Board reply={cur} busy={false} removed={[]} onSend={(t) => sent.push(t)} onCart={noop} onCheckout={noop} />));
+    const line = box.querySelector(".earlier-names");
+    expect(line?.textContent).toContain("Ранее предлагал");
+    expect([...line!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Кировск", "Губаха"]);
+    await act(async () => line!.querySelectorAll("button")[1].click());
+    expect(sent).toEqual(["Губаха"]);
+    // an old batch stays open and live after the list changed
+    const old = structuredClone(cur);
+    cur.plan.destinations = cur.plan.destinations.map((x) => ({ ...x, name: `${x.name} (другой)` }));
+    const html = new DOMParser().parseFromString(
+      renderToStaticMarkup(<EarlierChoices reply={old} current={cur} busy={false} onSend={noop} />),
+      "text/html",
+    );
+    expect(html.querySelector("details.earlier")?.hasAttribute("open")).toBe(true);
+    expect(html.querySelectorAll("details.earlier button[aria-label^='Выбрать направление']").length).toBe(old.plan.destinations.length);
+    act(() => root.unmount());
+    box.remove();
   });
 });

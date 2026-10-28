@@ -147,6 +147,9 @@ export type ChatReply = {
   llm: boolean;
 };
 
+// GET /api/mode: false means the agent answers by rules, without a model (TRAP-1).
+export type LlmMode = { llm: boolean };
+
 export type CartAction = { session_id: string; action: "add" | "remove"; offer_id: string };
 export type CheckoutRequest = {
   session_id: string;
