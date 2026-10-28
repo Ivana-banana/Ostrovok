@@ -77,6 +77,7 @@ from api.extract import (
     EACH_STAY_RE,
     HOTEL_NOTE,
     MAX_NIGHTS,
+    MODES,
     MONTH,
     MONTH_NAMES,
     MONTHS,
@@ -87,6 +88,7 @@ from api.extract import (
     PLACE_RES,
     SEASONS,
     _known,
+    _night_word,
     asks_booking,
     asks_stay,
     children_uncounted,
@@ -104,7 +106,15 @@ from api.extract import (
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
-from api.inspire import ROAD_LINE, card, suggest_destinations, unchecked_wishes
+from api.inspire import (
+    ROAD_LINE,
+    _level,
+    _month,
+    _rule_breaks,
+    card,
+    suggest_destinations,
+    unchecked_wishes,
+)
 from api.offers import SyntheticTransport, _complete, find_offers, resolve_place, road_nights
 from api.optimizer import (
     bundles,
@@ -123,6 +133,11 @@ log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 NO_PET_HOTEL = (
     "Внимание: у отеля нет отметки о приёме животных — уточните у отеля до брони."  # #556
+)
+# #575: a plane takes the pet on the terms of the airline; the reply names them, no fee (TRAP-4)
+NO_PET_FLIGHT = (
+    "Внимание: питомец в самолёте — не отказ, а условие авиакомпании, которое не подтверждено: "
+    "вес, переноска и доплата. Уточните у авиакомпании до оплаты."
 )
 NO_PET_MARK = "Нет отметки о животных:"  # the count line of the compare reply (#475)
 CONFIRM_RE = re.compile(
@@ -352,6 +367,8 @@ PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
 EXCLUDED = "исключено"
 # #451: the places of the earlier «ещё» batches; a turn without «ещё» drops the note.
 SHOWN = "уже показаны"
+# #452: the country the user named on «Откуда?»; its places are shown until a place is named.
+COUNTRY = "страна"
 
 
 def _label(assumption: str) -> str:
@@ -371,6 +388,24 @@ def resolve_hotel_budget(data: dict) -> None:
             data["assumptions"][i] = (
                 f"{HOTEL_NOTE}: {_rub(night)} за ночь, {_rub(night * n)} за {n} ноч."
             )
+
+
+# #167: «бюджет: 3 000 ₽ × 2 взрослых × 4 ночи»: a budget «в сутки» keeps its factors in the note.
+PER_NIGHT_BUDGET_RE = re.compile(
+    r"^бюджет: (\d[\d ]*) ₽ ×(?: (\d+) взросл\w*(?: \(дети не считаются\))? ×)? (\d+) ноч\w*"
+)
+
+
+def resolve_trip_budget(data: dict) -> None:
+    """The trip budget stated «в сутки» is a total of the nights the plan has now (#167)."""
+    for i, a in enumerate(data["assumptions"]):
+        m = PER_NIGHT_BUDGET_RE.match(a)
+        if not m or not data["nights"] or data["nights"] == int(m.group(3)):
+            continue
+        day, people, n = int(m.group(1).replace(" ", "")), int(m.group(2) or 1), data["nights"]
+        data["budget_rub"] = day * people * n
+        party = f" {people} взрослых ×" if m.group(2) else ""
+        data["assumptions"][i] = f"бюджет: {_rub(day)} ×{party} {n} {_night_word(n)}"
 
 
 def _noted(spec: TripSpec, label: str) -> bool:
@@ -425,6 +460,7 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
         return "ask", _month_number(other.group(1)) if other else None
     unclear = (
         r"\bможет\b|\bможно\b|\bа если\b|\bчто если\b|\bкак насч|\b(?:был|была|были|было)\b|побывал"
+        r"|\bли\b"  # «а не поедем ли в феврале» (#220)
     )
     if "?" in t or re.search(unclear, t):
         return "ask", month
@@ -432,7 +468,10 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     # Without a comma a «не» after the month is a refusal («в январе не поедем»). After a comma,
     # «но», «и» or «а» it may belong to a neighbour («в январе, не дорого»): only a verb of
     # refusing makes it one (#198).
-    parts = re.split(r",|\s(?:но|и|а)\s", clause, maxsplit=1)
+    # A dash before «не» + a neighbour wish ends the part too: «в январе — не дорого» (#220).
+    # Any other «— не X» stays a refusal: «январь — не пойдёт», «в январе — не»
+    neighbour = r"(?=не\s+(?:очень\s+)?(?:дорог|дешев|жарк|шумн|далек)\w*)"
+    parts = re.split(rf",|\s[—–-]\s+{neighbour}|\s(?:но|и|а)\s", clause, maxsplit=1)
     near, after = parts[0], parts[1] if len(parts) > 1 else ""
     strong = r"нельзя|отпадает|отпадают|исключен|невозможн"  # a refusal anywhere near the month
     weak = r"отменя|неудобн"  # a refusal only as the whole part (#215)
@@ -460,9 +499,25 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     return "move", month
 
 
-def month_reply(spec: TripSpec, target: int | None, hint: str) -> tuple[str, list[Question]]:
+def month_other(text: str, month: int) -> int | None:
+    """The second month of a doubt («в январе, а не поедем ли в феврале»), to ask about (#220)."""
+    low = text.lower().replace("ё", "е")
+    if not re.search(r"\bли\b", low):  # a doubt «…ли…» only; «не в декабре, лучше в январе» is not
+        return None
+    names = re.findall(rf"\b{MONTH}", low)
+    others = [n for n in map(_month_number, names) if n != month]
+    return others[0] if others else None
+
+
+def month_reply(
+    spec: TripSpec, target: int | None, hint: str, other: int | None = None
+) -> tuple[str, list[Question]]:
     """The reply to a month that moves nothing: the dates stay, or a question about the move."""
     own = f"Даты {period(spec)} вы назвали сами."
+    if target is not None and other is not None:  # two months in a doubt: ask which one
+        moves = [f"Перенести на {MONTH_NAMES[n - 1]}" for n in (target, other)]
+        text = f"{own} {MONTH_NAMES[target - 1].capitalize()} или {MONTH_NAMES[other - 1]}?"
+        return text, [Question(text="Что сделать с датами?", options=moves)]
     if target is None:
         return f"{own} Назовите нужные даты или месяц, на который перенести.", []
     name = MONTH_NAMES[target - 1]
@@ -507,6 +562,8 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     for k, v in found.items():
         data[k] = data[k] + [w for w in v if w not in data[k]] if k == "wishes" else v
     resolve_hotel_budget(data)
+    if "budget_rub" not in found:  # a budget stated now is not recounted
+        resolve_trip_budget(data)
     return TripSpec.model_validate(data)
 
 
@@ -525,6 +582,19 @@ def shown_before(spec: TripSpec) -> list[str]:
     return [
         p for a in spec.assumptions if _label(a) == SHOWN for p in a.split(": ", 1)[1].split(", ")
     ]
+
+
+def country_before(spec: TripSpec) -> str | None:
+    """#452: the country kept from an earlier message while the trip has no place."""
+    if spec.destinations:
+        return None
+    return next((a.split(": ", 1)[1] for a in spec.assumptions if _label(a) == COUNTRY), None)
+
+
+def with_country(spec: TripSpec, country: str | None) -> TripSpec:
+    kept = [a for a in spec.assumptions if _label(a) != COUNTRY]
+    note = [f"{COUNTRY}: {country}"] if country and not spec.destinations else []
+    return spec.model_copy(update={"assumptions": kept + note})
 
 
 def with_shown(spec: TripSpec, shown: list[str]) -> TripSpec:
@@ -1737,11 +1807,37 @@ PRICE_VERSUS_RE = re.compile(
     r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?"
     r"|^\s*(?:а\s+)?(?:в|на)\s+(?:\w+\s+)?\w*[^\Wую]\s+(?:будет\s+|вс[её]\s+же\s+)?"
     r"(?:дешевле|дороже|выгоднее)\s*\?\s*$"
+    # #483: «поезд дешевле самолёта?» has no «чем»
+    r"|\b(?:поезд|самол[её]т|машин)\w*\s+(?:будет\s+)?(?:дешевле|дороже|выгоднее)\s+"
+    r"(?:поезд|самол[её]т|машин)\w*\s*\?"
 )
 VERSUS_ORDER_RE = re.compile(
     r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
 )
 MARKET_RE = re.compile(r"\bв\s+среднем\b|рынк|\bобычно\b")  # «дешевле, чем в среднем?»
+# «а дешевле, чем в Турции» inside a longer message: the comparison words only (#483)
+VERSUS_CLAUSE_RE = re.compile(
+    r"(?i)\b(?:а\s+)?(?:это\s+)?(?:(?:на\s+)?(?:поезд|самол[её]т|машин)\w*\s+)?"
+    r"(?:дешевле|дороже|выгоднее),?\s+чем\s+(?:в\s+|на\s+)?[\w-]+"
+    # no «чем»: «поезд дешевле самолёта»
+    r"|\b(?:поезд|самол[её]т|машин)\w*\s+(?:будет\s+)?(?:дешевле|дороже|выгоднее)\s+"
+    r"(?:поезд|самол[её]т|машин)\w*"
+)
+
+
+MODE_NAMES = {"train": "поезд", "flight": "самолёт", "car": "машина"}
+
+
+def _mode_versus_reply(old: ChatReply, modes: list[str]) -> str:
+    """«поезд дешевле, чем самолёт?»: the cheapest offer of each mode in the plan (TRAP-4)."""
+    rows = []
+    for mode in modes:
+        prices = [o.price_rub for o in old.plan.offers if getattr(o, "mode", None) == mode]
+        name = MODE_NAMES[mode].capitalize()
+        rows.append(
+            f"{name}: от {_rub(min(prices))} (синтетика)" if prices else f"{name}: в плане нет"
+        )
+    return f"Это вопрос: план не меняю. {'; '.join(rows)}. {HINTS[old.stage]}"
 
 
 def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
@@ -1752,8 +1848,10 @@ def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
         return ""
     spec = old.plan.spec
     others = [d for d in found.get("destinations", []) if d not in spec.destinations]
+    if not others and len(modes := [m for m, rx in MODES if re.search(rx, low)]) == 2:
+        return _mode_versus_reply(old, modes)  # #483: «а поезд дешевле, чем самолёт?»
     if not (others or MARKET_RE.search(low)):
-        return ""  # «а поезд дешевле, чем самолёт?»: not this question, the old rules read it
+        return ""
     total = old.cart.total_rub or sum(
         o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
     )
@@ -1965,6 +2063,8 @@ def _text_compare(plan: Plan) -> str:
     ]
     if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
         lines.append(f"{NO_PET_MARK} у {n} из {len(rows)} отелей.")
+    if _pet_flies(plan):
+        lines.append(NO_PET_FLIGHT)
     # C14 (#364, TRAP-5): the chosen legs keep local times with zones (_offer_lines, #468).
     lines += _offer_lines(plan)
     for e in plan.explanations[:1]:
@@ -1999,6 +2099,17 @@ def _at(dt: datetime) -> str:
     return f"{dt:%d.%m %H:%M} ({_zone(dt)})"
 
 
+def _pet_flies(plan: Plan) -> bool:
+    """#575: the pet goes on a chosen flight, a condition of the airline (offers.PET_FLIGHT)."""
+    return plan.spec.pets and any(
+        isinstance(o, TransportOffer)
+        and o.mode == "flight"
+        and o.pets_allowed
+        and o.offer_id in plan.selected
+        for o in plan.offers
+    )
+
+
 def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
     lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
@@ -2006,6 +2117,8 @@ def _text_assemble(plan: Plan) -> str:
     chosen = [o for o in plan.offers if o.kind == "hotel" and o.offer_id in plan.selected]
     if plan.spec.pets and any(not h.pets_allowed for h in chosen):
         lines.append(NO_PET_HOTEL)  # #556: the reminder stays on «Оформляем?»
+    if _pet_flies(plan):
+        lines.append(NO_PET_FLIGHT)
     lines += _unchecked_lines(plan.spec)
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
@@ -2063,15 +2176,19 @@ PET_DROP = "Без питомца"
 
 def _pet_neighbours(spec: TripSpec) -> list[tuple[float, dict]]:
     """#550: the catalogue places nearest to the chosen one (catalog.km_between) where some trip
-    takes the pet, up to 3, with the distance. Without the origin and the refused places."""
+    takes the pet, up to 3, with the distance. Without the origin and the refused places.
+    #575: and without the places of another kind than the wishes ask (no sea for «море»)."""
     here = resolve_place(spec.destinations[0])
     if here is None:
         return []
     refused = refused_before(spec)
     skip = {*spec.destinations, here["name"], spec.origin, *refused}
+    hub, month = catalog.origin_hub(spec.origin or DEFAULT_ORIGIN)[0], _month(spec)
     out = []
     for p in sorted(catalog.places(), key=lambda p: catalog.km_between(here, p)):
         if p["name"] in skip or p.get("country") in refused:
+            continue
+        if _level(_rule_breaks(spec, p, hub, month)) >= 2:  # off the theme of the wishes
             continue
         trips = enumerate_trips(find_offers(spec, p["name"], estimate=True))
         if any(pets_ok(t) for t in trips):  # no trips is no way out (pets_possible says yes)
@@ -2400,10 +2517,23 @@ def step(
     if (
         prev
         and old.stage in PLAN3
-        and set(rules_found) <= {"destinations", "wishes"}  # «дешевле, чем 50 тысяч?» is a budget
+        and set(rules_found) <= {"destinations", "wishes", "modes"}  # «…чем 50 тысяч?» is a budget
         and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
         and (reply := _price_versus_reply(old, low, rules_found))
     ):
+        # #483: «дешевле, чем в Турции, с бассейном?» — the question changes nothing, the wish or
+        # the one mode next to it is still an edit: the rest goes on without the comparison.
+        if (
+            set(rules_found.get("wishes", [])) - {"недорого"}
+            or len(rules_found.get("modes", [])) == 1
+        ) and (
+            (rest := VERSUS_CLAUSE_RE.sub(" ", message).strip(" ,?"))
+            and rest != message.strip(" ,?")  # a clause the regex does not cut would loop
+        ):
+            done = step(prev, sid, rest, use_llm, origin)
+            head = reply.removesuffix(f" {HINTS[old.stage]}").split(" Чтобы")[0]
+            head = head.removeprefix("Это вопрос: план не меняю. ")
+            return done.model_copy(update={"reply": f"{head}\n{done.reply}"})
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
         return drop_transfers(old)
@@ -2490,7 +2620,8 @@ def step(
     month_target, month_note = target, None
     if month_verdict in ("ask", "stay"):
         month_target = target if month_verdict == "ask" else now.date_from.month
-        month_note = month_reply(now, month_target, "")
+        other = month_other(message, month_target) if month_verdict == "ask" else None
+        month_note = month_reply(now, month_target, "", other)
     refused_month = month_verdict in ("ask", "stay", "skip")
     idx = _ordinal(message)
     deadline = llm.deadline()
@@ -2515,6 +2646,20 @@ def step(
     if asking and ASKING_NOTE in notes and not found:
         return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
     said_origin = _said_origin(old, message, found)  # #436, TRAP-3
+    # #452: a country on «Откуда?» names where to go, not one place: the cards show its places
+    # and the spec keeps the country (a note) until a place or another country is named.
+    country_pool = None
+    if (
+        not said_origin
+        and old.stage == "clarify"
+        and any(q.text.startswith(ORIGIN_ASK) for q in old.questions)
+        and (c := catalog.country_of(message))
+        and len(dests := found.get("destinations") or []) == 1
+        and (place := catalog.resolve(dests[0]))
+        and place["country"] == c  # «Египет» extracts as Хургада: the one place of the country
+        and catalog.by_country(c)
+    ):
+        found["destinations"], country_pool = [], c
     # #453: the place abroad named again on «Откуда?» is no origin either: Москва, said aloud
     origin_default = (
         not said_origin
@@ -2703,6 +2848,10 @@ def step(
         else []
     )
     spec = with_shown(spec, [])  # the note is set again below, by a «ещё» batch only
+    country_pool = country_pool or country_before(old.plan.spec)  # #452: kept till a place is named
+    if country_pool in refused:
+        country_pool = None  # «не хочу в Турцию»: a refused country is no filter
+    spec = with_country(spec, country_pool)  # a place named now drops the note
     route = severals(message, found.get("destinations", []))
     if route:  # the lost city stays visible (#128, #139)
         spec = spec.model_copy(
@@ -2742,7 +2891,16 @@ def step(
     if not spec.destinations:
         # 5: four are left without the origin. #451: «ещё» — the same spec, the pool without
         # every place shown in this session.
-        dests = suggest_destinations(spec, 5, [*refused, *seen])
+        # #452: every other country is excluded, as a refused one is (#113)
+        skip = [c for c in catalog.snapshot()["countries"] if c != country_pool]
+        skip = skip if country_pool else []
+        dests = suggest_destinations(spec, 5, [*refused, *seen, *skip])
+        no_country = None
+        if country_pool and not dests and not more and not other:
+            # Nothing of that country fits: say it, show the other places, drop the country.
+            no_country, country_pool, skip = country_pool, None, []
+            dests = suggest_destinations(spec, 5, [*refused, *seen])
+        spec = with_country(spec, country_pool)
         if more:
             gone = old.plan.spec.destinations
             dests = [d for d in dests if d.name != spec.origin][:4]
@@ -2756,7 +2914,7 @@ def step(
             spec = with_shown(spec, [*seen, *(d.name for d in dests)])
         elif other:
             gone = old.plan.spec.destinations
-            ranked = suggest_destinations(spec, len(CATALOG), refused)
+            ranked = suggest_destinations(spec, len(CATALOG), [*refused, *skip])
             shown = [d.name for d in old.plan.destinations] if old.stage == "inspire" else []
             # Without the options already shown, if enough others are left.
             # The origin is no destination: a stay in the city of departure has no transport (#94).
@@ -2769,7 +2927,14 @@ def step(
         dests = [d for d in dests if d.name != spec.origin][:4]
         plan = Plan(spec=spec, destinations=dests)
         if not other:
-            return reply("inspire", plan, _text_inspire(plan), questions=party_question(spec))
+            sorry = (
+                f"Под ваши условия в стране «{no_country}» мест нет. Показываю другие страны.\n"
+                if no_country
+                else ""
+            )
+            return reply(
+                "inspire", plan, sorry + _text_inspire(plan), questions=party_question(spec)
+            )
         gone_text = f"Убираю «{', '.join(gone)}» из плана, корзину очищаю. " if gone else ""
         question = Question(text="Куда поедем?", options=[d.name for d in dests])
         text = gone_text + _text_inspire(plan)
