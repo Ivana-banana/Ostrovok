@@ -2,12 +2,11 @@
 
 import pytest
 from fastapi.testclient import TestClient
+from talk import say
 
 from api import catalog
-from api.contracts import ChatRequest
 from api.extract import extract
 from api.main import app, get_store
-from api.model import chat
 from api.store import SessionStore
 
 S1 = (
@@ -19,10 +18,6 @@ S1 = (
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def test_s1_goes_ahead_with_stated_assumptions(store):

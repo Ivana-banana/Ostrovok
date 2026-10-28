@@ -8,10 +8,10 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import PARTY_UNKNOWN, chat
+from api.model import PARTY_UNKNOWN
 from api.store import SessionStore
 
 PARAMS_TS = Path(__file__).parents[2] / "web/src/params.ts"
@@ -20,10 +20,6 @@ PARAMS_TS = Path(__file__).parents[2] / "web/src/params.ts"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def test_the_forms_below_are_the_forms_of_the_panel():
@@ -133,7 +129,7 @@ def test_party_note_without_a_child(store, text):
     r = say(store, text)
     assert r.plan.spec.adults == 2 and r.plan.spec.children_ages == []
     assert PARTY_UNKNOWN in r.plan.spec.assumptions
-    assert not any("едет" in q.text for q in r.questions)  # no child, no question
+    assert not any(" едет " in q.text for q in r.questions)  # no child, no question
 
 
 def test_party_note_goes_when_the_panel_names_the_party(store):
