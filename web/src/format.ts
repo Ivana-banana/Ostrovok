@@ -1,8 +1,15 @@
 import type { Cart, ChatReply, Meal, Mode, Priority, TripSpec } from "./contracts";
 
 // One reply line for the user; the no-model mode is labelled honestly (TRAP-1).
+const NO_AI = " — упрощённый режим без ИИ";
 export function describe(r: ChatReply): string {
-  return r.llm ? r.reply : `${r.reply} — упрощённый режим без ИИ`;
+  return r.llm ? r.reply : `${r.reply}${NO_AI}`;
+}
+
+// The bubble text without the no-model label: only while the «Без ИИ» badge is on the screen
+// (TRAP-1 stays honest by the badge, the label after every answer is noise, #434).
+export function withoutNoAi(text: string): string {
+  return text.endsWith(NO_AI) ? text.slice(0, -NO_AI.length) : text;
 }
 
 export const MEALS: Record<Meal, string> = {
@@ -70,6 +77,28 @@ export function cartLine(cart: Cart): string {
 export function localTime(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
   return m ? `${m[3]}.${m[2]} ${m[4]}:${m[5]}` : iso;
+}
+
+// The zone of the event as the backend writes it in the chat: «UTC+3», «UTC+5:30» (TRAP-5, #364).
+export function zoneLabel(iso: string): string {
+  const m = /([+-])(\d{2}):?(\d{2})$/.exec(iso);
+  if (!m) return /Z$/.test(iso) ? "UTC" : "";
+  const minutes = m[3] === "00" ? "" : `:${m[3]}`;
+  return `UTC${m[1]}${Number(m[2])}${minutes}`;
+}
+
+// Local time with its zone: «11.12 07:10 (UTC+3)».
+export function zonedTime(iso: string): string {
+  const zone = zoneLabel(iso);
+  return zone ? `${localTime(iso)} (${zone})` : localTime(iso);
+}
+
+// A moment of the service itself (voucher time, written in UTC): shown in the browser zone.
+export function browserTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 export function localDate(iso: string | null): string {
@@ -141,3 +170,166 @@ export const SOURCES: { name: string; text: string; url: string; licence: string
     licence: "ODbL",
   },
 ];
+
+// The cards under the last answer already show these lists (#434), so the chat bubble drops
+// them: the hotel rows after «Отели:», the «Рейс N.» rows after «Транспорт:», the timeline rows
+// after «План поездки:» and the destination rows (backend api/model.py _text_compare,
+// _text_assemble, _text_inspire). A row is dropped only right after its header. The header of
+// the destinations and of the plan becomes one short lead line. Every other line (summary, climate,
+// «Предлагаю», «Почему», assumptions, questions, hints) stays as it is.
+const LISTS: { head: RegExp; row: RegExp; lead?: (rows: number, last: boolean) => string }[] = [
+  { head: /^Отели:$/, row: /^\d+\. .+ — \S*★, рейтинг / },
+  { head: /^Транспорт:$/, row: /^Рейс \d+\. / },
+  {
+    head: /^План поездки:$/,
+    row: /^\d{2}\.\d{2} \d{2}:\d{2} \(UTC[+-][\d:]+\) — /,
+    lead: (_n, last) => (last ? "План поездки собран — таймлайн ниже." : "План поездки был собран."),
+  },
+  {
+    head: /^Подходящие направления.*:$/,
+    row: /^\d+\. .+ \(.+\) — от .+ на \d+ чел\./,
+    lead: (n, last) =>
+      `Нашёл ${n} ${countWord(n, "направление", "направления", "направлений")}${last ? " — выберите карточку ниже." : "."}`,
+  },
+];
+
+function countWord(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m100 > 10 && m100 < 15) return many;
+  return m10 === 1 ? one : m10 > 1 && m10 < 5 ? few : many;
+}
+
+// `last`: the cards sit under this answer. In an older answer they sit under a newer one, so
+// the lead line must not point «ниже» (#439).
+export function brief(text: string, last = true): string {
+  const out: string[] = [];
+  let list: (typeof LISTS)[number] | null = null;
+  let head = -1; // index in out of the lead line of the open list
+  let rows = 0;
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (list && list.row.test(t)) {
+      rows++;
+      if (list.lead) out[head] = list.lead(rows, last);
+      continue;
+    }
+    list = LISTS.find((l) => l.head.test(t)) ?? null;
+    if (list) {
+      rows = 0;
+      if (list.lead) {
+        head = out.length;
+        out.push(line); // no rows after it: the header stays as it is
+      }
+      continue;
+    }
+    out.push(line);
+  }
+  return out.some((l) => l.trim()) ? out.join("\n") : text;
+}
+
+// #468: the compare answer (backend api/model.py _offer_lines) has the header «Предлагаю:», one
+// line per item of the trip and the line «Итого». `items` are «label: text» pairs, `more` are the
+// details that the chat folds under «Подробнее»: why, risks, climate and the note on mock prices.
+// null: the text has no such block (other stages, older answers), the chat shows it line by line.
+export type OfferParts = {
+  head: string[];
+  items: { label: string; text: string }[];
+  points: Point[] | null; // the items as blocks; null: a line did not parse, show the plain list
+  total: string;
+  more: string[];
+  tail: string[];
+};
+
+// One item of the proposed trip as a block (#468): facts are the short sub-lines of the block.
+export type Ride = { from: string; to: string; facts: string[] };
+export type Point =
+  | { kind: "hotel"; name: string; facts: string[]; price: string }
+  | {
+      kind: "leg";
+      label: string; // «Туда» or «Обратно»
+      mode: Mode;
+      ride: Ride; // the route: «Москва» → «Казань (KZN)»; facts: seats, changes, notes
+      start: string; // «10.12 18:50»
+      end: string;
+      zones: string[]; // one zone when both times share it, else the zone of each time
+      price: string;
+    }
+  | { kind: "transfer"; rides: Ride[]; price: string }
+  | { kind: "extra"; name: string; price: string } // a paid extra of the hotel: «Ранний заезд …»
+  | { kind: "included"; facts: string[] };
+
+const ITEM = /^(Отель|Туда|Обратно|Трансферы|Доп\. услуга|Включено): (.+)$/;
+const MORE = /^(Почему|Риск|Климат): |^Цены — синтетика\.$/;
+
+export function offerParts(text: string): OfferParts | null {
+  const lines = text.split("\n").filter((l) => l.trim());
+  const at = lines.findIndex((l) => l.trim() === "Предлагаю:");
+  if (at < 0) return null;
+  const items: OfferParts["items"] = [];
+  let i = at + 1;
+  for (let m; i < lines.length && (m = ITEM.exec(lines[i].trim())); i++) items.push({ label: m[1], text: m[2].replace(/\.$/, "") });
+  if (!items.length || !lines[i]?.startsWith("Итого ")) return null;
+  const rest = (part: string[]) => part.filter((l) => !MORE.test(l.trim()));
+  const points = items.map(point);
+  return {
+    head: rest(lines.slice(0, at)),
+    items,
+    points: points.every((x) => x) ? (points as Point[]) : null,
+    total: lines[i].slice("Итого ".length).replace(/\.$/, ""),
+    more: lines.filter((l) => MORE.test(l.trim())),
+    tail: rest(lines.slice(i + 1)),
+  };
+}
+
+// The words of the mode at the start of a leg title (backend api/offers.py _leg).
+const LEG_MODES: [RegExp, Mode][] = [
+  [/^перелёт /, "flight"],
+  [/^поезд /, "train"],
+  [/^на своей машине /, "car"],
+];
+const ARROW = " → ";
+const AT = String.raw`\d{2}\.\d{2} \d{2}:\d{2}`;
+const SPAN = new RegExp(String.raw`^(.+), (${AT})(?: \((UTC[^)]+)\))? → (${AT}) \((UTC[^)]+)\)$`);
+
+// «А → Б» and its facts as a ride; null without exactly one arrow in the route.
+function ride(route: string, facts: string[]): Ride | null {
+  const ends = route.split(ARROW);
+  return ends.length === 2 ? { from: ends[0], to: ends[1], facts } : null;
+}
+
+// «text — 7 900 ₽»: the text and the price; null without a price at the end.
+function priced(text: string): [string, string] | null {
+  const at = text.lastIndexOf(" — ");
+  return at > 0 && /₽$/.test(text) ? [text.slice(0, at), text.slice(at + 3)] : null;
+}
+
+// One item line of the backend (api/model.py _offer_lines) as a block; null when it does not parse.
+function point({ label, text }: { label: string; text: string }): Point | null {
+  if (label === "Включено") return { kind: "included", facts: text.split(", ") };
+  const p = priced(text);
+  if (!p) return null;
+  const [body, price] = p;
+  if (label === "Доп. услуга") return { kind: "extra", name: body, price };
+  if (label === "Отель") {
+    // «Казантель, Казань, 2★, без питания, невозвратный»: the name may hold commas, the stars may miss
+    const parts = body.split(", ");
+    const facts = parts.splice(/★$/.test(parts.at(-3) ?? "") ? -3 : -2);
+    return parts.length && facts.length ? { kind: "hotel", name: parts.join(", "), facts, price } : null;
+  }
+  if (label === "Трансферы") {
+    // «вокзал → Казантель, Казань, ≈2.6 км; …»: the hotel name holds commas, the facts start at «≈»
+    const rides = body.split("; ").map((r) => {
+      const at = r.indexOf(", ≈");
+      return at > 0 ? ride(r.slice(0, at), r.slice(at + 2).split(", ")) : null;
+    });
+    return rides.every((r) => r) ? { kind: "transfer", rides: rides as Ride[], price } : null;
+  }
+  // «поезд Москва → Казань, 2 места, 10.12 18:50 → 11.12 07:10 (UTC+3)»
+  const m = SPAN.exec(body);
+  const mode = m && LEG_MODES.find(([word]) => word.test(m[1]));
+  if (!m || !mode) return null;
+  const [route, ...facts] = m[1].replace(mode[0], "").split(", ");
+  const r = ride(route, facts);
+  return r && { kind: "leg", label, mode: mode[1], ride: r, start: m[2], end: m[4], zones: m[3] ? [m[3], m[5]] : [m[5]], price };
+}

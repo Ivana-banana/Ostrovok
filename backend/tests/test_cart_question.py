@@ -4,11 +4,11 @@ An edit («хотим с бассейном», «с нами едет собак
 """
 
 import pytest
+from talk import say
 
 from api import llm
-from api.contracts import ChatRequest
 from api.guards import unknown_prices
-from api.model import REFUSE_RE, chat
+from api.model import REFUSE_RE
 from api.store import SessionStore
 
 SOCHI = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч, нужен завтрак"
@@ -28,10 +28,6 @@ QUESTIONS = [
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def at(store, stage):

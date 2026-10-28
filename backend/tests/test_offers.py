@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from talk import say
 
 from api import catalog, offers
 from api.contracts import ChatRequest, TripSpec
@@ -48,7 +49,7 @@ def test_trap_2_any_coordinates_get_hotels_transport_transfers_and_extras():
 def test_trap_2_city_outside_the_old_catalogue_reaches_booking(tmp_path):
     """TRAP-2, S5: Istanbul was not in the 7-city fixture; now the chat books it."""
     store = SessionStore(tmp_path / "s.db")
-    r = chat(ChatRequest(message="Хочу в Стамбул, 4 ночи с 10 декабря, двое взрослых"), store)
+    r = say(store, "Хочу в Стамбул, 4 ночи с 10 декабря, двое взрослых")
     assert r.stage == "compare" and len(kinds(r.plan.offers, "hotel")) >= 3
     for text in ("беру", "да", "подтверждаю"):
         r = chat(ChatRequest(session_id=r.session_id, message=text), store)

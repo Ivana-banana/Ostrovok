@@ -29,7 +29,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
-from api import catalog, dag
+from api import catalog, dag, offers
+from api import main as api_main
 from api.contracts import (
     Bundle,
     Cancellation,
@@ -41,12 +42,22 @@ from api.contracts import (
     TransportOffer,
 )
 from api.fixtures import WARM_WATER_C
-from api.main import app, get_store
-from api.model import NOT_IN_CATALOG
-from api.offers import _norm, find_offers, osm_hotels, resolve_place, transfer_id
+from api.model import NOT_IN_CATALOG, ORIGIN_ASK
+from api.offers import (
+    SyntheticTransport,
+    _norm,
+    find_offers,
+    osm_hotels,
+    resolve_place,
+    transfer_id,
+)
 from api.optimizer import enumerate_trips, optimize, pets_ok
 from api.store import SessionStore
 from api.timeline import build_timeline
+
+# make eval measures the synthetic data whatever .env has: api.main picks real flights by
+# TRAVELPAYOUTS_TOKEN (#261); eval needs the same numbers on every machine and no network (TRAP-6).
+offers.TRANSPORT = SyntheticTransport()
 
 MAX_FLIGHT_H = 5.0  # S1: "перелёт дольше 5 ч"
 LLM_ENV = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
@@ -131,6 +142,8 @@ def _recorded(url: str, params: dict) -> dict:
 @contextmanager
 def _api() -> Iterator[tuple[TestClient, SessionStore]]:
     """A client on a temporary store and the recorded geocoder; all of it goes away after."""
+    # The module attributes at call time: a test may reload api.main (#442).
+    app, get_store = api_main.app, api_main.get_store
     with tempfile.TemporaryDirectory(prefix="eval-") as tmp:
         store = SessionStore(Path(tmp) / "eval.db")
         previous = app.dependency_overrides.get(get_store)
@@ -155,6 +168,26 @@ def _post(client: TestClient, text: str, sid: str | None = None) -> tuple[int, C
     return res.status_code, (
         ChatReply.model_validate(res.json()) if res.status_code == 200 else None
     )
+
+
+def _origin_only(r: ChatReply | None) -> bool:
+    """#436: the reply asks the departure city only (a request that names no origin)."""
+    return (
+        r is not None
+        and r.stage == "clarify"
+        and bool(r.questions)
+        and all(q.text.startswith(ORIGIN_ASK) for q in r.questions)
+    )
+
+
+def _post_from_origin(
+    client: TestClient, text: str, sid: str | None = None
+) -> tuple[int, ChatReply | None]:
+    """_post; the origin question of #436 gets its first chip, as in _walk."""
+    code, r = _post(client, text, sid)
+    if _origin_only(r):
+        code, r = _post(client, r.questions[0].options[0], r.session_id)
+    return code, r
 
 
 def _walk(
@@ -380,8 +413,13 @@ def check_S3(case: dict) -> tuple[bool, str]:
                         fails.append(f"{tag}: остановился на {last.stage}")
                     if any(r.llm for r in run.replies):
                         fails.append(f"{tag}: llm=True")
-                    if name == "A" and (run.asked or run.replies[0].stage != "compare"):
-                        fails.append(f"{tag}: точный запрос не разобран ({run.replies[0].stage})")
+                    # #436: the exact request names no origin; that one question is allowed
+                    skip = int(_origin_only(run.replies[0]) and len(run.replies) > 1)
+                    asked = run.asked - (len(run.replies[0].questions) if skip else 0)
+                    if name == "A" and (asked or run.replies[skip].stage != "compare"):
+                        fails.append(
+                            f"{tag}: точный запрос не разобран ({run.replies[skip].stage})"
+                        )
                     if variant == "A1":
                         total = last.voucher.total_rub if last.voucher else 0
                         spec = last.plan.spec
@@ -671,9 +709,9 @@ def check_S4(case: dict) -> tuple[bool, str]:
     run = _record(Run("S4", "нормальный путь после атаки"))
     with _api() as (client, _):
         with _planted_description(NEUTRAL):
-            _, control = _post(client, ask)
+            _, control = _post_from_origin(client, ask)
         with _planted_description(INJECTION):
-            code, first = _post(client, ask)
+            code, first = _post_from_origin(client, ask)
             if control is None or first is None:
                 return False, f"ход 1: ответ {code}"
             run.replies.append(first)
@@ -1203,7 +1241,7 @@ def check_S6(case: dict) -> tuple[bool, str]:
             f"ваучер: итог {_rub(v.total_rub)}, предупреждение о бюджете "
             + ("есть" if warned else "не показано до подтверждения"),
         )
-        fresh = _session(TestClient(app, raise_server_exceptions=False), sid)
+        fresh = _session(TestClient(api_main.app, raise_server_exceptions=False), sid)
         items["7"] = _need(
             fresh.voucher == v
             and fresh.stage == "booked"

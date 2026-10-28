@@ -36,6 +36,11 @@ describe("чипы параметров", () => {
     expect(otherAssumptions(s)).toEqual(notes);
   });
 
+  it("#451: служебное «уже показаны» не показывается среди допущений", () => {
+    const s = with_({ assumptions: ["уже показаны: Сочи, Анапа", "маршрут: Сочи потерян"] });
+    expect(otherAssumptions(s)).toEqual(["маршрут: Сочи потерян"]);
+  });
+
   it("состав «не назван» помечен", () => {
     const s = with_({ assumptions: ["взрослых: 2 (состав не назван)"] });
     expect(paramChips(s).find((c) => c.id === "party")?.assumed).toBe(true);
