@@ -460,6 +460,7 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
         return "ask", _month_number(other.group(1)) if other else None
     unclear = (
         r"\bможет\b|\bможно\b|\bа если\b|\bчто если\b|\bкак насч|\b(?:был|была|были|было)\b|побывал"
+        r"|\bли\b"  # «а не поедем ли в феврале» (#220)
     )
     if "?" in t or re.search(unclear, t):
         return "ask", month
@@ -467,7 +468,10 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     # Without a comma a «не» after the month is a refusal («в январе не поедем»). After a comma,
     # «но», «и» or «а» it may belong to a neighbour («в январе, не дорого»): only a verb of
     # refusing makes it one (#198).
-    parts = re.split(r",|\s(?:но|и|а)\s", clause, maxsplit=1)
+    # A dash before «не» + a neighbour wish ends the part too: «в январе — не дорого» (#220).
+    # Any other «— не X» stays a refusal: «январь — не пойдёт», «в январе — не»
+    neighbour = r"(?=не\s+(?:очень\s+)?(?:дорог|дешев|жарк|шумн|далек)\w*)"
+    parts = re.split(rf",|\s[—–-]\s+{neighbour}|\s(?:но|и|а)\s", clause, maxsplit=1)
     near, after = parts[0], parts[1] if len(parts) > 1 else ""
     strong = r"нельзя|отпадает|отпадают|исключен|невозможн"  # a refusal anywhere near the month
     weak = r"отменя|неудобн"  # a refusal only as the whole part (#215)
@@ -495,9 +499,25 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     return "move", month
 
 
-def month_reply(spec: TripSpec, target: int | None, hint: str) -> tuple[str, list[Question]]:
+def month_other(text: str, month: int) -> int | None:
+    """The second month of a doubt («в январе, а не поедем ли в феврале»), to ask about (#220)."""
+    low = text.lower().replace("ё", "е")
+    if not re.search(r"\bли\b", low):  # a doubt «…ли…» only; «не в декабре, лучше в январе» is not
+        return None
+    names = re.findall(rf"\b{MONTH}", low)
+    others = [n for n in map(_month_number, names) if n != month]
+    return others[0] if others else None
+
+
+def month_reply(
+    spec: TripSpec, target: int | None, hint: str, other: int | None = None
+) -> tuple[str, list[Question]]:
     """The reply to a month that moves nothing: the dates stay, or a question about the move."""
     own = f"Даты {period(spec)} вы назвали сами."
+    if target is not None and other is not None:  # two months in a doubt: ask which one
+        moves = [f"Перенести на {MONTH_NAMES[n - 1]}" for n in (target, other)]
+        text = f"{own} {MONTH_NAMES[target - 1].capitalize()} или {MONTH_NAMES[other - 1]}?"
+        return text, [Question(text="Что сделать с датами?", options=moves)]
     if target is None:
         return f"{own} Назовите нужные даты или месяц, на который перенести.", []
     name = MONTH_NAMES[target - 1]
@@ -2600,7 +2620,8 @@ def step(
     month_target, month_note = target, None
     if month_verdict in ("ask", "stay"):
         month_target = target if month_verdict == "ask" else now.date_from.month
-        month_note = month_reply(now, month_target, "")
+        other = month_other(message, month_target) if month_verdict == "ask" else None
+        month_note = month_reply(now, month_target, "", other)
     refused_month = month_verdict in ("ask", "stay", "skip")
     idx = _ordinal(message)
     deadline = llm.deadline()
