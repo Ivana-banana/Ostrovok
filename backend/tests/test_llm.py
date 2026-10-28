@@ -666,3 +666,22 @@ def test_model_whole_month_range_is_dropped_but_explicit_dates_stay():
     assert with_llm(explicit, whole)["date_to"] == date(2026, 11, 30)
     part = {"date_from": date(2026, 12, 11), "date_to": date(2026, 12, 13), "nights": 2}
     assert with_llm(found, part)["nights"] == 2
+
+
+def test_trap_7_explanation_keeps_the_price_source_mark(tmp_path, fake):
+    """TRAP-7 (#610): a model text that drops or changes the mark of a sum keeps the rules text."""
+    plan = _plan(tmp_path)
+    e = plan.explanations[0]
+    plan.explanations[0] = e.model_copy(update={"why": "Отель за 7 000 ₽ (101hotels) — лучший"})
+    for o in plan.offers:
+        if o.offer_id == e.offer_id:
+            o.price_rub = 7_000
+
+    def reply(text):
+        return lambda p: answer({"explanations": [{"offer_id": e.offer_id, "why": text}]})
+
+    fake.why = reply("Лучший отель за 7 000 ₽ (101hotels) по вашим условиям")
+    assert llm.explain(plan)[0].why.startswith("Лучший отель за 7 000 ₽ (101hotels)")
+    for bad in ("Лучший отель за 7 000 ₽ по вашим условиям", "Лучший отель за 7 000 ₽ (синтетика)"):
+        fake.why = reply(bad)
+        assert llm.explain(plan) is None
