@@ -119,3 +119,26 @@ def test_458_bare_name_from_old_batch_and_no_state_in_text(store):
     assert r.plan.spec.destinations == [first[0]] and r.stage == "compare"
     assert hotel_cities(r) == {first[0]}
     assert "уже показаны" not in r.reply
+
+
+def test_458_named_in_prefers_the_longest_name():
+    """#458: «Венеция» is not «Вена»: at one position the longer name wins."""
+    from api.model import named_in
+
+    assert named_in("третий: Венеция", ["Вена", "Венеция"]) == "Венеция"
+    assert named_in("третий: Вена", ["Венеция", "Вена"]) == "Вена"
+    assert named_in("второй: Кировск", ["Киров", "Кировск"]) == "Кировск"
+
+
+def test_458_hotel_name_beats_number_at_compare(store):
+    """#458: «беру первый — <название второго отеля>» takes the named hotel, no LLM."""
+    from api.optimizer import hotel_rows
+
+    r = say(store, "Казань на выходные, из Москвы, двое взрослых")
+    while r.stage != "compare":
+        r = say(store, "да", r.session_id)
+    rows = hotel_rows(r.plan.offers, r.plan.selected)
+    assert len(rows) >= 2
+    r = say(store, f"беру первый — {rows[1].title}", r.session_id)
+    chosen = {o.title for o in r.plan.offers if o.offer_id in r.plan.selected and o.kind == "hotel"}
+    assert chosen == {rows[1].title} and not r.llm

@@ -642,6 +642,18 @@ suite("чат как в мессенджере", () => {
     expect(q).toEqual(["Сколько вас?"]);
   });
 
+  it("#458: на select чипы-вопросы остаются: у карточек там нет «Выбрать»", async () => {
+    const r = { ...structuredClone(checkoutStage), stage: "select" as const };
+    const [d] = r.plan.destinations;
+    r.plan.destinations = [d, { ...d, name: "Сочи" }];
+    r.questions = [{ text: "Какой город берём?", options: [d.name, "Сочи"] }];
+    routes["POST /api/chat"] = () => ({ status: 200, body: r });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    expect([...box.querySelectorAll(".questions p")].map((p) => p.textContent)).toEqual(["Какой город берём?"]);
+  });
+
   it("строки «Допущения» и «Не проверяю» ответа — приглушённой строкой", async () => {
     const reply = "Нашёл варианты.\nДопущения: даты не названы.\nНе проверяю по данным: детская анимация.";
     routes["POST /api/chat"] = () => ({ status: 200, body: { ...checkoutStage, reply } });

@@ -391,8 +391,9 @@ export function App() {
   const groups = groupChats(filterChats(chats, query));
   // The cards of the current stage under the last answer; hidden while the agent thinks.
   const cardNames = reply ? reply.plan.destinations.map((d) => d.name) : [];
+  // Only at inspire: there the cards have «Выбрать». At select the chips are the only way to pick.
   const questions = reply
-    ? reply.questions.filter((q) => !(q.options.length > 0 && q.options.every((o) => cardNames.includes(o))))
+    ? reply.questions.filter((q) => reply.stage !== "inspire" || !(q.options.length > 0 && q.options.every((o) => cardNames.includes(o))))
     : [];
   const block = reply && !thinking && (
     <div key="stage-block" className="attach">

@@ -867,8 +867,8 @@ def named_in(text: str, names: list[str]) -> str | None:
     for n in dict.fromkeys(names):
         stem = catalog._stem(catalog.norm(n))
         if m := re.search(rf"(?<!\w){re.escape(stem)}", t):
-            hits.append((m.start(), n))
-    return min(hits)[1] if hits else None
+            hits.append((m.start(), -len(stem), n))  # earliest, then the longest: Вена < Венеция
+    return min(hits)[2] if hits else None
 
 
 LegCommand = tuple[str, str | int, str | None]
