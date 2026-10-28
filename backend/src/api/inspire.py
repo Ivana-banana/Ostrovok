@@ -312,7 +312,9 @@ def _level(violates: list[str]) -> int:
     3 no trip at all."""
     if any(v == NO_PETS or v.endswith(NO_WAY) for v in violates):
         return 3
-    if any(v in OFF_THEME or v.startswith((NOT_SOUTH, NOT_WARM, NO_AURORA)) for v in violates):
+    if any(
+        v in OFF_THEME or v.startswith((NO_SEA, NOT_SOUTH, NOT_WARM, NO_AURORA)) for v in violates
+    ):
         return 2
     return int(bool(violates))
 
@@ -388,4 +390,19 @@ def suggest_destinations(
         cards += [card(spec, hub, p, note) for p in rest[: MAX_CANDIDATES - step]]
         cards.sort(key=_rank)
         shown = _spread(cards, limit)
+    return _say_no_sea_way(spec, shown)
+
+
+def _say_no_sea_way(spec: TripSpec, shown: list[Destination]) -> list[Destination]:
+    """#315: «поездом на море» from the far inland: every card is a place without a sea. Each
+    card then says that the sea is out of reach by this mode, not only «моря нет»."""
+    if "море" not in spec.wishes or not spec.modes or "flight" in spec.modes:
+        return shown
+    if not shown or not all(NO_SEA in d.violates for d in shown):
+        return shown
+    ways = " или ".join(MODES[m] for m in spec.modes)
+    for d in shown:
+        d.violates = [
+            f"{NO_SEA}: {ways} до моря не доехать" if v == NO_SEA else v for v in d.violates
+        ]
     return shown

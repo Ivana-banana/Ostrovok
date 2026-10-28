@@ -322,9 +322,9 @@ def _friends(t: str, m: re.Match) -> tuple[int, str]:
 # #322: «трое детей 3, 5 и 8» (no «лет»): a list of two or more numbers right after the child
 # noun. A unit after it («5 ночей», «2 и 3 класса», «100 тысяч») says the numbers are not ages.
 AGES_BARE_RE = re.compile(
-    r"\s*\(?((?>(?:\d{1,2}\s*(?:,|и)\s*(?=\d))+)\d{1,2})\)?(?![\d.,]*\d)"
+    r"\s*\(?((?>(?:\d{1,2}\s*(?:,|и)\s*(?=\d))+)\d{1,2})\)?(?![\d.,]*\d)(?![*/])"
     r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
-    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек|млн|млрд|т\.?\s?р\b|\$|€|eur|usd|раз|вариант|лини))"
 )
 # #337: every number may carry its own unit: «1 год и 4 года», «6 месяцев и 3 года».
 AGES_RE = re.compile(
@@ -332,16 +332,16 @@ AGES_RE = re.compile(
 )
 # «с детьми 5 лет и 8»: the first number has a unit, the last has none.
 AGES_TAIL_RE = re.compile(
-    r"\D{0,12}?(\d{1,2}\s*(лет|год|мес)\w*\s*(?:,|и)\s*\d{1,2})(?![\d.,]*\d)(?!\s*(?:лет|год|мес))(?=\s*(?:[.,;!?)]|$))"
+    r"\D{0,12}?(\d{1,2}\s*(лет|год|мес)\w*\s*(?:,|и)\s*\d{1,2})(?![\d.,]*\d)(?![*/])(?!\s*(?:лет|год|мес))(?=\s*(?:[.,;!?)]|$))"
     r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
-    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек|млн|млрд|т\.?\s?р\b|\$|€|eur|usd|раз|вариант|лини))"
 )
 # «сын 10.» / «дочь 3,»: one bare number closing the clause is the age of a single child.
 # #359: «сын 4 и дочь 9»: «и» and the next child word close it too.
 AGE_ONE_RE = re.compile(
     r"\s*(\d{1,2})(?![\d.,]*\d)(?=\s*(?:[.,;!?)]|$)|\s+и\s+(?:реб|сын|доч|малыш|внук|внуч))"
     r"(?![\s(]*(?:ноч|дн|сут|недел|тыс|к\b|₽|руб|р\b|класс|чел|взросл|%|:|-|числ|звезд|этаж|час"
-    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек))"
+    r"|мин|км\b|янв|фев|мар|апр|ма[йяе]\b|июн|июл|авг|сен|окт|ноя|дек|млн|млрд|т\.?\s?р\b|\$|€|eur|usd|раз|вариант|лини))"
 )
 AGE_ITEM_RE = re.compile(r"(\d{1,2})(?:\s*(лет|год|мес))?")
 
@@ -834,10 +834,13 @@ NEG_VERBS = (
 # Right before a place; «не дорого, в Турцию» is no match: only these words may stand between.
 NEG_BEFORE = re.compile(
     rf"(?:\b(?:без|ни)\s+|\bне\s+(?:{NEG_VERBS}\s+)*"
-    r"|\b(?:надоел\w*|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|избега\w+|устал\w*\s+от)\s+)"
+    r"|\b(?:надоел\w*|отверга\w+|отвергн\w+|исключ\w+|вычеркн\w+|избега\w+|устал\w*\s+от)\s+"
+    r"|\bвместо\s+)"  # «вместо Казани Нижний Новгород»: Казань goes, Нижний Новгород comes (#576)
     r"(?:(?:в|во|на)\s+)?$"
 )
 # «кроме X» refuses X, but «кроме Сочи хотим ещё в Казань» adds Казань to Сочи.
+# «вместо X, Y»: the refusal is for X only, Y is the new place (#576).
+INSTEAD_BEFORE = re.compile(r"\bвместо\s+(?:(?:в|во|на)\s+)?$")
 EXCEPT_BEFORE = re.compile(r"\bкроме\s+(?:(?:в|во|на)\s+)?$")
 ADDITION = re.compile(r"\b(?:еще|тоже|также|заодно)\b")
 WANT_AFTER = re.compile(r"\b(?:хотим|хочу|хотел\w*|заедем|заехать|поедем|поехать|съездить)\b")
@@ -1004,6 +1007,7 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
             own[i].append((w0 + before.start(), w0 + before.end()))
             anchor[i] = spans[i][1]
     exc = [bool(EXCEPT_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
+    instead = [bool(INSTEAD_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     weak = [bool(WEAK_BEFORE.search(t[max(0, s - 60) : s])) for s, _ in spans]
     for i in reversed(range(n)):
         e = spans[i][1]
@@ -1031,7 +1035,7 @@ def _negated(t: str, spans: list[tuple[int, int]], keys: list[str] | None = None
     neg = [False] * n
     for i in range(n):
         in_list = i > 0 and bool(LIST_FORWARD.fullmatch(t[spans[i - 1][1] : spans[i][0]]))
-        in_list = in_list and not _wanted_pair(t, spans, i)
+        in_list = in_list and not _wanted_pair(t, spans, i) and not instead[i - 1]
         neg[i] = (
             strong[i]
             or (exc[i] and not _adds_place(t, spans, i, strong))
@@ -2374,7 +2378,9 @@ def _people(
         said = _ages_of(a, not plural_word) if a else []
         if not a and not asking and (b := AGES_BARE_RE.match(t, m.end())):
             bare = [int(x) for x in re.findall(r"\d+", b.group(1))]
-            if max(bare) <= 17 and (not m.group(1) or _num(m.group(1)) == len(bare)):
+            # a singular noun without a count («с сыном 5 и 8») is one child, not a list (#332)
+            listed = m.group(1) or plural_word or m.group("twin")
+            if max(bare) <= 17 and listed and (not m.group(1) or _num(m.group(1)) == len(bare)):
                 said = bare
         single = (
             not m.group(1) and not m.group("twin") and not m.group(0).split()[-1].startswith("дет")
