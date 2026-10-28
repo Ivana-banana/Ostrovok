@@ -849,6 +849,7 @@ def transport() -> TransportProvider:
     """The transport port of this request: REAL_TRANSPORT when asked and built, else TRANSPORT."""
     return REAL_TRANSPORT if _real_data.get() and REAL_TRANSPORT is not None else TRANSPORT
 
+
 # The estimate path (ADR-0002, #307): inspiration, the dead-end check of pets and eval price
 # dozens of places per turn. A live API does not fit the turn (5 s per call), so they read
 # these synthetic adapters, never the ones above; the offers are marked synthetic (TRAP-7).

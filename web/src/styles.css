@@ -699,6 +699,12 @@ button.icon {
   cursor: not-allowed;
 }
 
+.switches-note {
+  color: var(--side-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .switch input::after {
     transition: none;

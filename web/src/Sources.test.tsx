@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { SWITCHES_KEY, SourceSwitches, type Switches, loadSwitches } from "./Sources";
+import { NO_KEY_NOTE, SWITCHES_KEY, SourceSwitches, type Switches, loadSwitches } from "./Sources";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -37,6 +37,15 @@ it("TRAP-1: без ключа в .env переключатель недосту�
   expect(real.closest("label")?.title).toBe("нет ключа в .env");
   expect(llm.disabled || !llm.checked).toBe(false);
   expect(llm.closest("label")?.textContent).toBe("GigaChat");
+});
+
+it("TRAP-1: без ключа причина видна подписью, не только подсказкой (#262)", () => {
+  const [real] = render({ real_data: false, llm: false }, { real_data: false, llm: true });
+  const note = box.querySelector(".switches-note");
+  expect(note?.textContent).toBe(NO_KEY_NOTE);
+  expect(real.getAttribute("aria-describedby")).toBe(note?.id);
+  render({ real_data: false, llm: false }, { real_data: true, llm: true });
+  expect(box.querySelector(".switches-note")).toBeNull();
 });
 
 it("включение отдаёт новое состояние", () => {

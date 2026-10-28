@@ -6,6 +6,10 @@ export type Switches = { real_data: boolean; llm: boolean };
 export const SWITCHES_KEY = "trip.switches";
 const OFF: Switches = { real_data: false, llm: false };
 const NO_KEY = "нет ключа в .env";
+// #262: the jury runs without keys, so the reason is visible, not only in a tooltip.
+export const NO_KEY_NOTE =
+  "Недоступно в этой сборке: нет ключа API в .env. В демо команды работает с реальными данными.";
+const NOTE_ID = "switches-no-key";
 const LABELS: [keyof Switches, string][] = [
   ["real_data", "Реальные данные (Авиасейлс)"],
   ["llm", "GigaChat"],
@@ -56,11 +60,17 @@ export function SourceSwitches({
             role="switch"
             checked={on[key] && can[key]}
             disabled={!can[key]}
+            aria-describedby={can[key] ? undefined : NOTE_ID}
             onChange={(e) => onChange({ ...on, [key]: e.target.checked })}
           />
           <span>{label}</span>
         </label>
       ))}
+      {LABELS.some(([key]) => !can[key]) && (
+        <small id={NOTE_ID} className="switches-note">
+          {NO_KEY_NOTE}
+        </small>
+      )}
     </div>
   );
 }
