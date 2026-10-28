@@ -18,8 +18,9 @@ LIVE_TRAINS=0; a chat request uses it only with real_data (offers.transport(), #
 - Only the trains of the base adapter are replaced, the chosen place only (spec.destinations),
   both ends in Russia: the rules of the core and the estimate path do not move (ADR-0002).
 - Real legs have synthetic=False and an offer_id ending «-tutu» (the web chip «tutu»).
-- Fallback to the trains of the base adapter (TRAP-6): no network or timeout (then tutu is not
-  asked for FAILED_S), a refusal (404 on an unknown slug, captcha), a bad page, no train that day.
+- Fallback to the trains of the base adapter (TRAP-6): no network, timeout, 5xx or captcha (then
+  tutu is not asked for FAILED_S), a refusal (404 on an unknown slug), a bad or empty page (then
+  this page is not asked for FAILED_S), no train that day. robots.txt 5xx disallows all.
 - Disk cache: data/live/tutu/<From>-<To>.json, the parsed trains (the page has no date), fresh
   for CACHE_S; a stale file serves when the network fails. Standard library only.
 """
@@ -87,7 +88,8 @@ class Refused(RuntimeError):
 
 
 class Offline(Refused):
-    """The network failed (OSError, timeout): tutu is not asked for FAILED_S."""
+    """The network failed (OSError, timeout), the host is down (5xx) or shows a captcha: tutu
+    is not asked for FAILED_S. For robots.txt it means all is disallowed (RFC 9309)."""
 
 
 def parse_route(html: str) -> list[dict]:
@@ -151,6 +153,7 @@ class TutuTrains:
         self.get = get or self._get  # (path) -> page text; raises Offline or Refused
         self.cache_dir = cache_dir
         self.failed_at = -float("inf")
+        self.missed: dict[str, float] = {}  # page -> time of a refusal or an empty page
         self.robots: str | None = None
         self.lock = threading.Lock()
 
@@ -248,21 +251,27 @@ class TutuTrains:
         if file.exists() and time.time() - file.stat().st_mtime < CACHE_S:
             return _read(file)
         rows = None
-        if time.monotonic() - self.failed_at >= FAILED_S:
+        last = max(self.failed_at, self.missed.get(path, -float("inf")))
+        if time.monotonic() - last >= FAILED_S:  # a miss is not asked again at once
             try:
                 if self._allowed(path):
                     text = self.get(path)
                     if refused(text):  # a page only: robots.txt itself names «/captcha»
-                        raise Refused(f"{HOST}{path}: капча, отказ хоста")
+                        raise Offline(f"{HOST}{path}: капча, отказ хоста")
                     rows = parse_route(text)
+                    if not rows:
+                        self.missed[path] = time.monotonic()
+                        log.warning("tutu %s: no direct train, synthetic", path)
                 else:
                     log.warning("tutu %s: robots.txt disallows, synthetic", path)
             except Offline as e:
                 self.failed_at = time.monotonic()
                 log.warning("tutu %s: %s", path, e)
             except Refused as e:
+                self.missed[path] = time.monotonic()
                 log.warning("tutu %s: %s, synthetic", path, e)
             except (KeyError, TypeError, ValueError, AttributeError) as e:
+                self.missed[path] = time.monotonic()
                 log.warning("tutu %s: bad page (%s), synthetic", path, e)
         if rows:
             try:
@@ -285,7 +294,7 @@ class TutuTrains:
                 except Offline:
                     self.failed_at = time.monotonic()  # under the lock: one timeout, not two
                     raise
-                except Refused as e:  # no robots.txt read: allowed, the page itself may fail
+                except Refused as e:  # 4xx: no rules, all allowed (RFC 9309); 5xx is Offline
                     log.warning("tutu robots.txt: %s; считаем путь разрешённым", e)
                     self.robots = ""
         return allowed(self.robots, path)
@@ -303,6 +312,8 @@ class TutuTrains:
             status, text = e.code, ""
         except OSError as e:  # URLError, timeout, refused connection, broken gzip
             raise Offline(f"{HOST}{path}: сеть ({e!r})") from e
+        if status >= 500:  # the host is down: robots.txt unreachable disallows all (RFC 9309)
+            raise Offline(f"{HOST}{path}: HTTP {status}, хост недоступен")
         if status != 200:
             raise Refused(f"{HOST}{path}: HTTP {status}, отказ хоста")
         return text

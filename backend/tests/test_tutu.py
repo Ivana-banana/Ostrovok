@@ -7,6 +7,7 @@ No network: the adapter gets a fake `get`; the pages are trimmed real tutu.ru ro
 import importlib
 import os
 import time
+import urllib.error
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -220,6 +221,41 @@ def test_trap6_the_real_robots_txt_is_obeyed_though_it_names_captcha(tmp_path, m
     assert "/poezda/Ekaterinburg/Moskva/" not in fake.calls  # disallowed: not fetched
     assert "/poezda/Moskva/Ekaterinburg/" in fake.calls  # the route page is allowed
     assert any(not x.synthetic for x in got if x.origin == "Москва")
+
+
+def test_trap6_robots_5xx_disallows_all_and_is_asked_again_later(tmp_path, monkeypatch):
+    """RFC 9309: robots.txt unreachable (5xx) means all is disallowed; not «allowed» forever."""
+
+    def down(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, None)
+
+    monkeypatch.setattr("urllib.request.urlopen", down)
+    tutu = TutuTrains(SyntheticTransport(), cache_dir=tmp_path)  # the real _get, no network
+    s = spec()
+    assert tutu.legs(s, *ends()) == base(s)
+    assert tutu.robots is None  # asked again after FAILED_S
+    tutu.failed_at -= FAILED_S
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: Answer(ROBOTS))
+    assert tutu._allowed("/poezda/Moskva/Kazan/")
+
+
+def test_trap6_a_miss_is_not_asked_again_at_once(tmp_path):
+    """404, an empty page: the pair waits FAILED_S; a captcha: tutu waits FAILED_S."""
+    s = spec()
+    empty = page("Moskva-Ekaterinburg").replace('"routes":[', '"routes":[],"x":[')
+    fake = Fake(**{"/poezda/Moskva/Ekaterinburg/": Refused("HTTP 404"),
+                   "/poezda/Ekaterinburg/Moskva/": empty})  # fmt: skip
+    tutu = TutuTrains(SyntheticTransport(), get=fake, cache_dir=tmp_path)
+    tutu.legs(s, *ends())
+    asked = list(fake.calls)
+    assert tutu.legs(s, *ends()) == base(s)
+    assert fake.calls == asked
+    captcha = Fake(**{"/poezda/Moskva/Ekaterinburg/": "<html>Подтвердите, что вы не робот</html>"})
+    tutu = TutuTrains(SyntheticTransport(), get=captcha, cache_dir=tmp_path / "captcha")
+    tutu.legs(s, *ends())
+    asked = list(captcha.calls)
+    tutu.legs(s, *ends())
+    assert captcha.calls == asked
 
 
 def test_trap6_no_train_that_day_keeps_synthetic(tmp_path):
