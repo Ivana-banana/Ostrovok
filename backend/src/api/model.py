@@ -106,7 +106,15 @@ from api.extract import (
     with_llm,
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
-from api.inspire import ROAD_LINE, card, suggest_destinations, unchecked_wishes
+from api.inspire import (
+    ROAD_LINE,
+    _level,
+    _month,
+    _rule_breaks,
+    card,
+    suggest_destinations,
+    unchecked_wishes,
+)
 from api.offers import SyntheticTransport, _complete, find_offers, resolve_place, road_nights
 from api.optimizer import (
     bundles,
@@ -125,6 +133,11 @@ log = logging.getLogger(__name__)
 NOT_IN_CATALOG = "нет в каталоге"  # shared with the simulator in checks.py (#149)
 NO_PET_HOTEL = (
     "Внимание: у отеля нет отметки о приёме животных — уточните у отеля до брони."  # #556
+)
+# #575: a plane takes the pet on the terms of the airline; the reply names them, no fee (TRAP-4)
+NO_PET_FLIGHT = (
+    "Внимание: питомец в самолёте — не отказ, а условие авиакомпании, которое не подтверждено: "
+    "вес, переноска и доплата. Уточните у авиакомпании до оплаты."
 )
 NO_PET_MARK = "Нет отметки о животных:"  # the count line of the compare reply (#475)
 CONFIRM_RE = re.compile(
@@ -2015,6 +2028,8 @@ def _text_compare(plan: Plan) -> str:
     ]
     if spec.pets and (n := sum(not h.pets_allowed for h in rows)):
         lines.append(f"{NO_PET_MARK} у {n} из {len(rows)} отелей.")
+    if _pet_flies(plan):
+        lines.append(NO_PET_FLIGHT)
     # C14 (#364, TRAP-5): the chosen legs keep local times with zones (_offer_lines, #468).
     lines += _offer_lines(plan)
     for e in plan.explanations[:1]:
@@ -2049,6 +2064,17 @@ def _at(dt: datetime) -> str:
     return f"{dt:%d.%m %H:%M} ({_zone(dt)})"
 
 
+def _pet_flies(plan: Plan) -> bool:
+    """#575: the pet goes on a chosen flight, a condition of the airline (offers.PET_FLIGHT)."""
+    return plan.spec.pets and any(
+        isinstance(o, TransportOffer)
+        and o.mode == "flight"
+        and o.pets_allowed
+        and o.offer_id in plan.selected
+        for o in plan.offers
+    )
+
+
 def _text_assemble(plan: Plan) -> str:
     lines = ["План поездки:"]
     lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
@@ -2056,6 +2082,8 @@ def _text_assemble(plan: Plan) -> str:
     chosen = [o for o in plan.offers if o.kind == "hotel" and o.offer_id in plan.selected]
     if plan.spec.pets and any(not h.pets_allowed for h in chosen):
         lines.append(NO_PET_HOTEL)  # #556: the reminder stays on «Оформляем?»
+    if _pet_flies(plan):
+        lines.append(NO_PET_FLIGHT)
     lines += _unchecked_lines(plan.spec)
     lines.append(f"Итого {_rub(_selected_total(plan))} (синтетика). Оформляем? Напишите «да».")
     return "\n".join(lines)
@@ -2113,15 +2141,19 @@ PET_DROP = "Без питомца"
 
 def _pet_neighbours(spec: TripSpec) -> list[tuple[float, dict]]:
     """#550: the catalogue places nearest to the chosen one (catalog.km_between) where some trip
-    takes the pet, up to 3, with the distance. Without the origin and the refused places."""
+    takes the pet, up to 3, with the distance. Without the origin and the refused places.
+    #575: and without the places of another kind than the wishes ask (no sea for «море»)."""
     here = resolve_place(spec.destinations[0])
     if here is None:
         return []
     refused = refused_before(spec)
     skip = {*spec.destinations, here["name"], spec.origin, *refused}
+    hub, month = catalog.origin_hub(spec.origin or DEFAULT_ORIGIN)[0], _month(spec)
     out = []
     for p in sorted(catalog.places(), key=lambda p: catalog.km_between(here, p)):
         if p["name"] in skip or p.get("country") in refused:
+            continue
+        if _level(_rule_breaks(spec, p, hub, month)) >= 2:  # off the theme of the wishes
             continue
         trips = enumerate_trips(find_offers(spec, p["name"], estimate=True))
         if any(pets_ok(t) for t in trips):  # no trips is no way out (pets_possible says yes)
