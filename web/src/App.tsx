@@ -592,7 +592,7 @@ export function App() {
                     <Mascot size={30} state={i === lastAgent && reply?.stage === "booked" ? "happy" : "idle"} />
                     <div className="b">
                       <AgentText
-                        text={badgeNoAi ? withoutNoAi(brief(m.text)) : brief(m.text)}
+                        text={badgeNoAi ? withoutNoAi(brief(m.text, i === lastAgent)) : brief(m.text, i === lastAgent)}
                         synthetic={synthetic}
                         typing={typing === i}
                         onTick={scroll}
