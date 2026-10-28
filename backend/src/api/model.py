@@ -714,7 +714,7 @@ def far_origin_question(spec: TripSpec) -> list[Question]:
         return []
     hubs = sorted(catalog.hubs(), key=lambda h: -h["pop"])
     names = [h["name"] for h in hubs if h["name"] != DEFAULT_ORIGIN][:BIG_HUBS]
-    if place := catalog.resolve(spec.destinations[0]):
+    if place := resolve_place(spec.destinations[0]):  # #404: a geocoder place too
         # The place itself and its neighbour hubs are no origin to compare: their road is always
         # small (Ростов-на-Дону — Геленджик 5 000 ₽), so the gap would measure the distance to
         # the nearest city, not the origin (#380).
