@@ -5,6 +5,9 @@
 - Only offers of the plan can enter the cart, and the price is taken from the plan, not from
   the client (TRAP-4). Every price is synthetic (TRAP-7).
 - Checkout needs the total the user saw. A different total means the cart changed: 409.
+- Checkout needs a hotel and, unless the trip needs no road (timeline.road_needed: own
+  tickets, origin at the destination), a leg there and a leg back: else 409 that names what
+  is missing (#532). A booking of a hotel alone or of flights alone is no trip.
 - The purchase goes through the port `BookingProvider` (ADR-0002): `BOOKING.quote` re-checks the
   prices, then `BOOKING.book` books. `BOOKING` is the simulation now; a real provider replaces
   it with one assignment. A refusal of the provider is a 409 with its reason; the cart stays.
@@ -35,7 +38,7 @@ from api.contracts import (
 )
 from api.offers import transfer_id
 from api.store import SessionStore
-from api.timeline import build_timeline
+from api.timeline import build_timeline, road_gaps, ways
 from api.webhook import send_booking
 
 log = logging.getLogger(__name__)
@@ -372,6 +375,23 @@ def _repeat(reply: ChatReply, confirm_total_rub: int) -> Voucher | None:
     return v
 
 
+def _gap(spec: TripSpec, items: list[Offer]) -> str | None:
+    """#532: what the cart lacks for a trip, as the 409 text; None when nothing is missing."""
+    hotel = next((o for o in items if o.kind == "hotel"), None)
+    if hotel is None:
+        return (
+            "В корзине нет отеля: бронь без проживания не оформляю. Верните отель кнопкой "
+            "«Вернуть» в корзине или выберите другой на доске."
+        )
+    gaps = road_gaps(spec, hotel.city, [o for o in items if o.kind == "transport"])
+    if gaps:
+        return (
+            f"В корзине нет дороги {ways(gaps)}: бронь без транспорта не оформляю. Верните рейс "
+            "кнопкой «Вернуть» в корзине или напишите в чате «билеты у нас есть»."
+        )
+    return None
+
+
 def _priced(reply: ChatReply, confirm_total_rub: int) -> tuple[Cart, ChatReply | None]:
     """The cart quoted by the provider, ready to book; or, when the provider changed the
     prices, the reply to store instead: the cart with the new prices and the new total."""
@@ -380,6 +400,8 @@ def _priced(reply: ChatReply, confirm_total_rub: int) -> tuple[Cart, ChatReply |
     cart = make_cart([o for o in reply.plan.offers if o.offer_id in in_cart])
     if not cart.items:
         raise CartRefusal(409, "Корзина пуста: оформлять нечего.")
+    if gap := _gap(reply.plan.spec, cart.items):
+        raise CartRefusal(409, gap)
     quoted = _quote(reply.plan.spec, cart)
     if quoted.total_rub == confirm_total_rub:
         return quoted, None
