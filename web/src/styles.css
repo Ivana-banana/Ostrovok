@@ -2044,6 +2044,13 @@ tr .tag {
   vertical-align: 1px;
 }
 
+/* #547: the source chip of a real price (101hotels, Авиасейлс); not purple, so it is not read as «синтетика» */
+.synth.synth-real {
+  border-color: transparent;
+  background: #e3f3e8;
+  color: #17653a;
+}
+
 /* lists with prices: cart, voucher; same rhythm as a table row */
 
 ul.plain {

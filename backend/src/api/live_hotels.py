@@ -349,9 +349,12 @@ class Live101Hotels:
     always answers (TRAP-1, TRAP-6). The per-hotel stay total, meals and free-cancel deadline stay
     modelled from the real price, so each offer keeps the REAL_NOTE provenance line."""
 
+    health_label = "101hotels (живые) / синтетика при сбое"
+
     def __init__(self, base: object) -> None:
         self.base = base
-        # No data_mode: the fallback list is still synthetic, so /health keeps «синтетика» (TRAP-7).
+        # No data_mode: the fallback list is still synthetic, so the rank in /health stays
+        # «синтетика» (TRAP-7). `health_label` only names the live source there (#547).
 
     def hotels(
         self, spec: TripSpec, place: Place, now: datetime

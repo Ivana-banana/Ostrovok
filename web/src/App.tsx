@@ -139,6 +139,26 @@ const EMPTY_UI: Ui = { messages: [], removed: [] };
 
 export const MODE_RETRY_MS = 2000; // #534: the second GET /api/mode
 
+// The help texts name the real sources found in the offers of the plan (#547, TRAP-7).
+const HOTELS_REAL = "Отели — 101hotels (цена «от» на сегодня)";
+const FLIGHTS_REAL = "перелёты — Авиасейлс (цены из кэша поиска)";
+const realParts = (offers: Offer[]) => {
+  const real = (kind: Offer["kind"]) => offers.some((o) => o.kind === kind && !o.synthetic);
+  return [real("hotel") && HOTELS_REAL, real("transport") && FLIGHTS_REAL].filter(Boolean) as string[];
+};
+const priceSources = (offers: Offer[]) => {
+  const parts = realParts(offers);
+  return parts.length
+    ? `${parts.join(", ")}, остальные цены — синтетика. Оплата имитирована.`
+    : "Цены и рейсы — синтетика. Оплата имитирована.";
+};
+const dataNote = (offers: Offer[]) => {
+  const parts = realParts(offers);
+  return parts.length
+    ? `${parts.join(", ")}; остальные цены, тарифы, трансферы и рейтинги — синтетика.`
+    : "Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже.";
+};
+
 export function App() {
   const [text, setText] = useState("");
   const [reply, setReply] = useState<ChatReply | null>(null);
@@ -735,9 +755,7 @@ export function App() {
               <span className="qmark" aria-hidden="true">?</span>
             </summary>
             <p>
-              {reply?.plan.offers.some((o) => o.kind === "transport" && !o.synthetic)
-                ? "Перелёты — Авиасейлс (цены из кэша поиска), остальные цены — синтетика. Оплата имитирована."
-                : "Цены и рейсы — синтетика. Оплата имитирована."}
+              {priceSources(reply?.plan.offers ?? [])}
             </p>
           </details>
         </form>
@@ -771,8 +789,8 @@ export function App() {
             </span>
           ))}
           <span>
-            Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже. Климат и
-            время в пути — оценки команды. Оплата имитируется.
+            {dataNote(reply?.plan.offers ?? [])} Климат и время в пути — оценки команды. Оплата
+            имитируется.
           </span>
           </details>
         </footer>
