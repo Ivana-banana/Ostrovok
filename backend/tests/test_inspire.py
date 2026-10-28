@@ -4,6 +4,7 @@ Rules only, no model (TRAP-1). The requests are the jury and operator comments o
 """
 
 import pytest
+from talk import say
 
 from api import catalog, inspire
 from api.contracts import ChatRequest, TripSpec
@@ -19,7 +20,7 @@ def store(tmp_path):
 
 
 def inspired(store, text):
-    r = chat(ChatRequest(session_id=None, message=text), store)
+    r = say(store, text)
     assert r.stage == "inspire" and r.plan.spec.destinations == [], r.reply
     assert 2 <= len(r.plan.destinations) <= 4
     return r.plan.destinations
@@ -139,7 +140,7 @@ C17 = "Устал, хочу тишины и леса, без самолётов,
 
 def test_c17_quiet_forest_no_planes_gives_nature_without_flights(store):
     """C17: «тишины и леса, без самолётов» gave Воронеж, Нижний, Минск and Бухарест (plane)."""
-    first = chat(ChatRequest(session_id=None, message=C17), store)
+    first = say(store, C17)
     assert "flight" not in first.plan.spec.modes
     assert first.plan.spec.modes, "«без самолётов» must be written to the spec"
     r = chat(ChatRequest(session_id=first.session_id, message="тысяч 60"), store)
@@ -308,7 +309,7 @@ def test_sea_with_a_dog_refills_from_the_warmest_sea(store):
 
 
 def first_reply(store, text):
-    return chat(ChatRequest(session_id=None, message=text), store)
+    return say(store, text)
 
 
 def test_c361_northern_lights_are_checked_by_latitude_and_season(store):

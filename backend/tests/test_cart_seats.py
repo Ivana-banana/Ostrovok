@@ -11,10 +11,10 @@ the web show the offer title, so the label is in the title. Offline, rules only 
 from datetime import date
 
 import pytest
+from talk import say
 
 from api import offers
-from api.contracts import ChatRequest, TransportOffer, TripSpec
-from api.model import chat
+from api.contracts import TransportOffer, TripSpec
 from api.offers import _fares, resolve_place, transport_offers
 from api.store import SessionStore
 
@@ -29,10 +29,6 @@ def store(tmp_path, monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("GIGACHAT_AUTH_KEY", raising=False)
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def legs(mode: str, adults: int, kids: list[int], place: str = "Анапа") -> list[TransportOffer]:

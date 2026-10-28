@@ -3,10 +3,10 @@
 from datetime import date
 
 import pytest
+from talk import ask, say
 
-from api.contracts import ChatRequest
 from api.extract import extract
-from api.model import _genitive, chat
+from api.model import ORIGIN_ASK, _genitive
 from api.store import SessionStore
 
 ORIGIN_NOTE = "откуда: Москва (город вылета не назван)"
@@ -15,10 +15,6 @@ ORIGIN_NOTE = "откуда: Москва (город вылета не назв
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def fixed_today(monkeypatch, day: date) -> None:
@@ -137,9 +133,11 @@ def test_single_negation_still_refuses(text):
     ],
 )
 def test_ticket_request_asks_where_not_the_hotel(store, text):
-    r = say(store, text)
-    assert r.stage == "clarify" and len(r.questions) == 1
-    q = r.questions[0].text.lower()
+    """The origin goes first in the same turn (#436), the place is the second question."""
+    r = ask(store, text)
+    assert r.stage == "clarify" and len(r.questions) == 2
+    assert r.questions[0].text.startswith(ORIGIN_ASK)
+    q = r.questions[1].text.lower()
     assert "гостиниц" not in q and "куда" in q
 
 
@@ -151,8 +149,8 @@ def test_tickets_in_a_budget_ask_nothing_new(store):
 
 @pytest.mark.parametrize("text", ["Забронируй гостиницу на пятницу", "Забронируй отель на 2 ночи"])
 def test_hotel_booking_asks_the_city(store, text):
-    r = say(store, text)
-    assert len(r.questions) == 1 and "гостиниц" in r.questions[0].text.lower()
+    r = ask(store, text)
+    assert len(r.questions) == 2 and "гостиниц" in r.questions[1].text.lower()
 
 
 # ---------------------------------------------------------------- 4. «эта пятница» on a Friday
@@ -180,7 +178,7 @@ def test_bare_friday_on_a_friday_stays_the_next_one(monkeypatch):
 
 def test_road_over_half_of_the_budget_asks_the_origin(store):
     """Бали, 100 000 ₽ on all: the cheapest Москва round trip is over half of it (offers)."""
-    r = say(store, "Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч")
+    r = ask(store, "Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч")
     assert r.stage == "clarify" and len(r.questions) == 1
     assert r.questions[0].options[0] == "Из Москвы"
 
@@ -195,14 +193,18 @@ def test_road_over_half_of_the_budget_asks_the_origin(store):
 def test_egypt_and_turkey_are_alike(store, text):
     """3000 km asked for Хургада (3183 km) and not for Анталия (2159 km). By the offers both are
     alike: Москва is about a third of the budget and under 15 % dearer than the cheapest big hub,
-    so the origin is an assumption the user sees."""
-    r = say(store, text)
-    assert r.questions == [] and ORIGIN_NOTE in r.plan.spec.assumptions
+    so the origin question names no road sums (#436)."""
+    r = ask(store, text)
+    assert len(r.questions) == 1 and r.questions[0].text.startswith(ORIGIN_ASK)
+    assert "≈" not in r.questions[0].text
 
 
-def test_without_a_budget_the_origin_is_assumed(store):
-    r = say(store, "Бали на 12 ночей вдвоём")
-    assert r.questions == [] and ORIGIN_NOTE in r.plan.spec.assumptions
+def test_without_a_budget_the_origin_is_asked_without_sums(store):
+    """#436: no budget, the origin is still asked; «не важно» leaves Москва as an assumption."""
+    r = ask(store, "Бали на 12 ночей вдвоём")
+    assert len(r.questions) == 1 and "≈" not in r.questions[0].text
+    after = ask(store, "не важно", r.session_id)
+    assert after.questions == [] and ORIGIN_NOTE in after.plan.spec.assumptions
 
 
 @pytest.mark.parametrize(
@@ -230,5 +232,5 @@ def test_hub_genitive_for_the_chip(name, form):
 
 def test_road_question_claims_no_fit(store):
     """The rule compares the road only: the text names the sums and the share, not the fit."""
-    q = say(store, "Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч").questions[0]
+    q = ask(store, "Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч").questions[0]
     assert "уложит" not in q.text and "% бюджета" in q.text and "разница ≈" in q.text
