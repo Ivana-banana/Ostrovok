@@ -24,6 +24,9 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
 from importlib.resources import files
@@ -367,16 +370,25 @@ def _hotel(
     # Free cancellation only from 3 stars (team estimate), in the share of 3+ star hotels with it
     # on the 101hotels city page (#119), else in 80% (team estimate).
     share = place.get("free_cancel_share", 0.8)
-    refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 1 - share
+    real_cancel = base.get("free_cancel")  # a real 101hotels card states it (#528); else model it
+    if real_cancel is None:
+        refundable_rate = base["stars"] >= 3 and _rand(place["name"], key, "refund") >= 1 - share
+    else:
+        refundable_rate = real_cancel
     free_until = None
     if refundable_rate:
         days = (7, 3, 1)[int(_rand(place["name"], key, "deadline") * 3)]
         free_until = datetime.combine(date_in - timedelta(days=days), time(12, 0), tz)
     has_refundable = free_until is not None and free_until > now
-    room = place["level"] * STAR_FACTOR[base["stars"]] * _room_factor(spec)
-    jitter = _between(0.9, 1.12, place["name"], key, date_in, nights, _guests_tag(spec))
+    # A real 101hotels «от N ₽» per night (#528) is the price anchor: not jittered or re-seasoned.
+    real = base.get("night_rub")
+    room = (real or place["level"] * STAR_FACTOR[base["stars"]]) * _room_factor(spec)
+    season = (lambda _d: 1.0) if real else _night_factor
+    jitter = (
+        1.0 if real else _between(0.9, 1.12, place["name"], key, date_in, nights, _guests_tag(spec))
+    )
     people = spec.adults + 0.5 * sum(a >= 2 for a in spec.children_ages)
-    rooms = [room * _night_factor(date_in + timedelta(days=k)) * jitter for k in range(nights)]
+    rooms = [room * season(date_in + timedelta(days=k)) * jitter for k in range(nights)]
     night = sum(rooms) / nights
     before = date_in - timedelta(days=1)
     out = []
@@ -411,22 +423,31 @@ def _hotel(
                 pets_allowed=base["pets"],
                 amenities=base["amenities"],
                 description=base["note"],
+                synthetic=real is None,
             )
             extras = [
-                (f"{offer_id}-early", f"Ранний заезд с 06:00 — {base['title']}", 0.5 * night),
-                (f"{offer_id}-late", f"Поздний выезд до 18:00 — {base['title']}", 0.4 * night),
+                ("early", time(6, 0), f"Ранний заезд с 06:00 — {base['title']}", 0.5 * night),
+                ("late", time(18, 0), f"Поздний выезд до 18:00 — {base['title']}", 0.4 * night),
                 (
-                    f"{offer_id}-prev",
+                    "prev",
+                    None,
                     f"Ночь накануне, {before:%d.%m} — {base['title']}",
-                    (room * _night_factor(before) * jitter + meal_night) * tariff,
+                    (room * season(before) * jitter + meal_night) * tariff,
                 ),
             ]
             out.append(
                 (
                     hotel,
                     [
-                        ExtraOffer(offer_id=i, title=t, for_offer_id=offer_id, price_rub=_rub(p))
-                        for i, t, p in extras
+                        ExtraOffer(
+                            offer_id=f"{offer_id}-{tag}",
+                            title=t,
+                            for_offer_id=offer_id,
+                            price_rub=_rub(p),
+                            tag=tag,
+                            at=at,
+                        )
+                        for tag, at, t, p in extras
                     ],
                 )
             )
@@ -766,6 +787,8 @@ def transfer_offers(
                     depart_at=start,
                     arrive_at=_shift(start, ride),
                     price_rub=_rub((400 + 30 * road) * minivan),
+                    hotel_offer_id=h.offer_id,
+                    leg_offer_id=leg.offer_id,
                 )
             )
     return out
@@ -815,32 +838,86 @@ class SyntheticTransfers:
 HOTELS: HotelProvider = OsmOrSynthetic()
 TRANSPORT: TransportProvider = SyntheticTransport()
 TRANSFERS: TransferProvider = SyntheticTransfers()
+# Real flights (#490): main.py builds the adapter once when TRAVELPAYOUTS_TOKEN is set. A chat
+# request uses it only with ChatRequest.real_data: a ContextVar per request, not a module swap,
+# so parallel sessions keep their own choice. Only the live path (find_offers) asks transport();
+# inspiration and the pets check read ESTIMATE_*, travel_hours a SyntheticTransport.
+REAL_TRANSPORT: TransportProvider | None = None
+_real_data: ContextVar[bool] = ContextVar("real_data", default=False)
+
+
+@contextmanager
+def real_data(on: bool) -> Iterator[None]:
+    """The real transport for the searches inside the block, when it exists (#490)."""
+    token = _real_data.set(on)
+    try:
+        yield
+    finally:
+        _real_data.reset(token)
+
+
+def transport() -> TransportProvider:
+    """The transport port of this request: REAL_TRANSPORT when asked and built, else TRANSPORT."""
+    return REAL_TRANSPORT if _real_data.get() and REAL_TRANSPORT is not None else TRANSPORT
+
+
+# The estimate path (ADR-0002, #307): inspiration, the dead-end check of pets and eval price
+# dozens of places per turn. A live API does not fit the turn (5 s per call), so they read
+# these synthetic adapters, never the ones above; the offers are marked synthetic (TRAP-7).
+# The live ports serve only the chosen place (dag.py).
+ESTIMATE_HOTELS: HotelProvider = OsmOrSynthetic()
+ESTIMATE_TRANSPORT: TransportProvider = SyntheticTransport()
+ESTIMATE_TRANSFERS: TransferProvider = SyntheticTransfers()
+
+
+def _keyed(x: TransferOffer) -> TransferOffer:
+    """The ride under the core key of its pair: offer_id = transfer_id(hotel, leg), the
+    provider id in ref. A ride without the pair fields keeps its offer_id (the old rule)."""
+    if not (x.hotel_offer_id and x.leg_offer_id):
+        return x
+    key = transfer_id(x.hotel_offer_id, x.leg_offer_id)
+    if x.offer_id == key:
+        return x
+    return x.model_copy(update={"offer_id": key, "ref": x.ref or x.offer_id})
 
 
 def offers_for_place(
-    spec: TripSpec, place: dict, origin: dict | None = None, now: datetime | None = None
+    spec: TripSpec,
+    place: dict,
+    origin: dict | None = None,
+    now: datetime | None = None,
+    estimate: bool = False,
 ) -> list[Offer]:
     """All offers for one place and the spec dates: hotels, transport, transfers, add-ons.
 
     place and origin need only name, lat, lon and tz (TRAP-2); the rest has defaults.
+    estimate: the synthetic ESTIMATE_* adapters in place of the live ports.
     """
     if not spec.date_from:
         return []
     place = _complete(place)
     now = now or datetime.now(UTC)  # only the cancellation state depends on it
+    hp, tp, xp = (
+        (ESTIMATE_HOTELS, ESTIMATE_TRANSPORT, ESTIMATE_TRANSFERS)
+        if estimate
+        else (HOTELS, transport(), TRANSFERS)
+    )
     # A port that raises gives [] and a mark in the reply (ops.guarded, #290), not a 500.
-    pairs = ops.guarded("hotels", lambda: HOTELS.hotels(spec, place, now), [])
+    pairs = ops.guarded("hotels", lambda: hp.hotels(spec, place, now), [])
     hotels = [h for h, _ in pairs]
     legs = (
-        ops.guarded("transport", lambda: TRANSPORT.legs(spec, _complete(origin), place), [])
+        ops.guarded("transport", lambda: tp.legs(spec, _complete(origin), place), [])
         if origin and not spec.own_transport
         else []
     )
     own = own_legs(spec, place["name"])
-    transfers = ops.guarded(
-        "transfers", lambda: TRANSFERS.transfers(spec, place, hotels, legs + own), []
-    )
-    return [*hotels, *legs, *transfers, *(x for _, extras in pairs for x in extras)]
+    transfers = ops.guarded("transfers", lambda: xp.transfers(spec, place, hotels, legs + own), [])
+    return [
+        *hotels,
+        *legs,
+        *(_keyed(x) for x in transfers),
+        *(x for _, extras in pairs for x in extras),
+    ]
 
 
 OWN_THERE, OWN_BACK = "own-there", "own-back"  # leg_id of the user's own tickets (C5, #408)
@@ -875,10 +952,15 @@ def own_legs(spec: TripSpec, city: str) -> list[TransportOffer]:
     return out
 
 
-def find_offers(spec: TripSpec, name: str, now: datetime | None = None) -> list[Offer]:
-    """Offers for a destination name from the spec; [] when the name is unknown."""
+def find_offers(
+    spec: TripSpec, name: str, now: datetime | None = None, estimate: bool = False
+) -> list[Offer]:
+    """Offers for a destination name from the spec; [] when the name is unknown.
+
+    estimate: the synthetic estimate of a place among many (inspiration, dead ends, eval);
+    the live ports only for the place the user chose (dag.py)."""
     place = resolve_place(name)
     if place is None:
         return []
     origin = resolve_place(spec.origin) if spec.origin else None
-    return offers_for_place(spec, place, origin, now)
+    return offers_for_place(spec, place, origin, now, estimate)

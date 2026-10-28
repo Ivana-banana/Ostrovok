@@ -1,7 +1,8 @@
 """Optimizer (T7, #13): whole-trip bundles, hard filters, user weights, "what was sacrificed".
 
 - Bundle: one hotel tariff x a leg there x a leg back x the transfers of those legs to that
-  hotel (transfer_id). Every tariff of a hotel is its own HotelOffer, so several tariffs of
+  hotel (transfer_id: the key of the pair, offers_for_place sets it from the fields
+  TransferOffer.hotel_offer_id and leg_offer_id, #307). Every tariff of a hotel is its own HotelOffer, so several tariffs of
   one hotel compete as separate bundles. A car goes both ways or not at all; a car has no
   transfers. total_rub is the sum of price_rub of the bundle offers: all guests, all nights.
 - Hard filters from TripSpec: meal (the tariff meal includes the asked one: AI covers BB),
