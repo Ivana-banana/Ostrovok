@@ -411,6 +411,15 @@ suite("доска поездки", () => {
     expect(sent).toEqual(["Мои приоритеты по важности: отмена, цена."]);
   });
 
+  it("#577: пустой порядок — клик шлёт только выбранный, и «цена» тоже", () => {
+    const sent: string[] = [];
+    const sec = row("compare", [], (t) => sent.push(t));
+    const btn = (name: string) => [...sec!.querySelectorAll("button")].find((b) => b.textContent === name)!;
+    act(() => btn("рейтинг").click());
+    act(() => btn("цена").click());
+    expect(sent).toEqual(["Мои приоритеты по важности: рейтинг.", "Мои приоритеты по важности: цена."]);
+  });
+
   it("#577: после брони порядок виден, но не правится; пустой список скрыт", () => {
     const sec = row("booked", ["price", "cancellation"]);
     expect(pressed(sec)).toEqual(["цена"]);
@@ -419,8 +428,8 @@ suite("доска поездки", () => {
   });
 
   it("S9: на сборке подсказка честно говорит, что смена вернёт к сравнению", () => {
-    expect(row("assemble", ["price"])?.title).toContain("вернёт вас к сравнению");
-    expect(row("compare", ["price"])?.title).toBe("");
+    expect(row("assemble", ["price"])?.textContent).toContain("вернёт вас к сравнению");
+    expect(row("compare", ["price"])?.textContent).not.toContain("вернёт");
   });
 
   it("#434: блок этапа — карточки этапа открыты, уже выбранное свёрнуто в «Варианты»", () => {

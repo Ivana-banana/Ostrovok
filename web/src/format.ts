@@ -151,15 +151,6 @@ export function priorityMessage(order: Priority[]): string {
   return `Мои приоритеты по важности: ${order.map((p) => PRIORITIES[p]).join(", ")}.`;
 }
 
-// Moves the item one place; null when it cannot move.
-export function movePriority(order: Priority[], i: number, by: -1 | 1): Priority[] | null {
-  const j = i + by;
-  if (i < 0 || i >= order.length || j < 0 || j >= order.length) return null;
-  const next = [...order];
-  [next[i], next[j]] = [next[j], next[i]];
-  return next;
-}
-
 // Data sources the product really uses. Add a source here only when the code reads it
 // (research/data-sources.md has the licences). Today: hotels from the OSM snapshot.
 export const SOURCES: { name: string; text: string; url: string; licence: string }[] = [

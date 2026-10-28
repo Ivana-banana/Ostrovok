@@ -177,12 +177,15 @@ export function PriorityRow({ order, stage, busy, onSend }: {
   const editable = stage === "compare" || stage === "assemble";
   if (!order.length && !editable) return null;
   const all = Object.keys(PRIORITIES) as Priority[];
-  const rest = order.length ? order : all;
   const main = order[0] ?? "price";
-  const hint =
-    stage === "assemble" ? "Смена приоритета вернёт вас к сравнению: план нужно будет собрать заново." : undefined;
+  // Empty order: send only the clicked one. The user did not choose the tail, and an explicit
+  // ["price"] differs from the empty list in the optimizer (D-009), so «цена» is sent too.
+  const pick = (p: Priority) => {
+    if (order.length && p === main) return;
+    onSend(priorityMessage([p, ...order.filter((x) => x !== p)]));
+  };
   return (
-    <section className="priorities" aria-label="Приоритеты" title={editable ? hint : undefined}>
+    <section className="priorities" aria-label="Приоритеты">
       <h2>Что для вас важнее</h2>
       <ul>
         {all.map((p) => (
@@ -192,13 +195,16 @@ export function PriorityRow({ order, stage, busy, onSend }: {
               className="chip"
               aria-pressed={p === main}
               disabled={busy || !editable}
-              onClick={() => p !== main && onSend(priorityMessage([p, ...rest.filter((x) => x !== p)]))}
+              onClick={() => pick(p)}
             >
               {PRIORITIES[p]}
             </button>
           </li>
         ))}
       </ul>
+      {stage === "assemble" && (
+        <p className="muted">Смена приоритета вернёт вас к сравнению: план нужно будет собрать заново.</p>
+      )}
     </section>
   );
 }

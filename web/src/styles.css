@@ -2295,6 +2295,12 @@ button.primary:hover:not(:disabled),
   scrollbar-width: none;
 }
 
+.priorities .muted {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}
+
 .priorities h2 {
   margin: 0;
   font-size: 13.5px;
@@ -2671,7 +2677,13 @@ button.param.chosen {
   }
 
   .priorities {
+    flex-wrap: wrap;
     padding: 6px 12px;
+    overflow-x: visible;
+  }
+
+  .priorities ul {
+    flex-wrap: wrap;
   }
 
   .strip:has(.editor) {
