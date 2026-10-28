@@ -246,9 +246,17 @@ NOT_RESTART_RE = re.compile(
     r"не\s+(?:надо|нужн\w*|хочу|будем)"
 )
 RESTART_CHIP = "Начать заново"
+# #503: after the voucher «Изменить бронь» opens a new trip with the same terms and the edit the
+# user wrote before the press. The edit lives in the text of the chip question: the reply is the
+# only state of the session, and the user sees what will be applied.
+CHANGE_CHIP = "Изменить бронь"
+CHANGE_RE = re.compile(rf"^\s*{CHANGE_CHIP}\s*[.!]*\s*$", re.IGNORECASE)
+EDIT_NOTE = "Правка для новой поездки: «"
+EDIT_NOTE_RE = re.compile(rf"{EDIT_NOTE}(.*)»\.$", re.DOTALL)
 AFTER_BOOKING = (
-    "Другое направление, другие даты или состав — это новая поездка: нажмите "
-    f"«{RESTART_CHIP}» или напишите «новая поездка»."
+    "Другое направление, другие даты или состав — это новая поездка. Нажмите "
+    f"«{CHANGE_CHIP}»: возьму те же условия и вашу правку. Или нажмите «{RESTART_CHIP}» "
+    "или напишите «новая поездка»: начнём с нуля."
 )
 OTHER_RE = re.compile(
     r"\b(?:друг(?:ое|ой|ую|ие|их)|ино[ейю])\s+(?:направлен\w*|город\w*|мест\w*|стран\w*|курорт\w*)"
@@ -2488,6 +2496,36 @@ def same_place_question(old: ChatReply, name: str, found: dict) -> list[Question
     return [Question(text=text, options=[here, *(o for o in chips if o != here)])]
 
 
+def _booking_edit(prev: ChatReply, message: str) -> str:
+    """#503: the edits of the trip the user wrote after the voucher: the earlier ones from the
+    chip question of prev, then this message when it edits the trip."""
+    old = next((m.group(1) for q in prev.questions if (m := EDIT_NOTE_RE.search(q.text))), "")
+    low = message.lower().replace("ё", "е")
+    found, _ = extract(message, True)
+    if EDIT_KEYS & set(found) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low):
+        return f"{old}. {message}" if old else message
+    return old
+
+
+def _change_booking(prev: ChatReply, sid: str, use_llm: bool, origin: str | None) -> ChatReply:
+    """#503: a new trip from the booked one: the same spec and plan, no cart, no voucher, plus
+    the edit written before the press. The first booking stays: nothing is cancelled or rebooked."""
+    edit = _booking_edit(prev, "")
+    kept = (
+        f"Бронь {prev.voucher.booking_id} остаётся оформленной: она не отменена и не переоформлена."
+    )
+    trip = prev.model_copy(
+        update={"voucher": None, "cart": Cart(), "stage": "compare", "questions": []}
+    )
+    if edit:
+        done = step(trip, sid, edit, use_llm, origin)
+        head = "Новая поездка на тех же условиях с вашей правкой — отдельная покупка."
+    else:
+        done = trip.model_copy(update={"reply": _text_compare(trip.plan), "llm": False})
+        head = "Новая поездка на тех же условиях — отдельная покупка. Правки пока нет."
+    return done.model_copy(update={"reply": f"{head} {kept}\n{done.reply}"})
+
+
 def step(
     prev: ChatReply | None, sid: str, message: str, use_llm: bool = False, origin: str | None = None
 ) -> ChatReply:
@@ -2511,6 +2549,8 @@ def step(
         fresh = step(None, sid, rest, use_llm, origin=named)
         kept = f" Бронь {prev.voucher.booking_id} остаётся оформленной." if prev.voucher else ""
         return fresh.model_copy(update={"reply": f"Начинаем заново.{kept} {fresh.reply}"})
+    if prev and prev.voucher and CHANGE_RE.match(message):
+        return _change_booking(prev, sid, use_llm, origin)
     if prev and prev.voucher:
         text = f"Бронь {prev.voucher.booking_id} уже оформлена."
         if GUEST_DATA_RE.search(message):  # #367: an e-mail or a phone after the booking
@@ -2519,7 +2559,9 @@ def step(
                 text += " Бронь имитирована."
         # #98: no dead end — another city or other dates mean a new trip; the booking stays
         text += f" {AFTER_BOOKING}"
-        chip = Question(text="Что дальше?", options=[RESTART_CHIP])
+        edit = _booking_edit(prev, message)
+        ask = f"Что дальше? {EDIT_NOTE}{edit}»." if edit else "Что дальше?"
+        chip = Question(text=ask, options=[CHANGE_CHIP, RESTART_CHIP])
         return prev.model_copy(update={"reply": text, "questions": [chip], "llm": False})
     old = prev or ChatReply(
         session_id=sid,
