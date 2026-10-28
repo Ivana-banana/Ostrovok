@@ -2948,7 +2948,10 @@ def step(
         )
 
     if prev is None and (questions := blocking_questions(spec, message)):
-        return reply("clarify", Plan(spec=spec), _text_clarify(questions), questions=questions)
+        text = _text_clarify(questions)
+        if use_llm and (own := llm.rewrite_questions(questions, deadline)):
+            text, used = own, True  # checked against the question texts (TRAP-4)
+        return reply("clarify", Plan(spec=spec), text, questions=questions)
     spec = assume(spec)
     if not spec.destinations:
         # 5: four are left without the origin. #451: «ещё» — the same spec, the pool without
