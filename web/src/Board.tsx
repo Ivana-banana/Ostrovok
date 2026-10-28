@@ -903,6 +903,13 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   );
   const editable = stage === "compare" || stage === "assemble";
   const more = moreLine(reply, editable);
+  const nextStep = next && (
+    <section className="sec next" aria-label="Следующий шаг">
+      <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
+        {next.label}
+      </button>
+    </section>
+  );
   return (
     <div className="board">
       {!reply.llm && (
@@ -912,25 +919,29 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
       )}
       {destinationsInChat(stage) && destinations}
       {voucher && <VoucherView voucher={voucher} />}
-      {past ? (
+      {past && (
         <>
           {cartView}
           {timeline}
         </>
-      ) : (
+      )}
+      {/* The plan is built: its timeline and the step to the cart first, the options after it. */}
+      {stage === "assemble" && (
+        <>
+          {timeline}
+          {nextStep}
+          {choices}
+          {cartView}
+        </>
+      )}
+      {!past && stage !== "assemble" && (
         <>
           {choices}
           {timeline}
+          {nextStep}
+          {cartView}
         </>
       )}
-      {next && (
-        <section className="sec next" aria-label="Следующий шаг">
-          <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
-            {next.label}
-          </button>
-        </section>
-      )}
-      {!past && cartView}
       {(more || editable) && (
         <details className="more" open={plan.changes.length > 0 || undefined}>
           <summary>

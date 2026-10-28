@@ -161,12 +161,16 @@ export const SOURCES: { name: string; text: string; url: string; licence: string
 // them: the hotel rows after «Отели:», the «Рейс N.» rows after «Транспорт:», the timeline rows
 // after «План поездки:» and the destination rows (backend api/model.py _text_compare,
 // _text_assemble, _text_inspire). A row is dropped only right after its header. The header of
-// the destinations becomes one lead line with their count. Every other line (summary, climate,
+// the destinations and of the plan becomes one short lead line. Every other line (summary, climate,
 // «Предлагаю», «Почему», assumptions, questions, hints) stays as it is.
 const LISTS: { head: RegExp; row: RegExp; lead?: (rows: number) => string }[] = [
   { head: /^Отели:$/, row: /^\d+\. .+ — \S*★, рейтинг / },
   { head: /^Транспорт:$/, row: /^Рейс \d+\. / },
-  { head: /^План поездки:$/, row: /^\d{2}\.\d{2} \d{2}:\d{2} \(UTC[+-][\d:]+\) — / },
+  {
+    head: /^План поездки:$/,
+    row: /^\d{2}\.\d{2} \d{2}:\d{2} \(UTC[+-][\d:]+\) — /,
+    lead: () => "План поездки собран — таймлайн ниже.",
+  },
   {
     head: /^Подходящие направления.*:$/,
     row: /^\d+\. .+ \(.+\) — от .+ на \d+ чел\./,
