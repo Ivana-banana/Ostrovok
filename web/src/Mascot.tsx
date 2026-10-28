@@ -21,7 +21,8 @@ export function moodOf(r: ChatReply | null, failed: boolean): MascotState {
   if (failed) return "puzzled";
   if (!r) return "idle";
   if (r.stage === "booked") return "happy";
-  if (NOT_FOUND.test(r.reply)) return "puzzled";
+  const found = r.plan.offers.length > 0 || r.plan.destinations.length > 0;
+  if (NOT_FOUND.test(r.reply) && !found) return "puzzled"; // «X нет в каталоге. По вашему выбору — Y» found Y
   if (r.questions.length) return "curious";
   return "glad";
 }

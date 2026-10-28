@@ -67,7 +67,12 @@ suite("маскот", () => {
     expect(moodOf(r({ stage: "booked" }), false)).toBe("happy");
     expect(moodOf(r({ stage: "clarify", questions: [{ text: "Откуда вы поедете?", options: ["Из Москвы"] }] }), false)).toBe("curious");
     expect(moodOf(r({ stage: "compare", questions: [], reply: "Нашёл 5 отелей." }), false)).toBe("glad");
-    expect(moodOf(r({ stage: "select", questions: [], reply: "Направления «Атлантида» нет в каталоге." }), false)).toBe("puzzled");
+    const empty = { ...base.plan, offers: [], destinations: [] };
+    // the real backend texts (model.py): nothing found → puzzled; a replacement city was found → glad
+    const lost = "Направления «Атлантида» пока нет в каталоге, и геокодер его не нашёл (или нет сети). Где это место, не знаю.";
+    expect(moodOf(r({ stage: "select", questions: [], reply: lost, plan: empty }), false)).toBe("puzzled");
+    const swapped = "«Атлантида» нет в каталоге. По вашему выбору — Сочи.";
+    expect(moodOf(r({ stage: "compare", questions: [], reply: swapped }), false)).toBe("glad");
     expect(moodOf(r({ stage: "compare", questions: [] }), true)).toBe("puzzled");
   });
 
