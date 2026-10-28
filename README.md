@@ -19,7 +19,7 @@
 ```bash
 git clone https://github.com/ostrovok-hackathon-2026/nedovost-org.git
 cd nedovost-org
-cp .env.example .env
+cp .env.example .env   # с ключами жюри: расшифруйте secrets.env.age в .env (раздел «Переменные окружения»)
 docker compose up --build
 # открыть http://localhost:8080
 ```
@@ -244,6 +244,8 @@ flowchart LR
 ## Переменные окружения
 
 Файл `.env.example`. Ключи LLM можно оставить пустыми: тогда агент работает по правилам.
+
+Ключи для жюри лежат в `secrets.env.age`: это `.env`, зашифрованный `age` публичным ключом организаторов. Провайдер LLM — GigaChat, модель — `GigaChat-3-Ultra`. Расшифровка: `age -d -i <закрытый ключ> -o .env secrets.env.age`. В файле ключи `GIGACHAT_AUTH_KEY` и `TRAVELPAYOUTS_TOKEN`, они выпущены только для жюри. Остальные переменные совпадают с `.env.example`. Затем запустите `docker compose up --build` и включите переключатель «GigaChat» в UI: ключ только делает модель доступной.
 
 | Переменная | По умолчанию | Назначение |
 |---|---|---|
