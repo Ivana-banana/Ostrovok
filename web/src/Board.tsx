@@ -48,12 +48,33 @@ export type BoardProps = {
   onCheckout: (guest: Guest | null) => void;
 };
 
-// Every price carries the "синтетика" label when the data is mock (TRAP-7).
-export function Price({ value, synthetic = true }: { value: number; synthetic?: boolean }) {
+// The source of a real price (#547). The contract has no source field: derive it from the kind.
+// The chip and its tooltip tell where a non-synthetic number comes from.
+const PRICE_SOURCES: Record<string, { chip: string; hint: string }> = {
+  hotel: { chip: "101hotels", hint: "итог по цене «от» 101hotels; питание и тариф — оценка" },
+  transport: { chip: "Авиасейлс", hint: "самый дешёвый билет из кэша поиска Авиасейлс, не цена брони" },
+};
+const OTHER_SOURCE = { chip: "реальные данные", hint: "цена не синтетическая" };
+export type PriceSource = { chip: string; hint: string };
+export const sourceOf = (items: { kind: string }[]): PriceSource => {
+  const kinds = [...new Set(items.map((o) => o.kind))];
+  if (kinds.length === 1) return PRICE_SOURCES[kinds[0]] ?? OTHER_SOURCE;
+  const known = kinds.map((k) => PRICE_SOURCES[k] ?? OTHER_SOURCE);
+  return { chip: known.map((x) => x.chip).join(" + "), hint: known.map((x) => x.hint).join("; ") };
+};
+
+// Every price carries the "синтетика" label when the data is mock (TRAP-7); a real price carries
+// the chip of its source instead of nothing (#547).
+export function Price({ value, synthetic = true, source }: { value: number; synthetic?: boolean; source?: PriceSource }) {
   return (
     <span className="price">
       {rub(value)}
       {synthetic && <span className="synth">синтетика</span>}
+      {!synthetic && (
+        <span className="synth synth-real" title={(source ?? OTHER_SOURCE).hint}>
+          {(source ?? OTHER_SOURCE).chip}
+        </span>
+      )}
     </span>
   );
 }
@@ -391,7 +412,7 @@ function Hotels({ plan, stage, busy, onSend }: {
                     {chosen && <span className="tag">выбран</span>}
                   </td>
                   <td className="num cost">
-                    <Price value={h.price_rub} synthetic={h.synthetic} />
+                    <Price value={h.price_rub} synthetic={h.synthetic} source={sourceOf([h])} />
                   </td>
                   <td className="num">{h.stars !== null ? `${h.stars}★` : "—"}</td>
                   <td className="num" data-label="Рейтинг">{h.rating ?? "—"}</td>
@@ -484,7 +505,7 @@ function Transport({ plan, stage, busy, onSend }: {
                   {/* #475: the pet mark of a leg, as for the hotels */}
                   <td data-label="Питомцы">{t.pets_allowed ? "можно" : "нет отметки"}</td>
                   <td className="num cost">
-                    <Price value={t.price_rub} synthetic={t.synthetic} />
+                    <Price value={t.price_rub} synthetic={t.synthetic} source={sourceOf([t])} />
                   </td>
                   <td className="act">
                     {(stage === "compare" || stage === "assemble") && !chosen && (
@@ -511,9 +532,9 @@ function Transport({ plan, stage, busy, onSend }: {
 
 function Bundles({ plan }: { plan: Plan }) {
   if (!plan.bundles.length) return null;
-  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? id;
-  const synthetic = (b: Bundle) =>
-    isSynthetic(plan.offers.filter((o) => b.offer_ids.includes(o.offer_id)));
+  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title;
+  const of = (b: Bundle) => plan.offers.filter((o) => b.offer_ids.includes(o.offer_id));
+  const synthetic = (b: Bundle) => isSynthetic(of(b));
   const kind = (id: string) => plan.offers.find((o) => o.offer_id === id)?.kind;
   const heading = plan.bundles.every((b) => b.offer_ids.some((id) => kind(id) === "transport"))
     ? "Варианты поездки целиком"
@@ -526,12 +547,13 @@ function Bundles({ plan }: { plan: Plan }) {
           <article key={b.bundle_id} className="card">
             <h3>{b.label}</h3>
             <p>
-              <Price value={b.total_rub} synthetic={synthetic(b)} />, в пути {hours(b.travel_hours)}
+              <Price value={b.total_rub} synthetic={synthetic(b)} source={sourceOf(of(b))} />, в пути {hours(b.travel_hours)}
             </p>
             <ul>
-              {b.offer_ids.map((id) => (
-                <li key={id}>{title(id)}</li>
-              ))}
+              {b.offer_ids.flatMap((id) => {
+                const t = title(id); // an id outside the plan is no text for the guest (#549)
+                return t ? [<li key={id}>{t}</li>] : [];
+              })}
             </ul>
             {b.tradeoffs.length > 0 && (
               <p className="muted">
@@ -547,7 +569,7 @@ function Bundles({ plan }: { plan: Plan }) {
 
 function Explanations({ plan }: { plan: Plan }) {
   if (!plan.explanations.length) return null;
-  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? id;
+  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? "Вариант плана";
   const synth = isSynthetic(plan.offers);
   return (
     <section className="sec" aria-label="Почему этот выбор">
@@ -640,16 +662,13 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
             <ul>
               {fixes.map((id) => {
                 const o = offer(id);
+                if (!o) return null; // a fix outside the plan has no title: no raw id for the guest (#549)
                 return (
                   <li key={id}>
-                    {o ? o.title : id}
-                    {o && (
-                      <>
-                        {" — "}
-                        <Price value={o.price_rub} synthetic={o.synthetic} />
-                      </>
-                    )}
-                    {o && canAdd && (
+                    {o.title}
+                    {" — "}
+                    <Price value={o.price_rub} synthetic={o.synthetic} source={sourceOf([o])} />
+                    {canAdd && (
                       <button type="button" disabled={busy} onClick={() => onCart("add", id)}>
                         В корзину
                       </button>
@@ -721,7 +740,7 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
         {cart.items.map((o) => (
           <li key={o.offer_id} className="row">
             <span>{o.title}</span>
-            <Price value={o.price_rub} synthetic={o.synthetic} />
+            <Price value={o.price_rub} synthetic={o.synthetic} source={sourceOf([o])} />
             {editable && (
               <button
                 type="button"
@@ -755,20 +774,20 @@ function CartView({ cart, spec, stage, removed, busy, onCart, onCheckout }: {
       <p className="total" data-testid="cart-total">
         <span>Итого: </span>
         <b>
-          <Price value={shownTotal} synthetic={synthetic} />
+          <Price value={shownTotal} synthetic={synthetic} source={sourceOf(cart.items)} />
         </b>
       </p>
       {synthetic && <span className="sub">все цены — синтетика · оплата имитируется</span>}
       {over && (
         <p className="warn" role="note">
           Итог больше бюджета {rub(spec.budget_rub!)} на{" "}
-          <Price value={cart.total_rub - spec.budget_rub!} synthetic={synthetic} />.
+          <Price value={cart.total_rub - spec.budget_rub!} synthetic={synthetic} source={sourceOf(cart.items)} />.
         </p>
       )}
       {hotelOver > 0 && (
         <p className="warn" role="note">
           Отель дороже бюджета отеля {rub(spec.hotel_budget_rub!)} на{" "}
-          <Price value={hotelOver} synthetic={hotel!.synthetic} />.
+          <Price value={hotelOver} synthetic={hotel!.synthetic} source={sourceOf([hotel!])} />.
         </p>
       )}
       {editable && cart.items.length > 0 && (
@@ -867,16 +886,14 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
       </p>
       <ul className="plain">
         {voucher.items.map((o) => (
-          <li key={o.offer_id} className="row">
-            <span>
-              {o.title} <small className="muted">{o.offer_id}</small>
-            </span>
-            <Price value={o.price_rub} synthetic={o.synthetic} />
+          <li key={o.offer_id} className="row" data-offer-id={o.offer_id}>
+            <span>{o.title}</span>
+            <Price value={o.price_rub} synthetic={o.synthetic} source={sourceOf([o])} />
           </li>
         ))}
       </ul>
       <p className="total">
-        Итого: <Price value={voucher.total_rub} synthetic={isSynthetic(voucher.items)} />
+        Итого: <Price value={voucher.total_rub} synthetic={isSynthetic(voucher.items)} source={sourceOf(voucher.items)} />
       </p>
     </section>
   );
@@ -981,17 +998,34 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   const more = moreLine(reply, editable);
   // The sum of the chosen plan, before the cart exists: the same offers the cart will hold.
   const picked = cart.items.length ? cart.items : plan.offers.filter((o) => plan.selected.includes(o.offer_id));
+  // #556: on compare a plan with no selected hotel is a dead end: "беру" is off. The same rule as
+  // backend `_hotel_selected` (model.py), #532. The hint is built from the facts of the plan: the
+  // pet filtered the hotels out (#550), the hotel source gave none (#532), or none is picked.
+  const noHotel = stage === "compare" && !plan.offers.some((o) => o.kind === "hotel" && plan.selected.includes(o.offer_id));
+  const hasHotels = plan.offers.some((o) => o.kind === "hotel");
+  const noHotelHint = !hasHotels
+    ? "Отеля в плане нет — источник отелей не ответил. Повторите запрос, выберите другие даты или направление"
+    : plan.spec.pets
+      ? "В плане нет отеля — выберите отель, другой город или «Без питомца»"
+      : "Выберите отель из списка";
   const nextStep = next && (
     <section className="sec next" aria-label="Следующий шаг">
-      <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
+      <button
+        type="button"
+        className="buy"
+        disabled={busy || noHotel}
+        title={noHotel ? noHotelHint : undefined}
+        onClick={() => onSend(next.text)}
+      >
         {next.label}
         {stage === "assemble" && picked.length > 0 && (
           <>
             {" · "}
-            <Price value={picked.reduce((t, o) => t + o.price_rub, 0)} synthetic={isSynthetic(picked)} />
+            <Price value={picked.reduce((t, o) => t + o.price_rub, 0)} synthetic={isSynthetic(picked)} source={sourceOf(picked)} />
           </>
         )}
       </button>
+      {noHotel && <p className="muted no-hotel">{noHotelHint}</p>}
     </section>
   );
   return (

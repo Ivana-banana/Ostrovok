@@ -10,7 +10,9 @@ const FAMILY = "Сочи из Москвы самолётом, 2 взрослы�
 const EMPTY = /^\s*(—|)\s*$/;
 
 // «41 000 ₽синтетика» → 41000.
-const rub = (t: string | null) => Number((t ?? "").replace("синтетика", "").replace(/\D/g, ""));
+// #547: a real price carries the chip of its source («101hotels», «Авиасейлс») instead.
+const MARK = /синтетика|101hotels|Авиасейлс|реальные данные/;
+const rub = (t: string | null) => Number((t ?? "").replace(new RegExp(MARK, "g"), "").replace(/\D/g, ""));
 
 // S6 п.2 в UI: ≥ 3 разных отеля, у каждого заполнены ≥ 5 признаков. Отели считаем по названию,
 // а не по числу строк: строка может быть тарифом отеля.
@@ -29,7 +31,7 @@ async function expectHotelTable(hotels: Locator) {
   }
   expect([...full].length, `отелей с 5 заполненными признаками: ${[...full].join(", ")}`).toBeGreaterThanOrEqual(3);
   // Цена несёт пометку «синтетика», условия отмены читаются словами.
-  await expect(hotels.locator("tbody tr").first().locator(".price")).toContainText("синтетика");
+  await expect(hotels.locator("tbody tr").first().locator(".price")).toContainText(MARK);
   await expect(hotels).toContainText(/бесплатн|невозвратный/);
 }
 
@@ -76,7 +78,7 @@ test("S6: запрос → сравнение → план → корзина �
   // Сравнение: ≥ 3 отеля, цены с пометкой «синтетика», транспорт со временем в пути.
   const hotels = page.getByRole("region", { name: "Сравнение отелей" });
   await expect(hotels.locator("tbody tr").nth(2)).toBeVisible(); // S6: не меньше 3
-  await expect(hotels.locator(".price .synth").first()).toHaveText("синтетика");
+  await expect(hotels.locator(".price .synth").first()).toHaveText(MARK);
   const transport = page.getByRole("region", { name: "Сравнение транспорта" });
   await expect(transport).toContainText("ч ");
   await expectHotelTable(hotels);
@@ -186,7 +188,7 @@ test("ширина телефона: чат с карточками этапа �
       const p = prices.nth(i);
       await p.scrollIntoViewIfNeeded();
       await expect(p).toBeVisible();
-      await expect(p.locator(".synth")).toHaveText("синтетика");
+      await expect(p.locator(".synth")).toHaveText(MARK);
       const b = await p.boundingBox();
       expect(b && b.x >= 0 && b.x + b.width <= 390, `цена ${i + 1} в «${name}» в пределах экрана`).toBe(true);
     }
@@ -404,7 +406,7 @@ test("пункт «Туда» раскрывает другие варианты
   expect(await alts.count()).toBeGreaterThanOrEqual(2);
   await expect(answer.locator(".alt-badge.cheap")).toHaveText("самый дешёвый");
   await expect(alts.filter({ hasText: "выбран" })).toHaveCount(1);
-  for (const p of await alts.locator(".price").all()) await expect(p.locator(".synth")).toHaveText("синтетика"); // TRAP-7
+  for (const p of await alts.locator(".price").all()) await expect(p.locator(".synth")).toHaveText(MARK); // TRAP-7
   await alts.locator("button.alt-pick").first().click();
   await expect(page.locator(".msg.user")).toHaveCount(2);
   const after = page.locator(".msg.agent").last().locator("ul.points [role='button']").filter({ hasText: /^Туда/ });

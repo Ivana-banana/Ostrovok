@@ -77,7 +77,9 @@ def test_provider_failure_is_logged_and_marked_in_the_reply(monkeypatch, records
     assert not any(r.exc_info for r in records if r.levelno >= logging.INFO)
     assert "SECRET-KEY" not in " ".join(r.getMessage() for r in records)
     assert f"Источник «{label}» не ответил" in body["reply"]
-    marks = [i for i in body["plan"]["issues"] if label in i["text"]]
+    # #532: the plan without transport also has a road error that names transport; the mark
+    # is the issue of the source itself.
+    marks = [i for i in body["plan"]["issues"] if i["text"].startswith(f"Источник «{label}»")]
     assert marks
     assert marks[0]["severity"] == "warn"
     assert "SECRET-KEY" not in r.text  # the exception text stays in the log, not in the reply
@@ -144,3 +146,15 @@ def test_health_data_mode_is_the_lowest_of_the_adapters(monkeypatch):
     assert ops.data_mode()["data_mode"] == "реальный"
     monkeypatch.setattr(offers, "TRANSFERS", object())  # no declared mode: the safe side
     assert ops.data_mode()["data_mode"] == "синтетика"
+
+
+def test_trap7_health_names_the_live_hotels_but_keeps_the_synthetic_rank(monkeypatch):
+    from api.live_hotels import Live101Hotels
+
+    monkeypatch.setattr(offers, "HOTELS", Live101Hotels(offers.HOTELS))
+    body = ops.health()
+    assert body["status"] == "ok"
+    assert body["hotels"] == "101hotels (живые) / синтетика при сбое"
+    # the fallback is synthetic: the whole is not «реальный»
+    assert body["data_mode"] == "синтетика"
+    assert body["transport"] == "синтетика"
