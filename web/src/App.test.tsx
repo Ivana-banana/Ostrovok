@@ -412,6 +412,10 @@ suite("приложение", () => {
     expect(link.textContent).toBe("ODbL");
     expect(link.href).toBe("https://www.openstreetmap.org/copyright");
     expect(foot?.textContent).toContain("синтетика");
+    // hidden under «Данные ?» until opened, one click away
+    const more = foot?.querySelector("details");
+    expect(more?.open).toBe(false);
+    expect(more?.querySelector("summary")?.textContent).toContain("Данные");
   });
 
   it("TRAP-7: подвал называет всю синтетику и оценки команды", async () => {
