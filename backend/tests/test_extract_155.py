@@ -21,6 +21,7 @@ def test_trap_3_two_word_origin_with_or_leaves_no_novgorod(store):
     spec = r.plan.spec
     assert spec.origin == "Нижний Новгород"
     assert spec.destinations == ["Сочи"]  # «Казани» is the other origin, not a destination
+    assert "Казань — второй вариант вылета" in r.reply  # the second origin is told, not silent
 
 
 @pytest.mark.parametrize(
@@ -70,6 +71,19 @@ def test_trap_3_tail_of_a_name_is_no_place(text, dests):
 @pytest.mark.parametrize(
     "text, dests",
     [
+        ("Хочу в Турцию Аланья или Кемер", ["Турция", "Аланья", "Кемер"]),
+        ("Хочу в Италию Сиена или Флоренция", ["Италия", "Сиена", "Флоренция"]),
+        ("Сочи Адлер или Анапа", ["Сочи", "Адлер", "Анапа"]),
+    ],
+)
+def test_trap_3_place_after_a_place_stays_a_destination(text, dests):
+    """Only a known tail of a name («Сити») is cut off; a resort after a country or a city stays."""
+    assert extract(text)[0]["destinations"] == dests
+
+
+@pytest.mark.parametrize(
+    "text, dests",
+    [
         ("Шри Ланка или Мальдивы", ["Шри-Ланка", "Мале"]),
         ("Шри Ланка или Сочи", ["Хиккадува", "Сочи"]),  # the city of the catalogue for the country
         ("Сочи или Шри Ланка", ["Сочи", "Хиккадува"]),
@@ -94,8 +108,11 @@ def test_refusal_stops_at_the_comma_of_the_pair(tail):
     assert found["destinations"] == ["Анталия", "Ларнака"]
 
 
-def test_refusal_goes_on_after_the_comma_with_also():
-    found, _ = extract("Не хочу в Египет, Турция или Кипр, тоже нет")
+@pytest.mark.parametrize(
+    "tail", ["тоже нет", "не надо", "не интересно", "и Кипр тоже", "и Турция тоже", "не нравится"]
+)
+def test_refusal_goes_on_after_the_comma(tail):
+    found, _ = extract(f"Не хочу в Египет, Турция или Кипр, {tail}")
     assert not found.get("destinations")
 
 
@@ -107,3 +124,20 @@ def test_refusal_in_the_same_clause_still_refuses_the_pair():
 def test_wished_pair_with_a_budget_clause_after():
     found, _ = extract("Хочу в Египет, Турция или Кипр, бюджет не больше 100 тысяч")
     assert found["destinations"] == ["Хургада", "Анталия", "Ларнака"]
+
+
+def test_trap_3_origin_pair_gives_a_note_with_the_second_origin():
+    _, notes = extract("Из Нижнего Новгорода или Казани в Сочи в мае")
+    assert any("вылет: Нижний Новгород; Казань — второй вариант вылета" in n for n in notes)
+
+
+@pytest.mark.parametrize("text", ["Хочу в Шри Ланку", "Хочу в Шри Ланка", "Хочу на Шри Ланку"])
+def test_trap_3_shri_lanka_spelling_is_the_country(text):
+    assert extract(text)[0]["destinations"] == ["Шри-Ланка"]
+
+
+@pytest.mark.parametrize(
+    "text", ["Нижний Тагил или Екатеринбург", "Хочу в Нижний Тагил или Екатеринбург"]
+)
+def test_trap_3_second_word_of_a_name_is_no_place(text):
+    assert "Тагилы" not in extract(text)[0]["destinations"]
