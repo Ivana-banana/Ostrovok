@@ -488,8 +488,24 @@ LANDMARK_RE = re.compile(
     r"\s+([А-ЯЁ][\w-]+)\b(?!\s+(?:мор|озер))"
 )
 # «Красной площадью», «Невского проспекта»: after an adjective the noun is part of the name (#466)
-LANDMARK_NOUN_RE = re.compile(r"\s+[а-яё][\w-]+")
-ADJ_ENDINGS = ("ой", "ей", "ого", "его", "ому", "ая", "ую", "ий", "ый", "ое", "ые", "ых", "ом")
+LANDMARK_NOUN_RE = re.compile(r"\s+(?!(?:для|на|в|во|и|с|со|по|за|или|недорог\w*))[а-яё][\w-]+")
+# «-ом» is a noun after «рядом с»: «Арбатом»; «-ым», «-им» are adjectives: «Большим театром»
+ADJ_ENDINGS = (
+    "ой",
+    "ей",
+    "ого",
+    "его",
+    "ому",
+    "ая",
+    "ую",
+    "ий",
+    "ый",
+    "ое",
+    "ые",
+    "ых",
+    "ым",
+    "им",
+)
 BREAKFAST_FROM_RE = re.compile(
     r"завтрак\w*\s+с\s+(\d{1,2})(?::(\d\d)|\s*(?:утра|ч\b|час(?:а|ов)?\b))"
 )
@@ -501,7 +517,7 @@ def _is_destination(word: str, found: dict) -> bool:
     for d in found.get("destinations", []):
         n = d.lower().replace("ё", "е")
         stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
-        if len(stem) >= 4 and w.startswith(stem):
+        if len(stem) >= 4 and w.startswith(stem) and len(w) - len(stem) <= 2:  # not «Москворецкого»
             return True
     return False
 
