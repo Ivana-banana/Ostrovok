@@ -27,7 +27,7 @@ const sample: ChatReply = {
       "modes": ["train"],
       "max_travel_hours": null,
       "own_transport": false,
-      "arrive_at": null,
+      "arrive_at": "2026-12-11T07:10:00+03:00",
       "leave_at": null,
       "wishes": ["центр"],
       "priorities": ["price", "cancellation"],

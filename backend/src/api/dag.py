@@ -289,6 +289,9 @@ def shift_dates(spec: TripSpec, text: str, planned: bool = True) -> TripSpec:
             "nights": (end - start).days,
             "month": start.month,
             "assumptions": kept,
+            # Own tickets move with their end of the stay, the clock time stays (#424)
+            "arrive_at": spec.arrive_at and spec.arrive_at + (start - spec.date_from),
+            "leave_at": spec.leave_at and spec.leave_at + (end - spec.date_to),
         }
     )
 

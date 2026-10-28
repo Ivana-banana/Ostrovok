@@ -103,6 +103,7 @@ from api.extract import (
     is_too_long_note,
     is_unchecked,
     llm_past_dates,
+    own_clock,
     past_year_note,
     too_long_note,
     with_llm,
@@ -2892,6 +2893,10 @@ def step(
         spec_model = merged(with_model)
         if spec_model != spec:
             found, spec, used = with_model, spec_model, True
+    if spec.own_transport and not (spec.arrive_at and spec.leave_at):
+        # #424: the rules read the clock, the model the dates: the clock is put on those dates
+        said = own_clock(message, spec.destinations, spec.date_from, spec.date_to)
+        spec = spec.model_copy(update={k: v for k, v in said.items() if getattr(spec, k) is None})
     swapped = [d for d in old.plan.spec.destinations if d not in spec.destinations]
     # A refusal holds for the next turns; a place named later (even a city of that country) ends it.
     named = found.get("destinations", [])
