@@ -123,7 +123,7 @@ def test_disk_snapshot_keeps_no_hotel_name_6_5_4(monkeypatch):
     """Rule 6.5(4)/6.9: the cached city level is numbers only, even though the page has names."""
     monkeypatch.setattr(lh, "_get", lambda p: CITY_HTML)
     assert lh.city_level(place(), SOON) is not None
-    text = (lh.CACHE / "sochi-11.json").read_text("utf-8")
+    text = (lh.CACHE / "sochi.json").read_text("utf-8")  # #533: keyed by slug, no trip month
     assert not any(w in text for w in ("Отель", "Звезда", "Дворик"))
 
 
@@ -156,6 +156,8 @@ def test_real_offer_honours_the_card_free_cancel(monkeypatch):
 
 def test_level_feeds_base_when_no_named_cards(monkeypatch):
     """Numbers but no names: no real offer, but the live city level still reaches the base."""
+    # #533: the divisor is SEASON[month of the fetch]; freeze the fetch in November.
+    monkeypatch.setattr(lh, "_now", lambda: datetime(2026, 11, 1, tzinfo=MSK))
     monkeypatch.setattr(lh, "_get", lambda p: NUMBERS_HTML)
     base = FakeBase()
     out = lh.Live101Hotels(base).hotels(spec(), place(), datetime.now(MSK))
@@ -166,7 +168,7 @@ def test_level_feeds_base_when_no_named_cards(monkeypatch):
 
 def test_falls_back_to_base_when_offline_TRAP_6(monkeypatch):
     def dead(path):
-        raise lh.Refused("нет сети")
+        raise lh.Offline("нет сети")  # #533: only a network failure turns the layer off
 
     monkeypatch.setattr(lh, "_get", dead)
     base = FakeBase()
@@ -188,7 +190,7 @@ def test_foreign_place_is_synthetic_TRAP_6(monkeypatch):
 
 def test_snapshot_on_disk_is_served_offline_TRAP_6(monkeypatch, tmp_path):
     monkeypatch.setattr(lh, "CACHE", tmp_path)
-    (tmp_path / "sochi-11.json").write_text('{"level": 2339, "free_cancel_share": 0.75}', "utf-8")
+    (tmp_path / "sochi.json").write_text('{"level": 2339, "free_cancel_share": 0.75}', "utf-8")
     monkeypatch.setattr(lh, "_get", lambda p: pytest.fail("offline: must read the snapshot"))
     lh._offline["on"] = True
     assert lh.city_level(place(), SOON) == {"level": 2339, "free_cancel_share": 0.75}
