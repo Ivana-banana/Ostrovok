@@ -53,14 +53,23 @@ def test_C10_TRAP_5_olkhon_plan_has_no_timeline_error(store):
 def test_C14_TRAP_5_compare_reply_times_carry_zones_and_duration(store):
     r = say(store, C14)
     assert r.stage == "compare"
-    rows = [x for x in r.reply.splitlines() if x.startswith("Рейс ")]
+    # #349: the legs are on the board, not in the chat; the offers keep zone-aware times (TRAP-5)
+    assert "Рейс 1." not in r.reply and "на доске" in r.reply
+    legs = [o for o in r.plan.offers if o.kind == "transport"]
+    assert legs
+    for o in legs:
+        assert o.depart_at.utcoffset() is not None and o.arrive_at.utcoffset() is not None
+        hours = (o.arrive_at - o.depart_at).total_seconds() / 3600
+        assert hours >= 9, o.title  # never a flight under 2 h
+    for line in r.reply.splitlines():
+        if TIME.search(line):
+            assert re.search(r"\d{2}:\d{2} \(UTC[+-]\d+(:\d{2})?\)", line), line
+    # the chat itself shows the duration of each chosen leg: «15:55 → 17:40» is not 1 h 45 min
+    rows = [x for x in r.reply.splitlines() if x.startswith(("Туда:", "Обратно:"))]
     assert rows
     for row in rows:
-        assert re.search(r"вылет \d{2}\.\d{2} \d{2}:\d{2} \(UTC[+-]\d+\)", row), row
-        assert len(re.findall(r"\d{2}:\d{2}", row)) == 2, row  # the start time is not repeated
-        assert re.search(r"прилёт \d{2}\.\d{2} \d{2}:\d{2} \(UTC[+-]\d+\)", row), row
         hours = int(re.search(r"в пути (\d+) ч", row).group(1))
-        assert hours >= 9, row  # never a flight under 2 h
+        assert hours >= 9, row
 
 
 def test_C14_TRAP_5_assemble_reply_every_time_has_a_zone(store):
@@ -75,25 +84,22 @@ def test_C14_TRAP_5_assemble_reply_every_time_has_a_zone(store):
 
 
 @pytest.mark.parametrize(
-    ("text", "start", "end"),
+    "text",
     [
-        ("Казань из Москвы поездом, 3 ночи с 30 апреля, двое", "отправление", "прибытие"),
-        (
-            "На машине из Москвы в Сочи с собакой, двое взрослых, 10 ночей с 5 июля",
-            "старт на машине",
-            "приезд на машине",
-        ),
+        "Казань из Москвы поездом, 3 ночи с 30 апреля, двое",
+        "На машине из Москвы в Сочи с собакой, двое взрослых, 10 ночей с 5 июля",
     ],
 )
-def test_C14_TRAP_5_train_and_car_rows_use_their_own_verbs(store, text, start, end):
+def test_C14_TRAP_5_train_and_car_rows_have_no_flight_words(store, text):
     """Review of #384: a train or a car has no «вылет» and no «прилёт»."""
     r = say(store, text)
     assert r.stage == "compare"
-    rows = [x for x in r.reply.splitlines() if x.startswith("Рейс ")]
+    # #349: the legs are on the board; the chosen leg of «Предлагаю» (#468) has its duration
+    # and never says «вылет», «прилёт» or «перелёт» for a train or a car
+    rows = [x for x in r.reply.splitlines() if x.startswith(("Туда:", "Обратно:"))]
     assert rows
     for row in rows:
-        assert "вылет" not in row and "прилёт" not in row, row
-        assert f"· {start} " in row and f" → {end} " in row, row
+        assert not re.search("вылет|прилёт|перелёт", row) and "в пути " in row, row
 
 
 def test_issue_line_has_one_period(store):
