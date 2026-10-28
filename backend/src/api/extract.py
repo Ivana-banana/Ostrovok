@@ -223,7 +223,12 @@ CHILD_RE = re.compile(
 NO_CHILD_BEFORE = re.compile(r"\bбез\s+(?:\w+\s+и\s+|\w+[иы]х\s+)?$")
 # A number word or a number right after the child noun: the children are named. A negation
 # later in the clause is a double negation («без детей не поедем»): the children stay.
-NO_CHILD_AFTER = re.compile(r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)|[^,.;!?]*\b(?:не|ни\w*)\b")
+# #206: the clause ends at a stop, a bracket, a line break or a dash with spaces. The negation
+# words are listed: «ни\w*» would catch «Ницца», «Нижний», «ниже».
+NO_CHILD_AFTER = re.compile(
+    r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)"
+    r"|(?:(?!\s[–—-]\s)[^,.;!?()\n])*\b(?:не|ни|никуда|никак|никогда|ничего)\b"
+)
 NO_CHILD_FORM = ("детей", "ребенка", "сына", "дочери", "малыша")
 # #112: the party. A number word names a person only in a few forms; «одна ночь», «один из
 # вариантов», «один и тот же отель» are not a party. A solo word needs a stop, a preposition
