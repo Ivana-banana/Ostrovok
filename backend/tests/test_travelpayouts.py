@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from api import offers
+from api import model, offers
 from api.contracts import TripSpec
 from api.offers import SyntheticTransport, find_offers, resolve_place
 from api.travelpayouts import TravelpayoutsTransport
@@ -48,7 +48,7 @@ class Fake:
     """Answers by direction; an exception instance is raised. Counts the calls."""
 
     def __init__(self, there=None, back=None):
-        self.by_dir = {"VKO-AYT": there or answer(THERE), "AYT-VKO": back or answer(HOME)}
+        self.by_dir = {"MOW-AYT": there or answer(THERE), "AYT-MOW": back or answer(HOME)}
         self.calls: list[str] = []
 
     def __call__(self, src: str, dst: str, day: date) -> dict:
@@ -93,6 +93,15 @@ def test_trap4_real_flights_keep_api_prices_zones_and_core_invariants(adapter):
     assert {there.destination, back.origin} == hotels  # letter by letter (timeline.py)
     assert there.origin == back.destination == s.origin  # there first, back ends at the origin
     assert "рейс PC 1581" in there.title
+    assert "детский тариф — оценка" in there.title  # the child share is ours, not the API's
+
+
+def test_moscow_is_asked_by_its_city_code_and_the_place_by_its_airport(adapter):
+    """MOW: the API searches SVO, DME, VKO and ZIA; Анталия stays AYT."""
+    fake = Fake()
+    adapter(fake)
+    legs(spec())
+    assert fake.calls == ["MOW-AYT", "AYT-MOW"]
 
 
 def test_trap6_network_error_gives_synthetic_legs_and_a_pause(adapter):
@@ -101,7 +110,7 @@ def test_trap6_network_error_gives_synthetic_legs_and_a_pause(adapter):
     s = spec()
     assert legs(s) == synthetic(s)
     assert all(x.synthetic for x in legs(s))  # TRAP-7
-    assert fake.calls == ["VKO-AYT"]  # FAILED_S: no request after the first error
+    assert fake.calls == ["MOW-AYT"]  # FAILED_S: no request after the first error
 
 
 def test_trap6_stale_cache_serves_when_the_network_fails(adapter, tmp_path):
@@ -113,7 +122,7 @@ def test_trap6_stale_cache_serves_when_the_network_fails(adapter, tmp_path):
     fake = Fake(there=OSError("down"), back=OSError("down"))
     adapter(fake)
     assert [x.synthetic for x in legs(s)] == [False, False]
-    assert fake.calls == ["VKO-AYT"]
+    assert fake.calls == ["MOW-AYT"]
 
 
 def test_fresh_cache_answers_without_a_request(adapter):
@@ -142,6 +151,42 @@ def test_trap5_back_flight_before_check_out_is_dropped(adapter):
     s = spec()
     back = [x for x in legs(s) if x.origin != s.origin]
     assert back and all(x.synthetic for x in back)
+
+
+def test_trap5_there_flight_after_check_in_day_is_dropped(adapter):
+    late = row("VKO", "AYT", at(SOON, 23, 0, MSK))  # 275 min: lands after midnight in AYT
+    adapter(Fake(there=answer(late)))
+    s = spec()
+    there = [x for x in legs(s) if x.origin == s.origin]
+    assert there and all(x.synthetic for x in there)
+
+
+def test_trap6_origin_hub_sweep_does_not_call_the_api(adapter):
+    """far_origin_question prices Москва and 9 hubs: an estimate, synthetic (ADR-0002)."""
+    fake = Fake()
+    adapter(fake)
+    s = TripSpec(destinations=["Анталия"], date_from=SOON, date_to=BACK, nights=4,
+                 budget_rub=150_000)  # fmt: skip
+    model.far_origin_question(s)
+    assert fake.calls == []
+
+
+def test_trap6_tests_and_eval_never_see_the_token(monkeypatch):
+    """conftest drops the token before api.main is imported; checks.py (make eval) puts the
+    synthetic transport back after api.main picked the real one."""
+    import api.checks
+    import api.main
+
+    assert "TRAVELPAYOUTS_TOKEN" not in os.environ
+    assert isinstance(offers.TRANSPORT, SyntheticTransport)
+    monkeypatch.setattr(offers, "TRANSPORT", offers.TRANSPORT)  # restored after the test
+    monkeypatch.setenv("TRAVELPAYOUTS_TOKEN", "token")
+    importlib.reload(api.main)
+    assert isinstance(offers.TRANSPORT, TravelpayoutsTransport)
+    importlib.reload(api.checks)
+    assert isinstance(offers.TRANSPORT, SyntheticTransport)
+    monkeypatch.delenv("TRAVELPAYOUTS_TOKEN")
+    importlib.reload(api.main)
 
 
 def test_inspiration_place_is_not_asked_live(adapter):

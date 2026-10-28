@@ -1,8 +1,13 @@
+import os
 from collections.abc import Callable
 
 import pytest
 
 from api import catalog
+
+# Tests never call Travelpayouts (TRAP-6): api.main picks the real adapter by this token at
+# import, and test modules import api.main after this file.
+os.environ.pop("TRAVELPAYOUTS_TOKEN", None)
 
 
 @pytest.fixture(autouse=True)

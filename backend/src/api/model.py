@@ -91,7 +91,7 @@ from api.extract import (
 )
 from api.fixtures import CATALOG, build_timeline, future_date, rank
 from api.inspire import ROAD_LINE, card, suggest_destinations, unchecked_wishes
-from api.offers import find_offers, resolve_place, road_nights
+from api.offers import SyntheticTransport, _complete, find_offers, resolve_place, road_nights
 from api.optimizer import (
     bundles,
     dead_end_text,
@@ -514,9 +514,14 @@ def party_question(spec: TripSpec) -> list[Question]:
 
 
 def _round_trip(probe: TripSpec, origin: str) -> int | None:
-    """The cheapest round trip origin -> destination -> origin for the party, from the offers."""
+    """The cheapest round trip origin -> destination -> origin for the party, by synthetic
+    transport: the sweep of up to 10 origins is an estimate, a live port is only for the plan
+    (ADR-0002, #261)."""
     spec = probe.model_copy(update={"origin": origin})
-    legs = [o for o in find_offers(spec, spec.destinations[0]) if isinstance(o, TransportOffer)]
+    home, place = resolve_place(origin), resolve_place(spec.destinations[0])
+    if home is None or place is None or spec.own_transport:
+        return None
+    legs = SyntheticTransport().legs(spec, _complete(home), _complete(place))
     there = _cheapest([o for o in legs if o.origin == origin])
     back = _cheapest([o for o in legs if o.destination == origin])
     return there.price_rub + back.price_rub if there and back else None

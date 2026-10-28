@@ -2,17 +2,20 @@
 
 main.py assigns it to offers.TRANSPORT only when TRAVELPAYOUTS_TOKEN is set (TRAP-1).
 
-- One request per direction: GET /aviasales/v3/prices_for_dates, one way, airport IATA codes
-  of the catalogue, one date. The answer is the cheapest cached ticket of that date: price for
-  one adult in roubles, departure with its UTC offset, duration in minutes, transfers.
+- One request per direction: GET /aviasales/v3/prices_for_dates, one way, one date; the
+  departure city by its IATA city code (CITY_IATA), else airport IATA codes of the catalogue.
+  The answer is the cheapest ticket of that date from the Aviasales search cache, not a
+  bookable fare: price for one adult in roubles, departure with its UTC offset, duration in
+  minutes, transfers.
 - Only the flights of the synthetic adapter are replaced: trains and cars stay synthetic. A
   direction gets real flights only when the synthetic adapter flies it (distance, closed
   airports, spec.modes), so the rules of the core do not move.
 - Live only for the place the user chose (spec.destinations): inspiration and dead-end checks
   price dozens of places per turn, the live API there does not fit the turn (ADR-0002).
 - Times: departure and arrival in the zones of their airports (catalog airports), else of the
-  place (TRAP-5). Price: the API price x full fares of the party (offers._fares, the child
-  share is the team rule of the synthetic adapter); nothing else (TRAP-4).
+  place (TRAP-5). A leg there arrives by the end of the check-in day; a leg back leaves after
+  check-out. Price: the API price x full fares of the party (offers._fares); the child share
+  is the team rule of the synthetic adapter, the title says so (TRAP-4, TRAP-7).
 - Real legs have synthetic=False; a fallback leg stays synthetic=True (TRAP-7).
 - Fallback to synthetic flights of that direction: no IATA code, a network error or timeout
   (TIMEOUT_S per request, two requests fit the 5 s of ADR-0002), a bad answer, or an empty one
@@ -37,6 +40,7 @@ from api.contracts import Place, TransportOffer, TripSpec
 from api.offers import (
     SyntheticTransport,
     _back_from,
+    _child_fare,
     _dates,
     _fares,
     _guests_tag,
@@ -53,6 +57,10 @@ TIMEOUT_S = 2.5  # one request; a search makes two
 CACHE_S = 6 * 3600  # a cached answer is fresh this long
 FAILED_S = 60  # after a network error the API is not asked again for this long
 
+# IATA city codes of the departure cities with several airports: the API then searches all
+# of them (MOW: SVO, DME, VKO, ZIA). The place of the trip keeps its catalogue airport.
+CITY_IATA = {"Москва": "MOW"}
+
 Fetch = Callable[[str, str, date], dict]  # (from IATA, to IATA, date) -> the JSON answer
 
 
@@ -64,6 +72,11 @@ def airport_tz() -> dict[str, str]:
 
 def _iata(p: Place) -> str:
     return (p.get("airport") or {}).get("iata", "")
+
+
+def _code(p: Place, place: Place) -> str:
+    """The departure city by its city code when it has one; the place of the trip by its airport."""
+    return _iata(p) if p is place else CITY_IATA.get(p["name"]) or _iata(p)
 
 
 def _zone(iata: str, p: Place) -> ZoneInfo:
@@ -108,7 +121,7 @@ class TravelpayoutsTransport:
         self, spec: TripSpec, a: Place, b: Place, day: date, place: Place
     ) -> list[TransportOffer]:
         """Real flights a -> b on `day`; [] means the synthetic ones stay."""
-        src, dst = _iata(a), _iata(b)
+        src, dst = (_code(p, place) for p in (a, b))
         if not src or not dst:
             return []
         rows = self._answer(src, dst, day)
@@ -122,6 +135,8 @@ class TravelpayoutsTransport:
         if a is place:  # back: not before check-out, the ride and the margin (#370, TRAP-5)
             earliest = _back_from(place, "flight", day)
             legs = [x for x in legs if x.depart_at >= earliest]
+        else:  # there: on the check-in day, not after it (TRAP-5)
+            legs = [x for x in legs if x.arrive_at.astimezone(ZoneInfo(place["tz"])).date() <= day]
         if not legs:
             log.warning("travelpayouts %s-%s %s: no flight, synthetic", src, dst, day)
         return legs
@@ -175,6 +190,8 @@ class TravelpayoutsTransport:
             title += f", пересадок: {changes}"
         if seats := _seats_label(spec, "flight"):
             title += f", {seats}"
+        if any(_child_fare("flight", age)[0] != 1 for age in spec.children_ages):
+            title += ", детский тариф — оценка"  # a share of the adult price, not the API (TRAP-7)
         return TransportOffer(
             offer_id=f"t-{a['slug']}-{b['slug']}-flight-{depart:%Y%m%d%H%M}-{_guests_tag(spec)}-tp",
             title=title,
