@@ -264,6 +264,10 @@ LEG_NONE = {
 LEG_THERE_RE = re.compile(r"\bтуда\b|\bв\s+одну\s+сторону\b")
 LEG_BACK_RE = re.compile(r"\bобратно\b|\bназад\b|\bобратн\w+")
 LEG_CLAUSE_RE = re.compile(r"[,;]|\bа\b|\bи\b")
+# C12 (#366): «возьми рейс в 06:15» picks the leg by its local departure time.
+LEG_TIME_RE = re.compile(
+    r"\b(?:рейс\w*|перел[её]т\w*|поезд\w*|вылет\w*|самол[её]т\w*)\b.*?\b([01]?\d|2[0-3])[:.]([0-5]\d)\b"
+)
 # Assumption text starts with "<label>:"; a stated field removes its assumption.
 LABELS = {
     "destinations": "направление",
@@ -941,6 +945,11 @@ def leg_commands(text: str) -> list[LegCommand]:
     verb = bool(LEG_PICK_RE.search(t)) or hotel_row(t) is not None  # #388: «отель 1 и поезд»
     out: list[LegCommand] = []
     for clause in LEG_CLAUSE_RE.split(t):
+        if verb and (m := LEG_TIME_RE.search(clause)):
+            direction = "back" if LEG_BACK_RE.search(clause) else None
+            direction = "there" if LEG_THERE_RE.search(clause) else direction
+            out.append(("time", f"{int(m.group(1)):02d}:{m.group(2)}", direction))
+            continue
         if row := _leg_row(clause):
             out.append(("row", row[0], row[1]))
             continue
@@ -956,6 +965,20 @@ def leg_commands(text: str) -> list[LegCommand]:
 
 def _cheapest(legs: list[TransportOffer]) -> TransportOffer | None:
     return min(legs, key=lambda x: (x.price_rub, x.offer_id), default=None)
+
+
+def _no_time(table: list[TransportOffer], dirs: dict, ways: list[str], hhmm: str) -> str:
+    """C12: «Рейса в 06:15 нет. Туда: 08:00 (рейс 1), 15:10 (рейс 2).» The times and rows are
+    those of the plan offers (TRAP-4); the row is the one «рейс N» takes."""
+    lines = []
+    for d in ways:
+        have = [
+            f"{x.depart_at:%H:%M} (рейс {table.index(x) + 1})" for x in dirs[d] if x.mode != "car"
+        ]
+        if have:
+            lines.append(f"{'Туда' if d == 'there' else 'Обратно'}: {', '.join(have)}.")
+    tail = " ".join(lines) if lines else "Других рейсов в данных нет."
+    return f"Рейса в {hhmm} нет. {tail}"
 
 
 def switch_transport(
@@ -997,9 +1020,24 @@ def switch_transport(
     for kind, what, direction in commands:
         # The spec filtered this mode out of the offers (offers.py): «возьми поезд» then
         # is a new constraint, and the caller re-plans the trip instead.
-        want = direction if kind == "row" else what  # the mode asked for, if any
+        want = (
+            direction if kind == "row" else None if kind == "time" else what
+        )  # the mode asked for
         if want and plan.spec.modes and want not in plan.spec.modes:
             return None, ""
+        if kind == "time":
+            ways = [direction] if direction else ["there", "back"]
+            hit = [
+                (d, x)
+                for d in ways
+                for x in dirs[d]
+                if x.mode != "car" and f"{x.depart_at:%H:%M}" == what
+            ]
+            if not hit:
+                return None, _no_time(table, dirs, ways, str(what))
+            d, new[d] = hit[0]
+            touched.add(d)
+            continue
         if kind == "row":
             rows = [x for x in table if direction in (None, x.mode)]
             if not 0 <= what < len(rows):
