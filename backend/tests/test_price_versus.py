@@ -126,7 +126,12 @@ def test_mode_versus_question_changes_nothing(store):
     after = say(store, "а поезд дешевле, чем самолёт?", before.session_id)
     assert after.plan.spec == before.plan.spec and after.stage == "compare"
     assert "план не меняю" in after.reply
-    assert "Поезд:" in after.reply and "Самолёт:" in after.reply
+    for mode, name in (("train", "Поезд"), ("flight", "Самолёт")):
+        prices = [o.price_rub for o in before.plan.offers if getattr(o, "mode", None) == mode]
+        if prices:  # TRAP-4: the price in the reply is the cheapest offer of the plan
+            assert f"{name}: от {min(prices):,} ₽".replace(",", " ") in after.reply
+        else:
+            assert f"{name}: в плане нет" in after.reply
 
 
 def test_wish_next_to_a_versus_question_is_applied(store):
@@ -136,3 +141,26 @@ def test_wish_next_to_a_versus_question_is_applied(store):
     assert "недорого" not in after.plan.spec.wishes
     assert set(after.plan.spec.wishes) - set(before.plan.spec.wishes), after.plan.spec.wishes
     assert "цифр не выдумываю" in after.reply
+
+
+@pytest.mark.parametrize("stage", ["compare", "checkout"])
+def test_mode_versus_question_with_a_wish(store, stage):
+    before = at(store, stage)
+    after = say(store, "а поезд дешевле, чем самолёт? с санаторием", before.session_id)
+    assert after.plan.spec.modes == before.plan.spec.modes
+    assert "санаторий" in after.plan.spec.wishes and "недорого" not in after.plan.spec.wishes
+    assert "план не меняю" not in after.reply
+
+
+@pytest.mark.parametrize("stage", ["compare", "checkout"])
+def test_mode_versus_without_chem_changes_nothing(store, stage):
+    before = at(store, stage)
+    after = say(store, "поезд дешевле самолёта?", before.session_id)
+    assert after.plan.spec == before.plan.spec
+
+
+def test_mode_next_to_a_versus_question_is_applied(store):
+    before = at(store, "compare")
+    after = say(store, "а дешевле, чем в Турции, поездом?", before.session_id)
+    assert after.plan.spec.destinations == before.plan.spec.destinations
+    assert after.plan.spec.modes == ["train"]

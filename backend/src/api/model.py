@@ -1738,6 +1738,9 @@ PRICE_VERSUS_RE = re.compile(
     r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?"
     r"|^\s*(?:а\s+)?(?:в|на)\s+(?:\w+\s+)?\w*[^\Wую]\s+(?:будет\s+|вс[её]\s+же\s+)?"
     r"(?:дешевле|дороже|выгоднее)\s*\?\s*$"
+    # #483: «поезд дешевле самолёта?» has no «чем»
+    r"|\b(?:поезд|самол[её]т|машин)\w*\s+(?:будет\s+)?(?:дешевле|дороже|выгоднее)\s+"
+    r"(?:поезд|самол[её]т|машин)\w*\s*\?"
 )
 VERSUS_ORDER_RE = re.compile(
     r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
@@ -1745,7 +1748,8 @@ VERSUS_ORDER_RE = re.compile(
 MARKET_RE = re.compile(r"\bв\s+среднем\b|рынк|\bобычно\b")  # «дешевле, чем в среднем?»
 # «а дешевле, чем в Турции» inside a longer message: the comparison words only (#483)
 VERSUS_CLAUSE_RE = re.compile(
-    r"(?i)\b(?:а\s+)?(?:это\s+)?(?:дешевле|дороже|выгоднее),?\s+чем\s+(?:в\s+|на\s+)?[\w-]+"
+    r"(?i)\b(?:а\s+)?(?:это\s+)?(?:(?:на\s+)?(?:поезд|самол[её]т|машин)\w*\s+)?"
+    r"(?:дешевле|дороже|выгоднее),?\s+чем\s+(?:в\s+|на\s+)?[\w-]+"
 )
 
 
@@ -2426,13 +2430,16 @@ def step(
         and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
         and (reply := _price_versus_reply(old, low, rules_found))
     ):
-        # #483: «дешевле, чем в Турции, с бассейном?» — the question changes nothing, the wish
-        # next to it is still an edit: the rest of the message goes on without the comparison.
-        if set(rules_found.get("wishes", [])) - {"недорого"} and (
-            rest := VERSUS_CLAUSE_RE.sub(" ", message).strip(" ,?")
-        ):
+        # #483: «дешевле, чем в Турции, с бассейном?» — the question changes nothing, the wish or
+        # the one mode next to it is still an edit: the rest goes on without the comparison.
+        if (
+            set(rules_found.get("wishes", [])) - {"недорого"}
+            or len(rules_found.get("modes", [])) == 1
+        ) and (rest := VERSUS_CLAUSE_RE.sub(" ", message).strip(" ,?")):
             done = step(prev, sid, rest, use_llm, origin)
-            return done.model_copy(update={"reply": f"{reply.split(' Чтобы')[0]}\n{done.reply}"})
+            head = reply.removesuffix(f" {HINTS[old.stage]}").split(" Чтобы")[0]
+            head = head.removeprefix("Это вопрос: план не меняю. ")
+            return done.model_copy(update={"reply": f"{head}\n{done.reply}"})
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
         return drop_transfers(old)
