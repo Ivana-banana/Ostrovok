@@ -35,6 +35,23 @@ def test_not_from_x_alone_is_no_origin_and_no_destination():
     assert "origin" not in found and "destinations" not in found
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "хочу отель не из дешёвых в Сочи",
+        "мы не из Москвы в Сочи",
+        "летим не из Москвы, Сочи на 5 ночей",
+    ],
+)
+def test_a_place_next_to_not_from_stays_a_destination(text):
+    found = extract(text)[0]
+    assert found["destinations"] == ["Сочи"] and "origin" not in found
+
+
+def test_not_from_moscow_question_names_no_origin():
+    assert "origin" not in extract("не из Москвы ли рейс?")[0]
+
+
 def test_C25_correction_changes_the_origin(store):
     r = say(store, C25)
     assert r.plan.spec.origin == "Москва"
