@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
-import { Board, TripParams } from "./Board";
-import { PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
+import { Board, EarlierChoices, TripParams } from "./Board";
+import { MIN_THINK_MS, PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
 import type { ChatReply, Guest, Offer, Stage } from "./contracts";
 import { SOURCES, brief, cartLine, describe, withoutNoAi } from "./format";
@@ -121,8 +121,9 @@ export function App() {
   const [road, setRoad] = useState(false); // the roadmap sheet below 1100 px
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [query, setQuery] = useState("");
+  // Replies of the earlier agent messages, by "session:index" (in memory): their choices stay clickable.
+  const [earlier, setEarlier] = useState<Record<string, ChatReply>>({});
   const [thinking, setThinking] = useState(false);
-  const [typing, setTyping] = useState<number | null>(null); // index of the message being typed
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
   const [healthNoAi, setHealthNoAi] = useState(false); // /api/mode says no model: known before the first reply
   const box = useRef<HTMLTextAreaElement>(null);
@@ -178,7 +179,6 @@ export function App() {
       writeSid(id);
       setReply(r);
       setNoAi(!r.llm);
-      setTyping(null);
       setUi({ ...saved, messages });
       const first = saved.messages.find((m) => m.role === "user")?.text ?? "";
       editChats((list) => (list.some((c) => c.session_id === id) ? list : touchChat(list, id, first)));
@@ -236,12 +236,18 @@ export function App() {
     const withUser = { ...ui, messages: [...ui.messages, { role: "user" as const, text: m }] };
     setUi(withUser);
     setThinking(true);
+    const no = loadNo.current;
     try {
+      const t0 = Date.now();
       const r = await chat({ session_id: sid, message: m });
+      // A fast offline reply still shows the thinking indicator for a moment (not with reduced motion).
+      const rest = MIN_THINK_MS - (Date.now() - t0);
+      if (motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
+      if (no !== loadNo.current) return; // the user switched the chat while the agent thought
       writeSid(r.session_id);
       setReply(r);
+      setEarlier((e) => ({ ...e, [`${r.session_id}:${withUser.messages.length}`]: r }));
       setNoAi(!r.llm);
-      if (motionOk()) setTyping(withUser.messages.length);
       update(
         { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage }] },
         r.session_id,
@@ -338,7 +344,6 @@ export function App() {
     setNote(null);
     setText("");
     setRestoring(false);
-    setTyping(null);
     setDrawer(false);
     box.current?.focus();
   }
@@ -384,9 +389,8 @@ export function App() {
   const cls = ["app", drawer && "drawer-open", road && "road-open"].filter(Boolean).join(" ");
   const synthetic = !reply || !reply.plan.offers.length || reply.plan.offers.some((o) => o.synthetic);
   const groups = groupChats(filterChats(chats, query));
-  const scroll = () => end.current?.scrollIntoView?.({ block: "end" });
-  // The cards of the current stage under the last answer; hidden while the agent thinks or types.
-  const block = reply && typing === null && !thinking && (
+  // The cards of the current stage under the last answer; hidden while the agent thinks.
+  const block = reply && !thinking && (
     <div key="stage-block" className="attach">
       {reply.questions.length > 0 && (
         <div className="questions">
@@ -586,22 +590,20 @@ export function App() {
                     data-msg={i}
                     ref={i === lastAgent ? lastMsg : undefined}
                     className="msg agent"
-                    role={i === lastAgent ? "status" : undefined}
-                    aria-busy={typing === i || undefined}
+                    role={i === lastAgent && !thinking ? "status" : undefined}
                   >
                     <Mascot size={30} state={i === lastAgent ? moodOf(reply, !!error) : "idle"} />
                     <div className="b">
                       <AgentText
                         text={badgeNoAi ? withoutNoAi(brief(m.text, i === lastAgent)) : brief(m.text, i === lastAgent)}
                         synthetic={synthetic}
-                        typing={typing === i}
-                        onTick={scroll}
-                        onDone={() => setTyping(null)}
                       />
                     </div>
                   </div>
                 );
               // One key for the block: it moves under a new last answer without losing its state.
+              const old = m.role === "agent" && i !== lastAgent ? earlier[`${sid}:${i}`] : undefined;
+              if (old && reply) return [msg, <EarlierChoices key={`earlier-${i}`} reply={old} current={reply} busy={busy} onSend={send} />];
               return i === lastAgent && block ? [msg, block] : [msg];
             })}
             {lastAgent < 0 && block}

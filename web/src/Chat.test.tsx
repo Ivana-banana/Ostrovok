@@ -60,22 +60,15 @@ suite("чат", () => {
     expect(renderToStaticMarkup(<StepCaption stage={null} onOpen={() => {}} />)).toBe("");
   });
 
-  it("печать по словам: полный текст сразу доступен чтению с экрана, обрывки скрыты", async () => {
+  it("текст агента сразу отформатирован: без печати по словам, «синтетика» у цены есть (TRAP-7)", async () => {
     const box = document.createElement("div");
     const root = createRoot(box);
-    const text = "Нашёл четыре направления у тёплого моря в ноябре, от 96 400 ₽ за всех.";
-    let done = false;
-    await act(async () => root.render(<AgentText text={text} synthetic typing onDone={() => (done = true)} />));
-    // the hidden whole text has the same «синтетика» marks as the shown one (TRAP-7)
-    const sr = box.querySelector(".sr-only");
-    expect(sr?.textContent).toBe(text.replace("₽", "₽синтетика"));
-    expect(sr?.querySelector(".price .synth")?.textContent).toBe("синтетика");
-    const typed = box.querySelector(".typing");
-    expect(typed?.getAttribute("aria-hidden")).toBe("true");
-    expect(typed?.textContent?.length ?? 0).toBeLessThan(text.length);
-    await act(async () => new Promise((r) => setTimeout(r, 900)));
-    expect(done).toBe(true);
+    const text = "Нашёл четыре направления у тёплого моря в ноябре, от 96 400 ₽ за всех. Вода 26 °C.";
+    await act(async () => root.render(<AgentText text={text} synthetic />));
+    expect(box.querySelector(".typing")).toBeNull();
     expect(box.querySelector(".sr-only")).toBeNull();
+    expect(box.querySelector(".price .synth")?.textContent).toBe("синтетика");
+    expect(box.querySelector("mark")?.textContent).toBe("26 °C");
     expect(box.textContent).toBe(text.replace("₽", "₽синтетика"));
     act(() => root.unmount());
   });

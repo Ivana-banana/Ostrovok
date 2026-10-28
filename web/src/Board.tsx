@@ -232,11 +232,12 @@ function destTags(d: Destination, all: Destination[], budget: number | null) {
   return tags;
 }
 
-export function Destinations({ plan, stage, busy, onSend }: {
+export function Destinations({ plan, stage, busy, onSend, more = true }: {
   plan: Plan;
   stage: Stage;
   busy: boolean;
   onSend: (t: string) => void;
+  more?: boolean; // false in an older answer: «ещё» is understood only in the current block
 }) {
   return (
     <section className="dests" aria-label="Направления">
@@ -299,8 +300,8 @@ export function Destinations({ plan, stage, busy, onSend }: {
         })}
       </div>
       {/* #451: the next places of the same pool, without the shown ones (api/model.py MORE_RE) */}
-      {stage === "inspire" && (
-        <button type="button" className="more" disabled={busy} onClick={() => onSend("ещё")}>
+      {stage === "inspire" && more && (
+        <button type="button" className="more-dests" disabled={busy} onClick={() => onSend("ещё")}>
           Показать ещё
         </button>
       )}
@@ -308,14 +309,14 @@ export function Destinations({ plan, stage, busy, onSend }: {
   );
 }
 
-// One row per hotel, as in the chat: the selected tariff of the hotel, else its first one.
-// The backend orders the tariffs of a hotel best first for the spec (optimizer.hotel_rows).
 // Zone of a transport end: smaller text that may wrap apart from the time (TRAP-5, #455).
 function zoneTag(iso: string) {
   const zone = zoneLabel(iso);
   return zone ? <span className="zone"> ({zone})</span> : null;
 }
 
+// One row per hotel, as in the chat: the selected tariff of the hotel, else its first one.
+// The backend orders the tariffs of a hotel best first for the spec (optimizer.hotel_rows).
 function hotelRows(plan: Plan): HotelOffer[] {
   const rows = new Map<string, HotelOffer>();
   for (const o of plan.offers) {
@@ -877,6 +878,41 @@ function moreLine(reply: ChatReply, editable: boolean): string {
   return parts.join(" · ");
 }
 
+// The choices of an older answer stay under it, folded: the user can scroll up and pick an earlier
+// option without retyping (#450). Same cards and buttons as in the block of the stage.
+export function EarlierChoices({ reply, current, busy, onSend }: {
+  reply: ChatReply;
+  current: ChatReply;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
+  const { plan, stage } = reply;
+  const rows = (r: ChatReply) =>
+    r.plan.offers.filter((o) => o.kind === "hotel" || o.kind === "transport").map((o) => o.offer_id).join();
+  const n = plan.destinations.length + plan.offers.filter((o) => o.kind === "hotel" || o.kind === "transport").length;
+  if (!n || stage === "checkout" || stage === "booked") return null;
+  // «беру второй» and «третий: Сочи» are parsed against the CURRENT list by the row number: a button
+  // is live only while the stage and the rows (the destination names) are the same as in the current plan.
+  const names = (r: ChatReply) => r.plan.destinations.map((d) => d.name).join();
+  const rowsLive = stage === current.stage && rows(reply) === rows(current);
+  const destLive = stage === "inspire" && current.stage === "inspire" && names(reply) === names(current);
+  const stale = (!rowsLive && rows(reply) !== "") || (!destLive && plan.destinations.length > 0 && stage === "inspire");
+  return (
+    <details className="more options earlier">
+      <summary>
+        <b>Варианты</b>
+        <span>выбор из прошлого ответа</span>
+      </summary>
+      {stale && <p className="muted">План изменился — выберите в текущем блоке.</p>}
+      {plan.destinations.length > 0 && (
+        <Destinations plan={plan} stage={destLive ? stage : "booked"} busy={busy} onSend={onSend} more={false} />
+      )}
+      <Hotels plan={plan} stage={rowsLive ? stage : "booked"} busy={busy} onSend={onSend} />
+      <Transport plan={plan} stage={rowsLive ? stage : "booked"} busy={busy} onSend={onSend} />
+    </details>
+  );
+}
+
 // The block of the current stage under the last agent message (#434): the cards of the stage
 // first, then the compact «Подробнее» (priorities, assumptions, changes, reasons). The options
 // the user already chose from fold into «Варианты» after the cart is built. Every section stays
@@ -920,10 +956,18 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   );
   const editable = stage === "compare" || stage === "assemble";
   const more = moreLine(reply, editable);
+  // The sum of the chosen plan, before the cart exists: the same offers the cart will hold.
+  const picked = cart.items.length ? cart.items : plan.offers.filter((o) => plan.selected.includes(o.offer_id));
   const nextStep = next && (
     <section className="sec next" aria-label="Следующий шаг">
       <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
         {next.label}
+        {stage === "assemble" && picked.length > 0 && (
+          <>
+            {" · "}
+            <Price value={picked.reduce((t, o) => t + o.price_rub, 0)} synthetic={isSynthetic(picked)} />
+          </>
+        )}
       </button>
     </section>
   );
@@ -938,25 +982,25 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
       {voucher && <VoucherView voucher={voucher} />}
       {past && (
         <>
-          {cartView}
           {timeline}
+          {cartView}
         </>
       )}
-      {/* The plan is built: its timeline and the step to the cart first, the options after it. */}
+      {/* The plan is built: its timeline, the options, the cart; the main action is last (#450). */}
       {stage === "assemble" && (
         <>
           {timeline}
-          {nextStep}
           {choices}
           {cartView}
+          {nextStep}
         </>
       )}
       {!past && stage !== "assemble" && (
         <>
           {choices}
           {timeline}
-          {nextStep}
           {cartView}
+          {nextStep}
         </>
       )}
       {(more || editable) && (
