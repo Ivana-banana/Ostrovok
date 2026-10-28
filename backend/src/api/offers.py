@@ -588,6 +588,10 @@ def _span_h(delta: timedelta) -> str:
 # 3:30-4:15; Москва - Нижний Новгород 3:55; Москва - Владимир 1:46. Calibrated on the pairs of
 # tests/test_rail_time.py within ±20 %; the rest are team estimates (D-028). Prices do not
 # depend on the speed.
+# Fares (#280): a full fare = base + per km of route, at SEASON 1.0, by the kind of train. Fit
+# to the medians of tutu.ru fares of all classes on the routes from Moscow of 2026-10-27
+# (prices_tutu.json, scripts/calibrate_prices.py trains); tests/test_calibrate_prices.py checks it.
+TRAIN_FARE = {"day": (1000, 1.2), "night": (500, 1.9)}
 # A day train comes by DAY_ARRIVE_BY (no arrival at night, TRAP-5). Back it leaves at DAY_BACK,
 # earlier when it would come later, never before _back_from (check-out and the way to the
 # station, #370); a longer ride back goes by the overnight train only.
@@ -643,6 +647,12 @@ def _ends(p: dict) -> list[tuple[str, float]]:
         if km <= FAST_END_KM:
             out.append((n, km * RAIL_DETOUR / DAY_TRAIN_KMH))
     return out
+
+
+def _train_base(kind: str, route: float) -> float:
+    """Full train fare at SEASON 1.0 for `route` km (TRAIN_FARE)."""
+    fixed, per_km = TRAIN_FARE[kind]
+    return fixed + per_km * route
 
 
 def _day_train_hours(a: dict, b: dict, route: float) -> float | None:
@@ -724,9 +734,9 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
             if _shift(out, _minutes(day)).astimezone(tb) <= datetime.combine(
                 there, DAY_ARRIVE_BY, tb
             ):
-                trains.append((day, 700 + 3.4 * route, out, ret, DAY_BACK))
+                trains.append((day, _train_base("day", route), out, ret, DAY_BACK))
         if route >= 600:  # overnight train: arrives in the morning
-            hours, base = route / 70, 1100 + 3.0 * route
+            hours, base = route / 70, _train_base("night", route)
             out = _shift(datetime.combine(there, time(7, 10), tb), -_minutes(hours))
             ret = max(datetime.combine(back, time(21, 40), tb), earliest)
             trains.append((hours, base, out, ret, time(21, 40)))
