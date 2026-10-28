@@ -189,7 +189,7 @@ CHOICE_RE = re.compile(
 # #193: «давайте без трансфера» is an edit even with a consent word in it. «нужен ли трансфер?»
 # and «а трансфер нужен?» ask; they are not here.
 NO_TRANSFER_RE = re.compile(
-    r"(?<!\bне\s)\bбез\s+(?:\w+\s+)?трансфер\w*"
+    r"(?<!\bне\s)\bбез\s+(?:\w+\s+)?трансфер\w*\b(?!\s+не\b)"  # #204: «без трансфера не поедем»
     r"|\b(?:убер\w+|убра\w+|удал\w+|исключ\w+)\s+(?:\w+\s+)?трансфер\w*"
     r"|\bоткаж\w*\s+от\s+(?:\w+\s+)?трансфер\w*"
     r"|\bне\s+нуж(?:ен|на|но|ны)\s+(?:\w+\s+)?трансфер\w*"
@@ -203,7 +203,7 @@ ASKS_COMPARE_RE = re.compile(r"\b(?:дороже|дешевле|выгодн\w*)
 # «без трансфера, сколько будет?». It is an edit. «Сколько стоит без трансфера?» asks first.
 COMMAND_SUM_RE = re.compile(
     r"\b(?:(?:убер(?:и|ите|ём|ем)|удал(?:и|ите)|исключ(?:и|ите)|откаж(?:ись|итесь)\w*)\s+"
-    r"(?:\w+\s+)?(?:от\s+)?|без\s+(?:\w+\s+)?)трансфер\w*[^?]*?[,;:—–-]\s*(?:а\s+)?сколько\b"
+    r"(?:\w+\s+)?(?:от\s+)?|без\s+(?:\w+\s+)?)трансфер\w*\b(?!\s+не\b)[^?]*?[,;:—–-]\s*(?:а\s+)?сколько\b"
 )
 
 EDIT_KEYS = {
@@ -2217,7 +2217,7 @@ def _text_kids_question(old: ChatReply) -> str:
     ).strip()
 
 
-def drop_transfers(old: ChatReply, plan: Plan | None = None, asked_sum: bool = False) -> ChatReply:
+def drop_transfers(old: ChatReply, plan: Plan | None = None) -> ChatReply:
     """#193: «давайте без трансфера» at assemble or checkout. The transfers leave the plan (at
     checkout also the cart); the timeline is built again (TRAP-5). The stage stays: a plain
     consent fills the cart. The model does not read the message; the prices stay from the plan."""
@@ -2238,9 +2238,6 @@ def drop_transfers(old: ChatReply, plan: Plan | None = None, asked_sum: bool = F
     head = f"Убираю трансфер из плана: {rows}."
     if old.stage == "assemble":
         text = f"{head} В корзину пока ничего не кладу.\n{_text_assemble(plan)}"
-        if asked_sum:  # #204: the new sum is the sum of the plan offers, no model writes it
-            total = sum(o.price_rub for o in plan.offers if o.offer_id in plan.selected)
-            text = f"{head} Выйдет {_rub(total)} (синтетика).\n{_text_assemble(plan)}"
     else:
         text = f"{head} В корзине теперь {_rub(cart.total_rub)} (синтетика). {HINTS['checkout']}"
     return old.model_copy(
@@ -2416,7 +2413,7 @@ def step(
     ):
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
-        return drop_transfers(old, asked_sum=bool(COMMAND_SUM_RE.search(low)))
+        return drop_transfers(old)
     # #186, #216: «какая погода в декабре?» at a December plan names no new field: still a
     # question. A question with a fact to give («погода?», «почему не Бульвар?», «почему не
     # поезд?») goes to no model, changes nothing, and is no transport pick.

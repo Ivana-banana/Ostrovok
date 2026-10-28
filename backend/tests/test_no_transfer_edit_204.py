@@ -56,3 +56,19 @@ def test_command_with_how_much_is_an_edit(monkeypatch, store, text, stage, model
     assert f"{sold:,}".replace(",", " ") in r2.reply.replace(" ", " ").replace(" ", " ")
     if stage == "checkout":
         assert r2.cart.total_rub < r.cart.total_rub
+
+
+NEEDS_TRANSFER = [
+    "без трансфера не поедем, сколько стоит трансфер?",
+    "без трансфера не поедем, и на неделю позже",
+]
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize("text", NEEDS_TRANSFER)
+def test_without_transfer_we_will_not_go_keeps_the_transfer(monkeypatch, store, text, stage, model):
+    r, r2 = run(monkeypatch, store, stage, text, model)
+    assert transfers(r2)
+    if "сколько" in text and not model:  # a question: nothing changes (the stub model adds a wish)
+        assert r2.plan == r.plan and r2.cart == r.cart and r2.stage == stage
