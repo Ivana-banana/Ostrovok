@@ -86,6 +86,22 @@ def test_trap_5_own_tickets_after_the_block_reach_the_booking(monkeypatch, store
     assert r.stage == "booked" and r.voucher is not None
 
 
+def test_trap_5_own_tickets_clear_the_road_error_on_the_same_turn(monkeypatch, store):
+    """The same hotel stays selected, so the selection is unchanged; the timeline still
+    follows own_transport (dag.TIMELINE_FIELDS): the board shows no stale road error."""
+    monkeypatch.setattr(offers, "TRANSPORT", NoTransport())
+    r = say(store, KAZAN)
+    r = say(store, "беру", r.session_id)
+    assert _road_errors(r)
+    hotel = [i for i in r.plan.selected if i.startswith("h-")]
+    r = say(store, "билеты у нас есть", r.session_id)
+    assert r.plan.spec.own_transport
+    assert [i for i in r.plan.selected if i.startswith("h-")] == hotel
+    assert not _road_errors(r)
+    # The reply names the error only as «было» of the change: «стыковки: … → замечаний нет».
+    assert "→ замечаний нет" in r.reply and "В корзину пока не кладу" not in r.reply
+
+
 def test_trap_5_failed_hotel_source_gives_no_cart_of_the_road_alone(monkeypatch, store):
     monkeypatch.setattr(offers, "HOTELS", NoHotels())
     r = say(store, KAZAN)
