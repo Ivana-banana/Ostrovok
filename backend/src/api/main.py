@@ -36,8 +36,9 @@ V1 = "Партнёрский API /api/v1"
 WEB = "Веб-клиент /api"
 DESCRIPTION = """\
 Агент путешествий «О!дин запрос»: одно сообщение путешественника → план, корзина и
-имитированная бронь. Цены, время и стыковки — из провайдеров, не из LLM; цены — синтетика,
-кроме перелётов Авиасейлс при `real_data` (у них `synthetic=false`).
+имитированная бронь. Цены, время и стыковки — из провайдеров, не из LLM. По умолчанию
+(`real_data=true`) отели — 101hotels, перелёты — Авиасейлс, у них `synthetic=false`; остальное
+и любой сбой источника — синтетика. `real_data=false` — всё синтетика.
 
 **Партнёрам — `/api/v1`.** `POST /api/v1/plan` — одним вызовом текст запроса → план с
 корзиной. `POST /api/v1/chat` — диалог по шагам. `POST /api/v1/checkout` — бронь,
@@ -101,7 +102,8 @@ def health() -> dict[str, object]:
 def mode() -> LlmMode:
     # false — переключатель в вебе недоступен: в .env нет ключа (TRAP-1). Включает их запрос:
     # ChatRequest.llm и ChatRequest.real_data (#490). /health тоже показывает режимы (#290).
-    return LlmMode(llm=llm_available(), real_data=offers.REAL_TRANSPORT is not None)
+    live = offers.REAL_TRANSPORT is not None or getattr(offers.HOTELS, "live_layer", False)
+    return LlmMode(llm=llm_available(), real_data=live)
 
 
 @contextmanager

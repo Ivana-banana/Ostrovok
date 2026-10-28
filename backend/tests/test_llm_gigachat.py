@@ -209,15 +209,28 @@ def test_static_key_wins_and_needs_no_oauth(monkeypatch, giga):
     assert not giga.oauth and giga.chat[0][0] == "Bearer static"
 
 
-def test_response_format_order_and_memory(giga, caplog):
-    """OpenAI json_schema (400 at GigaChat), then the flat GigaChat form; remembered."""
+def reject_openai_form(auth, payload):
+    """GigaChat: the OpenAI json_schema form is a 400, the flat form works."""
+    if "json_schema" in payload["response_format"]:
+        return http_error(CHAT, 400, EMPTY_SCHEMA)
+    return Resp({"choices": [{"message": {"content": json.dumps(NULLS)}}]})
 
-    def chat(auth, payload):
-        if "json_schema" in payload["response_format"]:
-            return http_error(CHAT, 400, EMPTY_SCHEMA)
-        return Resp({"choices": [{"message": {"content": json.dumps(NULLS)}}]})
 
-    giga.on_chat = chat
+def test_gigachat_key_sends_the_flat_form_first(giga, caplog):
+    """#568: with GIGACHAT_AUTH_KEY the first request is the working one, no 400 round trip."""
+    giga.on_chat = reject_openai_form
+    with caplog.at_level(logging.WARNING, logger="api.llm"):
+        assert ask() == NULLS
+    assert [p["response_format"] for _, p in giga.chat] == [
+        {"type": "json_schema", "schema": llm.SPEC_SCHEMA}
+    ]
+    assert "rejected" not in caplog.text
+
+
+def test_response_format_order_and_memory(monkeypatch, giga, caplog):
+    """A static key: OpenAI json_schema first, then the flat GigaChat form; remembered."""
+    monkeypatch.setenv("LLM_API_KEY", "static")
+    giga.on_chat = reject_openai_form
     with caplog.at_level(logging.WARNING, logger="api.llm"):
         assert ask() == NULLS
     formats = [p["response_format"] for _, p in giga.chat]
@@ -235,8 +248,8 @@ def test_every_format_rejected_is_logged_with_its_name(giga, caplog):
         assert ask() is None
     kinds = [p["response_format"] for _, p in giga.chat]
     assert [("json_schema" in k, "schema" in k, k["type"]) for k in kinds] == [
-        (True, False, "json_schema"),
         (False, True, "json_schema"),
+        (True, False, "json_schema"),
         (False, False, "json_object"),
     ]
     for name in ("json_schema/openai", "json_schema/gigachat", "json_object"):
