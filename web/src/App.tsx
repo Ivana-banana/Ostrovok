@@ -142,9 +142,13 @@ export const MODE_RETRY_MS = 2000; // #534: the second GET /api/mode
 // The help texts name the real sources found in the offers of the plan (#547, TRAP-7).
 const HOTELS_REAL = "Отели — 101hotels (цена «от» на сегодня)";
 const FLIGHTS_REAL = "перелёты — Авиасейлс (цены из кэша поиска)";
+const TRAINS_REAL = "поезда — tutu";
 const realParts = (offers: Offer[]) => {
-  const real = (kind: Offer["kind"]) => offers.some((o) => o.kind === kind && !o.synthetic);
-  return [real("hotel") && HOTELS_REAL, real("transport") && FLIGHTS_REAL].filter(Boolean) as string[];
+  const real = (kind: string) =>
+    offers.some((o) => !o.synthetic && (o.kind === kind || (o.kind === "transport" && o.mode === kind)));
+  return [real("hotel") && HOTELS_REAL, real("flight") && FLIGHTS_REAL, real("train") && TRAINS_REAL].filter(
+    Boolean,
+  ) as string[];
 };
 const priceSources = (offers: Offer[]) => {
   const parts = realParts(offers);
