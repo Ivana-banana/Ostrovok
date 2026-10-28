@@ -363,8 +363,10 @@ MODES = [
 # «без самолётов», «не хочу лететь»: the flight is banned (the spec keeps the other modes)
 NO_FLIGHT = re.compile(
     r"\b(?:без|не)\s+(?:на\s+)?(?!долг|длинн)(?:перелет\w*|самолет\w*|авиа(?!билет|компани|линии|перевоз)\w*)"
-    r"|\bне\s+(?:хочу\s+|будем\s+|надо\s+)?(?:лететь|летим|полетим|летать|летаем|летаю)\b"
+    r"|\bне\s+(?:хочу\s+|будем\s+|надо\s+)?(?:лететь|летим|полетим|летать)\b"
     r"(?!\s+(?:долг|дольше|больше|более|\d|с\s+пересад))"  # a long flight, not every flight
+    # #314: «не летаем» bans only at the end of its clause: «не летаем лоукостерами» does not
+    r"|\bне\s+лета(?:ем|ю)\b(?:\s+(?:вообще|совсем))?(?=\s*(?:[.,;!?)—–-]|$)|\s+(?:и|а|но)\b)"
 )
 # #302: a meal or a mode refused after its name: «all inclusive не надо», «самолёт ни за что».
 # «не надо» refuses only at the end of its clause: «поезд, не надо пересадок» keeps the train.

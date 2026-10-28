@@ -15,3 +15,25 @@ def test_we_do_not_fly_bans_the_flight(text):
 @pytest.mark.parametrize("text", ["не летаем долго, Сочи", "мы не летаем больше 4 часов, Сочи"])
 def test_no_long_flight_is_no_ban(text):
     assert "modes" not in extract(text)[0]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "не летаю лоукостерами, Бали",
+        "не летаем без багажа, Сочи",
+        "не летаем экономом",
+        "не летаем Аэрофлотом, Сочи",
+        "не летаю ночью, Сочи",
+        "не летаю с детьми ночью",
+    ],
+)
+def test_a_fly_refusal_with_a_detail_is_no_ban(text):
+    assert "train" not in extract(text)[0].get("modes", [])
+
+
+@pytest.mark.parametrize(
+    "text", ["мы вообще не летаем", "не летаем вообще, Казань", "не летаю и всё"]
+)
+def test_we_do_not_fly_at_clause_end_bans_the_flight(text):
+    assert extract(text)[0]["modes"] == ["train", "car"]
