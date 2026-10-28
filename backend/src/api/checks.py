@@ -42,7 +42,7 @@ from api.contracts import (
 )
 from api.fixtures import WARM_WATER_C
 from api.main import app, get_store
-from api.model import NOT_IN_CATALOG
+from api.model import NOT_IN_CATALOG, ORIGIN_ASK
 from api.offers import _norm, find_offers, osm_hotels, resolve_place, transfer_id
 from api.optimizer import enumerate_trips, optimize, pets_ok
 from api.store import SessionStore
@@ -155,6 +155,26 @@ def _post(client: TestClient, text: str, sid: str | None = None) -> tuple[int, C
     return res.status_code, (
         ChatReply.model_validate(res.json()) if res.status_code == 200 else None
     )
+
+
+def _origin_only(r: ChatReply | None) -> bool:
+    """#436: the reply asks the departure city only (a request that names no origin)."""
+    return (
+        r is not None
+        and r.stage == "clarify"
+        and bool(r.questions)
+        and all(q.text.startswith(ORIGIN_ASK) for q in r.questions)
+    )
+
+
+def _post_from_origin(
+    client: TestClient, text: str, sid: str | None = None
+) -> tuple[int, ChatReply | None]:
+    """_post; the origin question of #436 gets its first chip, as in _walk."""
+    code, r = _post(client, text, sid)
+    if _origin_only(r):
+        code, r = _post(client, r.questions[0].options[0], r.session_id)
+    return code, r
 
 
 def _walk(
@@ -380,8 +400,13 @@ def check_S3(case: dict) -> tuple[bool, str]:
                         fails.append(f"{tag}: остановился на {last.stage}")
                     if any(r.llm for r in run.replies):
                         fails.append(f"{tag}: llm=True")
-                    if name == "A" and (run.asked or run.replies[0].stage != "compare"):
-                        fails.append(f"{tag}: точный запрос не разобран ({run.replies[0].stage})")
+                    # #436: the exact request names no origin; that one question is allowed
+                    skip = int(_origin_only(run.replies[0]) and len(run.replies) > 1)
+                    asked = run.asked - (len(run.replies[0].questions) if skip else 0)
+                    if name == "A" and (asked or run.replies[skip].stage != "compare"):
+                        fails.append(
+                            f"{tag}: точный запрос не разобран ({run.replies[skip].stage})"
+                        )
                     if variant == "A1":
                         total = last.voucher.total_rub if last.voucher else 0
                         spec = last.plan.spec
@@ -671,9 +696,9 @@ def check_S4(case: dict) -> tuple[bool, str]:
     run = _record(Run("S4", "нормальный путь после атаки"))
     with _api() as (client, _):
         with _planted_description(NEUTRAL):
-            _, control = _post(client, ask)
+            _, control = _post_from_origin(client, ask)
         with _planted_description(INJECTION):
-            code, first = _post(client, ask)
+            code, first = _post_from_origin(client, ask)
             if control is None or first is None:
                 return False, f"ход 1: ответ {code}"
             run.replies.append(first)

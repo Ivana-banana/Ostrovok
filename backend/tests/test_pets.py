@@ -1,9 +1,8 @@
 """#131: with a pet the agent never leads to a booking with a hotel or a leg that refuses pets."""
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.offers import find_offers
 from api.optimizer import optimize
 from api.store import SessionStore
@@ -16,10 +15,6 @@ NO_CATALOG = "нет в каталоге"
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def chosen(r):
