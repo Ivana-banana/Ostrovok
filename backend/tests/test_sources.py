@@ -1,4 +1,4 @@
-"""#490: the switches of ChatRequest pick the sources per request, both off by default.
+"""#490, #566: the switches of ChatRequest pick the sources per request, both on by default.
 
 No network: the real transport is a fake adapter, the model is a fake _complete.
 """
@@ -50,15 +50,35 @@ def transport(reply: dict) -> list[dict]:
     return [o for o in reply["plan"]["offers"] if o["kind"] == "transport"]
 
 
-def test_trap7_real_data_off_gives_synthetic_even_with_token(client, real):
-    reply = client.post("/api/chat", json={"message": SOCHI}).json()
+class LiveHotels:
+    """A live hotel layer stand-in: counts the calls, falls back to `base` like Live101Hotels."""
+
+    live_layer = True
+
+    def __init__(self, base) -> None:
+        self.base = base
+        self.calls = 0
+
+    def hotels(self, spec, place, now):
+        self.calls += 1
+        return self.base.hotels(spec, place, now)
+
+
+def test_trap7_real_data_off_gives_synthetic_even_with_token(client, real, monkeypatch):
+    live = LiveHotels(offers.HOTELS)
+    monkeypatch.setattr(offers, "HOTELS", live)
+    reply = client.post("/api/chat", json={"message": SOCHI, "real_data": False}).json()
     assert transport(reply) and all(o["synthetic"] for o in transport(reply))
-    assert real.calls == 0
+    assert real.calls == 0 and live.calls == 0  # #566: «Синтетика» drops the live hotels too
 
 
-def test_trap7_real_data_on_uses_the_real_adapter_for_this_request_only(client, real):
-    reply = client.post("/api/chat", json={"message": SOCHI, "real_data": True}).json()
-    assert real.calls > 0
+def test_trap7_real_data_by_default_uses_the_real_adapter_for_this_request_only(
+    client, real, monkeypatch
+):
+    live = LiveHotels(offers.HOTELS)
+    monkeypatch.setattr(offers, "HOTELS", live)
+    reply = client.post("/api/chat", json={"message": SOCHI}).json()  # #566: on by default
+    assert real.calls > 0 and live.calls > 0
     assert transport(reply) and not any(o["synthetic"] for o in transport(reply))
     assert offers.transport() is offers.TRANSPORT  # no global swap after the request
 
