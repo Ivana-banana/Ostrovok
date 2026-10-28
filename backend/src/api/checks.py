@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 
 from api import catalog, dag, offers
 from api import main as api_main
+from api.live_hotels import Live101Hotels
 from api.contracts import (
     Bundle,
     Cancellation,
@@ -57,6 +58,13 @@ from api.timeline import build_timeline
 # make eval measures the synthetic data whatever .env has: real flights (#261) serve only a
 # request with real_data (#490), and _post never sends it; same numbers everywhere (TRAP-6).
 offers.REAL_TRANSPORT = None
+
+
+def _offline_hotels(p: object) -> object:
+    """The hotel port without the live 101hotels layer (#539): api.main wraps it by LIVE_HOTELS."""
+    while isinstance(p, Live101Hotels):
+        p = p.base
+    return p
 
 MAX_FLIGHT_H = 5.0  # S1: "перелёт дольше 5 ч"
 LLM_ENV = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
@@ -149,10 +157,13 @@ def _api() -> Iterator[tuple[TestClient, SessionStore]]:
         app.dependency_overrides[get_store] = lambda: store
         saved = catalog._get, catalog.ONLINE_CACHE, dict(catalog._online)
         catalog._get, catalog.ONLINE_CACHE = _recorded, Path(tmp) / "online_places.json"
+        hotels = offers.HOTELS  # read at call time: a test may reload api.main (#442)
+        offers.HOTELS = _offline_hotels(hotels)  # type: ignore[assignment]
         catalog._online.clear()
         try:
             yield TestClient(app, raise_server_exceptions=False), store
         finally:
+            offers.HOTELS = hotels
             catalog._get, catalog.ONLINE_CACHE = saved[:2]
             catalog._online.clear()
             catalog._online.update(saved[2])
