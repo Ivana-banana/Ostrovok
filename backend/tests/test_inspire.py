@@ -114,7 +114,7 @@ def test_shown_places_are_apart_and_two_per_country_at_most():
 def test_only_the_candidates_are_priced(monkeypatch):
     """445 places are not priced on each request: only CANDIDATES of them."""
     calls = []
-    monkeypatch.setattr(inspire, "find_offers", lambda spec, name: calls.append(name) or [])
+    monkeypatch.setattr(inspire, "find_offers", lambda spec, name, **kw: calls.append(name) or [])
     inspire.suggest_destinations(TripSpec(origin="Москва", month=7, wishes=["горы"]), 7)
     assert 0 < len(calls) <= inspire.CANDIDATES
 

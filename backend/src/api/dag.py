@@ -5,13 +5,14 @@ Nodes, each one feeds the next:
 - destination: spec.destinations[0]; nothing to compute, the root of the chain.
 - offers: find_offers(spec, destination); the search depends on dates, guests, origin.
 - ranking: rank(spec, offers); selected offers and why; budget, meal, refund, wishes.
-- timeline: build_timeline(plan) reads plan.selected and plan.offers, never the spec. It is
-  built for the first plan too and rebuilt when the selection changed.
+- timeline: build_timeline(plan) reads plan.selected, plan.offers and of the spec only
+  TIMELINE_FIELDS (own tickets, origin: #532). It is built for the first plan too and rebuilt
+  when the selection or one of these fields changed.
 - cart: the cart confirms one TripSpec (the voucher keeps it), so any trip change empties it.
   The next confirmation refills it with fill_cart, which replaces the items, never appends.
 
 A field changes -> its node and every node after it are dirty; clean nodes keep their values.
-The timeline also stops early: the same selected offers keep the same timeline.
+The timeline also stops early: the same selected offers and TIMELINE_FIELDS keep it.
 Plan.changes are "before -> after" lines from spec fields and tool data, not the LLM (TRAP-4).
 """
 
@@ -50,6 +51,9 @@ FIELD_NODE = {
     "wishes": "ranking",
     "priorities": "ranking",
 }
+# The spec fields build_timeline reads (#532): a change of them rebuilds the timeline even
+# when the selection stays the same (own tickets on a plan that had no legs).
+TIMELINE_FIELDS = ("origin", "own_transport", "arrive_at", "leave_at")
 # Key of a change group -> Change.what, the label the user sees.
 LABELS = {
     "destinations": "направление",
@@ -401,12 +405,13 @@ def replan(old: Plan, spec: TripSpec, cart: Cart) -> tuple[Plan, Cart, list[str]
         lost = _keep_pick(old, plan) if old.offers else None
         plan.selected = keep_refusal(plan, plan.selected)
         done.append("ranking")
-    # Invariant: build_timeline reads plan.selected and plan.offers, not the spec (T8, #14).
-    # The offer_id of a hotel or a leg carries dates and guests, so the same selected offers
-    # mean the same timeline. If the checker starts reading spec fields, rebuild it here.
-    # The timeline is built whenever the selection changed, also for the first plan (#66): the
-    # compare stage shows it before the user says «беру».
-    if _chosen(plan) != _chosen(old) or not old.offers:
+    # build_timeline reads plan.selected, plan.offers and of the spec only TIMELINE_FIELDS
+    # (T8, #14): own tickets (C5, #408) and the origin (#532, the road check). The offer_id of
+    # a hotel or a leg carries dates and guests, so the same selected offers and the same
+    # fields mean the same timeline. The timeline is built whenever one of them changed, also
+    # for the first plan (#66): the compare stage shows it before the user says «беру».
+    spec_moved = any(getattr(spec, f) != getattr(old.spec, f) for f in TIMELINE_FIELDS)
+    if _chosen(plan) != _chosen(old) or not old.offers or spec_moved:
         plan.timeline, plan.issues = build_timeline(plan)
         done.append("timeline")
     new_cart = cart

@@ -35,6 +35,7 @@ import {
   zonedTime,
   zoneLabel,
 } from "./format";
+import { HotelFilters } from "./HotelFilters";
 import { ParamsBar } from "./ParamsBar";
 import { otherAssumptions } from "./params";
 
@@ -91,7 +92,7 @@ const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
 
 // The strip of trip parameters above the chat (#434). Origin, dates, guests and budget are the
-// editable chips of ParamsBar; the other fields of the spec are read-only chips after them.
+// editable chips of ParamsBar, then the hotel filters (#431); the other fields of the spec are read-only chips after them.
 export function TripParams({ spec, locked, onSend }: {
   spec: TripSpec;
   locked: boolean;
@@ -108,13 +109,12 @@ export function TripParams({ spec, locked, onSend }: {
     ].filter(Boolean);
     rows.push(["Билеты", ["свои", ...times].join(", ")]);
   }
-  if (spec.hotel_budget_rub !== null) rows.push(["Бюджет отеля", rub(spec.hotel_budget_rub)]);
-  if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
   if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);
   return (
     <section className="strip" aria-label="Параметры поездки">
       <h2 className="sr-only">Параметры поездки</h2>
       <ParamsBar spec={spec} disabled={locked} onSend={onSend} />
+      <HotelFilters spec={spec} disabled={locked} onSend={onSend} />
       {rows.length > 0 && (
         <dl className="spec">
           {rows.map(([k, v]) => (

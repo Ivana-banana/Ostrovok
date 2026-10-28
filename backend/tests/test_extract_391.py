@@ -35,6 +35,19 @@ def test_bare_place_and_country_is_the_place(text):
     assert extract(text)[0].get("destinations") == ["Ушуайя"]
 
 
-def test_country_alone_after_a_comma_is_not_a_place_pair():
-    # «Привет, Аргентина на 10 дней»: a greeting is no place.
-    assert extract("Привет, Аргентина на 10 дней")[0].get("destinations") != ["Привет"]
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Привет, Аргентина на 10 дней",
+        "Пожалуйста, Турция в ноябре",
+        "Бюджет, Турция на неделю",
+        "Итак, Турция в ноябре",
+        "Значит, Турция в ноябре",
+        "Слушай, Турция в ноябре",
+        "Варианты, Таиланд в январе",
+    ],
+)
+def test_trap_3_filler_word_before_a_country_is_not_a_place(text):
+    """A word of speech before «, Страна» is no destination (#391 review)."""
+    first = text.split(",")[0]
+    assert first not in (extract(text)[0].get("destinations") or [])
