@@ -283,6 +283,89 @@ button.icon {
   animation: m-hop 3.6s ease-in-out infinite;
 }
 
+/* moods (moodOf): brows and ^ ^ eyes are hidden until a mood shows them */
+.mascot .brow,
+.mascot .joy {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 15;
+  stroke-linecap: round;
+}
+
+.mascot .brows,
+.mascot .joy {
+  display: none;
+}
+
+.mascot .brow {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+.mascot.curious .brows,
+.mascot.puzzled .brows,
+.mascot.glad .joy,
+.mascot.happy .joy {
+  display: inline;
+}
+
+.mascot.glad .eyes,
+.mascot.happy .eyes {
+  display: none;
+}
+
+.mascot.curious .brow-l {
+  visibility: hidden;
+}
+
+.mascot.curious .brow-r {
+  transform: translateY(-16px) rotate(-14deg);
+}
+
+.mascot.curious .bw {
+  transform: rotate(-7deg);
+  animation: m-tilt 0.5s ease-out;
+}
+
+.mascot.puzzled .brow-l {
+  transform: translateY(8px) rotate(-22deg);
+}
+
+.mascot.puzzled .brow-r {
+  transform: translateY(8px) rotate(22deg);
+}
+
+.mascot.puzzled .eyes {
+  translate: 0 14px;
+}
+
+.mascot.puzzled .bw {
+  animation: m-shrug 0.7s ease-in-out;
+}
+
+.mascot.glad .bw {
+  animation: m-hop 1.2s ease-in-out;
+}
+
+@keyframes m-tilt {
+  from {
+    transform: none;
+  }
+}
+
+@keyframes m-shrug {
+  0%,
+  100% {
+    transform: none;
+  }
+  30% {
+    transform: translateY(1px) scale(1.03, 0.96);
+  }
+  60% {
+    transform: rotate(-3deg);
+  }
+}
+
 /* happy: the trip is booked */
 .mascot.happy .bw {
   animation: m-jump 0.9s cubic-bezier(0.3, 0, 0.4, 1) 2;
