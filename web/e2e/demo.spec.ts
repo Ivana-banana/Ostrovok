@@ -387,3 +387,26 @@ test.describe("с анимацией", () => {
     expect(label.length).toBeGreaterThan(0);
   });
 });
+
+// #489: an item of the answer opens the other options of its kind with badges; a pick changes the plan.
+test("пункт «Туда» раскрывает другие варианты с плашками, выбор меняет план", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Запрос").fill(REQUEST);
+  await page.getByRole("button", { name: "Отправить" }).click();
+  const answer = page.locator(".msg.agent").last();
+  const there = answer.locator("ul.points [role='button']").filter({ hasText: /^Туда/ });
+  await expect(there).toHaveAttribute("aria-expanded", "false");
+  const before = (await there.locator(".pt-row").textContent()) ?? "";
+  await there.focus();
+  await page.keyboard.press("Enter");
+  await expect(there).toHaveAttribute("aria-expanded", "true");
+  const alts = answer.locator(`[id="${await there.getAttribute("aria-controls")}"] li.alt`);
+  expect(await alts.count()).toBeGreaterThanOrEqual(2);
+  await expect(answer.locator(".alt-badge.cheap")).toHaveText("самый дешёвый");
+  await expect(alts.filter({ hasText: "выбран" })).toHaveCount(1);
+  for (const p of await alts.locator(".price").all()) await expect(p.locator(".synth")).toHaveText("синтетика"); // TRAP-7
+  await alts.locator("button.alt-pick").first().click();
+  await expect(page.locator(".msg.user")).toHaveCount(2);
+  const after = page.locator(".msg.agent").last().locator("ul.points [role='button']").filter({ hasText: /^Туда/ });
+  await expect(after.locator(".pt-row")).not.toHaveText(before);
+});
