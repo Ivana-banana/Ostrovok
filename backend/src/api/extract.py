@@ -471,7 +471,7 @@ WISHES = [
     ("вегетарианское питание", r"вегетариан"),
     (
         "поздний заезд",
-        r"засел\w*(?:\s+\w+)?\s+(?:ночью|поздно|сразу)|засел\w*\s+после\s+(?:2[23]|0?[0-5])(?::\d\d|\s*(?:ч\b|час\w*|ночи|утра))|поздн\w*\s+(?:заезд|заселен)|ночн\w*\s+заезд",
+        r"засел\w*(?:\s+\w+)?\s+(?:ночью|поздно|сразу)|засел\w*\s+после\s+(?:2[23]|0?[0-5])(?::\d\d|\s*(?:ч\b|час\w*|ночи|утра))(?!\w*\s+дня)|поздн\w*\s+(?:заезд|заселен)|ночн\w*\s+заезд",
     ),
     ("детская кроватка", r"кроватк|колыбел"),
     ("вино и еда", r"\bвин[оа]\b|\bвинн|гастро|\bеда\b|\bкухн"),
@@ -524,9 +524,39 @@ LANDMARK_RE = re.compile(
     r"(?i:\b(?:(?:отел\w*|гостиниц\w*|жиль[её]|жить|остановиться)\s+(?:\w+\s+)?у|возле|около|рядом\s+с))"
     r"\s+([А-ЯЁ][\w-]+)\b(?!\s+(?:мор|озер))"
 )
+# «Красной площадью», «Невского проспекта»: after an adjective the noun is part of the name (#466)
+LANDMARK_NOUN_RE = re.compile(r"\s+(?!(?:для|на|в|во|и|с|со|по|за|или|недорог\w*)\b)[а-яё][\w-]+")
+# «-ом» is a noun after «рядом с»: «Арбатом»; «-ым», «-им» are adjectives: «Большим театром»
+ADJ_ENDINGS = (
+    "ой",
+    "ей",
+    "ого",
+    "его",
+    "ому",
+    "ая",
+    "ую",
+    "ий",
+    "ый",
+    "ое",
+    "ые",
+    "ых",
+    "ым",
+    "им",
+)
 BREAKFAST_FROM_RE = re.compile(
     r"завтрак\w*\s+с\s+(\d{1,2})(?::(\d\d)|\s*(?:утра|ч\b|час(?:а|ов)?\b))"
 )
+
+
+def _is_destination(word: str, found: dict) -> bool:
+    """«жить у Байкала» with Байкал in the destinations: the place itself, no landmark (#466)."""
+    w = word.lower().replace("ё", "е")
+    for d in found.get("destinations", []):
+        n = d.lower().replace("ё", "е")
+        stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
+        if len(stem) >= 4 and w.startswith(stem) and len(w) - len(stem) <= 2:  # not «Москворецкого»
+            return True
+    return False
 
 
 def is_unchecked(wish: str) -> bool:
@@ -2328,8 +2358,10 @@ def extract(
         found["modes"] = modes
     wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
     for m in LANDMARK_RE.finditer(text):  # #338: «отель у Технопарка»; cities are no landmark
-        if not _known(m.group(1)):
-            wishes.append(f"рядом: {m.group(1)}")
+        if not _known(m.group(1)) and not _is_destination(m.group(1), found):
+            adjective = m.group(1).lower().endswith(ADJ_ENDINGS)
+            noun = adjective and LANDMARK_NOUN_RE.match(text, m.end(1))
+            wishes.append(f"рядом: {m.group(1)}{noun.group(0) if noun else ''}")
     if m := BREAKFAST_FROM_RE.search(t):
         wishes.append(f"завтрак с {int(m.group(1)):02d}:{m.group(2) or '00'}")
     # #330: «20 ч в дороге», «в дороге до 10 часов», «дорога не дольше суток»
