@@ -505,6 +505,24 @@ def test_trap_4_explanation_keeps_only_numbers_from_the_facts(tmp_path, fake):
         assert llm.explain(plan) is None
 
 
+def test_trap_4_day_of_a_tool_date_is_a_fact(tmp_path, fake):
+    """TRAP-4, #568: «туда 14 декабря» repeats the tool date 14.12; another day is made up."""
+    plan = _plan(tmp_path)
+    t = next(o for o in plan.offers if o.kind == "transport" and o.offer_id in plan.selected)
+    known = llm._numbers(json.dumps(llm._facts(plan), ensure_ascii=False, default=str))
+    day, other = [d for d in range(1, 29) if float(d) not in known][:2]
+    t.depart_at = t.depart_at.replace(day=day)
+    oid = plan.explanations[0].offer_id
+
+    def why(text):
+        return lambda p: answer({"explanations": [{"offer_id": oid, "why": text}]})
+
+    fake.why = why(f"Туда {day} декабря в {t.depart_at:%H:%M}")
+    assert llm.explain(plan) is not None
+    fake.why = why(f"Туда {other} декабря в {t.depart_at:%H:%M}")
+    assert llm.explain(plan) is None
+
+
 def test_explanation_rewrite_reaches_the_reply(tmp_path, store, fake):
     plan = _plan(tmp_path)
     oid = plan.explanations[0].offer_id
@@ -628,3 +646,23 @@ def test_model_answer_cannot_lift_an_earlier_refusal(store, fake):
     r = say(store, "подешевле, до 100 тысяч", r.session_id)
     assert r.plan.spec.destinations == [] and "Анталия" not in [d.name for d in r.plan.destinations]
     assert "исключено: Турция, Египет" in r.plan.spec.assumptions
+
+
+def test_model_whole_month_range_is_dropped_but_explicit_dates_stay():
+    """#574: «в ноябре» from the model as 1..30 Nov (29 nights) must not replace the rules' 7 nights."""
+    found, _ = extract("Тёплое море в ноябре, из Москвы")
+    assert "date_from" not in found
+    whole = {
+        "date_from": date(2026, 11, 1),
+        "date_to": date(2026, 11, 30),
+        "nights": 29,
+        "month": 11,
+    }
+    out = with_llm(found, whole)
+    assert not {"date_from", "date_to"} & out.keys()
+    assert out.get("nights") != 29
+    explicit, _ = extract("Казань с 1 по 30 ноября")
+    assert explicit["date_from"].day == 1
+    assert with_llm(explicit, whole)["date_to"] == date(2026, 11, 30)
+    part = {"date_from": date(2026, 12, 11), "date_to": date(2026, 12, 13), "nights": 2}
+    assert with_llm(found, part)["nights"] == 2
