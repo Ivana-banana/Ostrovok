@@ -72,3 +72,36 @@ def test_without_transfer_we_will_not_go_keeps_the_transfer(monkeypatch, store, 
     assert transfers(r2)
     if "сколько" in text and not model:  # a question: nothing changes (the stub model adds a wish)
         assert r2.plan == r.plan and r2.cart == r.cart and r2.stage == stage
+
+
+NOT_A_PROBLEM = [
+    "без трансфера не проблема",
+    "без трансфера не страшно, доберёмся сами",
+    "без трансфера не нужен, давайте дальше",
+]
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize("text", NOT_A_PROBLEM)
+def test_without_transfer_is_no_problem_still_drops_it(monkeypatch, store, text, stage, model):
+    r, r2 = run(monkeypatch, store, stage, text, model)
+    assert not transfers(r2)
+    assert all(o.kind != "transfer" for o in r2.cart.items)
+    r3 = r2 if stage == "checkout" else say(store, "да", r2.session_id)
+    assert r3.stage == "checkout"
+    sold = sum(o.price_rub for o in r3.plan.offers if o.offer_id in r3.plan.selected)
+    assert (
+        r3.cart.total_rub
+        == sold
+        < sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
+    )
+
+
+@pytest.mark.parametrize(
+    "text", ["без трансфера не обойдёмся", "без трансфера не сможем добраться"]
+)
+def test_more_need_verbs_keep_the_transfer(store, text):
+    r = at(store, "assemble")
+    r2 = say(store, text, r.session_id)
+    assert transfers(r2) == transfers(r)
