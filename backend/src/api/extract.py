@@ -91,12 +91,30 @@ def _word_re(word: str, first: str | None = None) -> str:
 PLACE_RES = [
     (name, re.compile(rf"\b(?:{'|'.join(c['stems'])})\w*")) for name, c in CATALOG.items()
 ] + [(name, re.compile(rf"\b(?:{stem})\w*")) for name, stem in PLACES.items()]
-# Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not.
-CAPITAL_PLACES = [("Нижний Новгород", re.compile(r"Нижн\w*\b(?!\s+этаж)"))]
+# Checked on the original text: «Нижний» is a city, «на нижнем этаже» is not. A capitalized
+# word after it that is no «Новгород» makes another name: «Нижний Тагил» (#97, TRAP-3).
+CAPITAL_PLACES = [
+    (
+        "Нижний Новгород",
+        re.compile(r"Нижн(?:ий|его|ем|ему|им)\b(?!\s+этаж)(?!\s+(?!Новгород)[А-ЯЁ])"),
+    )
+]
 # Two-word cities of places.json not listed above (TRAP-3): «Великий Новгород в мае». Their
 # words are common («лечение минеральными водами»), so a name counts only with a capital first
 # letter (original text) or right after «в/во/из/до» (lower text).
 AFTER_PREPOSITION = r"(?:(?<=\bв )|(?<=\bво )|(?<=\bиз )|(?<=\bдо ))"
+
+
+# The end of the last word of a name: a case ending and then the word ends. «Новгородский» is
+# an adjective, not «Новгород» (#97).
+NAME_END = r"(?:[аяыиеуюь]|ом|ем|ой|ею|ов|ев|ам|ям|ах|ях|ами|ями)?(?![\w-])"
+# What may follow a name written with a lower case second word: «Минеральные воды в мае», but
+# «Минеральные воды полезны» is a phrase about the water.
+AFTER_NAME = r"(?=\s*(?:[,.!?;]|$)|\s+(?:в|во|на|с|со|из|до|по|для|к|и|\d)\b)"
+
+
+def _closed(word_re: str) -> str:
+    return word_re[:-3] + NAME_END if word_re.endswith(r"\w*") else word_re
 
 
 def _two_word_places() -> None:
@@ -105,10 +123,11 @@ def _two_word_places() -> None:
             continue
         words = p["name"].split()
         # the original text may have «ё»; the lower text has none
-        cap = [w[0].upper() + _word_re(w)[1:].replace("е", "[её]") for w in words]
-        cap[1:] = [f"[{w[0]}{w[0].lower()}]{w[1:]}" for w in cap[1:]]
-        CAPITAL_PLACES.append((p["name"], re.compile(r"\b" + r"\s+".join(cap))))
-        low = r"\s+".join(_word_re(w) for w in words)
+        first = words[0][0].upper() + _word_re(words[0])[1:].replace("е", "[её]")
+        stem = _closed(_word_re(words[-1])[1:].replace("е", "[её]"))
+        last = f"(?:{words[-1][0].upper()}{stem}|{words[-1][0].lower()}{stem}{AFTER_NAME})"
+        CAPITAL_PLACES.append((p["name"], re.compile(rf"\b{first}\s+{last}")))
+        low = r"\s+".join([*(_word_re(w) for w in words[:-1]), _closed(_word_re(words[-1]))])
         PLACE_RES.append((p["name"], re.compile(AFTER_PREPOSITION + low)))
 
 
@@ -148,23 +167,26 @@ REBUILD_VERBS = "|".join(
 )
 NOT_CITY_START = re.compile(
     r"(?:хоч|хот|ищ|нуж|надо|подск|посов|подбер|подбир|помог|помощ|орган|спланир|планир|собир"
-    r"|собер|давай|еду|едем|леч|лет[иеа]|поед|полет|мечт|привет|здравств|добр|отпуск|отел|билет"
+    r"|собер|давай|еду|едем|леч|лет[иеа]|поед|полет|мечт|привет|здравств|добр(?:ый|ое|ого|ая|ой|ую|ые|ым|ых|ыми|ому|ом|о)?\b|отпуск|отел|билет"
     r"|тур\b|туры|турист|поезд|подум|интерес|сделай|создай|найд|покаж|расскаж|предлож|можн"
     r"|нельз|будем|будет|как\b|что\b|где\b|куд|когд|сколько|есть\b|если\b|для\b|мне\b|нам\b"
     r"|мы\b|ну\b|вот\b|так\b|или\b|тепл|хорош|нормал|красив|дешев|дорог|быстр|скоро|срочно"
     r"|лучш|любо|какой|какая|какое|зим|весн|осен|друз|компан|сем[ьъ]|одн|вмест"
-    r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят"
+    r"|нет\b|спасиб|пожалуйст|итак\b|значит|слуша|бюджет|вариант|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят"
     # replanning verbs («Сдвинь на 3 дня») and common nouns («Отдых в ноябре»), #73
     r"|" + REBUILD_VERBS + r"|отдых(?:а|у|е|ом)?\b|отдохн\w*|каникул\w*"
     r"|путевк\w*|круиз\w*|пляж(?:а|у|е|и|ем)?\b|мор[еяюь]\b"
-    r"|(?:другой|простой|большой|небольшой|выходной|мой|твой|свой|такой|мамой|папой|подругой"
+    r"|(?:другой|простой|большой|небольшой|выходной|сухой|мой|твой|свой|такой|мамой|папой|подругой"
     r"|другом|сыном|детьми|внуком|внучкой|коллегами|братом|родителями|подругами|племянником|дедушкой|отцом|дочкой|сестрой|бабушкой|мужем|женой)\b)"
 )  # fmt: skip
 # Not a city by its ending: verbs («Планируем», «Ищете»), adjectives («Тёплое»), infinitives.
 # «ой» is not here: «Ханой» is a city. The ordinary words in «ой» that can stand before a
 # number («Другой на 3 ночи», «Мамой на 3 дня») are a list of whole words in NOT_CITY_START;
-# «Домой» is in NOT_PLACES.
-NOT_CITY_END = re.compile(r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ая|яя|ое|ее|ые|ие)$")
+# «Домой» is in NOT_PLACES. «ской» is an adjective («Городской на 3 дня»): a city never ends so.
+# «ной» is one too («Речной»), but «Ханой» is a city.
+NOT_CITY_END = re.compile(
+    r"(?:ем|им|ете|ите|ешь|ишь|ют|ят|ться|ть|ый|ий|ая|яя|ое|ее|ые|ие|ской|(?<!ха)ной)$"
+)
 CASES = "(?:а|у|е|ом|ем|ой|ы|и|ю|я|ь|ею|ам|ах|ами)"
 CASES_SHORT = "(?:а|у|е|ы)"  # «Рим», «Вена»: a longer ending would make a common word
 # Short stems that are ordinary words in these forms: «мала ли комната» is not «Мале».
@@ -176,7 +198,7 @@ NOT_SHORT_FORMS = {"мала", "малы", "бака"}
 PERSON_CITIES = {"Владимир", "София", "Виктория"}
 ADDRESS_NEXT = re.compile(  # «Владимир, хочу…» and «Владимир! Хочу…» (#73)
     r"\s*[,!]\s*(?:хоч|хот|подскаж|помог|подбер|найд|посовет|скаж|слуш|мне\b|нам\b|мы\b|ищ|нуж"
-    r"|добр|привет|здравств)"
+    r"|добр(?:ый|ое|ого|ая|ой|ую|ые|ым|ых|ыми|ому|ом|о)?\b|привет|здравств)"
 )
 # A length after a comma behind an unknown first word in a plan: «Ухта, 3 ночи». The form
 # «<word> на 3 дня» is a rebuild command («Перенеси на 2 дня позже»), never a note.
@@ -471,7 +493,7 @@ WISHES = [
     ("вегетарианское питание", r"вегетариан"),
     (
         "поздний заезд",
-        r"засел\w*(?:\s+\w+)?\s+(?:ночью|поздно|сразу)|засел\w*\s+после\s+(?:2[23]|0?[0-5])(?::\d\d|\s*(?:ч\b|час\w*|ночи|утра))|поздн\w*\s+(?:заезд|заселен)|ночн\w*\s+заезд",
+        r"засел\w*(?:\s+\w+)?\s+(?:ночью|поздно|сразу)|засел\w*\s+после\s+(?:2[23]|0?[0-5])(?::\d\d|\s*(?:ч\b|час\w*|ночи|утра))(?!\w*\s+дня)|поздн\w*\s+(?:заезд|заселен)|ночн\w*\s+заезд",
     ),
     ("детская кроватка", r"кроватк|колыбел"),
     ("вино и еда", r"\bвин[оа]\b|\bвинн|гастро|\bеда\b|\bкухн"),
@@ -524,9 +546,39 @@ LANDMARK_RE = re.compile(
     r"(?i:\b(?:(?:отел\w*|гостиниц\w*|жиль[её]|жить|остановиться)\s+(?:\w+\s+)?у|возле|около|рядом\s+с))"
     r"\s+([А-ЯЁ][\w-]+)\b(?!\s+(?:мор|озер))"
 )
+# «Красной площадью», «Невского проспекта»: after an adjective the noun is part of the name (#466)
+LANDMARK_NOUN_RE = re.compile(r"\s+(?!(?:для|на|в|во|и|с|со|по|за|или|недорог\w*)\b)[а-яё][\w-]+")
+# «-ом» is a noun after «рядом с»: «Арбатом»; «-ым», «-им» are adjectives: «Большим театром»
+ADJ_ENDINGS = (
+    "ой",
+    "ей",
+    "ого",
+    "его",
+    "ому",
+    "ая",
+    "ую",
+    "ий",
+    "ый",
+    "ое",
+    "ые",
+    "ых",
+    "ым",
+    "им",
+)
 BREAKFAST_FROM_RE = re.compile(
     r"завтрак\w*\s+с\s+(\d{1,2})(?::(\d\d)|\s*(?:утра|ч\b|час(?:а|ов)?\b))"
 )
+
+
+def _is_destination(word: str, found: dict) -> bool:
+    """«жить у Байкала» with Байкал in the destinations: the place itself, no landmark (#466)."""
+    w = word.lower().replace("ё", "е")
+    for d in found.get("destinations", []):
+        n = d.lower().replace("ё", "е")
+        stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
+        if len(stem) >= 4 and w.startswith(stem) and len(w) - len(stem) <= 2:  # not «Москворецкого»
+            return True
+    return False
 
 
 def is_unchecked(wish: str) -> bool:
@@ -613,11 +665,44 @@ def _known(word: str, exact_short: bool = False) -> str | None:
             continue
         stem = n[:-1] if n[-1] in "аяьйеиыуо" else n
         short = len(stem) <= 3
+        if (
+            n.endswith(("ое", "ее"))
+            and re.fullmatch(  # «в Лазаревском» is «Лазаревское» (#538)
+                re.escape(n[:-2]) + "(?:ое|ого|ому|ом|ым|ее|его|ему|ем|им)", w
+            )
+        ):
+            return p["name"]
         if w == n or _stem_re(stem, short).fullmatch(w):
             if short and w != n and (exact_short or w in NOT_SHORT_FORMS):
                 continue
             return p["name"]
     return None
+
+
+def _country_next(text: str, pos: int) -> bool:
+    """A country right after a comma: «Ушуайя, Аргентина на 10 дней» (#391)."""
+    m = re.compile(r"\s*,\s*((?:[А-ЯЁ][а-яё-]+)(?: [А-ЯЁа-яё-]+){0,2})").match(text, pos)
+    words = m.group(1).split() if m else []
+    return any(catalog.country_of(" ".join(words[:n]).lower()) for n in (1, 2, 3))
+
+
+def _first_with_country(text: str, t: str, pos: int) -> bool:
+    """The text starts with a place and a country at pos follows it after a comma (#391)."""
+    first = re.match(r"\s*[А-ЯЁа-яё-]+(?=\s*,\s*$)", text[:pos])
+    return bool(first and _country_next(text, first.end()) and _first_city(text, t, True))
+
+
+# «Нижний Тагил»: the first word is «Нижн…», the second one is a capitalized word but no «Новгород».
+# «Новый Афон», «Старый Оскол» too, unless the second word is ordinary («Новый Год», #538).
+NIZHNY_NAME = re.compile(
+    r"\s*(Нижн\w*|Нов(?:ый|ая|ое)|Стар(?:ый|ая|ое))\s+((?!Новгород)[А-ЯЁ][а-яё]+)"
+)
+NOT_NAME_TAIL = re.compile(r"год(?:а|у|ом|е)?$")  # «Новый Год» is a holiday, not a place
+
+
+def _name_tail_ok(tail: str) -> bool:
+    low = tail.lower().replace("ё", "е")
+    return not (_ordinary(tail, low) or NOT_CITY_END.search(low) or NOT_NAME_TAIL.match(low))
 
 
 def _first_city(
@@ -628,6 +713,14 @@ def _first_city(
     A known city (places.json) is always taken. An unknown word is taken only if guess is on.
     With guess off (the plan has a city) «Ухта, 3 ночи» is no destination, but it is not silent:
     a note says the city is not in the catalogue."""
+    nizhny = NIZHNY_NAME.match(text)  # «Нижний Тагил на 3 дня»: a name outside the catalogue
+    if nizhny and (nizhny.group(1).startswith("Нижн") or _name_tail_ok(nizhny.group(2))):
+        name = name_candidates(f"{nizhny.group(1)} {nizhny.group(2)}")[0]
+        if guess and FIRST_NEXT.match(t, nizhny.end()):
+            return nizhny.start(1), name
+        if notes is not None and LENGTH_NEXT.match(t, nizhny.end()):
+            notes.append(f"направление: «{name}» нет в каталоге, направление прежнее")
+        return None
     m = re.match(r"\s*([А-ЯЁа-яё][а-яё]+(?:-[А-ЯЁа-яё]+)*)", text)
     if not m:
         return None
@@ -636,7 +729,7 @@ def _first_city(
         if known in PERSON_CITIES and ADDRESS_NEXT.match(t, m.end()):
             return None
         return m.start(1), known  # a known city may be lower case: «иркутск на неделю»
-    if guess and FIRST_NEXT.match(t, m.end()):
+    if guess and (FIRST_NEXT.match(t, m.end()) or _country_next(text, m.end())):
         return _unknown_first_city(text, t, m, word, low)
     # «Отдых на море», «Нет»: no guess, no note
     if (
@@ -763,6 +856,37 @@ ELLIPSIS_GAP = re.compile(r"\s*(?:,\s*(?:(?:а|и)\s+)?|(?:а|и)\s+)(?:(?:в|в
 ELLIPSIS_TAIL = re.compile(r"\s*(?:тоже|также)(?=\s*(?:[,.!?;\n]|$))")
 
 
+def _origin_end(text: str, t: str, pos: int, name: str) -> tuple[int, list[str]]:
+    """Where the origin ends in the text, to blank it (#155).
+
+    «Из Нижнего Новгорода»: all words of the name go. «Из Казани или Самары»: the other
+    origin of the «или» pair is no destination. Returns the end and the names of the other origins."""
+
+    def spaced(p: int) -> int:
+        e = t.find(" ", p)
+        return len(t) if e < 0 else e
+
+    def name_end(p: int, name: str) -> int:
+        e = spaced(p)
+        for word in name.split()[1:]:
+            stem = word.lower().replace("ё", "е")[: max(3, len(word) - 2)]
+            if (nxt := re.match(r"\s+", t[e:])) and t.startswith(stem, e + nxt.end()):
+                e = spaced(e + nxt.end())
+        return e
+
+    end = name_end(pos, name)
+    others = []
+    while m := re.match(r"\s+(?:или|либо)\s+(?:(?:из|от)\s+)?(?=\w)", t[end:]):
+        at = end + m.end()
+        w = re.match(r"[а-яе-]+", t[at:])
+        other = _place_at(text, t, at) or _capital(text, at) or (w and _known(w[0]))
+        if not other:
+            break
+        end = name_end(at, other)
+        others.append(other)
+    return end, others
+
+
 def _word_end(t: str, pos: int) -> int:
     m = re.compile(r"[\w-]+").match(t, pos)
     return m.end() if m else pos
@@ -797,6 +921,13 @@ def _adds_place(t: str, spans: list[tuple[int, int]], i: int, refused: list[bool
     )
 
 
+# #155: a clause after the comma that goes on with the refusal: «, тоже нет», «, не надо».
+CLAUSE_REFUSAL = (
+    r"\s*(?:(?:и\s+[\w-]+\s+)?(?:тоже|также)|нет\b"
+    r"|не\s+(?:хочу|хотим|хочется|надо|нужн\w*|подходит|подойд\w*|интересн\w*|нравится))"
+)
+
+
 def _wanted_pair(t: str, spans: list[tuple[int, int]], i: int) -> bool:
     """#151: «Не хочу в Египет, Турция или Кипр»: a nominative after the comma names the wish.
 
@@ -811,10 +942,16 @@ def _wanted_pair(t: str, spans: list[tuple[int, int]], i: int) -> bool:
         r"\s+(?:или|либо)\s+", t[spans[group[-1]][1] : spans[group[-1] + 1][0]]
     ):
         group.append(group[-1] + 1)
-    stop = SENTENCE_END.search(t, spans[group[-1]][1])
-    rest = t[spans[group[-1]][1] : stop.start() if stop else len(t)]
-    if len(group) < 2 or re.search(r"\b(?:тоже|также|нет|не)\b", rest):
+    last = spans[group[-1]][1]
+    stop = SENTENCE_END.search(t, last)
+    rest = t[last : stop.start() if stop else len(t)]
+    # The refusal ends at the next comma: «…Турция или Кипр, но не дороже 150 тысяч» (#155).
+    # «, тоже нет» still goes on with the refusal.
+    clause, comma, after = rest.partition(",")
+    if len(group) < 2 or re.search(r"\b(?:тоже|также|нет|не)\b", clause):
         return False  # «Турция, Кипр», «Турция или Кипр тоже»: the refused list goes on
+    if comma and re.match(CLAUSE_REFUSAL, after):
+        return False
     return any(re.match(r"[\w-]*[ая]\b", t[spans[j][0] :]) for j in group)
 
 
@@ -953,7 +1090,7 @@ OR_PAIR = re.compile(
 NOT_PAIR_PLACE = re.compile(
     r"(?:экскурс|музе|прогулк|шопинг|театр|ресторан|развлеч|отдых|поход|рыбалк|дайвинг|серфинг"
     r"|аквапарк|зоопарк|достопримеч|концерт|фестивал|природ|взросл|реб[её]н|дет[иейяь]|малыш"
-    r"|сын|доч|внук|семь)"
+    r"|сын|доч|внук|семь|лет(?:о|ом|у)\b|выходн|каникул|праздник)"
 )
 NAME_WORD = r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*"
 # The first words of two-word names outside the catalogue (lower, «е» for «ё»): «Новый Афон».
@@ -962,7 +1099,13 @@ NAME_LEADS = {
     "новый", "новая", "новое", "старый", "старая", "роза", "красная", "красный", "красное",
     "большой", "большая", "малый", "малая", "верхний", "великий", "белый", "белая", "черный",
     "золотой", "горный", "южный", "северный", "санта", "сан", "нью", "лас", "лос", "абу", "форт",
+    "шри", "нижний",
 }  # fmt: skip
+
+
+# The last words of names that start with a place: «Москва Сити», «Сочи Парк» (lower, #155).
+# A list: «Хочу в Турцию Аланья или Кемер» has a resort after a country.
+NAME_TAILS = {"сити", "парк", "арена", "плаза", "молл"}
 
 
 def _ordinary(word: str, low: str) -> bool:
@@ -1016,6 +1159,10 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
         def taken(s: int) -> bool:
             return any(hs <= s < he for hs, _, he in hits)  # inside «Нижний Новгород» too
 
+        def part_of_name(s: int) -> bool:
+            """The word starts a name of two words that the hit has not covered: «Нижний Тагил»."""
+            return any(hs <= s < he and " " in name for hs, name, he in hits)
+
         sure = [
             taken(s) or _known(w) or any(rx.fullmatch(t[s:e]) for _, rx in COUNTRY_RES)
             for s, e, w in words
@@ -1023,6 +1170,13 @@ def _or_pairs(text: str, t: str, hits: list) -> set[int]:
         if not any(sure):
             continue
         for side, (s, e, w) in enumerate(words):
+            prev = re.search(r"([А-ЯЁа-яё-]+) $", text[:s])
+            if (
+                side == 0
+                and prev
+                and (t[s:e] in NAME_TAILS or (part_of_name(prev.start(1)) and not _known(w)))
+            ):
+                continue  # «Москва Сити или Сочи»: «Сити» ends the name before it (#155)
             sides.add(s)
             if taken(s):
                 continue
@@ -1067,11 +1221,39 @@ def _transit_dropped(t: str, hits: list) -> list:
     return out or hits
 
 
+VIA_LIST = re.compile(r"\b[Чч]ерез\s+(?=[А-ЯЁ])")
+LIST_SEP = re.compile(r"\s*,\s*(?:и\s+)?|\s+и\s+")
+
+
+def _via_list(text: str, t: str, hits: list) -> None:
+    """«Через Ярославль, Кострому и Плёс» (#305): every known place of the list is a route stop.
+
+    One name after «через» stays as it is. Two or more known places are a list of stops: the ones
+    the other rules miss are added with the form of the name fixed. The list ends at the first name
+    that is no known place: «через Островок и Яндекс», «через Казань, Бюджет 100 тысяч»."""
+    for m in VIA_LIST.finditer(text):
+        items, pos = [], m.end()
+        while t[pos : pos + 1] != " " and (span := _capital_span(text, pos)):
+            if not (_known(span[0]) or span[0] in COUNTRIES or _place_at(text, t, pos)):
+                break
+            items.append((pos, *span))
+            sep = LIST_SEP.match(text, span[1])
+            if not sep or not text[sep.end() : sep.end() + 1].isupper():
+                break
+            pos = sep.end()
+        if len(items) < 2:
+            continue
+        for start, name, end in items:
+            if not any(hs <= start < he for hs, _, he in hits):
+                hits.append((start, name, end))
+
+
 # #381: a bare place closes a clause after a comma («Не боюсь летать, Бали») or follows «ради»
 # («но ради Бали готов»). Only a place of the catalogue counts (_catalog_word). The tail word
 # is a name as written, not a case form: «…, Милана» is a person, not «Милан». «не ради Турции»
 # names no place.
 TAIL_PLACE = re.compile(r",\s*([А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*)(?=\s*(?:[.!?;)\n]|$))")
+TAIL_LOWER = re.compile(r",\s*([а-яе]+(?:-[а-яе]+)*)(?=\s*(?:[.!?;)\n]|$))")
 FOR_PLACE = re.compile(r"(?<!\bне )\bради\s+([а-яе]+(?:-[а-яе]+)*)")
 
 
@@ -1087,26 +1269,62 @@ def _catalog_word(word: str) -> str | None:
     return country if country and any(p["main"] for p in catalog.by_country(country)) else None
 
 
+def _whole_word_hits(t: str, hits: list[tuple[int, str, int]]) -> list[tuple[int, str, int]]:
+    """A stem hit inside a longer word is the place of the whole word (TRAP-3, #538).
+
+    «Бакуриани» is not «Баку», «Байкальск» is not «Байкал», «Горно-Алтайск» is not «Алтай»."""
+    out = []
+    for s, name, e in hits:
+        word = next(
+            (w for w in re.finditer(r"[а-яе]+(?:-[а-яе]+)*", t) if w.start() <= s < w.end()), None
+        )
+        known = _known(word[0]) if word else None
+        out.append((word.start(), known, word.end()) if known and known != name else (s, name, e))
+    return out
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
     A place after a negation is no destination (#113). Returns the refused places and countries."""
-    for m in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
-        w = re.match(r"[а-яе-]+", t[m.end() :])
-        if re.search(r"устал\w*\s+$", t[: m.start()]):
+    not_from: list[tuple[int, int]] = []  # the spans of «не из X»: X is no destination
+    # «Санкт Петербурга» without the hyphen is one name; the length stays (#544)
+    text = re.sub(r"(?<![а-яёА-ЯЁ])([Сс]анкт) (?=[Пп]етербург)", r"\1-", text)
+    t = re.sub(r"(?<![а-яе])(санкт) (?=петербург)", r"\1-", t)
+    m = name = None  # the first «из/от» that names the origin
+    for mm in re.finditer(r"\b(?:из|от)\s+(?=\w)", t):
+        w = re.match(r"[а-яе-]+", t[mm.end() :])
+        if re.search(r"устал\w*\s+$", t[: mm.start()]):
             continue  # «устали от Турции» is a refusal, not an origin
-        if name := _place_at(text, t, m.end()) or _capital(text, m.end()) or (w and _known(w[0])):
-            break
-    else:
-        m = None
+        if neg := re.search(r"\bне\s+$", t[: mm.start()]):  # «не из Москвы, а из Кинешмы» (#504)
+            # #509 review: a refused city of two words («не из Нижнего Новгорода») is no destination
+            gone = _place_at(text, t, mm.end()) or _capital(text, mm.end()) or (w and _known(w[0]))
+            end = _origin_end(text, t, mm.end(), gone)[0] if gone else t.find(" ", mm.end())
+            end = len(t) if end < 0 else end
+            not_from.append((neg.start(), end))
+            # no origin, no destination; «не» goes too, else it negates the next place
+            t = t[: neg.start()] + " " * (end - neg.start()) + t[end:]
+            continue
+        # The origin is the first «из X»; «Из Москвы, а не из Питера» (#544) refuses a later one.
+        if m is None and (
+            n := _place_at(text, t, mm.end()) or _capital(text, mm.end()) or (w and _known(w[0]))
+        ):
+            m, name = mm, n
     if m:
         if home := catalog.respelled(name):
             name = home["name"]  # «Ебург» -> Екатеринбург (#274)
+        else:
+            name = _genitive_name(name)
         found["origin"] = name
-        end = t.find(" ", m.end())
-        end = len(t) if end < 0 else end
+        end, others = _origin_end(text, t, m.end(), name)
+        if others:
+            notes.append(
+                f"вылет: {name}; {', '.join(others)} — второй вариант вылета,"
+                " напишите, если вылет лучше оттуда"
+            )
         t = t[: m.start()] + " " * (end - m.start()) + t[end:]  # the origin is not a destination
     hits = [(m.start(), name, m.end()) for name, rx in PLACE_RES for m in rx.finditer(t)]
+    hits = _whole_word_hits(t, hits)
     hits += [(m.start(), name, m.end()) for name, rx in CAPITAL_PLACES for m in rx.finditer(text)]
     # Exact names and aliases only: «Мальдивы на неделю», but never «Кубик льда» (#386).
     start = len(t) - len(t.lstrip())
@@ -1136,11 +1354,28 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
             and (n := _known(m.group(1)))
         ):
             hits.append((m.start(1), n, m.end(1)))
+    _via_list(text, t, hits)
     tails = [m.span(1) for m in TAIL_PLACE.finditer(text)]
+    # «в Тайланд, пхукет»: after a country a lowercase place at the end counts too (#345).
+    lower_tails = {}  # span -> the country before the comma: the place must be of this country
+    for m in TAIL_LOWER.finditer(t):
+        if not text[m.start(1)].islower():
+            continue  # a capitalized name is TAIL_PLACE's: «в Таиланд, Вьетнам» is two countries
+        head = t[: m.start()]
+        for country, rx in COUNTRY_RES:
+            if any(c.end() == len(head) for c in rx.finditer(head)):
+                tails.append(m.span(1))
+                lower_tails[m.span(1)] = country
     for s, e in [*tails, *(m.span(1) for m in FOR_PLACE.finditer(t))]:  # «…, Бали», «ради Бали»
         taken = t[s] == " " or any(hs <= s < he for hs, _, he in hits)  # " ": the origin span
+        # «Ушуайя, Аргентина»: the country clarifies the first word, it is no second place (#391).
+        taken = taken or (s, e) in tails and _first_with_country(text, t, s)
         name = None if taken else _catalog_word(text[s:e])
         as_written = bool(name) and name.lower().replace("ё", "е") == t[s:e]
+        if name and (s, e) in lower_tails:
+            place = resolve_place(name)
+            if not place or place["country"] != lower_tails[(s, e)]:
+                continue  # «в Грузию, губа»: Губа is no place of Грузия
         if name and name not in PERSON_CITIES and (as_written or (s, e) not in tails):
             hits.append((s, name, e))
     # The leading country is a destination only alone and with a main place: «Россия, хочу в Сочи»
@@ -1169,9 +1404,19 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     refused_at = {s for s, n in zip(starts, neg, strict=True) if n}
     refused = list(dict.fromkeys(mentions[s][2] for s in starts if s in refused_at))
     dests = []
+    by_country_word: dict[str, str | None] = {}
     for s, name, _ in sorted(hits):
-        if s in refused_at or name == found.get("origin"):
+        if s in refused_at or name == found.get("origin") or any(a <= s < e for a, e in not_from):
             continue
+        # «Шри Ланка», «в Шри Ланку»: the country «Шри-Ланка» by its alias of two words (#155)
+        name = next(
+            (
+                c
+                for c, al in catalog.snapshot()["countries"].items()
+                if " " in name and name.lower() in al
+            ),
+            name,
+        )
         if s in pair_sides and name in COUNTRIES and (city := resolve_place(name)):
             name = city["name"]  # «Египет или Турция»: the city of the catalogue for the country
         place = resolve_place(name)
@@ -1188,8 +1433,17 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
                 continue
             notes.append(f"направление: «{place['name']}» исключена, вместо неё {alt}")
             name = alt
+        # The country word of the hit, if the hit is one: «Таиланд», and «египет» as Хургада.
+        via = mentions[s][2] if mentions[s][2] in COUNTRIES else None
         if name not in dests:
             dests.append(name)
+            by_country_word[name] = via
+        elif via is None:
+            by_country_word[name] = None
+    # A place inside a named country wins over the country (#345): «в Тайланд на Пхукет» is Пхукет,
+    # «в Египет в Дахаб» is Дахаб, not Хургада, the city of the catalogue for the word «Египет».
+    named = {p["country"] for d in dests if by_country_word[d] is None and (p := resolve_place(d))}
+    dests = [d for d in dests if by_country_word[d] not in named]
     if dests:
         found["destinations"] = dests
     return refused
@@ -1205,26 +1459,71 @@ def excluded_places(text: str) -> list[str]:
 ADJ_CASE = re.compile(r"(?:ую|юю|ой|ей|ого|его|ом|ем|ым|им|ая|яя|ый|ий|ое|ее)$")
 
 
+# «Краснодарский край», «Калининградской области»: the region of a known city (#306, TRAP-3)
+REGION_NEXT = re.compile(r" (?:кра[йяюе]|област[ьи]|побережь[еюя]|берег[ау]?)(?![а-яё])")
+
+
 def _capital_span(text: str, pos: int) -> tuple[str, int] | None:
     """A capitalized name: kept as written, «Грузию» -> «Грузия»; and where it ends in the text.
 
     Two capitalized words are one name when the first is an adjective: «Старую Ладогу» ->
     «Старая Ладога» (TRAP-3). The geocoder gets the whole name, not «Старую»."""
     m = re.match(r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*", text[pos:])
-    if not m or m.group(0).lower() in NOT_PLACES or re.match(MONTH, m.group(0).lower()):
+    if not m or re.match(MONTH, m.group(0).lower()):
         return None
     word = m.group(0)
     end = pos + m.end()
     low = word.lower().replace("ё", "е")
+    if low in NOT_PLACES and low not in NAME_LEADS:
+        return None
     country = next((c for c, rx in COUNTRY_RES if rx.fullmatch(low)), None)
     if known := _known(word) or country:  # «Египте» is Египет, not a new city
         return known, end
+    region = REGION_NEXT.match(text, end)
+    adj = region and re.match(r"(.+?)ск(?:ий|ая|ое|ом|ого|ой|ую)$", word)
+    if adj and (city := _known(adj.group(1))):  # «Краснодарский край» -> Краснодар (#306)
+        return city, region.end()
     second = re.compile(rf" ({NAME_WORD})(?![а-яё-])").match(text, end)
     if second and (ADJ_CASE.search(low) and len(low) > 3 or low in NAME_LEADS):
-        tail, tail_low = second.group(1), second.group(1).lower().replace("ё", "е")
-        if not (_ordinary(tail, tail_low) or NOT_CITY_END.search(tail_low) or _known(tail)):
+        tail = second.group(1)
+        if _name_tail_ok(tail) and not _known(tail):
             return name_candidates(f"{word} {tail}")[0], second.end()
+    if low in NOT_PLACES:
+        return None  # «Новый год»: «новый» alone is no place (#538)
     return _nominative(word), end
+
+
+def _genitive_name(name: str) -> str:
+    """«Нижнего Тагила» -> «Нижний Тагил», «Кинешмы» -> «Кинешма», «Сызрани» -> «Сызрань» (TRAP-3).
+
+    After «из» a name outside the catalogue is in the genitive: the geocoder asks the nominative
+    and the reply says it (#538, #544). A masculine name of an adjective and a noun, or a feminine
+    name of one word; any other name stays as written («Алматы» is in the catalogue)."""
+    lead, _, noun = name.partition(" ")
+    base = lead[:-3] if lead.endswith(("ого", "его")) else ""
+    nominative = {"нов": "ый", "стар": "ый", "нижн": "ий", "верхн": "ий", "велик": "ий"}.get(
+        base.lower()
+    )
+    if not noun:
+        return _feminine_nominative(name)
+    if not nominative or " " in noun or not _name_tail_ok(noun):
+        return name
+    if re.search(r"[аеоуэ]я$", noun):
+        return f"{base}{nominative} {noun[:-1]}й"  # «Уренгоя» -> «Уренгой»
+    if re.search(r"[бвгджзклмнпрстфхцчшщ]а$", noun):
+        return f"{base}{nominative} {noun[:-1]}"  # «Тагила» -> «Тагил»
+    return name
+
+
+def _feminine_nominative(name: str) -> str:
+    """«Кинешмы» -> «Кинешма», «Ухты» -> «Ухта», «Сызрани» -> «Сызрань»; a known name stays."""
+    if catalog.resolve(name) or not _name_tail_ok(name):
+        return name  # «Алматы», «Хельсинки»: the catalogue spells it so
+    if re.search(r"[бвгджзклмнпрстфхцчшщ]ы$", name):
+        return name[:-1] + "а"
+    if re.search(r"[нр]и$", name) and len(name) > 4:
+        return name[:-1] + "ь"  # «Рязани» -> «Рязань»; «Дели», «Тбилиси», «Хельсинки» stay
+    return name
 
 
 def _capital(text: str, pos: int) -> str | None:
@@ -1238,6 +1537,8 @@ def _nominative(word: str) -> str:
     Other endings stay: «Малибу», «Сан-Паулу» are no accusative. The geocoder asks the name as
     written first and then the nominative guesses (catalog.lookup_online, TRAP-3)."""
     word = re.sub(r"и[ию]$", "ия", word)
+    if re.search(r"[хл]ту$", word):
+        return word[:-1] + "а"  # «Ухту» -> «Ухта»; «Тарту», «Тимбукту», «Турку», «Баку» stay (#97)
     if re.search(r"[аеёиоуыэюя]ск[еу]$", word):
         return word[:-1] + "а"  # «Аляске» -> «Аляска»; «Иркутске» has a consonant before «ск»
     return re.sub(r"(ск|цк|зк|град|бург|город)(?:е|а|у|ом)$", r"\1", word)
@@ -2328,8 +2629,10 @@ def extract(
         found["modes"] = modes
     wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
     for m in LANDMARK_RE.finditer(text):  # #338: «отель у Технопарка»; cities are no landmark
-        if not _known(m.group(1)):
-            wishes.append(f"рядом: {m.group(1)}")
+        if not _known(m.group(1)) and not _is_destination(m.group(1), found):
+            adjective = m.group(1).lower().endswith(ADJ_ENDINGS)
+            noun = adjective and LANDMARK_NOUN_RE.match(text, m.end(1))
+            wishes.append(f"рядом: {m.group(1)}{noun.group(0) if noun else ''}")
     if m := BREAKFAST_FROM_RE.search(t):
         wishes.append(f"завтрак с {int(m.group(1)):02d}:{m.group(2) or '00'}")
     # #330: «20 ч в дороге», «в дороге до 10 часов», «дорога не дольше суток»

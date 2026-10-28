@@ -313,6 +313,22 @@ def test_place_abroad_named_twice_is_no_origin(store, again):
     s = r.plan.spec
     assert r.stage == "compare" and s.destinations == ["Анталия"]
     assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
+    # #453: the reply says it aloud, not only in the notes at the end
+    assert r.reply.startswith("Город вылета не назван — беру Москву.")
+
+
+def test_a_named_origin_after_the_same_place_question_gets_no_default_line(store):
+    """#453: «из Питера» answers the question: no «беру Москву»."""
+    first = say(store, ANTALYA_TRIP)
+    asked = say(store, "Анталья", first.session_id)
+    r = say(store, "из Питера", asked.session_id)
+    assert r.plan.spec.origin == "Санкт-Петербург"
+    assert "беру Москву" not in r.reply
+
+
+def test_a_plain_trip_with_moscow_named_gets_no_default_line(store):
+    r = say(store, "Анталья на 5 ночей в июле, двое, из Москвы")
+    assert "беру Москву" not in r.reply
 
 
 def test_place_abroad_reasked_then_a_city_goes_on(store):
@@ -367,17 +383,18 @@ def test_sea_place_abroad_without_a_trip_place_is_the_destination(store, answer)
     assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
 
 
-def test_country_on_the_origin_question_shows_its_places(store):
-    """#452: «Турция» to «Откуда?» on «тёплое море» shows the places of Турция (inspire),
-    not one plan for the whole country."""
+@pytest.mark.parametrize("country", ["Турция", "Египет", "Таиланд"])
+def test_country_on_the_origin_question_shows_its_places(store, country):
+    """#452: a country on «Откуда?» after «тёплое море» shows the places of the country
+    (inspire), not one plan for the whole country. «Египет» extracts as Хургада: still a country."""
     from api import catalog
 
     first = say(store, "Тёплое море в ноябре, недорого, двое взрослых")
-    r = say(store, "Турция", first.session_id)
+    r = say(store, country, first.session_id)
     assert r.stage == "inspire" and r.plan.spec.destinations == []
     names = [d.name for d in r.plan.destinations]
     assert len(names) >= 2
-    assert all(catalog.resolve(n)["country"] == "Турция" for n in names)
+    assert all(catalog.resolve(n)["country"] == country for n in names)
 
 
 def _only_turkey(r):

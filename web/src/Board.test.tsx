@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { Board, EarlierChoices, TripParams } from "./Board";
+import { Board, EarlierChoices, Price, TripParams } from "./Board";
 import type { ChatReply } from "./contracts";
 import { changeValue, localTime } from "./format";
 
@@ -91,12 +91,13 @@ suite("доска поездки", () => {
     }
   });
 
-  it("TRAP-7: цена реальных данных без пометки", () => {
+  it("TRAP-7: у цены реальных данных нет «синтетика», есть пометка источника (#547)", () => {
     const real = structuredClone(base);
     real.plan.offers = real.plan.offers.map((o) => ({ ...o, synthetic: false }));
     const doc = render(real);
     const row = [...doc.querySelectorAll("tr")].find((r) => r.textContent?.includes("Отель у Кремля"));
-    expect(row?.querySelector(".synth")).toBeNull();
+    expect(row?.querySelector(".synth:not(.synth-real)")).toBeNull();
+    expect(row?.querySelector(".synth-real")?.textContent).toBe("101hotels");
   });
 
   it("TRAP-1: плашка «без ИИ», когда модель недоступна", () => {
@@ -183,12 +184,29 @@ suite("доска поездки", () => {
     expect(changeValue("2026-12-11")).toBe("11.12.2026");
   });
 
-  it("ваучер: номер брони, позиции с offer_id, итог и пометка об имитации", () => {
+  it("ваучер: номер брони, названия позиций, итог и пометка об имитации", () => {
     const v = render(base).querySelector("[aria-label='Ваучер']")?.textContent ?? "";
     expect(v).toContain("OST-0001");
-    expect(v).toContain("x1");
+    expect(v).toContain("Ранний заезд");
     expect(v).toContain("2 500 ₽");
     expect(v).toContain("имитирован");
+  });
+
+  it("#549: внутренние offer_id не видны в тексте ваучера, таймлайна, корзины и вариантов", () => {
+    const ids = { h1: "h-ayt-s0-ROn-20261107-7n-2ac5", t1: "t-spb-kut-flight-202702100830-2a", x1: "x-1cfd00a6119a" };
+    let json = JSON.stringify(hotelBought);
+    for (const [short, long] of Object.entries(ids)) json = json.replaceAll(`"${short}"`, `"${long}"`);
+    const r = JSON.parse(json) as typeof hotelBought;
+    r.plan.issues[0].fixes.push("x-not-in-plan-0001"); // a fix outside the plan: no raw id either
+    r.plan.bundles[0].offer_ids.push("x-not-in-plan-0002");
+    const doc = render(r);
+    for (const label of ["Ваучер", "Таймлайн", "Корзина"]) {
+      expect(doc.querySelector(`[aria-label='${label}']`)).not.toBeNull();
+    }
+    const text = doc.body.textContent ?? "";
+    for (const id of [...Object.values(ids), "x-not-in-plan"]) expect(text).not.toContain(id);
+    expect(doc.querySelector("[aria-label='Ваучер']")?.textContent).toContain("Ранний заезд");
+    expect(doc.querySelector(`[data-offer-id='${ids.x1}']`)).not.toBeNull(); // the id stays a data attribute
   });
 
   it("#348: питомец и возраст детей — в «Гости» ваучера и в корзине", () => {
@@ -271,7 +289,36 @@ suite("доска поездки", () => {
     expect(real?.querySelector("button.primary")?.textContent).toBe(
       "Подтвердить бронь на 600 ₽ · оплата имитируется",
     );
-    expect(real?.querySelector(".synth")).toBeNull();
+    expect(real?.querySelector(".synth:not(.synth-real)")).toBeNull();
+  });
+
+  it("TRAP-7: реальная цена получает пометку источника, синтетическая остаётся «синтетика» (#547)", () => {
+    const r = structuredClone(hotelBought);
+    r.stage = "compare";
+    r.plan.offers = r.plan.offers.map((o) =>
+      o.kind === "hotel" || o.kind === "transport" ? { ...o, synthetic: false } : o,
+    );
+    const doc = render(r);
+    const chips = (label: string) =>
+      [...doc.querySelectorAll(`[aria-label='${label}'] td.cost .synth`)].map((c) => c.textContent);
+    const hotelChip = doc.querySelector("[aria-label='Сравнение отелей'] td.cost .synth");
+    expect(hotelChip?.textContent).toBe("101hotels");
+    expect(hotelChip?.classList.contains("synth-real")).toBe(true);
+    expect(hotelChip?.getAttribute("title")).toBe("итог по цене «от» 101hotels; питание и тариф — оценка");
+    expect(chips("Сравнение транспорта")).toEqual(["Авиасейлс"]);
+    // the transfer stays synthetic; its price keeps «синтетика»
+    r.plan.offers = r.plan.offers.map((o) => ({ ...o, synthetic: o.kind !== "hotel" && o.kind !== "transport" }));
+    const cart = render({ ...r, stage: "checkout", voucher: null }).querySelector("[aria-label='Корзина']");
+    expect([...(cart?.querySelectorAll(".synth") ?? [])].every((c) => c.textContent === "синтетика")).toBe(true);
+  });
+
+  it("TRAP-7: ваучер с реальным отелем называет источник у цены (#547)", () => {
+    const r = structuredClone(base);
+    r.voucher!.items = r.plan.offers.filter((o) => o.kind === "hotel").map((o) => ({ ...o, synthetic: false }));
+    const voucher = render(r).querySelector("[aria-label='Ваучер']");
+    const marks = [...(voucher?.querySelectorAll(".synth") ?? [])].map((c) => c.textContent);
+    expect(marks).toContain("101hotels");
+    expect(marks).not.toContain("синтетика");
   });
 
   it("направления: карточки с кнопкой выбора на этапе inspire", () => {
@@ -428,6 +475,34 @@ suite("доска поездки", () => {
     expect(o.main).toBe(o.at("Корзина"));
   });
 
+  it("#556: на сравнении без отеля в плане «Беру этот план» недоступна, подсказка — по фактам плана", () => {
+    const r = { ...structuredClone(base), stage: "compare" as const, voucher: null };
+    const buy = (x: ChatReply) => render(x).querySelector(".board > .next button.buy") as HTMLButtonElement;
+    const hint = (x: ChatReply) => render(x).querySelector(".no-hotel")?.textContent;
+    expect(buy(r).disabled).toBe(false);
+    expect(hint(r)).toBeUndefined();
+    r.plan.selected = r.plan.selected.filter((id) => id !== "h1");
+    // no pet, hotels in the list, none picked
+    r.plan.spec.pets = false;
+    expect(buy(r).disabled).toBe(true);
+    expect(buy(r).textContent).toBe("Беру этот план");
+    expect(buy(r).getAttribute("title")).toBe(hint(r));
+    expect(hint(r)).toBe("Выберите отель из списка");
+    // pet, the hotels are filtered out
+    r.plan.spec.pets = true;
+    expect(hint(r)).toContain("Без питомца");
+    // no pet, the hotel source gave no offer
+    const dry = structuredClone(r);
+    dry.plan.spec.pets = false;
+    dry.plan.offers = dry.plan.offers.filter((o) => o.kind !== "hotel");
+    expect(buy(dry).disabled).toBe(true);
+    expect(hint(dry)).toContain("источник отелей не ответил");
+    expect(hint(dry)).not.toContain("питомц");
+    expect(buy(dry).getAttribute("title")).not.toContain("питомц");
+    // another stage is not touched: «Положить в корзину» stays live
+    expect((render({ ...r, stage: "assemble" }).querySelector(".board > .next button.buy") as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("#450: варианты прошлого ответа остаются под ним, кнопки выбора живые", () => {
     const r = { ...structuredClone(base), stage: "inspire" as const, voucher: null };
     const doc = new DOMParser().parseFromString(
@@ -527,5 +602,13 @@ suite("доска поездки", () => {
     expect(html.querySelectorAll("details.earlier button[aria-label^='Выбрать направление']").length).toBe(old.plan.destinations.length);
     act(() => root.unmount());
     box.remove();
+  });
+});
+
+suite("#547: безопасный запасной чип", () => {
+  it("TRAP-7: Price без synthetic и без источника показывает «реальные данные», не голое число", () => {
+    const html = renderToStaticMarkup(<Price value={1000} synthetic={false} />);
+    expect(html).toContain("реальные данные");
+    expect(renderToStaticMarkup(<Price value={1000} />)).toContain("синтетика");
   });
 });
