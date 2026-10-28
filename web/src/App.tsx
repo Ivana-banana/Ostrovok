@@ -16,7 +16,14 @@ import {
   touchChat,
 } from "./history";
 import { Mascot, moodOf } from "./Mascot";
-import { SourceSwitches, type Switches, loadSwitches, requested, saveSwitches } from "./Sources";
+import {
+  type ModeState,
+  SourceSwitches,
+  type Switches,
+  loadSwitches,
+  requested,
+  saveSwitches,
+} from "./Sources";
 
 // stage: the stage after an agent message; the roadmap links a done step to it (#434).
 // An agent message keeps its reply: the choices under it stay after «ещё», a reload or a chat switch.
@@ -130,6 +137,8 @@ const userError = (e: unknown) =>
 
 const EMPTY_UI: Ui = { messages: [], removed: [] };
 
+export const MODE_RETRY_MS = 2000; // #534: the second GET /api/mode
+
 export function App() {
   const [text, setText] = useState("");
   const [reply, setReply] = useState<ChatReply | null>(null);
@@ -147,6 +156,7 @@ export function App() {
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
   const [switches, setSwitches] = useState<Switches>(loadSwitches); // #490: both off by default
   const [can, setCan] = useState<LlmMode>({ llm: false, real_data: false }); // /api/mode: keys in .env
+  const [mode, setMode] = useState<ModeState>("loading"); // /api/mode: failed after a retry (#534)
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const lastMsg = useRef<HTMLDivElement>(null); // the last agent message: its block sits under it
@@ -217,10 +227,28 @@ export function App() {
   }
 
   // The switches and the mode badge must not wait for the first reply.
+  // #534: one retry after MODE_RETRY_MS (the container may still start), then a visible note.
   useEffect(() => {
-    getMode()
-      .then((m) => setCan({ llm: m.llm === true, real_data: m.real_data === true }))
-      .catch((e) => console.warn("GET /api/mode failed; the switches stay off", e));
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ask = (retry: boolean) =>
+      getMode()
+        .then((m) => {
+          if (!live) return;
+          setCan({ llm: m.llm === true, real_data: m.real_data === true });
+          setMode("ok");
+        })
+        .catch((e) => {
+          console.warn("GET /api/mode failed", retry ? "; retrying" : "; the switches stay off", e);
+          if (!live) return;
+          if (retry) timer = setTimeout(() => ask(false), MODE_RETRY_MS);
+          else setMode("failed");
+        });
+    ask(true);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
   }, []);
 
   function switchSources(next: Switches) {
@@ -567,7 +595,7 @@ export function App() {
               Без ИИ — упрощённый режим
             </span>
           )}
-          <SourceSwitches on={switches} can={can} onChange={switchSources} />
+          <SourceSwitches on={switches} can={can} mode={mode} onChange={switchSources} />
           <details className="hint">
             <summary aria-label="Где хранятся чаты">
               <span className="qmark" aria-hidden="true">?</span>
