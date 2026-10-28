@@ -31,16 +31,39 @@ export function StagePills({ stage }: { stage: Stage | null }) {
   );
 }
 
-// While /api/chat answers: the mascot bobs and a travel verb changes every VERB_MS.
-export function Thinking() {
+// Routes of the paper plane in a 64×32 box; the plane flies nose first along the dash.
+export const ROUTES = [
+  "M4 26 Q32 -8 60 26",
+  "M2 18 C16 2 24 34 38 18 S56 4 62 18",
+  "M6 26 C6 2 58 2 58 26",
+  "M2 24 L62 8",
+];
+
+function Plane() {
+  const [d] = useState(() => ROUTES[Math.floor(Math.random() * ROUTES.length)]);
+  return (
+    <span className="route">
+      <svg className="path" viewBox="0 0 64 32">
+        <path d={d} />
+      </svg>
+      <svg className="plane" style={{ offsetPath: `path("${d}")` }} viewBox="-12 -12 24 24">
+        <path d="M11 0L-2 -2.5L-6 -10L-8.5 -10L-6 -2L-10 -1.5L-12 -5L-13 -5L-12 0L-13 5L-12 5L-10 1.5L-6 2L-8.5 10L-6 10L-2 2.5Z" />
+      </svg>
+    </span>
+  );
+}
+
+// While /api/chat answers: a tossed banana or a paper plane (they take turns between answers)
+// and a travel verb that changes every VERB_MS.
+export function Thinking({ variant = "banana" }: { variant?: "banana" | "plane" }) {
   const [i, setI] = useState(() => Math.floor(Math.random() * VERBS.length));
   useEffect(() => {
     const t = setInterval(() => setI((n) => (n + 1) % VERBS.length), VERB_MS);
     return () => clearInterval(t);
   }, []);
   return (
-    <div className="think" aria-label="Агент думает">
-      <Mascot size={30} state="thinking" />
+    <div className={`think ${variant}`} aria-label="Агент думает">
+      {variant === "plane" ? <Plane /> : <Mascot size={30} state="thinking" />}
       <span>
         <span className="verb">{VERBS[i]}</span>
         <span className="dots" />

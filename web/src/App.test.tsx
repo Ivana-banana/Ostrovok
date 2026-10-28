@@ -97,6 +97,26 @@ suite("приложение", () => {
     expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
   });
 
+  it("индикатор «думает» чередуется между ответами: банан, потом самолётик", async () => {
+    let answer: (v: Response) => void = () => {};
+    vi.stubGlobal("fetch", () => new Promise<Response>((r) => (answer = r)));
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    expect(box.querySelector(".think.banana .mascot.thinking")).not.toBeNull();
+    await act(async () => answer(json(200, checkoutStage)));
+    await flush();
+    const area = box.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "Ещё вариант");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("Отправить");
+    expect(box.querySelector(".think.plane .route")).not.toBeNull();
+    await act(async () => answer(json(200, checkoutStage)));
+    await flush();
+  });
+
   it("неизвестная сессия: начинаем заново без ошибки", async () => {
     localStorage.setItem(SESSION_KEY, "gone");
     await mount();
