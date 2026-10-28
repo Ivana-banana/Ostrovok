@@ -1,22 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  ApiError,
-  cartAction,
-  chat,
-  checkout,
-  getMode,
-  getSession,
-} from "./api";
+import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
 import { Board, TripParams } from "./Board";
 import { PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
-import {
-  AgentText,
-  Roadmap,
-  STEPS,
-  StepCaption,
-  Thinking,
-  stepOf,
-} from "./Chat";
+import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
 import type { ChatReply, Guest, Offer, Stage } from "./contracts";
 import { SOURCES, brief, cartLine, describe, withoutNoAi } from "./format";
 import {
@@ -118,9 +104,7 @@ function saveUi(sid: string, ui: Ui) {
 }
 
 const userError = (e: unknown) =>
-  e instanceof ApiError
-    ? e.message
-    : "Что-то пошло не так. Попробуйте ещё раз.";
+  e instanceof ApiError ? e.message : "Что-то пошло не так. Попробуйте ещё раз.";
 
 const EMPTY_UI: Ui = { messages: [], removed: [] };
 
@@ -135,10 +119,7 @@ export function App() {
   const [chats, setChats] = useState<ChatEntry[]>(loadChats);
   const [drawer, setDrawer] = useState(false);
   const [road, setRoad] = useState(false); // the roadmap sheet below 1100 px
-  const [renaming, setRenaming] = useState<{
-    id: string;
-    title: string;
-  } | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [query, setQuery] = useState("");
   const [thinking, setThinking] = useState(false);
   const [typing, setTyping] = useState<number | null>(null); // index of the message being typed
@@ -170,11 +151,7 @@ export function App() {
 
   // Opens a saved chat: the server keeps the last reply, the browser keeps the messages.
   // prev: the chat on the screen before; it comes back when the new one does not open.
-  async function load(
-    id: string,
-    failText: string,
-    prev?: { reply: ChatReply | null; ui: Ui },
-  ) {
+  async function load(id: string, failText: string, prev?: { reply: ChatReply | null; ui: Ui }) {
     const no = ++loadNo.current;
     setRestoring(true);
     setError(null);
@@ -191,10 +168,7 @@ export function App() {
         }
         const gone = chatsNow.current.find((c) => c.session_id === id);
         editChats((list) => removeChat(list, id));
-        if (gone)
-          setNote(
-            `Чат «${gone.title}» больше не хранится на сервере. Убрал его из списка.`,
-          );
+        if (gone) setNote(`Чат «${gone.title}» больше не хранится на сервере. Убрал его из списка.`);
         return;
       }
       const saved = loadUi(id);
@@ -207,11 +181,7 @@ export function App() {
       setTyping(null);
       setUi({ ...saved, messages });
       const first = saved.messages.find((m) => m.role === "user")?.text ?? "";
-      editChats((list) =>
-        list.some((c) => c.session_id === id)
-          ? list
-          : touchChat(list, id, first),
-      );
+      editChats((list) => (list.some((c) => c.session_id === id) ? list : touchChat(list, id, first)));
     } catch (e) {
       if (no !== loadNo.current) return;
       setError(`${failText} ${userError(e)}`);
@@ -229,12 +199,7 @@ export function App() {
   useEffect(() => {
     getMode()
       .then((m) => setHealthNoAi(m.llm === false))
-      .catch((e) =>
-        console.warn(
-          "GET /api/mode failed; the badge waits for the first reply",
-          e,
-        ),
-      );
+      .catch((e) => console.warn("GET /api/mode failed; the badge waits for the first reply", e));
   }, []);
 
   // Reload restores the last open chat.
@@ -258,8 +223,7 @@ export function App() {
   // A new user message: the end of the chat, where the agent will answer.
   useEffect(() => {
     const last = ui.messages.at(-1);
-    if (last?.role === "agent")
-      lastMsg.current?.scrollIntoView?.({ block: "start" });
+    if (last?.role === "agent") lastMsg.current?.scrollIntoView?.({ block: "start" });
     else end.current?.scrollIntoView?.({ block: "end" });
   }, [ui.messages.length]);
 
@@ -269,10 +233,7 @@ export function App() {
     setBusy(true);
     setError(null);
     setNote(null);
-    const withUser = {
-      ...ui,
-      messages: [...ui.messages, { role: "user" as const, text: m }],
-    };
+    const withUser = { ...ui, messages: [...ui.messages, { role: "user" as const, text: m }] };
     setUi(withUser);
     setThinking(true);
     try {
@@ -282,13 +243,7 @@ export function App() {
       setNoAi(!r.llm);
       if (motionOk()) setTyping(withUser.messages.length);
       update(
-        {
-          ...withUser,
-          messages: [
-            ...withUser.messages,
-            { role: "agent", text: describe(r), stage: r.stage },
-          ],
-        },
+        { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage }] },
         r.session_id,
       );
       const first = withUser.messages.find((x) => x.role === "user")?.text ?? m;
@@ -308,11 +263,7 @@ export function App() {
     setError(null);
     const id = reply.session_id;
     try {
-      let cart = await cartAction({
-        session_id: id,
-        action,
-        offer_id: offerId,
-      });
+      let cart = await cartAction({ session_id: id, action, offer_id: offerId });
       const item =
         reply.cart.items.find((o) => o.offer_id === offerId) ??
         reply.plan.offers.find((o) => o.offer_id === offerId);
@@ -322,19 +273,13 @@ export function App() {
       const rest = ui.removed.filter((o) => o.offer_id !== offerId);
       let removed = rest;
       if (action === "remove" && item) {
-        const own = extras(reply.cart.items).filter(
-          (o) => !rest.some((r) => r.offer_id === o.offer_id),
-        );
+        const own = extras(reply.cart.items).filter((o) => !rest.some((r) => r.offer_id === o.offer_id));
         removed = [...rest, item, ...own];
       } else if (action === "add") {
         const again = extras(rest);
         try {
           for (const x of again) {
-            cart = await cartAction({
-              session_id: id,
-              action: "add",
-              offer_id: x.offer_id,
-            });
+            cart = await cartAction({ session_id: id, action: "add", offer_id: x.offer_id });
           }
           removed = rest.filter((o) => !again.includes(o));
         } catch (e) {
@@ -345,18 +290,7 @@ export function App() {
       const fresh = await getSession(id).catch(() => null);
       if (!fresh) setError(STALE_PLAN);
       // The old chat line with the cart sum is stale now: say the real count and total.
-      update({
-        ...ui,
-        removed,
-        messages: [
-          ...ui.messages,
-          {
-            role: "agent",
-            text: cartLine(cart),
-            stage: (fresh ?? reply).stage,
-          },
-        ],
-      });
+      update({ ...ui, removed, messages: [...ui.messages, { role: "agent", text: cartLine(cart), stage: (fresh ?? reply).stage }] });
       setReply({ ...(fresh ?? reply), cart });
       editChats((list) => touchChat(list, id, ""));
     } catch (e) {
@@ -381,10 +315,7 @@ export function App() {
       if (!fresh?.voucher) setError(STALE_PLAN);
       setReply(fresh?.voucher ? fresh : { ...reply, stage: "booked", voucher });
       const text = `Бронь ${voucher.booking_id} оформлена. ${voucher.simulated ? "Оплата имитирована." : "Оплата принята."}`;
-      update({
-        ...ui,
-        messages: [...ui.messages, { role: "agent", text, stage: "booked" }],
-      });
+      update({ ...ui, messages: [...ui.messages, { role: "agent", text, stage: "booked" }] });
       editChats((list) => touchChat(list, id, ""));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -442,30 +373,16 @@ export function App() {
   // A done step links to the first answer after which the trip was past it.
   const doneAt = STEPS.map((_, i) => {
     const n = ui.messages.findIndex(
-      (m) =>
-        m.role === "agent" &&
-        m.stage &&
-        (stepOf(m.stage) > i ||
-          (i === STEPS.length - 1 && m.stage === "booked")),
+      (m) => m.role === "agent" && m.stage && (stepOf(m.stage) > i || (i === STEPS.length - 1 && m.stage === "booked")),
     );
     return n < 0 ? null : n;
   });
   const jump = (n: number) => {
     setRoad(false);
-    document
-      .querySelector(`[data-msg="${n}"]`)
-      ?.scrollIntoView?.({
-        block: "start",
-        behavior: motionOk() ? "smooth" : "auto",
-      });
+    document.querySelector(`[data-msg="${n}"]`)?.scrollIntoView?.({ block: "start", behavior: motionOk() ? "smooth" : "auto" });
   };
-  const cls = ["app", drawer && "drawer-open", road && "road-open"]
-    .filter(Boolean)
-    .join(" ");
-  const synthetic =
-    !reply ||
-    !reply.plan.offers.length ||
-    reply.plan.offers.some((o) => o.synthetic);
+  const cls = ["app", drawer && "drawer-open", road && "road-open"].filter(Boolean).join(" ");
+  const synthetic = !reply || !reply.plan.offers.length || reply.plan.offers.some((o) => o.synthetic);
   const groups = groupChats(filterChats(chats, query));
   const scroll = () => end.current?.scrollIntoView?.({ block: "end" });
   // The cards of the current stage under the last answer; hidden while the agent thinks or types.
@@ -478,13 +395,7 @@ export function App() {
               <p>{q.text}</p>
               <div className="chips">
                 {q.options.map((o) => (
-                  <button
-                    key={o}
-                    type="button"
-                    className="chip"
-                    disabled={busy}
-                    onClick={() => send(o)}
-                  >
+                  <button key={o} type="button" className="chip" disabled={busy} onClick={() => send(o)}>
                     {o}
                   </button>
                 ))}
@@ -497,9 +408,7 @@ export function App() {
         reply={reply}
         busy={busy}
         removed={ui.removed.filter(
-          (o) =>
-            o.kind !== "extra" ||
-            !ui.removed.some((p) => p.offer_id === o.for_offer_id),
+          (o) => o.kind !== "extra" || !ui.removed.some((p) => p.offer_id === o.for_offer_id),
         )}
         onSend={send}
         onCart={onCart}
@@ -533,12 +442,7 @@ export function App() {
             ✕
           </button>
         </div>
-        <button
-          type="button"
-          className="newchat"
-          onClick={newChat}
-          disabled={busy}
-        >
+        <button type="button" className="newchat" onClick={newChat} disabled={busy}>
           ＋ Новый чат
         </button>
         {chats.length > 0 && (
@@ -572,12 +476,7 @@ export function App() {
                             aria-label="Название чата"
                             autoFocus
                             value={renaming.title}
-                            onChange={(e) =>
-                              setRenaming({
-                                id: c.session_id,
-                                title: e.target.value,
-                              })
-                            }
+                            onChange={(e) => setRenaming({ id: c.session_id, title: e.target.value })}
                             onBlur={() => finishRename(true)}
                             onKeyDown={(e) => {
                               if (e.key === "Escape") {
@@ -603,9 +502,7 @@ export function App() {
                             type="button"
                             className="icon"
                             aria-label={`Переименовать чат «${c.title}»`}
-                            onClick={() =>
-                              setRenaming({ id: c.session_id, title: c.title })
-                            }
+                            onClick={() => setRenaming({ id: c.session_id, title: c.title })}
                           >
                             ✎
                           </button>
@@ -626,12 +523,8 @@ export function App() {
               </ul>
             </div>
           ))}
-          {!chats.length && (
-            <p className="side-empty">Здесь появятся ваши поездки.</p>
-          )}
-          {chats.length > 0 && !groups.length && (
-            <p className="side-empty">Не нашёл чатов по запросу.</p>
-          )}
+          {!chats.length && <p className="side-empty">Здесь появятся ваши поездки.</p>}
+          {chats.length > 0 && !groups.length && <p className="side-empty">Не нашёл чатов по запросу.</p>}
         </nav>
         <div className="foot">
           {badgeNoAi && (
@@ -643,20 +536,8 @@ export function App() {
           <span>Список чатов хранится только в этом браузере.</span>
         </div>
       </aside>
-      {drawer && (
-        <div
-          className="backdrop"
-          aria-hidden="true"
-          onClick={() => setDrawer(false)}
-        />
-      )}
-      {road && (
-        <div
-          className="backdrop road-backdrop"
-          aria-hidden="true"
-          onClick={() => setRoad(false)}
-        />
-      )}
+      {drawer && <div className="backdrop" aria-hidden="true" onClick={() => setDrawer(false)} />}
+      {road && <div className="backdrop road-backdrop" aria-hidden="true" onClick={() => setRoad(false)} />}
       <section className="main" aria-label="Чат">
         <header className="top">
           <button
@@ -671,16 +552,11 @@ export function App() {
           </button>
           <h1 title={current?.title}>{current?.title ?? "Новая поездка"}</h1>
         </header>
-        <StepCaption
-          stage={reply?.stage ?? null}
-          onOpen={() => setRoad(true)}
-        />
+        <StepCaption stage={reply?.stage ?? null} onOpen={() => setRoad(true)} />
         {reply && (
           <TripParams
             spec={reply.plan.spec}
-            locked={
-              busy || reply.stage === "clarify" || reply.stage === "booked"
-            }
+            locked={busy || reply.stage === "clarify" || reply.stage === "booked"}
             onSend={send}
           />
         )}
@@ -713,17 +589,10 @@ export function App() {
                     role={i === lastAgent ? "status" : undefined}
                     aria-busy={typing === i || undefined}
                   >
-                    <Mascot
-                      size={30}
-                      state={i === lastAgent ? moodOf(reply, !!error) : "idle"}
-                    />
+                    <Mascot size={30} state={i === lastAgent ? moodOf(reply, !!error) : "idle"} />
                     <div className="b">
                       <AgentText
-                        text={
-                          badgeNoAi
-                            ? withoutNoAi(brief(m.text, i === lastAgent))
-                            : brief(m.text, i === lastAgent)
-                        }
+                        text={badgeNoAi ? withoutNoAi(brief(m.text, i === lastAgent)) : brief(m.text, i === lastAgent)}
                         synthetic={synthetic}
                         typing={typing === i}
                         onTick={scroll}
@@ -778,11 +647,7 @@ export function App() {
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
-                if (
-                  e.key === "Enter" &&
-                  !e.shiftKey &&
-                  !e.nativeEvent.isComposing
-                ) {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   void send(text);
                 }
@@ -798,9 +663,7 @@ export function App() {
               ↑
             </button>
           </div>
-          <p className="composer-hint">
-            Цены и рейсы — синтетика. Оплата имитирована.
-          </p>
+          <p className="composer-hint">Цены и рейсы — синтетика. Оплата имитирована.</p>
         </form>
       </section>
       <aside id="roadmap" className="roadmap" aria-label="Путь поездки">
@@ -820,25 +683,21 @@ export function App() {
           {/* the attribution stays one click away (ODbL), the panel stays quiet */}
           <details>
             <summary>
-              Данные{" "}
-              <span className="qmark" aria-hidden="true">
-                ?
-              </span>
+              Данные <span className="qmark" aria-hidden="true">?</span>
             </summary>
-            {SOURCES.map((x) => (
-              <span key={x.name}>
-                {x.text}, лицензия{" "}
-                <a href={x.url} target="_blank" rel="noreferrer">
-                  {x.licence}
-                </a>
-                .
-              </span>
-            ))}
-            <span>
-              Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне
-              снимка OSM — тоже. Климат и время в пути — оценки команды. Оплата
-              имитируется.
+          {SOURCES.map((x) => (
+            <span key={x.name}>
+              {x.text}, лицензия{" "}
+              <a href={x.url} target="_blank" rel="noreferrer">
+                {x.licence}
+              </a>
+              .
             </span>
+          ))}
+          <span>
+            Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже. Климат и
+            время в пути — оценки команды. Оплата имитируется.
+          </span>
           </details>
         </footer>
       </aside>

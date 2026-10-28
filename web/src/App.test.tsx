@@ -404,7 +404,7 @@ suite("приложение", () => {
     expect(chips).toEqual(["1. отмена", "2. цена"]);
   });
 
-  it("подвал: атрибуция OpenStreetMap (ODbL) видна и без поездки", async () => {
+  it("подвал: атрибуция OpenStreetMap (ODbL) есть и без поездки, под «Данные ?» в один клик", async () => {
     await mount();
     const foot = box.querySelector("footer[aria-label='Источники данных']");
     expect(foot?.textContent).toContain("© участники OpenStreetMap");
