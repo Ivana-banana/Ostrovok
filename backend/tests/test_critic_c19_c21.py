@@ -66,7 +66,9 @@ def test_C19_moscow_is_not_lost_silently(store):
     assert "Москва" in r.reply
     hotels = {o.city for o in r.plan.offers if o.kind == "hotel"}
     # Either the whole route, or one city named as such with a question
-    assert hotels >= {"Санкт-Петербург", "Москва"} or (r.questions and "Не вошло: Москва" in r.reply)
+    assert hotels >= {"Санкт-Петербург", "Москва"} or (
+        r.questions and "Не вошло: Москва" in r.reply
+    )
 
 
 # C20

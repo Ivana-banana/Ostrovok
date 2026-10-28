@@ -1413,9 +1413,7 @@ _EN_MONTH = "|".join(sorted(MONTHS_EN, key=len, reverse=True))
 _EN_DAY = r"(\d{1,2})(?:st|nd|rd|th)?"
 _EN_TO = r"\s*(?:[-–—]|to|till|until)\s*"
 # «20 November», «20th of November», «20-23 November», «from 20 to 23 November»
-EN_DAY_MONTH_RE = re.compile(
-    rf"\b{_EN_DAY}(?:{_EN_TO}{_EN_DAY})?\s+(?:of\s+)?({_EN_MONTH})\b"
-)
+EN_DAY_MONTH_RE = re.compile(rf"\b{_EN_DAY}(?:{_EN_TO}{_EN_DAY})?\s+(?:of\s+)?({_EN_MONTH})\b")
 # «November 20», «November 20 - 23»; a number of nights or guests is no day: «may 5 nights»
 EN_MONTH_DAY_RE = re.compile(
     rf"\b({_EN_MONTH})\s+(?:the\s+)?{_EN_DAY}(?:{_EN_TO}{_EN_DAY})?\b"
