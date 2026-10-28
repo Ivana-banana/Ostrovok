@@ -2401,3 +2401,21 @@ button.param.assumed {
     margin-left: 0;
   }
 }
+
+/* «Показать ещё» under the destination cards: a secondary button, not the «Подробнее» panel (#451) */
+.more-dests {
+  display: block;
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+  font-size: var(--fs-s);
+}
+
+.more-dests:hover:not(:disabled) {
+  background: var(--chip);
+}

@@ -231,11 +231,12 @@ function destTags(d: Destination, all: Destination[], budget: number | null) {
   return tags;
 }
 
-export function Destinations({ plan, stage, busy, onSend }: {
+export function Destinations({ plan, stage, busy, onSend, more = true }: {
   plan: Plan;
   stage: Stage;
   busy: boolean;
   onSend: (t: string) => void;
+  more?: boolean; // false in an older answer: «ещё» is understood only in the current block
 }) {
   return (
     <section className="dests" aria-label="Направления">
@@ -298,8 +299,8 @@ export function Destinations({ plan, stage, busy, onSend }: {
         })}
       </div>
       {/* #451: the next places of the same pool, without the shown ones (api/model.py MORE_RE) */}
-      {stage === "inspire" && (
-        <button type="button" className="more" disabled={busy} onClick={() => onSend("ещё")}>
+      {stage === "inspire" && more && (
+        <button type="button" className="more-dests" disabled={busy} onClick={() => onSend("ещё")}>
           Показать ещё
         </button>
       )}
@@ -896,7 +897,7 @@ export function EarlierChoices({ reply, current, busy, onSend }: {
       </summary>
       {stale && <p className="muted">План изменился — выберите в текущем блоке.</p>}
       {plan.destinations.length > 0 && (
-        <Destinations plan={plan} stage={destLive ? stage : "booked"} busy={busy} onSend={onSend} />
+        <Destinations plan={plan} stage={destLive ? stage : "booked"} busy={busy} onSend={onSend} more={false} />
       )}
       <Hotels plan={plan} stage={rowsLive ? stage : "booked"} busy={busy} onSend={onSend} />
       <Transport plan={plan} stage={rowsLive ? stage : "booked"} busy={busy} onSend={onSend} />

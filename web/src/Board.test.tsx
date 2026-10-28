@@ -270,7 +270,7 @@ suite("доска поездки", () => {
 
   it("#451: под карточками направлений — «Показать ещё», только на этапе inspire", () => {
     const more = (stage: ChatReply["stage"]) =>
-      render({ ...base, stage, voucher: null }).querySelector("[aria-label='Направления'] > button.more");
+      render({ ...base, stage, voucher: null }).querySelector("[aria-label='Направления'] > button.more-dests");
     expect(more("inspire")?.textContent).toBe("Показать ещё");
     expect(more("compare")).toBeNull();
   });
@@ -424,6 +424,8 @@ suite("доска поездки", () => {
     const d = doc.querySelector("details.earlier");
     expect(d?.hasAttribute("open")).toBe(false);
     expect(d?.querySelectorAll("button[aria-label^='Выбрать направление']").length).toBe(r.plan.destinations.length);
+    // «ещё» is understood only in the current block: an older block has no such button
+    expect(doc.querySelector("button.more-dests")).toBeNull();
     const booked = renderToStaticMarkup(<EarlierChoices reply={{ ...r, stage: "booked" }} current={r} busy={false} onSend={noop} />);
     expect(booked).toBe("");
   });
