@@ -76,6 +76,7 @@ make demo     # собирает web и поднимает http://localhost:8080
 |---|---|
 | `/` | UI: чат и доска поездки |
 | `/health`, `/api/health` | `200`, `{"status":"ok"}` |
+| `GET /api/mode` | `200`, `{"llm": bool}`: есть ли модель. Без неё UI показывает «Без ИИ» ещё до первого сообщения |
 | `POST /api/chat` | сообщение `{session_id?, message}` → ответ: этап, текст, вопросы, план, корзина, ваучер, флаг `llm` |
 | `GET /api/session/{id}` | восстановить сессию |
 | `POST /api/cart` | `{session_id, action: add|remove, offer_id}` |

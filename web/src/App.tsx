@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, cartAction, chat, checkout, getSession } from "./api";
+import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
 import { Board, TripParams } from "./Board";
 import { PRODUCT_LINE, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, StagePills, Thinking } from "./Chat";
 import type { ChatReply, Guest, Offer } from "./contracts";
-import { SOURCES, brief, cartLine, describe } from "./format";
+import { SOURCES, brief, cartLine, describe, withoutNoAi } from "./format";
 import {
   type ChatEntry,
   filterChats,
@@ -122,6 +122,7 @@ export function App() {
   const [thinking, setThinking] = useState(false);
   const [typing, setTyping] = useState<number | null>(null); // index of the message being typed
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
+  const [healthNoAi, setHealthNoAi] = useState(false); // /api/mode says no model: known before the first reply
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const lastMsg = useRef<HTMLDivElement>(null); // the last agent message: its block sits under it
@@ -191,6 +192,13 @@ export function App() {
       if (no === loadNo.current) setRestoring(false);
     }
   }
+
+  // The mode badge must not wait for the first reply.
+  useEffect(() => {
+    getMode()
+      .then((m) => setHealthNoAi(m.llm === false))
+      .catch((e) => console.warn("GET /api/mode failed; the badge waits for the first reply", e));
+  }, []);
 
   // Reload restores the last open chat.
   useEffect(() => {
@@ -359,6 +367,7 @@ export function App() {
 
   const lastAgent = ui.messages.map((m) => m.role).lastIndexOf("agent");
   const asked = ui.messages.filter((m) => m.role === "user").length; // the thinking banana and plane take turns
+  const badgeNoAi = reply ? noAi : healthNoAi; // the «Без ИИ» badge of the sidebar (TRAP-1)
   const cls = ["app", drawer && "drawer-open"].filter(Boolean).join(" ");
   const synthetic = !reply || !reply.plan.offers.length || reply.plan.offers.some((o) => o.synthetic);
   const groups = groupChats(filterChats(chats, query));
@@ -503,7 +512,7 @@ export function App() {
           {chats.length > 0 && !groups.length && <p className="side-empty">Не нашёл чатов по запросу.</p>}
         </nav>
         <div className="foot">
-          {noAi && (
+          {badgeNoAi && (
             <span className="badge-noai">
               <i />
               Без ИИ — упрощённый режим
@@ -566,7 +575,7 @@ export function App() {
                     <Mascot size={30} state={i === lastAgent && reply?.stage === "booked" ? "happy" : "idle"} />
                     <div className="b">
                       <AgentText
-                        text={brief(m.text)}
+                        text={badgeNoAi ? withoutNoAi(brief(m.text)) : brief(m.text)}
                         synthetic={synthetic}
                         typing={typing === i}
                         onTick={scroll}

@@ -4,6 +4,7 @@ import type {
   ChatReply,
   ChatRequest,
   CheckoutRequest,
+  LlmMode,
   Voucher,
 } from "./contracts";
 
@@ -61,6 +62,11 @@ export async function getSession(id: string): Promise<ChatReply | null> {
     if (e instanceof ApiError && e.status === 404) return null;
     throw e;
   }
+}
+
+// Known before the first reply: the "Без ИИ" badge must not wait for a chat message.
+export function getMode(): Promise<LlmMode> {
+  return call("GET", "/api/mode");
 }
 
 export function cartAction(a: CartAction): Promise<Cart> {

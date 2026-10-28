@@ -5,7 +5,10 @@ T12 inspiration, T14 eval.
 
 Routes: POST /api/chat (ChatRequest -> ChatReply), GET /api/session/{session_id} -> ChatReply,
 POST /api/cart (CartAction -> Cart), POST /api/checkout (CheckoutRequest -> Voucher;
-409 when the total differs from the cart or the booking provider refuses).
+409 when the total differs from the cart or the booking provider refuses),
+GET /api/mode -> LlmMode (known before the first reply; consumers: web/src/api.ts getMode,
+web/src/App.tsx, web/e2e/noai-badge.spec.ts, backend/tests/test_api.py). GET /health stays
+exactly {"status": "ok"} (task/rules.md): the LLM mode lives only in /api/mode.
 
 Money: whole roubles for everything (all guests, all nights, taxes included). Time: ISO 8601
 with a time zone, local to the place of the event. Only providers write prices and times
@@ -249,6 +252,10 @@ class ChatReply(BaseModel):
     cart: Cart
     voucher: Voucher | None = None
     llm: bool  # False: rule-based mode without a model (TRAP-1)
+
+
+class LlmMode(BaseModel):
+    llm: bool  # False: rule-based mode without a model (TRAP-1); GET /api/mode
 
 
 class CartAction(BaseModel):

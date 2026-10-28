@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 import type { ChatReply } from "./contracts";
-import { brief, browserTime, describe, fieldLabel, guestsText, movePriority, priorityMessage, yearsText } from "./format";
+import { brief, browserTime, describe, withoutNoAi, fieldLabel, guestsText, movePriority, priorityMessage, yearsText } from "./format";
 
 const reply = (llm: boolean): ChatReply => ({
   session_id: "s",
@@ -154,9 +154,9 @@ suite("короткий текст агента: списки показаны �
     ]);
   });
 
-  it("вдохновение: заголовок остаётся строкой-итогом, строк направлений нет", () => {
+  it("вдохновение: вместо списка направлений — одна строка с их числом", () => {
     expect(brief(INSPIRE).split("\n")).toEqual([
-      "Подходящие направления (цены, климат и время в пути — оценка, синтетика).",
+      "Нашёл 2 направления — выберите карточку ниже.",
       "Допущения: возраст ребёнка: 7 лет (возраст не назван); откуда: Москва (город вылета не назван).",
       "Напишите номер или название направления.",
     ]);
@@ -173,6 +173,19 @@ suite("короткий текст агента: списки показаны �
     const text = "1. Корстон, Казань — 5★, рейтинг 9.0, RO, невозвратный — 30 500 ₽\nБронь OST-1 оформлена.";
     expect(brief(text)).toBe(text);
     expect(brief("Бронь оформлена.")).toBe("Бронь оформлена.");
+  });
+
+  it("число направлений в строке-итоге со словом в нужной форме", () => {
+    const rows = (n: number) =>
+      [INSPIRE.split("\n")[0], ...Array.from({ length: n }, (_, i) => `${i + 1}. Сочи (Россия) — от 1 ₽ на 2 чел., в пути 2 ч.`)].join("\n");
+    expect(brief(rows(1))).toBe("Нашёл 1 направление — выберите карточку ниже.");
+    expect(brief(rows(5))).toBe("Нашёл 5 направлений — выберите карточку ниже.");
+  });
+
+  it("TRAP-1: пометка «без ИИ» снимается с текста, только когда её показывает значок", () => {
+    const text = describe(reply(false));
+    expect(withoutNoAi(text)).toBe("e");
+    expect(withoutNoAi("e")).toBe("e");
   });
 
   it("строки после списка снова видны; пустой итог — исходный текст", () => {

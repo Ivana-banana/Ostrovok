@@ -125,15 +125,29 @@ suite("приложение", () => {
     expect(box.textContent).toContain("Куда поедем?");
   });
 
-  it("TRAP-1: ответ без модели помечен «без ИИ» в чате и на доске", async () => {
+  it("TRAP-1: ответ без модели помечен «без ИИ» значком и в блоке этапа, текст ответа — без хвоста", async () => {
     routes["POST /api/chat"] = () => ({ status: 200, body: { ...booked, llm: false } });
     await mount();
     await click("Выходные в Казани");
     await click("Отправить");
     expect(calls.at(-1)?.body).toMatchObject({ session_id: null });
     expect(localStorage.getItem(SESSION_KEY)).toBe("s1");
-    expect(box.querySelector("[role='status']")?.textContent).toContain("без ИИ");
+    // #434: the badge says it once; the label after every answer is not repeated in the bubble.
+    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
     expect(box.querySelector(".board")?.textContent).toContain("без ИИ");
+    expect(box.querySelector("[role='status'] .b")?.textContent).toBe("Бронь оформлена.");
+  });
+
+  it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/mode сообщает llm=false", async () => {
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false } });
+    await mount();
+    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
+  });
+
+  it("с моделью пометки до первого сообщения нет", async () => {
+    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true } });
+    await mount();
+    expect(box.querySelector(".badge-noai")).toBeNull();
   });
 
   it("ошибка сервера: понятный текст без трассировки", async () => {
