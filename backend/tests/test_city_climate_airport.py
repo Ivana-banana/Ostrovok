@@ -133,7 +133,7 @@ def test_new_year_is_no_city(text):
 def test_a_capitalized_month_is_no_city(store, question):
     r = at(store, "compare")
     r2 = say(store, question, r.session_id)
-    assert "Климата для" not in r2.reply, r2.reply
+    assert ": климата" not in r2.reply, r2.reply  # #212: the no-data line
 
 
 @pytest.mark.parametrize(

@@ -1,8 +1,10 @@
-"""Facts for a question at a built plan (#186): weather, visas, «почему не <отель>».
+"""Facts for a question at a built plan (#186): weather, visas, «почему <отель> а не <отель>».
 
 Every fact comes from the plan offers or the catalogue (catalog.json); the model writes
 none of it (TRAP-4). No data means «нет данных», never a guess. Each price is marked as
 synthetic (TRAP-7). A question changes neither the plan nor the cart: the caller only reads.
+«Почему не Бульвар, там же море ближе?» is a question about the hotel. «Давай Бульвар, там море
+ближе» is an edit: the model reads it, and nothing here answers it.
 """
 
 import re
@@ -150,6 +152,37 @@ def _cancel(h: HotelOffer) -> str:
     return "бесплатная отмена" if h.cancellation.refundable else "невозвратный тариф"
 
 
+def _free_tariff(plan: Plan, hotel: HotelOffer) -> HotelOffer | None:
+    """The cheapest tariff of this hotel with free cancellation (the same meal first), or None.
+    The row of a hotel shows one tariff; the others are offers of the plan too (TRAP-4)."""
+    if hotel.cancellation.refundable:
+        return None
+    tariffs = [
+        o
+        for o in plan.offers
+        if isinstance(o, HotelOffer)
+        and (o.title, o.city) == (hotel.title, hotel.city)
+        and o.cancellation.refundable
+    ]
+    return min(tariffs, key=lambda o: (o.meal != hotel.meal, o.price_rub, o.offer_id), default=None)
+
+
+def _free_line(plan: Plan, *hotels: HotelOffer) -> str:
+    """«Тариф с бесплатной отменой: «Бульвар» — 30 900 ₽ (синтетика)». A hotel without such a
+    tariff in the data is named only next to one that has it; no tariff at all gives ""."""
+    found = [(h, _free_tariff(plan, h)) for h in hotels if not h.cancellation.refundable]
+    if not any(alt for _, alt in found):
+        return ""
+    parts = []
+    for h, alt in found:
+        if alt is None:
+            parts.append(f"«{_name_of(h)}» — в данных нет")
+            continue
+        meal = f", питание {alt.meal}" if alt.meal != h.meal else ""
+        parts.append(f"«{_name_of(h)}» — {_rub(alt.price_rub)}{meal}")
+    return "Тариф с бесплатной отменой: " + "; ".join(parts) + "."
+
+
 def versus_fact(plan: Plan, low: str) -> str:
     """Why the hotel of the plan and not the named one: price, cancellation, distance, rating.
     Two named hotels («чем Парк лучше Панорамы?») are compared with each other."""
@@ -173,8 +206,10 @@ def versus_fact(plan: Plan, low: str) -> str:
 
 def _versus(plan: Plan, chosen: HotelOffer, named: HotelOffer, where: str) -> str:
     if named.offer_id == chosen.offer_id:
+        free = _free_line(plan, chosen)
         return (
             f"{chosen.title} уже в плане: {_rub(chosen.price_rub)}, {_cancel(chosen)}.\n"
+            + (free + "\n" if free else "")
             + why_chosen(plan, chosen, hotel_rows(plan.offers, plan.selected))
         )
     facts = [f"цена {_rub(named.price_rub)} против {_rub(chosen.price_rub)}{where}"]
@@ -201,6 +236,8 @@ def _versus(plan: Plan, chosen: HotelOffer, named: HotelOffer, where: str) -> st
             (theirs if a > b else ours).append("рейтинг выше")
     other = f"«{_name_of(named)}»"
     lines = [f"{named.title} против {chosen.title}{where}: " + "; ".join(facts) + "."]
+    if free := _free_line(plan, named, chosen):
+        lines.append(free)
     mine = "Отель в плане" if where else f"«{_name_of(chosen)}»"
     if ours:
         lines.append(f"{mine} выигрывает: {', '.join(ours)}.")
@@ -337,11 +374,37 @@ def unknown_name_fact(plan: Plan, message: str) -> str:
     if any(_hit(tokens, w, loose=True) is not None for d in spots for w in _words(d, 3)):
         return f"«{named}» — это и есть направление плана, а не отель. Отели в данных: {have}."
     if _is_place(named):
-        return ""  # another place: the older rules offer the change of the destination
+        # «Почему не Египет, там теплее?» has a reason: the older rules read it as a weather question
+        full = WHY_NOT_RE.search(message.lower().replace("ё", "е")).group(1).strip(" ?!.")
+        return place_fact(plan, named) if len(full) == len(named) else ""
     city = spots[0] if spots else "этого направления"
     return (
         f"«{named}» нет в данных (отели: {city}); сравнить не с чем, выдумывать не буду. "
         f"Отели в данных: {have}."
+    )
+
+
+def _to(name: str) -> str:
+    """«Турция» → «Турцию», «Хургада» → «Хургаду» for «поехали в …»; other names stay."""
+    if name.endswith("ия"):
+        return name[:-1] + "ю"
+    return name[:-1] + "у" if name.endswith("а") else name
+
+
+def place_fact(plan: Plan, named: str) -> str:
+    """C13: «почему не Турция?» at a plan elsewhere. The plan is not rebuilt. The place gets the
+    climate of the catalogue (a number from a tool); its prices and flights were not compared,
+    and the answer says so (TRAP-4). The user is told how to switch."""
+    spots = plan.spec.destinations
+    place = _place(named)
+    if place and any((p := _place(d)) and p["name"] == place["name"] for d in spots):
+        return f"«{named}» — это и есть направление плана."
+    where = ", ".join(spots) if spots else "выбранном направлении"
+    return (
+        f"План собран на «{where}». «{named}» я не сравнивал: цен и рейсов туда в плане нет, "
+        "выдумывать не буду.\n"
+        f"{weather_fact(plan, '', [named])}\n"
+        f"Могу сравнить: напишите «поехали в {_to(named)}», и я пересоберу план."
     )
 
 
@@ -454,14 +517,13 @@ def weather_fact(plan: Plan, low: str = "", cities: list[str] | None = None, mon
     lines = []
     for city in cities or _places(plan):
         place = _place(city)
-        if place is None:
-            lines.append(f"Климата для {city} в данных нет — {NO_DATA}.")
+        air, water = catalog.month_climate(place, month) if place and month else (None, None)
+        if air is None and water is None:
+            # «Калуга: климата …» keeps the name as typed: no preposition, no case to get wrong
+            name = place["name"] if place else city
+            lines.append(f"{name}: климата {when or 'вашего месяца'} в данных нет — {NO_DATA}.")
             continue
         city = place["name"]
-        air, water = catalog.month_climate(place, month) if month else (None, None)
-        if air is None and water is None:
-            lines.append(f"Климата {city} {when or 'вашего месяца'} в данных нет — {NO_DATA}.")
-            continue
         parts = []
         if air is not None:
             parts.append(f"днём {air:g} °C")
@@ -586,6 +648,18 @@ def visa_fact() -> str:
         f"Данных о визах и правилах въезда в каталоге нет — {NO_DATA}. "
         "Проверьте требования для вашего гражданства на сайте консульства страны поездки."
     )
+
+
+def consent_fact(plan: Plan, low: str, message: str = "", found: dict | None = None) -> str:
+    """The tail question of a consent: «беру, а что с визой?», «погода хорошая? тогда беру».
+    The consent goes through; a visa, weather or airport question in the same message gets its
+    fact line. A message without «?» and any other topic get none: «беру Бульвар, там дешевле»
+    is a pick of a hotel, not a question."""
+    if "?" not in low:
+        return ""
+    if VISA_RE.search(low):
+        return visa_fact()
+    return city_fact(plan, low, message, found)
 
 
 def plan_fact(plan: Plan, low: str, message: str = "", found: dict | None = None) -> str:
