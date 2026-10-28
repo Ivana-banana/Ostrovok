@@ -115,6 +115,21 @@ suite("чат", () => {
     act(() => root.unmount());
   });
 
+  it("#508: название отеля уже с «Отель» — подпись не повторяется; без «Отель» подпись есть", async () => {
+    const box = document.createElement("div");
+    const root = createRoot(box);
+    const text = [
+      "Предлагаю:",
+      "Отель: Отель «Панорама», Сочи, 4★, завтрак, невозвратный — 9 000 ₽",
+      "Итого 9 000 ₽.",
+    ].join("\n");
+    await act(async () => root.render(<AgentText text={text} synthetic />));
+    expect(box.querySelector(".pt-name")?.textContent).toBe("Отель «Панорама», Сочи");
+    await act(async () => root.render(<AgentText text={text.replace("Отель «Панорама»", "Панорама")} synthetic />));
+    expect(box.querySelector(".pt-name")?.textContent).toBe("Отель Панорама, Сочи");
+    act(() => root.unmount());
+  });
+
   it("#473: трансфер без «≈… км» — маршрут без висящей точки, блок остаётся списком", async () => {
     const box = document.createElement("div");
     const root = createRoot(box);
