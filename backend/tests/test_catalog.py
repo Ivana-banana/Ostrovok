@@ -416,6 +416,32 @@ def test_trap_3_respelling_never_rewrites_a_catalogue_name():
     assert bad == []
 
 
+# --- #306: ordinary words are not places (TRAP-3) ---
+
+
+@pytest.mark.parametrize(
+    "word",
+    ["выбора", "Выбора", "Выбор", "выбору", "выбором", "Петербургский", "петербургская",
+     "Петербургском", "Петербургских"],
+)  # fmt: skip
+def test_trap_3_ordinary_word_near_a_place_is_no_place(word):
+    """«выбора» is not Выборг, «Петербургский» (adjective) is not Санкт-Петербург (#306)."""
+    assert catalog.resolve(word) is None, word
+    assert catalog.respelled(word) is None, word
+
+
+@pytest.mark.parametrize(
+    ("written", "name"),
+    [("Выборг", "Выборг"), ("в Выборг", "Выборг"), ("из Выборга", "Выборг"),
+     ("Выборге", "Выборг"), ("Выборгу", "Выборг"), ("Петербург", "Санкт-Петербург"),
+     ("в Петербург", "Санкт-Петербург"), ("Петербурга", "Санкт-Петербург"),
+     ("Питер", "Санкт-Петербург"), ("в Питер", "Санкт-Петербург"),
+     ("Питербург", "Санкт-Петербург"), ("Кисловодс", "Кисловодск")],
+)  # fmt: skip
+def test_trap_3_case_forms_and_typos_still_resolve_after_word_guard(written, name):
+    assert catalog.resolve(written)["name"] == name
+
+
 def test_airport_is_of_the_places_own_country():
     """#409: Брянск was GME (Gomel, Belarus, 237 km) and Смоленск MVQ (Mogilev); both are Russian."""
     for name in ("Брянск", "Смоленск"):

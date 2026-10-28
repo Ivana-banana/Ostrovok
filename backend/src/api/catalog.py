@@ -120,10 +120,22 @@ def _lead_close(q: str, k: str) -> bool:
     return b[0] in VOWELS and len(b) > 2 and b[1:3] == a[:2]
 
 
+def _another_word(q: str, k: str, q_full: str, k_full: str) -> bool:
+    """The stem q is not a typo of the stem k but a longer or a cut word (#306): «Петербургский»
+    is an adjective built on «Петербург», «Выбора» is «выбор» (choice), not «Выборг». A word cut by
+    a letter from a long name stays a typo: «Кисловодс». The tail is measured on the whole written
+    names, not on stems: «Лазаревскоее» has a tail of one letter over «лазаревское»."""
+    if len(q_full) - len(k_full) >= 2:
+        return q.startswith(k)
+    if len(q) > len(k):
+        return False
+    return len(q) < TYPO_MIN_LEN and k.startswith(q)
+
+
 def _same_words(query: list[str], key: list[str]) -> bool:
     """Same words up to a Russian case ending: «нижнем новгороде» = «нижний новгород»."""
     return len(query) == len(key) and all(
-        q.startswith(_stem(k)) and q[len(_stem(k)) :] in CASES
+        q == k or (q.startswith(_stem(k)) and q[len(_stem(k)) :] in CASES)
         for q, k in zip(query, key, strict=True)
     )
 
@@ -201,9 +213,12 @@ def resolve(text: str) -> dict | None:
     if len(q) < 4:
         return None
     stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
+    full = {_stems(k): k for k, _ in _keys() if len(k.split()) == len(q.split())}
     close = difflib.get_close_matches(_stems(q), stems, n=1, cutoff=FUZZY)
     # Only the best match counts: if it fails _lead_close, the answer is None, not the second
     # best. «Гагра» is not «Агра»; «Емал» is close to «Чемал», so it is not «Мале» (#267).
+    if close and _another_word(_stems(q), close[0], q, full[close[0]]):
+        return None
     if close and _lead_close(_stems(q), close[0]):
         return stems[close[0]]
     return None if close else _respelled(q)
@@ -220,6 +235,11 @@ def _respelled(q: str) -> dict | None:
     # A wrong letter or two in a long name. Only one such place, else it is a guess.
     stems = {_stems(k): p for k, p in _keys() if len(k.split()) == len(q.split())}
     typo = [s for s in stems if len(s) >= TYPO_MIN_LEN and s != _stems(q) and _typo(_stems(q), s)]
+    full = {_stems(k): k for k, _ in _keys() if len(k.split()) == len(q.split())}
+    # A candidate that is another word makes the answer a guess: «Краснодарский» is not a typo of
+    # «Красноярск» only because «Краснодар» was dropped as an adjective (#306).
+    if any(_another_word(_stems(q), s, q, full[s]) for s in typo):
+        return None
     if len(typo) == 1 and _lead_close(_stems(q), typo[0]):
         return stems[typo[0]]
     return None
