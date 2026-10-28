@@ -33,6 +33,7 @@ import {
   priorityMessage,
   rub,
   zonedTime,
+  zoneLabel,
 } from "./format";
 import { ParamsBar } from "./ParamsBar";
 import { otherAssumptions } from "./params";
@@ -303,6 +304,12 @@ export function Destinations({ plan, stage, busy, onSend }: {
 
 // One row per hotel, as in the chat: the selected tariff of the hotel, else its first one.
 // The backend orders the tariffs of a hotel best first for the spec (optimizer.hotel_rows).
+// Zone of a transport end: smaller text that may wrap apart from the time (TRAP-5, #455).
+function zoneTag(iso: string) {
+  const zone = zoneLabel(iso);
+  return zone ? <span className="zone"> ({zone})</span> : null;
+}
+
 function hotelRows(plan: Plan): HotelOffer[] {
   const rows = new Map<string, HotelOffer>();
   for (const o of plan.offers) {
@@ -440,10 +447,10 @@ function Transport({ plan, stage, busy, onSend }: {
                   </td>
                   <td>{MODES[t.mode]}</td>
                   <td data-label="Отправление">
-                    <span className="when">{zonedTime(t.depart_at)}</span> <small>{t.origin}</small>
+                    <span className="when">{localTime(t.depart_at)}</span> <small>{t.origin}</small>{zoneTag(t.depart_at)}
                   </td>
                   <td data-label="Прибытие">
-                    <span className="when">{zonedTime(t.arrive_at)}</span> <small>{t.destination}</small>
+                    <span className="when">{localTime(t.arrive_at)}</span> <small>{t.destination}</small>{zoneTag(t.arrive_at)}
                   </td>
                   <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
                   <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
