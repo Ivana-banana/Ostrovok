@@ -63,6 +63,7 @@ def test_trap5_other_cities_are_the_nearest_where_the_pet_goes(store):
     assert [d.name for d in dog.plan.destinations] == names  # «1» picks the first one
 
 
+@pytest.mark.usefixtures("flights_refuse_pets")  # #575: flights without pets
 def test_trap5_antalya_no_leg_takes_the_pet_nearest_cities_and_no_beru(store):
     r = say(store, ANTALYA)
     dog = say(store, DOG, r.session_id)
