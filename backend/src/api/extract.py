@@ -395,6 +395,13 @@ NO_FLIGHT = re.compile(
     r"\b(?:без|не)\s+(?:на\s+)?(?!долг|длинн)(?:перелет\w*|самолет\w*|авиа(?!билет|компани|линии|перевоз)\w*)"
     r"|\bне\s+(?:хочу\s+|будем\s+|надо\s+)?(?:лететь|летим|полетим|летать)\b"
     r"(?!\s+(?:долг|дольше|больше|более|\d|с\s+пересад))"  # a long flight, not every flight
+    # #314: «не летаем» bans only at the end of its clause: «не летаем лоукостерами» does not
+    r"|\bне\s+лета(?:ем|ю)\b(?:\s+(?:вообще|совсем))?(?=[ \t]*(?:[.,;!?)—–\n-]|$)|\s+(?:и|а|но)\b)"
+)
+# #314: «в январе, не летаем» refuses the month, not the flight
+MONTH_CLAUSE_RE = re.compile(
+    r"\b(?:январ|феврал|март|апрел|ма[йея]|июн|июл|август|сентябр|октябр|ноябр|декабр)\w*"
+    r"\s*[,—–-]\s*$"
 )
 # #302: a meal or a mode refused after its name: «all inclusive не надо», «самолёт ни за что».
 # «не надо» refuses only at the end of its clause: «поезд, не надо пересадок» keeps the train.
@@ -2301,7 +2308,13 @@ def extract(
     # лететь долго» bans a long flight only (#277).
     refused_after = any(REFUSED_AFTER_RE.match(t, x.end()) for x in hits["flight"])
     # «без перелёта не поеду»: two refusals want the flight (#351)
-    no_flight = [bool(REFUSED_AFTER_RE.match(t, x.end())) for x in NO_FLIGHT.finditer(t)]
+    no_flight = [
+        bool(REFUSED_AFTER_RE.match(t, x.end()))
+        for x in NO_FLIGHT.finditer(t)
+        if not (
+            re.search(r"\bлета(?:ем|ю)\b", x.group(0)) and MONTH_CLAUSE_RE.search(t, 0, x.start())
+        )
+    ]
     if any(no_flight) and "flight" not in modes:
         modes.append("flight")
     fear = _fears_flight(t)
