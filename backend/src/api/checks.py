@@ -176,8 +176,9 @@ def _api() -> Iterator[tuple[TestClient, SessionStore]]:
 
 def _post(client: TestClient, text: str, sid: str | None = None) -> tuple[int, ChatReply | None]:
     # llm: True — the model is asked whenever the env has one (#490): A2 of S3 needs the 401 path.
-    # real_data stays off: eval measures the synthetic data, no network (TRAP-6).
-    res = client.post("/api/chat", json={"session_id": sid, "message": text, "llm": True})
+    # real_data off (#566: on by default): eval measures the synthetic data, no network (TRAP-6).
+    body = {"session_id": sid, "message": text, "llm": True, "real_data": False}
+    res = client.post("/api/chat", json=body)
     return res.status_code, (
         ChatReply.model_validate(res.json()) if res.status_code == 200 else None
     )

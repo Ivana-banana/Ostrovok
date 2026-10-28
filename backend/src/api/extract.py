@@ -2206,6 +2206,9 @@ def _people_count(t: str, kids: int) -> tuple[int, str] | None:
 
 # #369: «по 50 тысяч на 1 человека», «сколько на человека?»: the price per head, no party.
 PER_PERSON_RE = re.compile(r"\bна\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b")
+PARTY_EDIT_RE = re.compile(
+    r"\b(?:давай\w*|можно|хочу|хотим|сделай\w*|переделай\w*|пересобер\w*|поменяй\w*)\b"
+)
 PRICE_CUE_RE = re.compile(r"сколько|\bцен[ауы]\b|стоимост|стоит|покаж\w*\s+цен")
 MONEY_PER_PERSON_RE = re.compile(
     r"((?:тыс\w*|руб\w*|₽|\d\s*к|\bр)\.?)\s+на\s+(?:(?:1|одного|каждого)\s+)?(?:человека|душу|персону)\b"
@@ -2257,7 +2260,9 @@ def _people(
     seen: list[tuple[str, list[int], int]] = []  # (kind, ages said, position in ages) (#359)
     last: int | None = None  # the end of the previous child word (#359)
     no_kids = False
-    if built and (PRICE_CUE_RE.search(t) or asking):  # only at a built plan
+    # #385: «давай на 1 человека?» asks for a party edit, not for a price
+    edit = asking and not PRICE_CUE_RE.search(t) and PARTY_EDIT_RE.search(t) and "номер" not in t
+    if built and (PRICE_CUE_RE.search(t) or asking) and not edit:  # only at a built plan
         t = PER_PERSON_RE.sub(" ", t)  # #369: «на 1 человека» is a unit of price, not a party
     t = MONEY_PER_PERSON_RE.sub(r"\1", t)
     for m in CHILD_RE.finditer(t):
@@ -2337,7 +2342,7 @@ def _people(
     elif m := re.search(rf"\bнас\s+(?:будет\s+)?{NUM}\b|\b({'|'.join(TOGETHER)})\b", t):
         total = _num(m.group(1)) if m.group(1) else TOGETHER[m.group(2)]
         found["adults"] = max(total - len(ages), 1)
-    elif not asking and not _family_adults(t) and (head := _people_count(t, len(ages))):
+    elif (not asking or edit) and not _family_adults(t) and (head := _people_count(t, len(ages))):
         found["adults"] = head[0]
         notes.append(head[1])
     elif (m := FRIENDS_RE.search(t)) and _num(m.group(1)) >= 1:
@@ -2669,6 +2674,13 @@ def extract(
 DATE_KEYS = {"date_from", "date_to", "month", "nights"}
 
 
+def _whole_month(llm_found: dict) -> bool:
+    start, end = llm_found.get("date_from"), llm_found.get("date_to")
+    if not (start and end) or start.day != 1:
+        return False
+    return end.month == start.month and (end + timedelta(days=1)).month != end.month
+
+
 def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = None) -> dict:
     """The model's fields win over the rules' fields; the rules keep what it did not say (#258).
 
@@ -2684,6 +2696,11 @@ def with_llm(found: dict, llm_found: dict | None, excluded: list[str] | None = N
         llm_found = {**llm_found, "destinations": kept}
         if not kept:
             del llm_found["destinations"]
+    if _whole_month(llm_found) and "date_from" not in found:
+        # «в ноябре» is a month, not 1..30 Nov: the rules read no days, so the model's range goes (#574).
+        llm_found = {
+            k: v for k, v in llm_found.items() if k not in ("date_from", "date_to", "nights")
+        }
     full_dates = "date_from" in llm_found and bool({"date_to", "nights"} & llm_found.keys())
     if full_dates:
         for d in DATE_KEYS:
