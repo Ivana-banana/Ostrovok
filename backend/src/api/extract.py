@@ -2039,7 +2039,11 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
     elif m := re.search(r"\bна\s+сутки\b", t):
         found["nights"] = 1
         notes.append(f"длительность: 1 ноч. («{m.group(0)}»)")
-    elif m := re.search(r"\bна\s+пар[уы]\s+(?:дн\w*|день|суток)", t):
+    # #146 (D-038): «пара» is a short trip of 2 nights; a number of days is N−1 nights.
+    # «на пару дней позже» is a shift, not a length.
+    elif m := re.search(
+        r"\bна\s+пар[уы]\s+(?:ноч\w*|суток|(?:дн\w*|день)\b(?!\s*(?:позже|раньше|спустя)))", t
+    ):
         found["nights"] = 2
         notes.append(f"длительность: 2 ноч. («{m.group(0)}»)")
     elif m := re.search(rf"\bна\s+пол\s?года\b{NOT_A_MOVE}", t):
