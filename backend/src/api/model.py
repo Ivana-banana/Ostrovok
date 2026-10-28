@@ -1127,14 +1127,23 @@ def _other_edits(found: dict) -> bool:
     return bool(rest)
 
 
+WHY_RE = re.compile(r"\bпочему\b")
+
+
+def talks_cheaper(low: str) -> bool:
+    """«Не надо дешевле» and «дешевле не бывает?» talk about the word, they ask for no change.
+    «Почему не дешевле?» is no refusal: it stays the wish «недорого», as before (#316)."""
+    if CHEAPER_MIN_RE.search(low):
+        return True
+    return bool(CHEAPER_REFUSAL_RE.search(low) and not WHY_RE.search(low))
+
+
 def drop_cheaper_wish(found: dict, low: str) -> dict:
     """«Не надо дешевле», «дешевле не бывает?» name the word, not a wish: «недорого» does not
     enter the spec and does not re-plan the trip (#316)."""
     wishes = found.get("wishes")
-    if not wishes or "недорого" not in wishes:
+    if not wishes or "недорого" not in wishes or not talks_cheaper(low):
         return found
-    if not (CHEAPER_REFUSAL_RE.search(low) or CHEAPER_MIN_RE.search(low)):
-        return found  # «почему не дешевле?» stays a wish, as before
     if WISH_CHEAP_RE.search(re.sub(rf"\b(?:{CHEAPER_WORD})\b", " ", low)):
         return found  # «недорогой отель, не надо дешевле»: the wish is said in other words
     rest = [w for w in wishes if w != "недорого"]
@@ -2589,7 +2598,7 @@ def step(
         old.stage in ("compare", "assemble")
         and not (plan_dirty or picks or lines)
         and prev is not None
-        and (CHEAPER_REFUSAL_RE.search(low) or CHEAPER_MIN_RE.search(low))
+        and talks_cheaper(low)
     ):
         text = f"{cheaper_talk_line(old, low)} {HINTS[old.stage]}"  # #316
         return old.model_copy(update={"reply": text, "questions": [], "llm": False})

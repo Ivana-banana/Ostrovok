@@ -227,3 +227,10 @@ def test_c316_c18_eval_case_still_lowers(store):
     first = say(store, START)
     second = say(store, "бюджет поменьше", first.session_id)
     assert total_of(second) < total_of(first) and "Было → стало" in second.reply
+
+
+def test_c316_why_not_cheaper_is_no_refusal():
+    from api.model import talks_cheaper
+
+    assert not talks_cheaper("почему не дешевле?")  # stays the wish «недорого»
+    assert talks_cheaper("не надо дешевле") and talks_cheaper("дешевле не бывает?")
