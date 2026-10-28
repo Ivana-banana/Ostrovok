@@ -20,6 +20,8 @@ import { Mascot } from "./Mascot";
 type Msg = { role: "user" | "agent"; text: string };
 type Ui = { messages: Msg[]; removed: Offer[] };
 
+const STALE_PLAN = "Не удалось обновить план — перезагрузите страницу";
+
 export const SESSION_KEY = "trip.session";
 const uiKey = (sid: string) => `trip.ui.${sid}`;
 
@@ -281,6 +283,7 @@ export function App() {
       }
       // The cart edit can change the plan (selection, timeline, issues): take it from the server.
       const fresh = await getSession(id).catch(() => null);
+      if (!fresh) setError(STALE_PLAN);
       // The old chat line with the cart sum is stale now: say the real count and total.
       update({ ...ui, removed, messages: [...ui.messages, { role: "agent", text: cartLine(cart) }] });
       setReply({ ...(fresh ?? reply), cart });
@@ -304,6 +307,7 @@ export function App() {
         ...(guest && { guest }),
       });
       const fresh = await getSession(id).catch(() => null);
+      if (!fresh?.voucher) setError(STALE_PLAN);
       setReply(fresh?.voucher ? fresh : { ...reply, stage: "booked", voucher });
       const text = `Бронь ${voucher.booking_id} оформлена. ${voucher.simulated ? "Оплата имитирована." : "Оплата принята."}`;
       update({ ...ui, messages: [...ui.messages, { role: "agent", text }] });
