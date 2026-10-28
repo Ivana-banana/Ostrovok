@@ -291,7 +291,8 @@ function PointRow({ point: p, synthetic, choice }: { point: Point; synthetic: bo
               <Fragment key={i}>
                 <From>{r.from}</From>{" "}
                 <span>
-                  {r.to} · {facts(r.facts)}
+                  {r.to}
+                  {r.facts.length > 0 && <> · {facts(r.facts)}</>}
                 </span>{" "}
               </Fragment>
             ))}
