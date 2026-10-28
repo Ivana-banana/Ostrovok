@@ -1206,6 +1206,11 @@ def _english_places(t: str, found: dict) -> None:
 
 
 WEEKDAYS = ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
+WEEKDAY_STEMS = ("понедельник", "вторник", "сред", "четверг", "пятниц", "суббот", "воскресень")
+# #293: «со среды по пятницу», «с пятницы до воскресенья» — a range by weekday names.
+WEEKDAY_RANGE = re.compile(
+    rf"\bсо?\s+({'|'.join(WEEKDAY_STEMS)})\w*\s+(?:по|до)\s+({'|'.join(WEEKDAY_STEMS)})\w*\b"
+)
 
 
 PAST_MARK = "уже прошло"  # in the note about a named day moved to next year
@@ -1246,6 +1251,21 @@ def llm_past_dates(llm_found: dict, today: date | None = None) -> str | None:
     for k in DATE_KEYS:
         llm_found.pop(k, None)
     return f"даты: от модели {start:%d.%m.%Y} {PAST_GONE_MARK} — не применены"
+
+
+# «через 3 дня», «через неделю»: groups are the number and the unit.
+IN_DAYS = re.compile(rf"\bчерез\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)")
+
+
+def _busy_days(t: str, m: re.Match) -> bool:
+    """«с понедельника по пятницу работаю»: working days, not trip dates.
+
+    Only first-person words next to the range count: «занятия для ребёнка» is no busy day."""
+    busy = r"(?:работаю|работаем|занят[аы]?|учусь|учимся|дежурю)\b"
+    return bool(
+        re.match(rf"[\s,.;—-]*(?:я\s+|мы\s+)?(?:{busy}|на работе\s*(?:[,.;!]|$))", t[m.end() :])
+        or re.search(rf"\b(?:{busy}|на работе)\s+$", t[: m.start()])
+    )
 
 
 # #362: «в конце января» is the end of the month. The day is inside the named part (check-in may
@@ -1311,7 +1331,25 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         if m := re.search(r"\b(сегодня|завтра|послезавтра)\b", t):
             days = {"сегодня": 0, "завтра": 1, "послезавтра": 2}[m.group(1)]
             found["date_from"] = today + timedelta(days=days)
-        elif m := re.search(rf"\bчерез\s+(?:{NUM}\s*)?(дн\w*|день|недел\w*)", t):
+        elif (m := WEEKDAY_RANGE.search(t)) and not _busy_days(t, m):
+            wd1, wd2 = (WEEKDAY_STEMS.index(g) for g in m.groups())
+            month, tomorrow = found.get("month"), today + timedelta(days=1)
+            if via := IN_DAYS.search(t):
+                n = _num(via.group(1)) if via.group(1) else 1
+                base = today + timedelta(days=n * (7 if via.group(2).startswith("нед") else 1))
+            elif re.search(r"\bследующ\w*\s+недел", t):
+                base = today + timedelta(days=7 - today.weekday())  # Monday
+            elif month and month != tomorrow.month:
+                base = future_date(month, 1)  # first such weekday of the named month or season
+            else:
+                base = tomorrow
+            start = base + timedelta(days=(wd1 - base.weekday()) % 7)
+            end = start + timedelta(days=(wd2 - wd1) % 7 or 7)  # the next such day after the start
+            found["date_from"], found["date_to"], found["nights"] = start, end, (end - start).days
+            if (n := re.search(rf"\b{NUM}\s*ноч\w*", t)) and _num(n.group(1)) != found["nights"]:
+                span = f"{found['nights']} {_night_word(found['nights'])}"
+                notes.append(f"даты: «{m.group(0)}» — {span}, «{n.group(0)}» не применено")
+        elif m := IN_DAYS.search(t):
             n = _num(m.group(1)) if m.group(1) else 1
             found["date_from"] = today + timedelta(
                 days=n * (7 if m.group(2).startswith("нед") else 1)
