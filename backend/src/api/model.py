@@ -77,6 +77,7 @@ from api.extract import (
     EACH_STAY_RE,
     HOTEL_NOTE,
     MAX_NIGHTS,
+    MODES,
     MONTH,
     MONTH_NAMES,
     MONTHS,
@@ -87,6 +88,7 @@ from api.extract import (
     PLACE_RES,
     SEASONS,
     _known,
+    _night_word,
     asks_booking,
     asks_stay,
     children_uncounted,
@@ -386,6 +388,24 @@ def resolve_hotel_budget(data: dict) -> None:
             )
 
 
+# #167: «бюджет: 3 000 ₽ × 2 взрослых × 4 ночи»: a budget «в сутки» keeps its factors in the note.
+PER_NIGHT_BUDGET_RE = re.compile(
+    r"^бюджет: (\d[\d ]*) ₽ ×(?: (\d+) взросл\w*(?: \(дети не считаются\))? ×)? (\d+) ноч\w*"
+)
+
+
+def resolve_trip_budget(data: dict) -> None:
+    """The trip budget stated «в сутки» is a total of the nights the plan has now (#167)."""
+    for i, a in enumerate(data["assumptions"]):
+        m = PER_NIGHT_BUDGET_RE.match(a)
+        if not m or not data["nights"] or data["nights"] == int(m.group(3)):
+            continue
+        day, people, n = int(m.group(1).replace(" ", "")), int(m.group(2) or 1), data["nights"]
+        data["budget_rub"] = day * people * n
+        party = f" {people} взрослых ×" if m.group(2) else ""
+        data["assumptions"][i] = f"бюджет: {_rub(day)} ×{party} {n} {_night_word(n)}"
+
+
 def _noted(spec: TripSpec, label: str) -> bool:
     return any(_label(a) == label for a in spec.assumptions)
 
@@ -520,6 +540,8 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     for k, v in found.items():
         data[k] = data[k] + [w for w in v if w not in data[k]] if k == "wishes" else v
     resolve_hotel_budget(data)
+    if "budget_rub" not in found:  # a budget stated now is not recounted
+        resolve_trip_budget(data)
     return TripSpec.model_validate(data)
 
 
@@ -1750,11 +1772,37 @@ PRICE_VERSUS_RE = re.compile(
     r"\b(?:дешевле|дороже|выгоднее)\b[^?]*\bчем\b[^?]*\?"
     r"|^\s*(?:а\s+)?(?:в|на)\s+(?:\w+\s+)?\w*[^\Wую]\s+(?:будет\s+|вс[её]\s+же\s+)?"
     r"(?:дешевле|дороже|выгоднее)\s*\?\s*$"
+    # #483: «поезд дешевле самолёта?» has no «чем»
+    r"|\b(?:поезд|самол[её]т|машин)\w*\s+(?:будет\s+)?(?:дешевле|дороже|выгоднее)\s+"
+    r"(?:поезд|самол[её]т|машин)\w*\s*\?"
 )
 VERSUS_ORDER_RE = re.compile(
     r"\b(?:сделай\w*|подбер\w*|найд\w*|найти|покаж\w*|предлож\w*|можно|есть)\b"
 )
 MARKET_RE = re.compile(r"\bв\s+среднем\b|рынк|\bобычно\b")  # «дешевле, чем в среднем?»
+# «а дешевле, чем в Турции» inside a longer message: the comparison words only (#483)
+VERSUS_CLAUSE_RE = re.compile(
+    r"(?i)\b(?:а\s+)?(?:это\s+)?(?:(?:на\s+)?(?:поезд|самол[её]т|машин)\w*\s+)?"
+    r"(?:дешевле|дороже|выгоднее),?\s+чем\s+(?:в\s+|на\s+)?[\w-]+"
+    # no «чем»: «поезд дешевле самолёта»
+    r"|\b(?:поезд|самол[её]т|машин)\w*\s+(?:будет\s+)?(?:дешевле|дороже|выгоднее)\s+"
+    r"(?:поезд|самол[её]т|машин)\w*"
+)
+
+
+MODE_NAMES = {"train": "поезд", "flight": "самолёт", "car": "машина"}
+
+
+def _mode_versus_reply(old: ChatReply, modes: list[str]) -> str:
+    """«поезд дешевле, чем самолёт?»: the cheapest offer of each mode in the plan (TRAP-4)."""
+    rows = []
+    for mode in modes:
+        prices = [o.price_rub for o in old.plan.offers if getattr(o, "mode", None) == mode]
+        name = MODE_NAMES[mode].capitalize()
+        rows.append(
+            f"{name}: от {_rub(min(prices))} (синтетика)" if prices else f"{name}: в плане нет"
+        )
+    return f"Это вопрос: план не меняю. {'; '.join(rows)}. {HINTS[old.stage]}"
 
 
 def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
@@ -1765,8 +1813,10 @@ def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
         return ""
     spec = old.plan.spec
     others = [d for d in found.get("destinations", []) if d not in spec.destinations]
+    if not others and len(modes := [m for m, rx in MODES if re.search(rx, low)]) == 2:
+        return _mode_versus_reply(old, modes)  # #483: «а поезд дешевле, чем самолёт?»
     if not (others or MARKET_RE.search(low)):
-        return ""  # «а поезд дешевле, чем самолёт?»: not this question, the old rules read it
+        return ""
     total = old.cart.total_rub or sum(
         o.price_rub for o in old.plan.offers if o.offer_id in old.plan.selected
     )
@@ -2432,10 +2482,23 @@ def step(
     if (
         prev
         and old.stage in PLAN3
-        and set(rules_found) <= {"destinations", "wishes"}  # «дешевле, чем 50 тысяч?» is a budget
+        and set(rules_found) <= {"destinations", "wishes", "modes"}  # «…чем 50 тысяч?» is a budget
         and not (is_rebuild(low) or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low))
         and (reply := _price_versus_reply(old, low, rules_found))
     ):
+        # #483: «дешевле, чем в Турции, с бассейном?» — the question changes nothing, the wish or
+        # the one mode next to it is still an edit: the rest goes on without the comparison.
+        if (
+            set(rules_found.get("wishes", [])) - {"недорого"}
+            or len(rules_found.get("modes", [])) == 1
+        ) and (
+            (rest := VERSUS_CLAUSE_RE.sub(" ", message).strip(" ,?"))
+            and rest != message.strip(" ,?")  # a clause the regex does not cut would loop
+        ):
+            done = step(prev, sid, rest, use_llm, origin)
+            head = reply.removesuffix(f" {HINTS[old.stage]}").split(" Чтобы")[0]
+            head = head.removeprefix("Это вопрос: план не меняю. ")
+            return done.model_copy(update={"reply": f"{head}\n{done.reply}"})
         return old.model_copy(update={"reply": reply, "questions": [], "llm": False})
     if no_transfer and not rules_found:
         return drop_transfers(old)
