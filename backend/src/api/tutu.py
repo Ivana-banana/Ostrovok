@@ -28,6 +28,7 @@ import gzip
 import json
 import logging
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -151,6 +152,7 @@ class TutuTrains:
         self.cache_dir = cache_dir
         self.failed_at = -float("inf")
         self.robots: str | None = None
+        self.lock = threading.Lock()
 
     def legs(self, spec: TripSpec, origin: Place, place: Place) -> list[TransportOffer]:
         legs = self.base.legs(spec, origin, place)
@@ -249,7 +251,10 @@ class TutuTrains:
         if time.monotonic() - self.failed_at >= FAILED_S:
             try:
                 if self._allowed(path):
-                    rows = parse_route(self.get(path))
+                    text = self.get(path)
+                    if refused(text):  # a page only: robots.txt itself names «/captcha»
+                        raise Refused(f"{HOST}{path}: капча, отказ хоста")
+                    rows = parse_route(text)
                 else:
                     log.warning("tutu %s: robots.txt disallows, synthetic", path)
             except Offline as e:
@@ -271,14 +276,15 @@ class TutuTrains:
         return _read(file) if file.exists() else None
 
     def _allowed(self, path: str) -> bool:
-        if self.robots is None:
-            try:
-                self.robots = self.get("/robots.txt")
-            except Offline:
-                raise
-            except Refused as e:  # no robots.txt read: allowed, the page itself may still fail
-                log.warning("tutu robots.txt: %s; считаем путь разрешённым", e)
-                self.robots = ""
+        with self.lock:  # both directions ask at once: robots.txt is read one time
+            if self.robots is None:
+                try:
+                    self.robots = self.get("/robots.txt")
+                except Offline:
+                    raise
+                except Refused as e:  # no robots.txt read: allowed, the page itself may fail
+                    log.warning("tutu robots.txt: %s; считаем путь разрешённым", e)
+                    self.robots = ""
         return allowed(self.robots, path)
 
     def _get(self, path: str) -> str:
@@ -294,6 +300,6 @@ class TutuTrains:
             status, text = e.code, ""
         except OSError as e:  # URLError, timeout, refused connection, broken gzip
             raise Offline(f"{HOST}{path}: сеть ({e!r})") from e
-        if status != 200 or refused(text):
+        if status != 200:
             raise Refused(f"{HOST}{path}: HTTP {status}, отказ хоста")
         return text
