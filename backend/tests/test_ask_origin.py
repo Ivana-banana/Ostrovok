@@ -351,3 +351,16 @@ def test_sea_place_abroad_without_a_trip_place_is_the_destination(store, answer)
     s = r.plan.spec
     assert [catalog.resolve(d)["name"] for d in s.destinations] == [catalog.resolve(answer)["name"]]
     assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
+
+
+def test_country_on_the_origin_question_shows_its_places(store):
+    """#452: «Турция» to «Откуда?» on «тёплое море» shows the places of Турция (inspire),
+    not one plan for the whole country."""
+    from api import catalog
+
+    first = say(store, "Тёплое море в ноябре, недорого, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    assert r.stage == "inspire" and r.plan.spec.destinations == []
+    names = [d.name for d in r.plan.destinations]
+    assert len(names) >= 2
+    assert all(catalog.resolve(n)["country"] == "Турция" for n in names)

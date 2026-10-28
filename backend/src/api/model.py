@@ -2357,6 +2357,17 @@ def step(
     if asking and ASKING_NOTE in notes and not found:
         return old.model_copy(update={"reply": _text_kids_question(old), "llm": False})
     said_origin = _said_origin(old, message, found)  # #436, TRAP-3
+    # #452: a country on «Откуда?» names where to go, not one place: the cards show its places
+    country_pool = None
+    if (
+        not said_origin
+        and old.stage == "clarify"
+        and any(q.text.startswith(ORIGIN_ASK) for q in old.questions)
+        and (c := catalog.country_of(message))
+        and found.get("destinations") == [c]
+        and catalog.by_country(c)
+    ):
+        found["destinations"], country_pool = [], c
     if said_origin and (again := same_place_question(old, said_origin, found)):
         # The other fields of the answer («Казань, трое взрослых») stay in the trip.
         rest = {k: v for k, v in found.items() if k != "origin" and k in TripSpec.model_fields}
@@ -2576,6 +2587,9 @@ def step(
         # 5: four are left without the origin. #451: «ещё» — the same spec, the pool without
         # every place shown in this session.
         dests = suggest_destinations(spec, 5, [*refused, *seen])
+        if country_pool:  # every other country is excluded, as a refused one is (#113)
+            others = [c for c in catalog.snapshot()["countries"] if c != country_pool]
+            dests = suggest_destinations(spec, 5, [*refused, *seen, *others]) or dests
         if more:
             gone = old.plan.spec.destinations
             dests = [d for d in dests if d.name != spec.origin][:4]
