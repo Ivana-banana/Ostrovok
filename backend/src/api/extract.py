@@ -1331,7 +1331,7 @@ def _dates(t: str, found: dict, notes: list[str], kept: int = 7) -> None:
         if m := re.search(r"\b(сегодня|завтра|послезавтра)\b", t):
             days = {"сегодня": 0, "завтра": 1, "послезавтра": 2}[m.group(1)]
             found["date_from"] = today + timedelta(days=days)
-        elif (m := WEEKDAY_RANGE.search(t)) and not _busy_days(t, m):
+        elif m := next((r for r in WEEKDAY_RANGE.finditer(t) if not _busy_days(t, r)), None):
             wd1, wd2 = (WEEKDAY_STEMS.index(g) for g in m.groups())
             month, tomorrow = found.get("month"), today + timedelta(days=1)
             if via := IN_DAYS.search(t):

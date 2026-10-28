@@ -1010,3 +1010,12 @@ def test_month_part_in_the_current_month_is_not_a_year_ahead(tuesday):
 def test_month_without_a_part_has_no_day(tuesday):
     found, _ = extract("Стамбул в январе")
     assert "date_from" not in found
+
+
+# #482: the trip range after a range of working days is still read.
+def test_weekday_range_after_work_days_is_the_trip_range(tuesday):
+    found, notes = extract(
+        "с понедельника по пятницу работаю, хочу в Казань с пятницы по воскресенье"
+    )
+    assert (found["date_from"], found["date_to"]) == (date(2026, 10, 30), date(2026, 11, 1))
+    assert not [n for n in notes if n.startswith("даты:")]
