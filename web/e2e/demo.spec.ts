@@ -335,30 +335,32 @@ for (const width of [390, 360]) {
 test.describe("с анимацией", () => {
   test.use({ reducedMotion: "no-preference" });
 
-  test("ответ печатается, затем видны подсказки, клик по подсказке уходит агенту", async ({ page }) => {
+  test("пока ответ не готов — только индикатор мысли, затем сообщение целиком с блоком этапа", async ({ page }) => {
     await page.goto("/");
-    // Record that the reply was typed: the typing node lives ≤ 1.5 s, polling could miss it.
+    // Record what the chat showed while it thought: the indicator lives ~1 s, polling could miss it.
     await page.evaluate(() => {
-      const w = window as unknown as { typed: boolean; busy: boolean };
-      w.typed = false;
-      w.busy = false;
+      const w = window as unknown as { thought: boolean; leaked: boolean };
+      w.thought = false;
+      w.leaked = false;
       new MutationObserver(() => {
-        if (document.querySelector(".msg.agent .typing")) w.typed = true;
-        if (document.querySelector(".msg.agent[aria-busy='true']")) w.busy = true;
+        if (document.querySelector(".think")) {
+          w.thought = true;
+          if (document.querySelector(".msg.agent .typing, .attach .board")) w.leaked = true;
+        }
       }).observe(document.body, { subtree: true, childList: true, attributes: true });
     });
     await page.getByLabel("Запрос").fill("Хочу на море");
     await page.getByRole("button", { name: "Отправить" }).click();
     const status = page.getByRole("status");
     await expect(status).not.toBeEmpty();
-    // Typing ends in ≤ 1.5 s: the message is not busy, the hints appear under it.
-    await expect(status).not.toHaveAttribute("aria-busy", "true", { timeout: 5000 });
+    await expect(page.locator(".think")).toHaveCount(0);
+    await expect(status).not.toHaveAttribute("aria-busy", "true");
     const seen = await page.evaluate(() => {
-      const w = window as unknown as { typed: boolean; busy: boolean };
-      return { typed: w.typed, busy: w.busy };
+      const w = window as unknown as { thought: boolean; leaked: boolean };
+      return { thought: w.thought, leaked: w.leaked };
     });
-    expect(seen.typed, "ответ печатался по словам").toBe(true);
-    expect(seen.busy, "сообщение было aria-busy во время печати").toBe(true);
+    expect(seen.thought, "индикатор мысли был виден").toBe(true);
+    expect(seen.leaked, "текст и карточки не показывались до готовности").toBe(false);
     const hint = page.locator(".attach").getByRole("button").first();
     await expect(hint).toBeVisible();
     const label = (await hint.getAttribute("aria-label")) ?? (await hint.textContent()) ?? "";

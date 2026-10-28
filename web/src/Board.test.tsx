@@ -382,4 +382,27 @@ suite("доска поездки", () => {
     r.plan.changes = [];
     expect(render(r).querySelector("details.more:not(.options)")?.hasAttribute("open")).toBe(false);
   });
+
+  it("#450: главное действие этапа — последнее в блоке, после отелей и транспорта, с суммой и «синтетика»", () => {
+    const order = (stage: ChatReply["stage"], mainLabel: string) => {
+      const doc = render({ ...hotelBought, stage, voucher: null });
+      const all = [...doc.querySelectorAll(".board > *")];
+      const at = (label: string) => all.findIndex((e) => e.getAttribute("aria-label") === label);
+      return { doc, all, at, main: all.findIndex((e) => e.textContent?.includes(mainLabel) && e.querySelector("button.buy, button.primary")) };
+    };
+    const a = order("assemble", "Положить в корзину");
+    expect(a.at("Таймлайн")).toBeLessThan(a.at("Сравнение отелей"));
+    expect(a.at("Сравнение отелей")).toBeLessThan(a.at("Сравнение транспорта"));
+    expect(a.at("Сравнение транспорта")).toBeLessThan(a.main);
+    expect(a.at("Корзина")).toBeLessThan(a.main);
+    expect(a.main).toBe(a.all.length - ([...a.doc.querySelectorAll(".board > details")].length) - 1);
+    const buy = a.doc.querySelector(".board > .next button.buy");
+    expect(buy?.textContent).toContain("Положить в корзину · ");
+    expect(buy?.querySelector(".price .synth")?.textContent).toBe("синтетика");
+    const c = order("compare", "Беру этот план");
+    expect(c.at("Сравнение транспорта")).toBeLessThan(c.main);
+    expect(c.at("Таймлайн")).toBeLessThan(c.main);
+    const o = order("checkout", "Подтвердить бронь");
+    expect(o.at("Таймлайн")).toBeLessThan(o.at("Корзина"));
+  });
 });

@@ -170,48 +170,9 @@ function Line({ text, synthetic }: { text: string; synthetic: boolean }) {
   );
 }
 
-const WORD_MS = 35;
-const TYPE_MAX_MS = 1500;
-
-// The text of an agent message. A new one appears word by word, then gets its highlights.
-export function AgentText({ text, synthetic, typing, onTick, onDone }: {
-  text: string;
-  synthetic: boolean;
-  typing: boolean;
-  onTick?: () => void;
-  onDone?: () => void;
-}) {
-  const words = text.split(/(\s+)/); // separators kept: new lines stay
-  const [shown, setShown] = useState(typing ? 0 : words.length);
-  useEffect(() => {
-    if (!typing) return;
-    const total = Math.ceil(words.length / 2);
-    const step = Math.min(WORD_MS, TYPE_MAX_MS / Math.max(total, 1));
-    let n = 0;
-    const t = setInterval(() => {
-      n += 2;
-      setShown(n);
-      onTick?.();
-      if (n >= words.length) {
-        clearInterval(t);
-        onDone?.();
-      }
-    }, step);
-    return () => clearInterval(t);
-  }, [typing]); // the text of a typing message does not change
-  if (typing && shown < words.length) {
-    // A screen reader gets the whole text at once, not the pieces of the typing.
-    return (
-      <>
-        <div className="sr-only">
-          <Lines text={text} synthetic={synthetic} />
-        </div>
-        <p className="typing caret" aria-hidden="true">
-          {words.slice(0, shown).join("")}
-        </p>
-      </>
-    );
-  }
+// The text of an agent message. It appears whole and formatted (highlights, «синтетика»):
+// until the answer is ready the chat shows only the Thinking indicator (#450).
+export function AgentText({ text, synthetic }: { text: string; synthetic: boolean }) {
   return <Lines text={text} synthetic={synthetic} />;
 }
 

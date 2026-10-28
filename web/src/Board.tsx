@@ -911,6 +911,12 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
     <section className="sec next" aria-label="Следующий шаг">
       <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
         {next.label}
+        {stage === "assemble" && cart.items.length > 0 && (
+          <>
+            {" · "}
+            <Price value={cart.total_rub} synthetic={isSynthetic(cart.items)} />
+          </>
+        )}
       </button>
     </section>
   );
@@ -925,25 +931,25 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
       {voucher && <VoucherView voucher={voucher} />}
       {past && (
         <>
-          {cartView}
           {timeline}
+          {cartView}
         </>
       )}
-      {/* The plan is built: its timeline and the step to the cart first, the options after it. */}
+      {/* The plan is built: its timeline, the options, the cart; the main action is last (#450). */}
       {stage === "assemble" && (
         <>
           {timeline}
-          {nextStep}
           {choices}
           {cartView}
+          {nextStep}
         </>
       )}
       {!past && stage !== "assemble" && (
         <>
           {choices}
           {timeline}
-          {nextStep}
           {cartView}
+          {nextStep}
         </>
       )}
       {(more || editable) && (

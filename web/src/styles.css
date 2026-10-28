@@ -993,12 +993,6 @@ button.icon {
   font-size: var(--fs-s);
 }
 
-.caret::after {
-  content: "▍";
-  color: var(--muted);
-  animation: blink 1s steps(2) infinite;
-}
-
 mark {
   background: var(--acc);
   color: var(--acc-ink);
@@ -1959,6 +1953,29 @@ button.primary:hover:not(:disabled),
 
 .next .buy {
   margin-top: 0;
+}
+
+/* the main action of a stage is the last in its block and sticks to the bottom of the feed (#450) */
+.board > .next,
+.sec > button.primary {
+  position: sticky;
+  bottom: 8px;
+  z-index: 3;
+  box-shadow: 0 0 0 6px var(--paper);
+  border-radius: 12px;
+}
+
+.buy .price {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 6px;
+  align-items: baseline;
+}
+
+.buy .synth {
+  font-size: 10.5px;
+  opacity: 0.85;
 }
 
 .voucher {

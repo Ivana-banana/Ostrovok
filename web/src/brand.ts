@@ -12,6 +12,7 @@ export const VERBS = [
   "Торгуюсь с отелями",
   "Листаю путеводитель",
   "Проверяю прогноз у моря",
+  "Ищу билеты",
   "Считаю пересадки",
   "Прокладываю маршрут",
   "Ловлю попутный ветер",
@@ -21,6 +22,7 @@ export const VERBS = [
   "Меряю температуру воды",
 ];
 export const VERB_MS = 700;
+export const MIN_THINK_MS = 900; // the thinking indicator is seen even on a fast offline reply
 
 // Animations only when the user did not ask for less motion. No matchMedia (tests): no motion.
 export function motionOk(): boolean {
