@@ -868,6 +868,18 @@ def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
     assert found["destinations"] == dests
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["Казань на выходные, без питомцев", "едем без собаки", "питомцев у нас нет",
+     "собаку не берём", "без животных", "без детей и без кошки", "поедем без нашей собаки",
+     "без детей и собаки", "у нас нет собаки", "собаки не будет", "нет у нас питомцев",
+     "мы не берём с собой собаку"],
+)  # fmt: skip
+def test_pets_negation_gives_false(text):  # #294
+    found, _ = extract(text)
+    assert found["pets"] is False
+
+
 # #293: a range by weekdays («со среды по пятницу») is a date range, not an assumption.
 @pytest.mark.parametrize(
     ("text", "start", "end"),
@@ -953,6 +965,35 @@ def test_weekday_range_names_a_conflicting_length(tuesday):
     found, notes = extract("Казань со среды по пятницу, на 5 ночей")
     assert found["nights"] == 2
     assert any(n.startswith("даты:") and "5 ночей" in n for n in notes), notes
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["едем с собакой", "с нами кот", "без детей, с собакой", "без питомцев не поедем",
+     "с собакой, без кошек", "без детей с собакой", "без собаки никуда не поедем",
+     "без собаки не едем", "мы без собаки не путешествуем", "без кошки не полетим",
+     "без питомца никак", "без собаки ни за что", "собака не будет проблемой",
+     "Сочи в ноябре, отель без доплаты за собаку", "отель без ограничений для собак",
+     "нет запрета на собак", "летим без пересадок кошка плохо переносит перелёты",
+     "нет детей есть собака", "двое взрослых без детей и собака", "без пересадок и собака с нами",
+     "едем вдвоём без детей и наша собака"],
+)  # fmt: skip
+def test_pets_positive_mention_stays_true(text):  # #294
+    found, _ = extract(text)
+    assert found["pets"] is True
+
+
+def test_pets_negation_clears_a_flag_set_earlier(tmp_path):  # #294
+    store = SessionStore(tmp_path / "s.db")
+    first = chat(ChatRequest(session_id=None, message="Казань на выходные, с собакой"), store)
+    assert first.plan.spec.pets is True
+    second = chat(ChatRequest(session_id=first.session_id, message="без питомцев"), store)
+    assert second.plan.spec.pets is False
+
+
+def test_pets_unrelated_text_does_not_touch_the_flag():  # #294
+    found, _ = extract("Казань на выходные, без детей")
+    assert "pets" not in found
 
 
 @pytest.mark.parametrize(

@@ -2015,6 +2015,51 @@ def _budget(t: str, found: dict, notes: list[str], nights: int, adults: int) -> 
         notes.append(f"бюджет: в {label} — не пересчитываю, уточните в рублях")
 
 
+PET_RE = re.compile(
+    r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"
+    r"|\bпс(?:а|у|ом|е|ы|ов|ам|ами|ах)\b"
+    r"|\bщен(?:ок|ка|ку|ком|ке|ки|ков|кам|ками|ках)\b|\bщенят(?:а|ам|ами|ах)?\b"
+    r"|\bкот[её]н(?:ок|ка|ку|ком|ке)\b|\bкотят(?:а|ам|ами|ах)?\b"
+    r"|\bживотн"  # only a refusal counts: «с животными» is the model's, a bare «животные» is a zoo
+)
+# #294: «без питомцев», «без детей и собаки», «питомцев нет», «собаку не берём». Between «без» and
+# the pet only a possessive or a list with «и»: «без нашей собаки». Any other word keeps the pet:
+# «без доплаты за собаку», «без детей с собакой», «без пересадок кошка плохо переносит перелёты».
+_PET_BEFORE = re.compile(
+    r"\b(?:без|нет|не\s+(?:берем|возьмем|везем|берут|возьмут))\s+(?:с\s+собой\s+)?(?:у\s+нас\s+)?"
+    r"(?:(?:наш|ваш|мо[ейи]|сво|тво)\w*\s+|\w+\s+и\s+(?:без\s+)?){0,2}$"
+)
+# After a list with «и» a pet in the nominative goes: «без детей и собака», «без пересадок и кот».
+_PET_NOMINATIVE = re.compile(
+    r"(?:собака|кошка|кот|пес|питомец|щенок|котенок|щенки|котята|животное|животные)\b"
+)
+_PET_AFTER = re.compile(
+    r"\w*\s+(?:у\s+нас\s+)?(?:нет\b|не\s+(?:берем|возьмем|везем|берут|возьмут)"
+    r"|не\s+(?:будет|будут)\s*(?:$|[.,;!?]))"  # «собака не будет проблемой» is no refusal
+)
+# «без собаки не поедем», «без собаки никуда не едем», «без питомца никак»: no pet, no trip
+_DOUBLE_NO = re.compile(
+    r"\w*(?:\s+\w+){0,2}?\s+(?:никуда|никак|ни\s+за\s+что"
+    r"|не\s+(?:(?:по)?(?:ед|ех|лет)\w*|путеш\w*|(?:с)?можем|хотим|будем|отправ\w*))"
+)
+
+
+def _pets(t: str) -> bool | None:
+    """True: a pet goes. False: the message refuses one. None: pets are not mentioned.
+    A pet that is not refused wins: «с собакой, без кошек»."""
+    refused = False
+    for m in PET_RE.finditer(t):
+        before = _PET_BEFORE.search(t[: m.start()])
+        if before and " и " in before.group() and _PET_NOMINATIVE.match(t, m.start()):
+            before = None
+        no = before or _PET_AFTER.match(t, m.end())
+        if no and not _DOUBLE_NO.match(t, m.end()):
+            refused = True
+        elif m.group() != "животн":
+            return True
+    return False if refused else None
+
+
 def extract(
     text: str,
     has_destination: bool = False,
@@ -2045,14 +2090,8 @@ def extract(
     _own_tickets(t, found)
     _people(t, found, notes, asking, has_destination)
     _budget(t, found, notes, nights, adults)
-    if re.search(
-        r"собак|кошк|\bкот(?:а|у|ом|е|ы|ов)?\b|\bпес\b|питом"
-        r"|\bпс(?:а|у|ом|е|ы|ов|ам|ами|ах)\b"
-        r"|\bщен(?:ок|ка|ку|ком|ке|ки|ков|кам|ками|ках)\b|\bщенят(?:а|ам|ами|ах)?\b"
-        r"|\bкот[её]н(?:ок|ка|ку|ком|ке)\b|\bкотят(?:а|ам|ами|ах)?\b",
-        t,
-    ):
-        found["pets"] = True
+    if (pets := _pets(t)) is not None:
+        found["pets"] = pets
     if meal := _meal(t):
         found["meal"] = meal
     negated = re.compile(r"\b(?:не|без)\s+(?:\w+\s+)?$")  # «не хочу лететь», «не на машине»
