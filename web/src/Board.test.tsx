@@ -108,12 +108,22 @@ suite("доска поездки", () => {
     try {
       expect(localTime("2026-12-11T07:10:00+03:00")).toBe("11.12 07:10");
       const text = render(hotelBought).querySelector("[aria-label='Таймлайн']")?.textContent ?? "";
-      expect(text).toContain("11.12 07:10");
+      expect(text).toContain("11.12 07:10 (UTC+3)");
       expect(text).toContain("прибытие 07:10 раньше заезда 14:00");
       expect(text).toContain("Ранний заезд"); // the fix offer is shown by its offer_id
     } finally {
       process.env.TZ = tz;
     }
+  });
+
+  it("#439: у отелей и направлений есть номера, у рейсов — зона времени", () => {
+    const doc = render(base);
+    const hotels = doc.querySelector("[aria-label='Сравнение отелей']");
+    expect(hotels?.querySelector("th.num")?.textContent).toBe("№");
+    expect(hotels?.querySelector("tbody td.no")?.textContent).toBe("1");
+    const dest = doc.querySelector("[aria-label='Направления']");
+    if (dest) expect(dest.querySelector(".dest-no")?.textContent).toBe("1. ");
+    expect(doc.body.textContent).toMatch(/\(UTC[+-]\d/);
   });
 
   it("#39: у отеля несколько тарифов — в таблице одна строка, выбранный тариф виден", () => {

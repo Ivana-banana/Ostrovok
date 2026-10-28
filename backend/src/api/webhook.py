@@ -49,5 +49,7 @@ def send_booking(voucher: Voucher) -> bool:
     # stored booking: it is logged, not swallowed.
     except Exception as e:  # noqa: BLE001
         host = urllib.parse.urlsplit(url).netloc  # the path and the query may hold a token
-        log.warning("webhook: booking %s not sent to %s: %r", voucher.booking_id, host, e)
+        log.warning(
+            "webhook: booking %s not sent to %s: %s", voucher.booking_id, host, type(e).__name__
+        )
         return False

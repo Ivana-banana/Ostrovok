@@ -32,6 +32,7 @@ import {
   PRIORITIES,
   priorityMessage,
   rub,
+  zonedTime,
 } from "./format";
 import { ParamsBar } from "./ParamsBar";
 import { otherAssumptions } from "./params";
@@ -249,6 +250,7 @@ export function Destinations({ plan, stage, busy, onSend }: {
           return (
             <article key={d.name} className="card dest">
               <h3>
+                <span className="dest-no">{i + 1}. </span>
                 {d.name} <small>{d.country}</small>
               </h3>
               <p>
@@ -329,6 +331,7 @@ function Hotels({ plan, stage, busy, onSend }: {
         <table className="grid-table">
           <thead>
             <tr>
+              <th className="num">№</th>
               <th>Отель</th>
               <th className="num">Цена за всё</th>
               <th className="num">Звёзды</th>
@@ -349,6 +352,7 @@ function Hotels({ plan, stage, busy, onSend }: {
               const word = ordinal(i);
               return (
                 <tr key={h.offer_id} className={chosen ? "chosen" : undefined}>
+                  <td className="num no">{i + 1}</td>
                   <td className="name">
                     {h.title}
                     {chosen && <span className="tag">выбран</span>}
@@ -436,10 +440,10 @@ function Transport({ plan, stage, busy, onSend }: {
                   </td>
                   <td>{MODES[t.mode]}</td>
                   <td data-label="Отправление">
-                    <span className="when">{localTime(t.depart_at)}</span> <small>{t.origin}</small>
+                    <span className="when">{zonedTime(t.depart_at)}</span> <small>{t.origin}</small>
                   </td>
                   <td data-label="Прибытие">
-                    <span className="when">{localTime(t.arrive_at)}</span> <small>{t.destination}</small>
+                    <span className="when">{zonedTime(t.arrive_at)}</span> <small>{t.destination}</small>
                   </td>
                   <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
                   <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
@@ -583,7 +587,7 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
       <ol className="timeline">
         {plan.timeline.map((e, i) => (
           <li key={`${e.at}-${i}`} className={gone(e.offer_id) ? "gone" : undefined} style={{ "--i": i } as CSSProperties}>
-            <time>{localTime(e.at)}</time> <span className="gone-title">
+            <time>{zonedTime(e.at)}</time> <span className="gone-title">
               <Money text={e.title} synthetic={isSynthetic(plan.offers)} />
             </span>
             {gone(e.offer_id) && <span className="gone-note"> — убрано из корзины</span>}

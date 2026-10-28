@@ -14,7 +14,7 @@ from api.cart import cart_route, checkout_route
 from api.contracts import Cart, CartAction, ChatReply, ChatRequest, CheckoutRequest, Voucher
 from api.guards import llm_available
 from api.model import chat
-from api.partner import allowed_origins, checkout_once, plan_reply, require_key
+from api.partner import checkout_once, cors_options, plan_reply, require_key
 from api.store import SessionStore, db_path
 
 V1 = "Партнёрский API /api/v1"
@@ -36,13 +36,8 @@ DESCRIPTION = """\
 """
 
 app = FastAPI(title="О!дин запрос — API агента путешествий", version="1.0", description=DESCRIPTION)
-if origins := allowed_origins():
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-API-Key", "Idempotency-Key"],
-    )
+if cors := cors_options():
+    app.add_middleware(CORSMiddleware, **cors)
 
 KEY = [Depends(require_key)]
 
