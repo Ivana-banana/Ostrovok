@@ -122,7 +122,7 @@ suite("приложение", () => {
     await mount();
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     expect(box.querySelector("[role='alert']")).toBeNull();
-    expect(box.textContent).toContain("Здесь появится доска поездки");
+    expect(box.textContent).toContain("Куда поедем?");
   });
 
   it("TRAP-1: ответ без модели помечен «без ИИ» в чате и на доске", async () => {
@@ -339,7 +339,8 @@ suite("приложение", () => {
       expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
       expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
       await click("＋ Новый чат");
-      expect(box.textContent).toContain("Здесь появится доска поездки");
+      expect(box.textContent).toContain("Куда поедем?");
+      expect(box.querySelector("[aria-label='Корзина']")).toBeNull();
     } finally {
       vi.restoreAllMocks();
     }
@@ -435,7 +436,7 @@ suite("список чатов слева", () => {
     await say("Казань на выходные");
     await click("＋ Новый чат");
     expect(userMsgs()).toEqual([]);
-    expect(box.textContent).toContain("Здесь появится доска поездки");
+    expect(box.textContent).toContain("Куда поедем?");
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     await say("Сочи с детьми");
     expect(calls.filter((c) => c.key === "POST /api/chat").map((c) => c.body)).toEqual([
@@ -581,7 +582,9 @@ suite("чат как в мессенджере", () => {
     await click("Отправить");
     const cards = [...box.querySelectorAll(".feed [aria-label='Направления'] .dest")];
     expect(cards).toHaveLength(2);
-    expect(box.querySelector(".plan [aria-label='Направления']")).toBeNull();
+    // #434: one window — the cards stand under the answer, there is no plan panel.
+    expect(box.querySelectorAll("[aria-label='Направления']")).toHaveLength(1);
+    expect(box.querySelector("#plan, .plan-toggle, .plan-sheet-open")).toBeNull();
     expect(cards[0].querySelector(".tag.best")?.textContent).toBe("лучшая цена");
     expect(cards[1].querySelector(".tag.warn")?.textContent).toBe("дороже бюджета");
     expect(cards[0].querySelector(".tag.warn")).toBeNull();

@@ -88,8 +88,9 @@ const isBudget = (what: string) => /^бюджет/i.test(fieldLabel(what));
 
 const isSynthetic = (items: Offer[]) => items.length === 0 || items.some((o) => o.synthetic);
 
-// Origin, dates, guests and budget are the chips of ParamsBar; the rows keep the rest.
-function SpecSummary({ spec, locked, onSend }: {
+// The strip of trip parameters above the chat (#434). Origin, dates, guests and budget are the
+// editable chips of ParamsBar; the other fields of the spec are read-only chips after them.
+export function TripParams({ spec, locked, onSend }: {
   spec: TripSpec;
   locked: boolean;
   onSend: (text: string) => void;
@@ -109,27 +110,34 @@ function SpecSummary({ spec, locked, onSend }: {
   if (spec.meal) rows.push(["Питание", MEALS[spec.meal]]);
   if (spec.wishes.length) rows.push(["Пожелания", spec.wishes.join(", ")]);
   return (
-    <section className="sec" aria-label="Параметры поездки">
-      <h2>Параметры</h2>
+    <section className="strip" aria-label="Параметры поездки">
+      <h2 className="sr-only">Параметры поездки</h2>
       <ParamsBar spec={spec} disabled={locked} onSend={onSend} />
-      <dl className="spec">
-        {rows.map(([k, v]) => (
-          <div key={k}>
-            <dt>{k}</dt>
-            <dd>{v}</dd>
-          </div>
-        ))}
-      </dl>
-      {otherAssumptions(spec).length > 0 && (
-        <div className="assumptions">
-          <h3>Допущения агента</h3>
-          <ul>
-            {otherAssumptions(spec).map((a) => (
-              <li key={a}>{a}</li>
-            ))}
-          </ul>
-        </div>
+      {rows.length > 0 && (
+        <dl className="spec">
+          {rows.map(([k, v]) => (
+            <div key={k}>
+              <dt>{k}</dt>
+              <dd>{v}</dd>
+            </div>
+          ))}
+        </dl>
       )}
+    </section>
+  );
+}
+
+function Assumptions({ spec }: { spec: TripSpec }) {
+  const list = otherAssumptions(spec);
+  if (!list.length) return null;
+  return (
+    <section className="sec assumptions" aria-label="Допущения агента">
+      <h2>Допущения агента</h2>
+      <ul>
+        {list.map((a) => (
+          <li key={a}>{a}</li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -207,7 +215,7 @@ function PriorityChips({ order, stage, busy, onSend }: {
   );
 }
 
-// Before a destination is picked the cards live in the chat, after it — on the plan panel.
+// Before a destination is picked its cards are open under the answer, after it — folded in «Варианты».
 export const destinationsInChat = (stage: Stage) => stage === "inspire" || stage === "select";
 
 // Tags of a card: only facts of the reply (the cheapest, the fastest, over the user budget).
@@ -839,9 +847,62 @@ const NEXT: Partial<Record<Stage, { label: string; text: string }>> = {
   assemble: { label: "Положить в корзину", text: "да" },
 };
 
+// What the compact block «Подробнее» holds, in one line for its summary.
+function moreLine(reply: ChatReply, editable: boolean): string {
+  const { spec, changes, explanations } = reply.plan;
+  const parts: string[] = [];
+  if (changes.length) parts.push(`изменено: ${changes.length}`);
+  if (spec.priorities.length) parts.push(`важнее: ${spec.priorities.map((p) => PRIORITIES[p]).join(" → ")}`);
+  else if (editable) parts.push("что для вас важнее");
+  const assumed = otherAssumptions(spec).length;
+  if (assumed) parts.push(`допущений: ${assumed}`);
+  if (explanations.length) parts.push("почему так");
+  return parts.join(" · ");
+}
+
+// The block of the current stage under the last agent message (#434): the cards of the stage
+// first, then the compact «Подробнее» (priorities, assumptions, changes, reasons). The options
+// the user already chose from fold into «Варианты» after the cart is built. Every section stays
+// in the DOM: a folded one is in a closed <details>.
 export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: BoardProps) {
   const { plan, stage, cart, voucher } = reply;
   const next = NEXT[stage];
+  const past = stage === "checkout" || stage === "booked";
+  const destinations = plan.destinations.length > 0 && (
+    <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />
+  );
+  const choices = (
+    <>
+      <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      <Bundles plan={plan} />
+    </>
+  );
+  // Folded: the destinations after one is picked; after the cart, the hotels and transport too.
+  const folded = !destinationsInChat(stage) && (destinations || past);
+  const timeline = (
+    <Timeline
+      plan={plan}
+      cart={cart}
+      marked={past}
+      canAdd={stage === "checkout"}
+      busy={busy}
+      onCart={onCart}
+    />
+  );
+  const cartView = (
+    <CartView
+      cart={cart}
+      spec={plan.spec}
+      stage={stage}
+      removed={removed}
+      busy={busy}
+      onCart={onCart}
+      onCheckout={onCheckout}
+    />
+  );
+  const editable = stage === "compare" || stage === "assemble";
+  const more = moreLine(reply, editable);
   return (
     <div className="board">
       {!reply.llm && (
@@ -849,29 +910,19 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
           без ИИ — упрощённый режим: модель недоступна, агент работает по правилам
         </p>
       )}
+      {destinationsInChat(stage) && destinations}
       {voucher && <VoucherView voucher={voucher} />}
-      <SpecSummary
-        spec={plan.spec}
-        locked={busy || stage === "clarify" || stage === "booked"}
-        onSend={onSend}
-      />
-      <PriorityChips order={plan.spec.priorities} stage={stage} busy={busy} onSend={onSend} />
-      <Changes plan={plan} />
-      {plan.destinations.length > 0 && !destinationsInChat(stage) && (
-        <Destinations plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      {past ? (
+        <>
+          {cartView}
+          {timeline}
+        </>
+      ) : (
+        <>
+          {choices}
+          {timeline}
+        </>
       )}
-      <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
-      <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
-      <Bundles plan={plan} />
-      <Explanations plan={plan} />
-      <Timeline
-        plan={plan}
-        cart={cart}
-        marked={stage === "checkout" || stage === "booked"}
-        canAdd={stage === "checkout"}
-        busy={busy}
-        onCart={onCart}
-      />
       {next && (
         <section className="sec next" aria-label="Следующий шаг">
           <button type="button" className="buy" disabled={busy} onClick={() => onSend(next.text)}>
@@ -879,15 +930,29 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
           </button>
         </section>
       )}
-      <CartView
-        cart={cart}
-        spec={plan.spec}
-        stage={stage}
-        removed={removed}
-        busy={busy}
-        onCart={onCart}
-        onCheckout={onCheckout}
-      />
+      {!past && cartView}
+      {(more || editable) && (
+        <details className="more" open={plan.changes.length > 0 || undefined}>
+          <summary>
+            <b>Подробнее</b>
+            {more && <span>{more}</span>}
+          </summary>
+          <Changes plan={plan} />
+          <PriorityChips order={plan.spec.priorities} stage={stage} busy={busy} onSend={onSend} />
+          <Assumptions spec={plan.spec} />
+          <Explanations plan={plan} />
+        </details>
+      )}
+      {folded && (
+        <details className="more options">
+          <summary>
+            <b>Варианты</b>
+            <span>{past ? "направления, отели и транспорт, из которых выбирали" : "другие направления"}</span>
+          </summary>
+          {destinations}
+          {past && choices}
+        </details>
+      )}
     </div>
   );
 }

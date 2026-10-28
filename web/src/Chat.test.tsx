@@ -6,9 +6,10 @@ import { AgentText, StagePills } from "./Chat";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const steps = (stage: Parameters<typeof StagePills>[0]["stage"]) =>
+  new DOMParser().parseFromString(renderToStaticMarkup(<StagePills stage={stage} />), "text/html");
 const now = (stage: Parameters<typeof StagePills>[0]["stage"]) =>
-  new DOMParser().parseFromString(renderToStaticMarkup(<StagePills stage={stage} />), "text/html")
-    .querySelector("[aria-current='step']")?.textContent;
+  steps(stage).querySelector("[aria-current='step'] .label")?.textContent;
 
 suite("чат", () => {
   it("этапы сверху: собранный план (assemble) — уже «Корзина»", () => {
@@ -19,6 +20,17 @@ suite("чат", () => {
     expect(now("checkout")).toBe("Корзина");
     expect(now("booked")).toBe("Бронь");
     expect(now(null)).toBeUndefined();
+  });
+
+  it("этапы — прогресс, а не кнопки: номера, галочка у пройденных, подпись «Шаг N из 5»", () => {
+    const doc = steps("compare");
+    const items = [...doc.querySelectorAll("ol.stage li")];
+    expect(items.map((li) => li.querySelector(".dot")?.textContent)).toEqual(["✓", "✓", "3", "4", "5"]);
+    expect(items.map((li) => li.className)).toEqual(["done", "done", "now", "", ""]);
+    expect(doc.querySelector("ol.stage button")).toBeNull();
+    expect(doc.querySelector(".step-caption")?.textContent).toBe("Шаг 3 из 5 · Сравнение");
+    expect((doc.querySelector(".step-bar i") as HTMLElement).style.width).toBe("60%");
+    expect(steps(null).querySelector(".step-caption")).toBeNull();
   });
 
   it("печать по словам: полный текст сразу доступен чтению с экрана, обрывки скрыты", async () => {

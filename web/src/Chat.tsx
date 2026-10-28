@@ -14,20 +14,39 @@ const STEPS: { label: string; stages: Stage[] }[] = [
   { label: "Бронь", stages: ["booked"] },
 ];
 
+// Progress of the trip, not buttons (#434): numbered steps joined by a line, a done step has a
+// check mark, the current one is highlighted. A narrow screen shows the caption and a thin bar.
 export function StagePills({ stage }: { stage: Stage | null }) {
   const at = stage ? STEPS.findIndex((s) => s.stages.includes(stage)) : -1;
   return (
-    <ol className="stage" aria-label="Этапы поездки">
-      {STEPS.map((s, i) => (
-        <li
-          key={s.label}
-          className={i === at ? "now" : i < at ? "done" : undefined}
-          aria-current={i === at ? "step" : undefined}
-        >
-          {s.label}
-        </li>
-      ))}
-    </ol>
+    <div className="steps">
+      <ol className="stage" aria-label="Этапы поездки">
+        {STEPS.map((s, i) => {
+          const done = i < at;
+          return (
+            <li
+              key={s.label}
+              className={i === at ? "now" : done ? "done" : undefined}
+              aria-current={i === at ? "step" : undefined}
+            >
+              <span className="dot" aria-hidden="true">
+                {done ? "✓" : i + 1}
+              </span>
+              <span className="label">{s.label}</span>
+              {done && <span className="sr-only"> — пройден</span>}
+            </li>
+          );
+        })}
+      </ol>
+      {at >= 0 && (
+        <p className="step-caption" aria-hidden="true">
+          Шаг {at + 1} из {STEPS.length} · {STEPS[at].label}
+          <span className="step-bar">
+            <i style={{ width: `${((at + 1) / STEPS.length) * 100}%` }} />
+          </span>
+        </p>
+      )}
+    </div>
   );
 }
 
