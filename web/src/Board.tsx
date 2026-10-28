@@ -532,7 +532,7 @@ function Transport({ plan, stage, busy, onSend }: {
 
 function Bundles({ plan }: { plan: Plan }) {
   if (!plan.bundles.length) return null;
-  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? id;
+  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title;
   const of = (b: Bundle) => plan.offers.filter((o) => b.offer_ids.includes(o.offer_id));
   const synthetic = (b: Bundle) => isSynthetic(of(b));
   const kind = (id: string) => plan.offers.find((o) => o.offer_id === id)?.kind;
@@ -550,9 +550,10 @@ function Bundles({ plan }: { plan: Plan }) {
               <Price value={b.total_rub} synthetic={synthetic(b)} source={sourceOf(of(b))} />, в пути {hours(b.travel_hours)}
             </p>
             <ul>
-              {b.offer_ids.map((id) => (
-                <li key={id}>{title(id)}</li>
-              ))}
+              {b.offer_ids.flatMap((id) => {
+                const t = title(id); // an id outside the plan is no text for the guest (#549)
+                return t ? [<li key={id}>{t}</li>] : [];
+              })}
             </ul>
             {b.tradeoffs.length > 0 && (
               <p className="muted">
@@ -568,7 +569,7 @@ function Bundles({ plan }: { plan: Plan }) {
 
 function Explanations({ plan }: { plan: Plan }) {
   if (!plan.explanations.length) return null;
-  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? id;
+  const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title ?? "Вариант плана";
   const synth = isSynthetic(plan.offers);
   return (
     <section className="sec" aria-label="Почему этот выбор">
@@ -661,16 +662,13 @@ function Timeline({ plan, cart, marked, canAdd, busy, onCart }: {
             <ul>
               {fixes.map((id) => {
                 const o = offer(id);
+                if (!o) return null; // a fix outside the plan has no title: no raw id for the guest (#549)
                 return (
                   <li key={id}>
-                    {o ? o.title : id}
-                    {o && (
-                      <>
-                        {" — "}
-                        <Price value={o.price_rub} synthetic={o.synthetic} source={sourceOf([o])} />
-                      </>
-                    )}
-                    {o && canAdd && (
+                    {o.title}
+                    {" — "}
+                    <Price value={o.price_rub} synthetic={o.synthetic} source={sourceOf([o])} />
+                    {canAdd && (
                       <button type="button" disabled={busy} onClick={() => onCart("add", id)}>
                         В корзину
                       </button>
@@ -888,10 +886,8 @@ function VoucherView({ voucher }: { voucher: Voucher }) {
       </p>
       <ul className="plain">
         {voucher.items.map((o) => (
-          <li key={o.offer_id} className="row">
-            <span>
-              {o.title} <small className="muted">{o.offer_id}</small>
-            </span>
+          <li key={o.offer_id} className="row" data-offer-id={o.offer_id}>
+            <span>{o.title}</span>
             <Price value={o.price_rub} synthetic={o.synthetic} source={sourceOf([o])} />
           </li>
         ))}
