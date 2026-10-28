@@ -639,7 +639,7 @@ button.icon {
   background: var(--noai);
 }
 
-/* #490: the switches of the real sources under the mode badge; off by default */
+/* #566: the «Синтетика» switch under the mode badge; off by default */
 .switches {
   display: flex;
   flex-direction: column;

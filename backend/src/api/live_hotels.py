@@ -350,6 +350,7 @@ class Live101Hotels:
     modelled from the real price, so each offer keeps the REAL_NOTE provenance line."""
 
     health_label = "101hotels (живые) / синтетика при сбое"
+    live_layer = True  # #566: offers.hotel_port() drops this layer for «Синтетика»
 
     def __init__(self, base: object) -> None:
         self.base = base
