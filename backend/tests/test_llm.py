@@ -628,3 +628,23 @@ def test_model_answer_cannot_lift_an_earlier_refusal(store, fake):
     r = say(store, "подешевле, до 100 тысяч", r.session_id)
     assert r.plan.spec.destinations == [] and "Анталия" not in [d.name for d in r.plan.destinations]
     assert "исключено: Турция, Египет" in r.plan.spec.assumptions
+
+
+def test_model_whole_month_range_is_dropped_but_explicit_dates_stay():
+    """#574: «в ноябре» from the model as 1..30 Nov (29 nights) must not replace the rules' 7 nights."""
+    found, _ = extract("Тёплое море в ноябре, из Москвы")
+    assert "date_from" not in found
+    whole = {
+        "date_from": date(2026, 11, 1),
+        "date_to": date(2026, 11, 30),
+        "nights": 29,
+        "month": 11,
+    }
+    out = with_llm(found, whole)
+    assert not {"date_from", "date_to"} & out.keys()
+    assert out.get("nights") != 29
+    explicit, _ = extract("Казань с 1 по 30 ноября")
+    assert explicit["date_from"].day == 1
+    assert with_llm(explicit, whole)["date_to"] == date(2026, 11, 30)
+    part = {"date_from": date(2026, 12, 11), "date_to": date(2026, 12, 13), "nights": 2}
+    assert with_llm(found, part)["nights"] == 2
