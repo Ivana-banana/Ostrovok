@@ -44,3 +44,21 @@ def test_these_weekend_on_a_weekend_day_is_not_next_friday(monkeypatch, today, s
     found, notes = extract("в Казань в эти выходные, двое")
     assert found["date_from"] == start and found["date_to"] == end and found["nights"] == nights
     assert any(n.startswith("даты:") for n in notes)
+
+
+def test_next_weekend_on_saturday_is_the_next_friday(monkeypatch):
+    fix_today(monkeypatch, date(2026, 11, 28))
+    found, _ = extract("в Казань в следующие выходные, двое")
+    assert found["date_from"] == date(2026, 12, 4) and found["date_to"] == date(2026, 12, 6)
+
+
+def test_bare_weekend_on_saturday_stays_the_next_friday(monkeypatch):
+    fix_today(monkeypatch, date(2026, 11, 28))
+    found, _ = extract("в Казань на выходные, двое")
+    assert found["date_from"] == date(2026, 12, 4) and found["nights"] == 2
+
+
+def test_named_month_weekend_on_saturday_stays_in_that_month(monkeypatch):
+    fix_today(monkeypatch, date(2026, 10, 31))
+    found, _ = extract("в Казань в ноябре на выходные, двое")
+    assert found["date_from"] == date(2026, 11, 6) and found["month"] == 11

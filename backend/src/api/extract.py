@@ -2078,7 +2078,12 @@ def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
             )
             start = base + timedelta(days=(4 - base.weekday()) % 7)  # Friday
             end = start + timedelta(days=2)
-            if base == tomorrow and date.today().weekday() in (5, 6):
+            if (
+                base == tomorrow
+                and date.today().weekday() in (5, 6)
+                and re.search(r"\bэт(?:и|их|им)\s+выходн", t)
+                and (not month or month == date.today().month)
+            ):
                 # #152: on Saturday or Sunday the weekend is under way: it starts today
                 start, end = date.today(), tomorrow
                 found["nights"] = 1
