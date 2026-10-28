@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useId, useState } from "react";
 import { Money, Price } from "./Board";
 import { VERBS, VERB_MS } from "./brand";
 import type { ChatReply, Mode, Stage } from "./contracts";
@@ -180,12 +180,27 @@ function Line({ text, synthetic }: { text: string; synthetic: boolean }) {
   );
 }
 
-// #468: a thin arrow of the routes and times in the proposed trip; screen readers and a copy get «→».
+// #476: the route line ●━○ between places and times; screen readers and a copy get «→».
+// The gradient and the filter need an id that is unique on the page: many lines are drawn.
 function Arrow() {
+  const id = useId().replace(/:/g, "");
   return (
     <>
-      <svg className="arrow" viewBox="0 0 22 8" aria-hidden="true">
-        <path d="M1 4h19M16 1l4 3-4 3" />
+      <svg className="arrow" viewBox="0 0 60 16" aria-hidden="true">
+        <defs>
+          <linearGradient id={`g${id}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" className="route-hi" />
+            <stop offset="1" className="route-lo" />
+          </linearGradient>
+          <filter id={`f${id}`} x="-20%" y="-80%" width="140%" height="260%">
+            <feDropShadow dx="0" dy="1" stdDeviation="0.8" floodColor="#000" floodOpacity=".25" />
+          </filter>
+        </defs>
+        <g filter={`url(#f${id})`}>
+          <rect x="3" y="4.75" width="54" height="6.5" rx="3.25" fill={`url(#g${id})`} />
+          <circle className="route-from" cx="6" cy="8" r="2.6" />
+          <circle className="route-to" cx="54" cy="8" r="2.6" />
+        </g>
       </svg>
       <span className="sr-only">→</span>
     </>
@@ -208,14 +223,6 @@ function Icon({ name }: { name: keyof typeof ICONS }) {
     <svg className="pt-ic" viewBox="0 0 24 24" aria-hidden="true">
       {ICONS[name]}
     </svg>
-  );
-}
-
-function Route({ ride }: { ride: Ride }) {
-  return (
-    <>
-      {ride.from} <Arrow /> {ride.to}
-    </>
   );
 }
 
@@ -247,22 +254,41 @@ function PointRow({ point: p, synthetic }: { point: Point; synthetic: boolean })
         {p.kind === "extra" && <div className="pt-sub">{p.name}</div>}
         {p.kind === "leg" && (
           <>
-            <div className="pt-sub">
-              <Route ride={p.ride} />
-            </div>
-            <div className="pt-sub">
-              {p.start}
-              {p.zones.length > 1 && ` ${p.zones[0]}`} <Arrow /> {p.end} · {p.zones.at(-1)}
+            <div className="pt-sub pt-route">
+              <span>{p.ride.from}</span>{" "}
+              <span className="pt-line">
+                <Arrow />
+              </span>{" "}
+              <span>{p.ride.to}</span>{" "}
+              <span className="pt-time">
+                {p.start}
+                {p.zones.length > 1 && ` ${p.zones[0]}`}
+              </span>{" "}
+              <span className="pt-line">
+                <Arrow />
+              </span>{" "}
+              <span className="pt-time">
+                {p.end} · {p.zones.at(-1)}
+              </span>
             </div>
             {p.ride.facts.length > 0 && <div className="pt-sub">{facts(p.ride.facts)}</div>}
           </>
         )}
-        {p.kind === "transfer" &&
-          p.rides.map((r, i) => (
-            <div key={i} className="pt-sub">
-              <Route ride={r} /> · {facts(r.facts)}
-            </div>
-          ))}
+        {p.kind === "transfer" && (
+          <div className="pt-sub pt-route">
+            {p.rides.map((r, i) => (
+              <Fragment key={i}>
+                <span>{r.from}</span>{" "}
+                <span className="pt-line">
+                  <Arrow />
+                </span>{" "}
+                <span>
+                  {r.to} · {facts(r.facts)}
+                </span>{" "}
+              </Fragment>
+            ))}
+          </div>
+        )}
       </div>
     </li>
   );

@@ -871,6 +871,93 @@ def test_trap_3_route_stop_after_cherez_stays_a_destination(text, dests):
 # --- #73: replanning verbs and common nouns are not a first-word city (TRAP-3) ---
 
 
+# #293: a range by weekdays («со среды по пятницу») is a date range, not an assumption.
+@pytest.mark.parametrize(
+    ("text", "start", "end"),
+    [
+        ("Казань со среды по пятницу", date(2026, 10, 28), date(2026, 10, 30)),
+        ("Казань с пятницы по воскресенье", date(2026, 10, 30), date(2026, 11, 1)),
+        ("Казань с понедельника до среды", date(2026, 11, 2), date(2026, 11, 4)),
+        ("Казань с пятницы по понедельник", date(2026, 10, 30), date(2026, 11, 2)),
+        ("Казань с четверга по субботу, двое", date(2026, 10, 29), date(2026, 10, 31)),
+    ],
+)
+def test_weekday_range_gives_the_nearest_dates(tuesday, text, start, end):
+    found, notes = extract(text)
+    assert found["date_from"] == start and found["date_to"] == end
+    assert found["nights"] == (end - start).days and found["month"] == start.month
+    assert notes == []
+
+
+def test_weekday_range_from_today_weekday_starts_next_week(tuesday):
+    found, _ = extract("Казань со вторника по четверг")
+    assert (found["date_from"], found["date_to"]) == (date(2026, 11, 3), date(2026, 11, 5))
+
+
+def test_weekday_range_turn_has_no_date_assumption(tuesday, tmp_path):
+    r = chat(
+        ChatRequest(session_id=None, message="Казань со среды по пятницу"),
+        SessionStore(tmp_path / "s.db"),
+    )
+    spec = r.plan.spec
+    assert (spec.date_from, spec.date_to, spec.nights) == (
+        date(2026, 10, 28),
+        date(2026, 10, 30),
+        2,
+    )
+    assert not [a for a in spec.assumptions if "дат" in a.lower()], spec.assumptions
+
+
+def test_weekday_range_api_returns_dates_without_date_assumptions(tuesday, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from api.main import app, get_store
+
+    store = SessionStore(tmp_path / "sessions.db")
+    monkeypatch.setitem(app.dependency_overrides, get_store, lambda: store)
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={"message": "Казань со среды по пятницу"})
+        assert response.status_code == 200
+        body = response.json()
+        spec = body["plan"]["spec"]
+        assert (spec["date_from"], spec["date_to"], spec["nights"]) == (
+            "2026-10-28",
+            "2026-10-30",
+            2,
+        )
+        assert not any("дат" in note.lower() for note in spec["assumptions"])
+        saved = client.get(f"/api/session/{body['session_id']}")
+        assert saved.status_code == 200
+        assert saved.json()["plan"]["spec"] == spec
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end", "month"),
+    [
+        ("Казань в декабре со среды по пятницу", date(2026, 12, 2), date(2026, 12, 4), 12),
+        ("Казань летом со среды по пятницу", date(2027, 6, 2), date(2027, 6, 4), 6),
+        (
+            "Казань на следующей неделе со среды по пятницу",
+            date(2026, 11, 4),
+            date(2026, 11, 6),
+            11,
+        ),
+        ("Казань со среды по пятницу следующей недели", date(2026, 11, 4), date(2026, 11, 6), 11),
+        ("Казань через неделю со среды по пятницу", date(2026, 11, 4), date(2026, 11, 6), 11),
+    ],
+)
+def test_weekday_range_respects_month_season_and_week_shift(tuesday, text, start, end, month):
+    found, notes = extract(text)
+    assert (found["date_from"], found["date_to"], found["month"]) == (start, end, month)
+    assert not [n for n in notes if n.startswith("даты:")]
+
+
+def test_weekday_range_names_a_conflicting_length(tuesday):
+    found, notes = extract("Казань со среды по пятницу, на 5 ночей")
+    assert found["nights"] == 2
+    assert any(n.startswith("даты:") and "5 ночей" in n for n in notes), notes
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -1001,6 +1088,30 @@ def test_trap3_name_with_exclamation_is_an_address(text, has_destination):
 @pytest.mark.parametrize("text", ["Владимир! 3 ночи", "Владимир на неделю"])
 def test_trap3_vladimir_without_a_request_verb_is_still_the_city(text):
     assert extract(text)[0]["destinations"] == ["Владимир"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "с понедельника по пятницу работаю, поехать на выходные в Казань",
+        "Казань, я работаю со среды по пятницу",
+    ],
+)
+def test_weekday_range_of_work_days_is_no_trip_range(tuesday, text):
+    found, _ = extract(text)
+    if "выходные" in text:  # the trip is the weekend: Friday to Sunday
+        assert (found["date_from"], found["date_to"]) == (date(2026, 10, 30), date(2026, 11, 1))
+    else:
+        assert "date_to" not in found
+
+
+@pytest.mark.parametrize(
+    "tail",
+    ["занятия для ребёнка в отеле", "работает ли аквапарк", "на работе отпустят"],
+)
+def test_weekday_range_stays_when_a_busy_word_is_no_first_person_busy_day(tuesday, tail):
+    found, _ = extract(f"Казань с пятницы по воскресенье, {tail}")
+    assert (found["date_from"], found["date_to"]) == (date(2026, 10, 30), date(2026, 11, 1))
 
 
 # #362: «в конце января» is the end of the month, not its first days.
