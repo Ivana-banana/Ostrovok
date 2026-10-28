@@ -63,6 +63,18 @@ def test_trap_1_checks_run_in_rule_mode_and_leave_the_env_as_it_was(monkeypatch)
     assert "LLM_BASE_URL" not in os.environ and "LLM_MODEL" not in os.environ
 
 
+def test_trap_6_eval_runs_without_the_live_hotel_layer(monkeypatch):
+    """TRAP-6, #539: api.main wraps HOTELS in Live101Hotels (LIVE_HOTELS=1); eval takes it off."""
+    from api import offers
+    from api.live_hotels import Live101Hotels
+
+    base = offers.HOTELS
+    monkeypatch.setattr(offers, "HOTELS", Live101Hotels(Live101Hotels(base)))
+    with checks._api():
+        assert offers.HOTELS is base
+    assert isinstance(offers.HOTELS, Live101Hotels)  # restored after the run
+
+
 def test_trap_1_s3_a2_really_asks_the_model_and_gets_401(monkeypatch):
     """TRAP-1, #490: eval asks for the model (ChatRequest.llm), so A2 goes through the 401 path."""
     calls = []
