@@ -780,6 +780,8 @@ def transfer_offers(
             continue
         flight = leg.mode == "flight"
         hub_km = place["airport_km"] if flight else place["station_km"]
+        if hub_km is None:  # #625: no station (or airport) in the catalog: no transfer to invent
+            continue
         hub = "аэропорт" if flight else "вокзал"
         if flight and place.get("airport"):
             hub += " " + place["airport"]["iata"]
