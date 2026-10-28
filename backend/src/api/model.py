@@ -1888,6 +1888,12 @@ def _price_versus_reply(old: ChatReply, low: str, found: dict) -> str:
     )
 
 
+def _own_answer(text: str, message: str, use_llm: bool) -> tuple[str, bool]:
+    """#617: with a key the model words the answer; checked against the template (TRAP-4)."""
+    own = llm.answer_question(message, text) if use_llm and message else None
+    return (own, True) if own else (text, False)
+
+
 def _question_answer(
     old: ChatReply, low: str = "", message: str = "", found: dict | None = None
 ) -> str:
@@ -2557,9 +2563,8 @@ def step(
         )
     ):
         # #193: a question about the transfer is answered from the plan and changes nothing.
-        return old.model_copy(
-            update={"reply": _question_answer(old, low), "questions": [], "llm": False}
-        )
+        text, used = _own_answer(_question_answer(old, low), message, use_llm)
+        return old.model_copy(update={"reply": text, "questions": [], "llm": used})
     if (
         prev
         and old.stage in PLAN3
@@ -2605,13 +2610,8 @@ def step(
             or (is_hotel_compare(old.plan, low) and not EDIT_KEYS & set(asked))
         )
     ):
-        return old.model_copy(
-            update={
-                "reply": _question_answer(old, low, message, rules_found),
-                "questions": [],
-                "llm": False,
-            }
-        )
+        text, used = _own_answer(_question_answer(old, low, message, rules_found), message, use_llm)
+        return old.model_copy(update={"reply": text, "questions": [], "llm": used})
     pure = (
         set(rules_found) <= {"modes"}
         and not SHIFT_RE.search(low)
@@ -2647,15 +2647,15 @@ def step(
     ):
         # #186: a question at compare with a fact to give («сколько стоит трансфер?») goes to
         # no model and changes nothing; other questions go on as before.
-        return old.model_copy(
-            update={"reply": _question_answer(old, low, message), "questions": [], "llm": False}
-        )
+        text, used = _own_answer(_question_answer(old, low, message), message, use_llm)
+        return old.model_copy(update={"reply": text, "questions": [], "llm": used})
     if prev and old.stage in ("assemble", "checkout") and is_question(low, asked):
         # #81: «сколько ехать до моря?» is no wish: no model reads it, the DAG does not run.
         kids_only = asking and ASKING_NOTE in rules_notes and no_change(rules_found, old)
         text = _text_kids_question(old) if kids_only else _question_answer(old, low, message)
+        text, used = _own_answer(text, message, use_llm)
         ask = [] if old.plan.spec.children_ages or not kids_only else kids_ask()  # #182
-        return old.model_copy(update={"reply": text, "questions": ask, "llm": False})
+        return old.model_copy(update={"reply": text, "questions": ask, "llm": used})
     # A month after dates the user named (#190): a clear request moves them below (merge);
     # a refusal or a doubt moves nothing and is never a consent («давай в январе?»).
     month_verdict, target, now = "", None, old.plan.spec
