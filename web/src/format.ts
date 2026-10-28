@@ -227,3 +227,110 @@ export function brief(text: string, last = true): string {
   }
   return out.some((l) => l.trim()) ? out.join("\n") : text;
 }
+
+// #468: the compare answer (backend api/model.py _offer_lines) has the header «Предлагаю:», one
+// line per item of the trip and the line «Итого». `items` are «label: text» pairs, `more` are the
+// details that the chat folds under «Подробнее»: why, risks, climate and the note on mock prices.
+// null: the text has no such block (other stages, older answers), the chat shows it line by line.
+export type OfferParts = {
+  head: string[];
+  items: { label: string; text: string }[];
+  points: Point[] | null; // the items as blocks; null: a line did not parse, show the plain list
+  total: string;
+  more: string[];
+  tail: string[];
+};
+
+// One item of the proposed trip as a block (#468): facts are the short sub-lines of the block.
+export type Ride = { from: string; to: string; facts: string[] };
+export type Point =
+  | { kind: "hotel"; name: string; facts: string[]; price: string }
+  | {
+      kind: "leg";
+      label: string; // «Туда» or «Обратно»
+      mode: Mode;
+      ride: Ride; // the route: «Москва» → «Казань (KZN)»; facts: seats, changes, notes
+      start: string; // «10.12 18:50»
+      end: string;
+      zones: string[]; // one zone when both times share it, else the zone of each time
+      price: string;
+    }
+  | { kind: "transfer"; rides: Ride[]; price: string }
+  | { kind: "extra"; name: string; price: string } // a paid extra of the hotel: «Ранний заезд …»
+  | { kind: "included"; facts: string[] };
+
+const ITEM = /^(Отель|Туда|Обратно|Трансферы|Доп\. услуга|Включено): (.+)$/;
+const MORE = /^(Почему|Риск|Климат): |^Цены — синтетика\.$/;
+
+export function offerParts(text: string): OfferParts | null {
+  const lines = text.split("\n").filter((l) => l.trim());
+  const at = lines.findIndex((l) => l.trim() === "Предлагаю:");
+  if (at < 0) return null;
+  const items: OfferParts["items"] = [];
+  let i = at + 1;
+  for (let m; i < lines.length && (m = ITEM.exec(lines[i].trim())); i++) items.push({ label: m[1], text: m[2].replace(/\.$/, "") });
+  if (!items.length || !lines[i]?.startsWith("Итого ")) return null;
+  const rest = (part: string[]) => part.filter((l) => !MORE.test(l.trim()));
+  const points = items.map(point);
+  return {
+    head: rest(lines.slice(0, at)),
+    items,
+    points: points.every((x) => x) ? (points as Point[]) : null,
+    total: lines[i].slice("Итого ".length).replace(/\.$/, ""),
+    more: lines.filter((l) => MORE.test(l.trim())),
+    tail: rest(lines.slice(i + 1)),
+  };
+}
+
+// The words of the mode at the start of a leg title (backend api/offers.py _leg).
+const LEG_MODES: [RegExp, Mode][] = [
+  [/^перелёт /, "flight"],
+  [/^поезд /, "train"],
+  [/^на своей машине /, "car"],
+];
+const ARROW = " → ";
+const AT = String.raw`\d{2}\.\d{2} \d{2}:\d{2}`;
+const SPAN = new RegExp(String.raw`^(.+), (${AT})(?: \((UTC[^)]+)\))? → (${AT}) \((UTC[^)]+)\)$`);
+
+// «А → Б» and its facts as a ride; null without exactly one arrow in the route.
+function ride(route: string, facts: string[]): Ride | null {
+  const ends = route.split(ARROW);
+  return ends.length === 2 ? { from: ends[0], to: ends[1], facts } : null;
+}
+
+// «text — 7 900 ₽»: the text and the price; null without a price at the end.
+function priced(text: string): [string, string] | null {
+  const at = text.lastIndexOf(" — ");
+  return at > 0 && /₽$/.test(text) ? [text.slice(0, at), text.slice(at + 3)] : null;
+}
+
+// One item line of the backend (api/model.py _offer_lines) as a block; null when it does not parse.
+function point({ label, text }: { label: string; text: string }): Point | null {
+  if (label === "Включено") return { kind: "included", facts: text.split(", ") };
+  const p = priced(text);
+  if (!p) return null;
+  const [body, price] = p;
+  if (label === "Доп. услуга") return { kind: "extra", name: body, price };
+  if (label === "Отель") {
+    // «Казантель, Казань, 2★, без питания, невозвратный»: the name may hold commas, the stars may miss
+    const parts = body.split(", ");
+    const facts = parts.splice(/★$/.test(parts.at(-3) ?? "") ? -3 : -2);
+    return parts.length && facts.length ? { kind: "hotel", name: parts.join(", "), facts, price } : null;
+  }
+  if (label === "Трансферы") {
+    // «вокзал → Казантель, Казань, ≈2.6 км; …»: the hotel name holds commas, the facts start at «≈»;
+    // without «≈ … км» the whole part is the route and there are no facts
+    const rides = body.split("; ").map((r) => {
+      const at = r.indexOf(", ≈");
+      return at > 0 ? ride(r.slice(0, at), r.slice(at + 2).split(", ")) : ride(r, []);
+    });
+    return rides.every((r) => r) ? { kind: "transfer", rides: rides as Ride[], price } : null;
+  }
+  // «поезд Москва → Казань, 2 места, 10.12 18:50 → 11.12 07:10 (UTC+3)»
+  const m = SPAN.exec(body);
+  const mode = m && LEG_MODES.find(([word]) => word.test(m[1]));
+  if (!m || !mode) return null;
+  const [route, ...facts] = m[1].replace(mode[0], "").split(", ");
+  const r = ride(route, facts);
+  return r && { kind: "leg", label, mode: mode[1], ride: r, start: m[2], end: m[4], zones: m[3] ? [m[3], m[5]] : [m[5]], price };
+}
