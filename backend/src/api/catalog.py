@@ -381,6 +381,46 @@ def _airport(here: dict, fetch: Callable[[str, dict], dict]) -> tuple[dict, floa
     return {"iata": port["iata"], "km": km, "tz": port["tz"], "road": road}, line, failed
 
 
+# #548: GOST-like Latin letters of the Russian ones, for a place the geocoder knows only by its
+# Latin name («Ушуайя» is not found, «Ushuaia» is).
+LATIN = dict(zip(
+    "абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+    ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s",
+     "t", "u", "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya"],
+    strict=True,
+))  # fmt: skip
+
+
+def _latin(text: str) -> str:
+    return "".join(LATIN.get(c, c) for c in norm(text))
+
+
+def latin_variants(name: str) -> list[str]:
+    """Latin spellings of a Russian name to ask the geocoder, likeliest first (at most two).
+
+    «Ушуайя» -> Ushuaia (я after a vowel or й is «ia», as in English maps), Ushuayya.
+    Empty when the name has no Cyrillic letter."""
+    if not re.search("[а-яё]", norm(name)):
+        return []
+    plain = _latin(name)
+    soft = re.sub(r"(?<=[aeiouy])y?ya", "ia", plain)
+    return [v.title() for v in dict.fromkeys([soft, plain])]
+
+
+def _skeleton(name: str) -> str:
+    """Latin skeleton of a Russian name: «Ушуайя» and «Ушуая» are one: ushuaia (#548).
+
+    «ь» stays as an apostrophe: «Ривьера» is not «Ривера»."""
+    s = re.sub(r"y(?=[aeuo])", "i", _latin(name.replace("ь", "'"))).replace("y", "i")
+    return re.sub(r"(.)\1+", r"\1", s.replace("j", "i"))
+
+
+def _russian(name: str) -> bool:
+    """The record name is Cyrillic: «Ушуая» is, «Marriott» and «River» are no Russian name."""
+    low = norm(name)
+    return bool(re.search("[а-яё]", low)) and not re.search("[a-z]", low)
+
+
 def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     """The geocoder's answer for a name in any case (TRAP-3), or None: never another place.
 
@@ -390,8 +430,11 @@ def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
       not a case of «Малиба». The answer must be the same words up to a case ending;
     - then the nominative guesses: «Старую Ладогу» asks «Старая Ладога», «Бледе» asks «Блед»,
       «Бледа», «Бледь». The answer to a guess must be the guess itself, letter for letter;
-    - last, when the first answer was another place, a longer list for the name as written:
-      «Тарту» is the second record after Тартус.
+    - then, when the first answer was another place, a longer list for the name as written:
+      «Тарту» is the second record after Тартус;
+    - last, a Latin spelling of the name (#548): «Ушуайя» is unknown, «Ushuaia» is Ушуая. Two
+      asks at most. The answer is the place only when its name is Russian (not «Marriott») and
+      has the same Latin skeleton as the name asked: «Тарту» never becomes Тартус.
     All of it fits GEOCODE_BUDGET_S: the first network error or the end of the time stops it.
     """
     ask = {"count": 1, "language": "ru", "format": "json"}
@@ -416,7 +459,17 @@ def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
                     return g
         # Written name: the first record was another place. A longer list may have the right one.
         wide = search(written, WIDE_COUNT)
-        return next((g for g in wide if _same_words(words, norm(g["name"]).split())), None)
+        if hit := next((g for g in wide if _same_words(words, norm(g["name"]).split())), None):
+            return hit
+        # The name as written and its first nominative guess: «Ушуайе» -> «Ушуай». Two asks.
+        bases = list(dict.fromkeys([written, name_candidates(name)[0]]))
+        wanted = {_skeleton(b) for b in bases}
+        asks = dict.fromkeys(v for i in (0, 1) for b in bases for v in latin_variants(b)[i : i + 1])
+        for latin in list(asks)[:2]:
+            for g in search(latin, 3):
+                if _russian(g["name"]) and _skeleton(g["name"]) in wanted:
+                    return g
+        return None
     finally:
         _deadline.reset(token)
 
