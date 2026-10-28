@@ -2302,6 +2302,14 @@ button.param.assumed {
   background: transparent;
 }
 
+button.param.chosen {
+  border-color: var(--ink);
+}
+
+.hotel-filters {
+  margin-top: 2px;
+}
+
 .param-name {
   color: var(--muted);
   font-size: 11px;
