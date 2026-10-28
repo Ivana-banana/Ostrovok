@@ -1145,42 +1145,61 @@ button.icon {
   line-height: 1.4;
 }
 
-/* #478: route and time of a leg are two rows of one grid: both lines stand in one column */
+/* #478, #488: route and time rows form one grid: the right words stand in one column;
+   each line starts 8px after its own left word and ends 8px before the right word */
 .pt-route {
   display: grid;
-  grid-template-columns: minmax(0, max-content) auto minmax(0, max-content);
+  grid-template-columns: minmax(0, max-content) minmax(0, max-content);
   justify-content: start;
   align-items: center;
   font-variant-numeric: tabular-nums;
 }
 
-.pt-route .pt-line {
+.pt-from {
   display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
-.arrow {
-  width: 52px;
-  height: 14px;
+.pt-word {
+  min-width: 0;
+}
+
+.pt-line {
+  position: relative;
+  flex: 1;
+  min-width: 28px;
+  height: 6px;
   margin: 0 8px;
-  vertical-align: -1px;
+  filter: drop-shadow(0 1px 0.8px rgb(0 0 0 / 0.25));
 }
 
-.arrow .route-hi {
-  stop-color: var(--route-hi);
+.pt-line .bar {
+  position: absolute;
+  inset: 0.25px 3px;
+  border-radius: 3px;
+  background: linear-gradient(var(--route-hi), var(--route-lo));
 }
 
-.arrow .route-lo {
-  stop-color: var(--route-lo);
+.pt-line .route-from,
+.pt-line .route-to {
+  position: absolute;
+  top: 0.4px;
+  box-sizing: border-box;
+  width: 5.2px;
+  height: 5.2px;
+  border-radius: 50%;
 }
 
-.arrow .route-from {
-  fill: var(--ink);
+.pt-line .route-from {
+  left: 0.4px;
+  background: var(--ink);
 }
 
-.arrow .route-to {
-  fill: var(--card);
-  stroke: var(--ink);
-  stroke-width: 1.6;
+.pt-line .route-to {
+  right: 0.4px;
+  background: var(--card);
+  border: 1.2px solid var(--ink);
 }
 
 @media (max-width: 480px) {
@@ -1204,9 +1223,8 @@ button.icon {
     font-size: 15px;
   }
 
-  .arrow {
-    width: 40px;
-    height: 12px;
+  .pt-line {
+    min-width: 22px;
     margin: 0 5px;
   }
 }
