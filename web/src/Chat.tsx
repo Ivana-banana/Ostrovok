@@ -283,7 +283,8 @@ function PointRow({ point: p, synthetic }: { point: Point; synthetic: boolean })
                   <Arrow />
                 </span>{" "}
                 <span>
-                  {r.to} · {facts(r.facts)}
+                  {r.to}
+                  {r.facts.length > 0 && <> · {facts(r.facts)}</>}
                 </span>{" "}
               </Fragment>
             ))}
