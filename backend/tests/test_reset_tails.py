@@ -57,6 +57,9 @@ def test_reset_phrases_start_over(store, stage, text):
         "давай сначала посмотрим отели",
         "давай заново пересчитаем",
         "заново посчитай цену",
+        "сколько стоит новая поездка",
+        "это не новая поездка",
+        "давай сначала?",
     ],
 )
 def test_reset_words_inside_a_sentence_keep_the_plan(store, text):
@@ -65,6 +68,13 @@ def test_reset_words_inside_a_sentence_keep_the_plan(store, text):
     assert "Начинаем заново" not in again.reply and again.stage != "clarify"
     assert again.plan.spec.destinations == r.plan.spec.destinations
     assert again.cart.items
+
+
+def test_a_question_about_a_new_trip_is_not_a_reset(store):
+    r = to_stage(store, "checkout")
+    again = say(store, "а новая поездка будет дешевле?", r.session_id)
+    assert "Начинаем заново" not in again.reply and again.stage != "clarify"
+    assert again.plan.spec.destinations == r.plan.spec.destinations
 
 
 def test_inspire_other_variants_never_repeat_silently(store):

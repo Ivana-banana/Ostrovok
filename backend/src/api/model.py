@@ -204,11 +204,13 @@ RESTART_RE = re.compile(
     # #98: «давай заново» resets at the end of a phrase or before a mark, like «сбрось»:
     # «давай заново посчитаем цену» edits the plan. A bare «заново» is a reset too.
     r"|\b(?:давай(?:те)?|хочу|попробу\w+|поехали)\s+(?:вс[её]\s+)?"
-    r"(?:заново|сначала|с\s+нуля|по\s+нов(?:ой|ому))(?=\s*(?:[.!,;:?]|$))"
+    r"(?:заново|сначала|с\s+нуля|по\s+нов(?:ой|ому))(?=\s*(?:[.!,;:]|$))"
     r"|\bвс[её]\s+заново\b"
     r"|\bсбрось(?:те)?(?:\s+(?:вс[её]|план|поиск|поездку|диалог))?\s*(?:[.!,;]|$)"
     r"|^\s*(?:заново|по\s+нов(?:ой|ому)|с\s+нуля)\s*[.!]*\s*$"
-    r"|\bнов(?:ая|ую)\s+поездк\w*\b"
+    # «новая поездка» as a command; «сколько стоит новая поездка» and «это не новая поездка» ask
+    r"|(?:^\s*|[.!,;:]\s*|\b(?:давай(?:те)?|хочу|начн\w+|начать|начинаем)\s+)"
+    r"нов(?:ая|ую)\s+поездк\w*(?=\s*(?:[.!,;:]|$))"
     r"|\bнов(?:ый|ую)\s+(?:поиск|запрос)(?=\s*(?:[.!,;:?]|$))",
     re.IGNORECASE,
 )
@@ -2097,7 +2099,7 @@ def step(
             if prev.voucher.simulated:
                 text += " Бронь имитирована."
         # #98: no dead end — another city or other dates mean a new trip; the booking stays
-        text += f" {AFTER_BOOKING} Бронь при этом остаётся оформленной."
+        text += f" {AFTER_BOOKING}"
         chip = Question(text="Что дальше?", options=[RESTART_CHIP])
         return prev.model_copy(update={"reply": text, "questions": [chip], "llm": False})
     old = prev or ChatReply(
