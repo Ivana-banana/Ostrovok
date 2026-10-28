@@ -319,6 +319,24 @@ test("ширина телефона: транспорт — время с гор
   expect(await noPageScroll(page)).toBe(false);
 });
 
+// #478: the legs and transfers of the offer stand in grids; no sideways scroll on the phone.
+test("ширина 390 px: Туда, Обратно и Трансферы в ответе без горизонтальной прокрутки", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("Запрос").fill(FAMILY + ", туда и обратно");
+  await page.getByRole("button", { name: "Отправить" }).click();
+  const offer = page.locator("ul.points").first();
+  await expect(offer).toContainText("Обратно");
+  await expect(offer).toContainText("Трансферы");
+  const wide = await page.evaluate(() => ({
+    page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    grids: [...document.querySelectorAll<HTMLElement>(".pt-route")].map((g) => g.scrollWidth - g.clientWidth),
+  }));
+  expect(wide.page).toBeLessThanOrEqual(0);
+  expect(wide.grids.length).toBeGreaterThanOrEqual(3);
+  for (const g of wide.grids) expect(g).toBeLessThanOrEqual(0);
+});
+
 for (const width of [390, 360]) {
   test(`ширина ${width} px: длинный город в транспорте переносится, прокрутки вбок нет (TRAP-2)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
@@ -368,4 +386,27 @@ test.describe("с анимацией", () => {
     await expect(page.getByRole("status")).not.toBeEmpty();
     expect(label.length).toBeGreaterThan(0);
   });
+});
+
+// #489: an item of the answer opens the other options of its kind with badges; a pick changes the plan.
+test("пункт «Туда» раскрывает другие варианты с плашками, выбор меняет план", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Запрос").fill(REQUEST);
+  await page.getByRole("button", { name: "Отправить" }).click();
+  const answer = page.locator(".msg.agent").last();
+  const there = answer.locator("ul.points [role='button']").filter({ hasText: /^Туда/ });
+  await expect(there).toHaveAttribute("aria-expanded", "false");
+  const before = (await there.locator(".pt-row").textContent()) ?? "";
+  await there.focus();
+  await page.keyboard.press("Enter");
+  await expect(there).toHaveAttribute("aria-expanded", "true");
+  const alts = answer.locator(`[id="${await there.getAttribute("aria-controls")}"] li.alt`);
+  expect(await alts.count()).toBeGreaterThanOrEqual(2);
+  await expect(answer.locator(".alt-badge.cheap")).toHaveText("самый дешёвый");
+  await expect(alts.filter({ hasText: "выбран" })).toHaveCount(1);
+  for (const p of await alts.locator(".price").all()) await expect(p.locator(".synth")).toHaveText("синтетика"); // TRAP-7
+  await alts.locator("button.alt-pick").first().click();
+  await expect(page.locator(".msg.user")).toHaveCount(2);
+  const after = page.locator(".msg.agent").last().locator("ul.points [role='button']").filter({ hasText: /^Туда/ });
+  await expect(after.locator(".pt-row")).not.toHaveText(before);
 });
