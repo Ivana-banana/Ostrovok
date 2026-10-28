@@ -151,3 +151,84 @@ def test_double_negation_does_not_remove_the_daughter(store):
 def test_double_negation_in_the_first_message_books_the_children(store):
     r = say(store, f"{FIRST}, без детей не поедем")
     assert r.plan.spec.children_ages == [7, 7]
+
+
+# #202: «отель без детей» is a wish for the hotel, not the party. «детей нет» is no children.
+HOTEL_WISH = [
+    "отель без детей",
+    "хочу отель без детей",
+    "Сочи в ноябре, хочу отель без детей",
+    "нужна гостиница без детей",
+    "ищу отель без маленьких детей",
+]
+
+
+@pytest.mark.parametrize("text", HOTEL_WISH)
+def test_hotel_without_kids_is_no_change_of_the_party(text):
+    found, notes = extract(text)
+    assert "children_ages" not in found
+    assert not any("возраст ребёнка" in n for n in notes)
+
+
+@pytest.mark.parametrize("text", HOTEL_WISH)
+def test_hotel_without_kids_keeps_the_daughter(store, text):
+    first = say(store, "Сочи из Москвы с 3 по 8 декабря, двое взрослых и дочка 5 лет")
+    assert first.plan.spec.children_ages == [5]
+    again = say(store, text, first.session_id)
+    assert again.plan.spec.children_ages == [5]
+    assert again.plan.spec.adults == 2
+
+
+def test_hotel_without_kids_is_named_unsupported():
+    _, notes = extract("Сочи в ноябре, хочу отель без детей, дочка 5 лет")
+    assert any("без детей" in n and "не учитыва" in n for n in notes)
+
+
+def test_hotel_wish_with_the_children_named_keeps_them():
+    found, _ = extract("Сочи в ноябре, дочка 5 лет, хочу отель без детей")
+    assert found["children_ages"] == [5]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сочи в ноябре, детей нет",
+        "Сочи в ноябре, у нас нет детей",
+        "Сочи в ноябре, дети не едут",
+        "Сочи в ноябре, ребенка нет",
+        "Сочи в ноябре, дети с нами не едут",
+        "Сочи в ноябре, детей у нас нет",
+    ],
+)
+def test_no_children_phrases_give_zero_children(text):
+    found, notes = extract(text)
+    assert found.get("children_ages") == []
+    assert not any("возраст ребёнка" in n for n in notes)
+
+
+def test_no_children_phrase_removes_the_children_of_the_plan(store):
+    first = say(store, "Сочи из Москвы с 3 по 8 декабря, двое взрослых и дочка 5 лет")
+    again = say(store, "детей нет", first.session_id)
+    assert again.plan.spec.children_ages == []
+    assert again.plan.spec.adults == 2
+
+
+@pytest.mark.parametrize(
+    ("text", "ages"),
+    [
+        ("Сочи в ноябре, дети без бабушки", [7, 7]),
+        ("Сочи в ноябре, с детьми", [7, 7]),
+        ("Сочи в ноябре, у нас нет бабушки, двое детей 4 и 6 лет", [4, 6]),
+        ("Сочи в ноябре, нет мужа, с ребёнком 4 года", [4]),
+        ("Сочи в ноябре, дети едут", [7, 7]),
+        ("Сочи в ноябре, дети не против, едем", [7, 7]),
+    ],
+)
+def test_no_children_phrases_do_not_catch_other_words(text, ages):
+    found, _ = extract(text)
+    assert found["children_ages"] == ages
+
+
+def test_a_question_about_no_children_changes_nothing():
+    found, _ = extract("а если детей нет?", asking=True)
+    assert "children_ages" not in found

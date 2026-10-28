@@ -298,6 +298,7 @@ def test_warm_up_by_the_fire_in_any_form_is_no_warm_wish():
     assert "тепло" in extract("погреемся в ноябре")[0]["wishes"]
 
 
+@pytest.mark.usefixtures("flights_refuse_pets")  # #575: flights without pets
 def test_sea_with_a_dog_refills_from_the_warmest_sea(store):
     """#356: «С собакой на море в ноябре» gave Петергоф 3.5 °C and Витебск «моря нет», not Сочи."""
     dests = inspired(store, "С собакой на море в ноябре из Москвы")
