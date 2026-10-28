@@ -62,7 +62,6 @@ from api.extract import (
     CAPITAL_PLACES,
     DATE_KEYS,
     DEFAULT_NIGHTS,
-    HARD_WISHES,
     HOTEL_NOTE,
     MAX_NIGHTS,
     MONTH,
@@ -85,6 +84,7 @@ from api.extract import (
     is_excluded,
     is_past_note,
     is_too_long_note,
+    is_unchecked,
     llm_past_dates,
     past_year_note,
     too_long_note,
@@ -1597,9 +1597,7 @@ def _text_clarify(questions: list[Question]) -> str:
 
 def _unchecked_lines(spec: TripSpec) -> list[str]:
     """#361: a wish with no data is named in the reply, not dropped."""
-    unchecked = unchecked_wishes(spec) + [
-        w for w in spec.wishes if w in HARD_WISHES or w.startswith(("рядом: ", "завтрак с "))
-    ]
+    unchecked = unchecked_wishes(spec) + [w for w in spec.wishes if is_unchecked(w)]
     return [f"Не проверяю по данным: {', '.join(unchecked)}."] if unchecked else []
 
 
