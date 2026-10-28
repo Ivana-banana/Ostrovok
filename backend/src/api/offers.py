@@ -30,7 +30,7 @@ from importlib.resources import files
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from api import catalog
+from api import catalog, ops
 from api.contracts import (
     Cancellation,
     ExtraOffer,
@@ -778,6 +778,8 @@ def transfer_offers(
 class OsmOrSynthetic:
     """Hotels from the OSM snapshot when it has at least 3 for the place, else synthetic."""
 
+    data_mode = "синтетика"  # /health (#290): the places are a snapshot, the prices are synthetic
+
     def hotels(
         self, spec: TripSpec, place: Place, now: datetime
     ) -> list[tuple[HotelOffer, list[ExtraOffer]]]:
@@ -789,12 +791,16 @@ class OsmOrSynthetic:
 class SyntheticTransport:
     """Flight, train or car from the great-circle distance (transport_offers)."""
 
+    data_mode = "синтетика"
+
     def legs(self, spec: TripSpec, origin: Place, place: Place) -> list[TransportOffer]:
         return transport_offers(spec, origin, place)
 
 
 class SyntheticTransfers:
     """Hub <-> hotel rides after each arrival and before each return (transfer_offers)."""
+
+    data_mode = "синтетика"
 
     def transfers(
         self,
@@ -822,13 +828,18 @@ def offers_for_place(
         return []
     place = _complete(place)
     now = now or datetime.now(UTC)  # only the cancellation state depends on it
-    pairs = HOTELS.hotels(spec, place, now)
+    # A port that raises gives [] and a mark in the reply (ops.guarded, #290), not a 500.
+    pairs = ops.guarded("hotels", lambda: HOTELS.hotels(spec, place, now), [])
     hotels = [h for h, _ in pairs]
     legs = (
-        TRANSPORT.legs(spec, _complete(origin), place) if origin and not spec.own_transport else []
+        ops.guarded("transport", lambda: TRANSPORT.legs(spec, _complete(origin), place), [])
+        if origin and not spec.own_transport
+        else []
     )
     own = own_legs(spec, place["name"])
-    transfers = TRANSFERS.transfers(spec, place, hotels, legs + own)
+    transfers = ops.guarded(
+        "transfers", lambda: TRANSFERS.transfers(spec, place, hotels, legs + own), []
+    )
     return [*hotels, *legs, *transfers, *(x for _, extras in pairs for x in extras)]
 
 
