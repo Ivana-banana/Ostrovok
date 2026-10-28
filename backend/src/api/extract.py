@@ -172,7 +172,7 @@ NOT_CITY_START = re.compile(
     r"|нельз|будем|будет|как\b|что\b|где\b|куд|когд|сколько|есть\b|если\b|для\b|мне\b|нам\b"
     r"|мы\b|ну\b|вот\b|так\b|или\b|тепл|хорош|нормал|красив|дешев|дорог|быстр|скоро|срочно"
     r"|лучш|любо|какой|какая|какое|зим|весн|осен|друз|компан|сем[ьъ]|одн|вмест"
-    r"|нет\b|спасиб|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят"
+    r"|нет\b|спасиб|пожалуйст|итак\b|значит|слуша|бюджет|вариант|отличн|ладно|понятно|ясно|дальше|далее|ок\b|окей|тогда|итого|ребят"
     # replanning verbs («Сдвинь на 3 дня») and common nouns («Отдых в ноябре»), #73
     r"|" + REBUILD_VERBS + r"|отдых(?:а|у|е|ом)?\b|отдохн\w*|каникул\w*"
     r"|путевк\w*|круиз\w*|пляж(?:а|у|е|и|ем)?\b|мор[еяюь]\b"
@@ -679,6 +679,19 @@ def _known(word: str, exact_short: bool = False) -> str | None:
     return None
 
 
+def _country_next(text: str, pos: int) -> bool:
+    """A country right after a comma: «Ушуайя, Аргентина на 10 дней» (#391)."""
+    m = re.compile(r"\s*,\s*((?:[А-ЯЁ][а-яё-]+)(?: [А-ЯЁа-яё-]+){0,2})").match(text, pos)
+    words = m.group(1).split() if m else []
+    return any(catalog.country_of(" ".join(words[:n]).lower()) for n in (1, 2, 3))
+
+
+def _first_with_country(text: str, t: str, pos: int) -> bool:
+    """The text starts with a place and a country at pos follows it after a comma (#391)."""
+    first = re.match(r"\s*[А-ЯЁа-яё-]+(?=\s*,\s*$)", text[:pos])
+    return bool(first and _country_next(text, first.end()) and _first_city(text, t, True))
+
+
 # «Нижний Тагил»: the first word is «Нижн…», the second one is a capitalized word but no «Новгород».
 # «Новый Афон», «Старый Оскол» too, unless the second word is ordinary («Новый Год», #538).
 NIZHNY_NAME = re.compile(
@@ -716,7 +729,7 @@ def _first_city(
         if known in PERSON_CITIES and ADDRESS_NEXT.match(t, m.end()):
             return None
         return m.start(1), known  # a known city may be lower case: «иркутск на неделю»
-    if guess and FIRST_NEXT.match(t, m.end()):
+    if guess and (FIRST_NEXT.match(t, m.end()) or _country_next(text, m.end())):
         return _unknown_first_city(text, t, m, word, low)
     # «Отдых на море», «Нет»: no guess, no note
     if (
@@ -1339,6 +1352,8 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
     tails = [m.span(1) for m in TAIL_PLACE.finditer(text)]
     for s, e in [*tails, *(m.span(1) for m in FOR_PLACE.finditer(t))]:  # «…, Бали», «ради Бали»
         taken = t[s] == " " or any(hs <= s < he for hs, _, he in hits)  # " ": the origin span
+        # «Ушуайя, Аргентина»: the country clarifies the first word, it is no second place (#391).
+        taken = taken or (s, e) in tails and _first_with_country(text, t, s)
         name = None if taken else _catalog_word(text[s:e])
         as_written = bool(name) and name.lower().replace("ё", "е") == t[s:e]
         if name and name not in PERSON_CITIES and (as_written or (s, e) not in tails):
