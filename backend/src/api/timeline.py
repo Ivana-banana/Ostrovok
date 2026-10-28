@@ -1,8 +1,9 @@
 """Timeline checker (T8, #14): arrival -> transfer -> check-in -> check-out -> transfer -> return.
 
 Deterministic, no network, no LLM. Reads only plan.selected and plan.offers, and of the spec
-only the own tickets (C5, #408: offers.own_legs); an edit of them re-runs the offers node of
-api/dag.py, so the timeline still follows its inputs. Every time is computed in UTC and shown in the local zone of the
+only the own tickets (C5, #408: offers.own_legs) and the origin (#532: a trip without a leg
+there or back is an error, not a silent cart of a hotel alone); an edit of them re-runs the
+offers node of api/dag.py, so the timeline still follows its inputs. Every time is computed in UTC and shown in the local zone of the
 event place (TRAP-5): the same ZoneInfo on both sides would subtract wall clocks and lose or
 gain an hour at a DST change. Texts are Russian; numbers come from offers or from the
 constants below. `fixes` hold offer_id from plan.offers only (TRAP-4): add-ons of the hotel
@@ -15,8 +16,9 @@ the time of the pair's transfer offer (offers.py derives it from the distance to
 the way out after an arrival), never shorter than OWN_WAY; never the time of a transfer that
 is not taken.
 
-Extra kind comes from the offer_id suffix (-early, -late, -prev, see api/offers.py); the
-time of an add-on comes from its title («с 06:00», «до 18:00»).
+Extra kind is ExtraOffer.tag, the time of an add-on is ExtraOffer.at (ADR-0002, #307).
+Without them: the offer_id suffix (-early, -late, -prev) and the time in the title
+(«с 06:00», «до 18:00»). The «≈N км» of a transfer title is text only: no km, no km text.
 
 All limits below are team estimates without a source.
 """
@@ -25,6 +27,7 @@ import re
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from api import catalog
 from api.contracts import (
     ExtraOffer,
     HotelOffer,
@@ -34,8 +37,19 @@ from api.contracts import (
     TimelineIssue,
     TransferOffer,
     TransportOffer,
+    TripSpec,
 )
-from api.offers import MAX_DRIVE, drive_time, own_legs, resolve_place, road_nights, transfer_id
+from api.offers import (
+    FAR_AIRPORT_KM,
+    MAX_DRIVE,
+    _complete,
+    drive_time,
+    km_between,
+    own_legs,
+    resolve_place,
+    road_nights,
+    transfer_id,
+)
 
 EARLY_WAIT = timedelta(hours=3)  # arrival earlier than this before check-in is an issue
 LATE_WAIT = timedelta(hours=3)  # time between check-out and leaving for the station or airport
@@ -62,6 +76,10 @@ HUBS = {"flight": "в аэропорт", "train": "на вокзал"}  # with t
 DEPARTURE_OF = {"flight": "вылета", "train": "отправления", "car": "старта"}
 TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
 KM_RE = re.compile(r"≈\s*(\d+(?:[.,]\d+)?)\s*км")  # the distance in a transfer title (offers.py)
+# #532: offers.transport_offers finds no legs closer than this: such a trip has no road to buy.
+NEAR_KM = 30
+AIRPORT_CITY_KM = 40  # a catalogue place this close to an airport names it in the timeline (#549)
+NO_ROAD = "Транспорта в плане нет"  # the start of the issue text; model.py names the block by it
 
 
 def _utc(dt: datetime) -> datetime:
@@ -89,9 +107,19 @@ def _night(dt: datetime) -> bool:
     return t >= NIGHT_FROM or t < NIGHT_TO
 
 
-def _title_time(extra: ExtraOffer | None) -> time | None:
+def _extra_time(extra: ExtraOffer | None) -> time | None:
+    """ExtraOffer.at; without it the HH:MM in the title (the old rule, ADR-0002)."""
+    if extra and extra.at:
+        return extra.at
     m = TIME_RE.search(extra.title) if extra else None
     return time(int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _tag(extra: ExtraOffer) -> str | None:
+    """ExtraOffer.tag; without it the offer_id suffix "-early", "-late", "-prev" (old rule)."""
+    if extra.tag:
+        return extra.tag
+    return next((t for t in ("early", "late", "prev") if extra.offer_id.endswith(f"-{t}")), None)
 
 
 def _at_place(dt: datetime, city: str) -> datetime:
@@ -134,7 +162,7 @@ class _Trip:
                 if isinstance(o, ExtraOffer)
                 and h
                 and o.for_offer_id == h.offer_id
-                and o.offer_id.endswith(f"-{tag}")
+                and _tag(o) == tag
             ),
             None,
         )
@@ -153,13 +181,13 @@ class _Trip:
         h, tz = self.room()
         if self.has("prev"):
             return _local(h.date_in - timedelta(days=1), h.check_in, tz)
-        early = _title_time(self.extra("early")) if self.has("early") else None
+        early = _extra_time(self.extra("early")) if self.has("early") else None
         return _local(h.date_in, min(early or h.check_in, h.check_in), tz)
 
     def leave_by(self) -> datetime:
         """The moment the room must be free."""
         h, tz = self.room()
-        late = _title_time(self.extra("late")) if self.has("late") else None
+        late = _extra_time(self.extra("late")) if self.has("late") else None
         return _local(h.date_out, max(late or h.check_out, h.check_out), tz)
 
     def offered(self, leg: TransportOffer) -> TransferOffer | None:
@@ -399,6 +427,25 @@ def _drive_issues(t: _Trip, leg: TransportOffer, fixes: bool = True) -> list[Tim
     return [TimelineIssue(severity="warn", text=text, fixes=_alt(t, leg, _drive_issues, fixes))]
 
 
+def _end_name(leg: TransportOffer, name: str) -> str:
+    """Where a flight lands or starts: a place far from its airport (#123) has none of its own,
+    so the event names the airport (and its city, when the catalogue has one next to it): not
+    «Прилёт: Бакуриани» for a landing in Кутаиси (#549, TRAP-5)."""
+    place = resolve_place(name) if leg.mode == "flight" else None
+    # As the offers see the place: a closed airport is already replaced (_complete, C8).
+    port = (_complete(place).get("airport") or {}) if place else {}
+    if not port or port.get("km", 0) <= FAR_AIRPORT_KM:
+        return name
+    row = next((a for a in catalog.snapshot()["airports"] if a[0] == port["iata"]), None)
+    here = port if "lat" in port else {"lat": row[1], "lon": row[2]} if row else None
+    if here is None:
+        return f"аэропорт {port['iata']}"
+    city = min(catalog.places(), key=lambda p: km_between(here, p), default=None)
+    if city is None or km_between(here, city) > AIRPORT_CITY_KM:
+        return f"аэропорт {port['iata']}"
+    return f"{city['name']} ({port['iata']})"
+
+
 def _leg_events(leg: TransportOffer, t: _Trip) -> list[TimelineEvent]:
     start, end = VERBS[leg.mode]
     depart = _at_place(leg.depart_at, leg.origin)
@@ -409,9 +456,13 @@ def _leg_events(leg: TransportOffer, t: _Trip) -> list[TimelineEvent]:
         arrive = leg.arrive_at.astimezone(t.room()[1])
     return [
         TimelineEvent(
-            at=depart, title=f"{start}: {leg.origin} → {leg.destination}", offer_id=leg.offer_id
+            at=depart,
+            title=f"{start}: {_end_name(leg, leg.origin)} → {_end_name(leg, leg.destination)}",
+            offer_id=leg.offer_id,
         ),
-        TimelineEvent(at=arrive, title=f"{end}: {leg.destination}", offer_id=leg.offer_id),
+        TimelineEvent(
+            at=arrive, title=f"{end}: {_end_name(leg, leg.destination)}", offer_id=leg.offer_id
+        ),
     ]
 
 
@@ -499,6 +550,64 @@ def _events(t: _Trip) -> list[TimelineEvent]:
     return sorted(events, key=lambda e: (_utc(e.at), starts_back(e)))
 
 
+def road_needed(spec: TripSpec, city: str) -> bool:
+    """#532: the trip needs a leg there and a leg back. Not with own tickets (C5), not without
+    an origin, not when the origin is the destination or closer than NEAR_KM."""
+    if spec.own_transport or not spec.origin or spec.origin == city:
+        return False
+    home, place = resolve_place(spec.origin), resolve_place(city)
+    return not (home and place and km_between(home, place) < NEAR_KM)
+
+
+def road_gaps(spec: TripSpec, city: str, legs: list[TransportOffer]) -> list[tuple[str, str]]:
+    """The directions (from, to) of the road that `legs` lack; [] when no road is needed."""
+    if not road_needed(spec, city):
+        return []
+    origin = spec.origin or ""
+    gaps = []
+    if not any(x.destination == city for x in legs):
+        gaps.append((origin, city))
+    if not any(x.origin == city for x in legs):
+        gaps.append((city, origin))
+    return gaps
+
+
+def ways(gaps: list[tuple[str, str]]) -> str:
+    """«Москва → Сочи и Сочи → Москва»."""
+    return " и ".join(f"{a} → {b}" for a, b in gaps)
+
+
+def _road_issues(t: _Trip, spec: TripSpec) -> list[TimelineIssue]:
+    """#532 (TRAP-5): no leg there or back in a trip that needs them. A failed transport
+    source or a mode the data lacks leaves the hotel alone; the cart must not take it so.
+    Fixes: the cheapest offered legs of the missing directions (TRAP-4: offers of the plan)."""
+    if not t.hotel:
+        return []
+    city = t.hotel.city
+    gaps = road_gaps(spec, city, t.legs + t.own)
+    if not gaps:
+        return []
+    fixes = []
+    for a, b in gaps:
+        there = b == city
+        offered = [
+            o
+            for o in t.by_id.values()
+            if isinstance(o, TransportOffer)
+            and (o.destination == city if there else o.origin == city)
+        ]
+        fixes += [o.offer_id for o in sorted(offered, key=lambda o: o.price_rub)[:MAX_ALTERNATIVES]]
+    text = (
+        f"{NO_ROAD}: нет дороги {ways(gaps)}."
+        + ("" if fixes else " Предложений транспорта нет.")
+        + " Бронь без дороги не оформляю. Можно выбрать "
+        + ("рейс из предложенных, " if fixes else "")
+        + "другие даты, другой транспорт («возьми поезд») или свои билеты — напишите "
+        "«билеты у нас есть»."
+    )
+    return [TimelineIssue(severity="error", text=text, fixes=fixes)]
+
+
 def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]]:
     """Events of the selected items in local time, and the docking issues with their fixes.
 
@@ -506,7 +615,7 @@ def build_timeline(plan: Plan) -> tuple[list[TimelineEvent], list[TimelineIssue]
     times, so a bought add-on removes the issue it fixes.
     """
     t = _Trip(plan)
-    issues = _leg_issues(t)
+    issues = _road_issues(t, plan.spec) + _leg_issues(t)
     for leg in t.legs:
         issues += _drive_issues(t, leg)
     if t.hotel:

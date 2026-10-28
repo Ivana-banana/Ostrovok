@@ -1,4 +1,4 @@
-import { Price, hotelRows } from "./Board";
+import { Price, hotelRows, sourceOf } from "./Board";
 import type { ChatReply, HotelOffer, TransportOffer } from "./contracts";
 import { MEALS, duration, ordinal, zonedTime } from "./format";
 
@@ -104,7 +104,7 @@ export function Alternatives({ id, label, choice }: { id: string; label: string;
               <div className="alt-facts">{facts(o)}</div>
             </div>
             <div className="alt-end">
-              <Price value={o.price_rub} synthetic={o.synthetic} />
+              <Price value={o.price_rub} synthetic={o.synthetic} source={sourceOf([o])} />
               {chosen ? (
                 <span className="alt-mark">выбран</span>
               ) : (
