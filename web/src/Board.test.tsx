@@ -115,8 +115,8 @@ suite("доска поездки", () => {
     expect(synth?.querySelector(".synth-time")).toBeNull();
   });
 
-  it("TRAP-1: плашка «без ИИ», когда модель недоступна", () => {
-    expect(render({ ...base, llm: false }).body.textContent).toContain("без ИИ");
+  it("TRAP-1: без модели плашки «без ИИ» нет", () => {
+    expect(render({ ...base, llm: false }).body.textContent).not.toContain("без ИИ");
     expect(render({ ...base, llm: true }).body.textContent).not.toContain("без ИИ");
   });
 
