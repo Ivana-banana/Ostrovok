@@ -400,7 +400,9 @@ AHEAD_RE = re.compile(r"\bчерез\s+\S+\s*(?:ноч|дн|сут)")  # «вы�
 OR_RE = re.compile(r"\b(?:или|либо)\b")  # cities joined by «или», «либо» are candidates
 # The adults are not named: 2 by default. With a child this becomes a question (#112).
 PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
-PARTY_SKIPPED = "взрослых: ответ «не важно» на вопрос о составе"  # #660: the question is not asked again
+PARTY_SKIPPED = (
+    "взрослых: ответ «не важно» на вопрос о составе"  # #660: the question is not asked again
+)
 KIDS_UNKNOWN = "возраст ребёнка: «с детьми» — число и возраст не названы"  # #182: asked, not 7
 # #113: the refused places live in this assumption (TripSpec has no field for them).
 EXCLUDED = "исключено"
