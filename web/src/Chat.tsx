@@ -1,6 +1,6 @@
 import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useId, useState } from "react";
 import { Alternatives, type Choice, optionsOf } from "./Alternatives";
-import { Money, Price, sourceOf } from "./Board";
+import { Money, Price, allSynthetic, sourceOf } from "./Board";
 import { VERBS, VERB_MS } from "./brand";
 import type { ChatReply, Mode, Stage } from "./contracts";
 import { MODES, offerParts, type Point, type Ride } from "./format";
@@ -51,7 +51,7 @@ function outcome(i: number, r: ChatReply): ReactNode {
     const items = r.cart.items.length ? r.cart.items : offers.filter((o) => selected.includes(o.offer_id));
     if (!items.length) return null;
     const total = r.cart.items.length ? r.cart.total_rub : items.reduce((a, o) => a + o.price_rub, 0);
-    return <Price value={total} synthetic={items.some((o) => o.synthetic)} source={sourceOf(items)} />;
+    return <Price value={total} synthetic={allSynthetic(items)} source={sourceOf(items)} />;
   }
   return r.voucher ? `Бронь ${r.voucher.booking_id}` : null;
 }

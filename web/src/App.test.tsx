@@ -132,6 +132,25 @@ suite("приложение", () => {
     await flush();
   });
 
+  it("#596: «Свой вариант» ставит фокус в поле и ничего не отправляет; другая кнопка отправляет ответ", async () => {
+    const options = ["ноябрь (рекомендуем)", "декабрь", "Не важно, решите сами", "Свой вариант"];
+    const clarify: ChatReply = {
+      ...structuredClone(checkoutStage),
+      stage: "clarify",
+      questions: [{ text: "Когда хотите поехать?", options }],
+    };
+    routes["POST /api/chat"] = () => ({ status: 200, body: clarify });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const sent = calls.filter((c) => c.key === "POST /api/chat").length;
+    await click("Свой вариант");
+    expect(calls.filter((c) => c.key === "POST /api/chat")).toHaveLength(sent);
+    expect(document.activeElement).toBe(box.querySelector("textarea[aria-label='Запрос']"));
+    await click("Не важно, решите сами");
+    expect(calls.at(-1)?.body).toMatchObject({ message: "Не важно, решите сами" });
+  });
+
   it("неизвестная сессия: начинаем заново без ошибки", async () => {
     localStorage.setItem(SESSION_KEY, "gone");
     await mount();
@@ -154,7 +173,6 @@ suite("приложение", () => {
   });
 
   it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/mode сообщает llm=false", async () => {
-    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
     routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: false } });
     await mount();
     expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
@@ -191,30 +209,22 @@ suite("приложение", () => {
     }
   });
 
-  it("#490: модель есть, но GigaChat выключен (по умолчанию) — пометка «Без ИИ»", async () => {
-    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: true } });
-    await mount();
-    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
-  });
-
-  it("с моделью и включённым GigaChat пометки до первого сообщения нет", async () => {
-    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+  it("#566: с ключом модели GigaChat включён по умолчанию — пометки до первого сообщения нет", async () => {
     routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: false } });
     await mount();
     expect(box.querySelector(".badge-noai")).toBeNull();
   });
 
-  it("#490: переключатель уходит с запросом и хранится в браузере; без ключа — false", async () => {
-    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
+  it("#566: «Синтетика» уходит с запросом и хранится в браузере", async () => {
     routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: true } });
     routes["POST /api/chat"] = () => ({ status: 200, body: checkoutStage });
     await mount();
-    const real = box.querySelector<HTMLInputElement>("aside input[role='switch']");
-    await act(async () => real?.click());
-    expect(JSON.parse(localStorage.getItem(SWITCHES_KEY) ?? "{}")).toEqual({ real_data: true, llm: true });
+    const synth = box.querySelector<HTMLInputElement>("aside input[role='switch']");
+    await act(async () => synth?.click());
+    expect(JSON.parse(localStorage.getItem(SWITCHES_KEY) ?? "{}")).toEqual({ synthetic: true });
     await click("Выходные в Казани");
     await click("Отправить");
-    expect(calls.at(-1)?.body).toMatchObject({ real_data: true, llm: false });
+    expect(calls.at(-1)?.body).toMatchObject({ real_data: false, llm: true });
   });
 
   it("ошибка сервера: понятный текст без трассировки", async () => {
@@ -291,7 +301,7 @@ suite("приложение", () => {
     await click("В корзину");
     const sum = String(total).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     const last = [...box.querySelectorAll(".msg.agent")].at(-1)?.textContent;
-    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
+    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽синтетика.`); // the label is a chip (#567)
   });
 
   it("#161: корзина изменилась, а план не обновился — ошибка вместо тихого устаревшего плана", async () => {
@@ -437,7 +447,7 @@ suite("приложение", () => {
     expect(box.querySelector("[aria-label='Корзина']")?.textContent).not.toContain("Вернуть");
   });
 
-  it("S9: сдвиг чипа отправляет агенту сообщение с полным порядком приоритетов", async () => {
+  it("S9: клик по чипу отправляет агенту сообщение с полным порядком приоритетов", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };
     compare.plan.spec.priorities = ["price", "cancellation"];
@@ -446,15 +456,15 @@ suite("приложение", () => {
     after.plan.spec.priorities = ["cancellation", "price"];
     routes["POST /api/chat"] = () => ({ status: 200, body: after });
     await mount();
-    const down = box.querySelector("button[aria-label='Опустить приоритет цена']") as HTMLButtonElement;
-    await act(async () => down.click());
+    const other = [...box.querySelectorAll("[aria-label='Приоритеты'] button")].find((b) => b.textContent === "отмена") as HTMLButtonElement;
+    await act(async () => other.click());
     await flush();
     expect(calls.at(-1)).toMatchObject({
       key: "POST /api/chat",
       body: { session_id: "s1", message: "Мои приоритеты по важности: отмена, цена." },
     });
-    const chips = [...box.querySelectorAll("[aria-label='Приоритеты'] .chip span")].map((c) => c.textContent);
-    expect(chips).toEqual(["1. отмена", "2. цена"]);
+    const on = [...box.querySelectorAll("[aria-label='Приоритеты'] [aria-pressed='true']")].map((c) => c.textContent);
+    expect(on).toEqual(["отмена"]);
   });
 
   it("подписи про хранение чатов и синтетику спрятаны под «?» и есть в разметке", async () => {
@@ -550,8 +560,8 @@ suite("список чатов слева", () => {
     expect(localStorage.getItem(SESSION_KEY)).toBeNull();
     await say("Сочи с детьми");
     expect(calls.filter((c) => c.key === "POST /api/chat").map((c) => c.body)).toEqual([
-      { session_id: null, message: "Казань на выходные", real_data: false, llm: false },
-      { session_id: null, message: "Сочи с детьми", real_data: false, llm: false },
+      { session_id: null, message: "Казань на выходные", real_data: true, llm: true },
+      { session_id: null, message: "Сочи с детьми", real_data: true, llm: true },
     ]);
     expect(titles()).toEqual(["Сочи с детьми", "Казань на выходные"]);
     await open("Казань на выходные");
@@ -670,7 +680,6 @@ suite("чат как в мессенджере", () => {
   });
 
   it("TRAP-1: ответ без модели — пометка «Без ИИ» в списке чатов", async () => {
-    localStorage.setItem(SWITCHES_KEY, JSON.stringify({ real_data: false, llm: true }));
     routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: false } });
     routes["POST /api/chat"] = () => ({ status: 200, body: { ...checkoutStage, llm: false } });
     await mount();
