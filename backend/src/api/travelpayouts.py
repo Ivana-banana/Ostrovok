@@ -31,7 +31,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from functools import cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -129,7 +129,8 @@ class TravelpayoutsTransport:
         if rows is None:
             return []
         try:
-            legs = [self._leg(spec, a, b, r) for r in rows]
+            at = self._fetched_at(src, dst, day)
+            legs = [self._leg(spec, a, b, r, at) for r in rows]
         except (KeyError, TypeError, ValueError) as e:
             log.warning("travelpayouts %s-%s %s: bad answer (%s), synthetic", src, dst, day, e)
             return []
@@ -176,7 +177,17 @@ class TravelpayoutsTransport:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
             return json.loads(r.read())
 
-    def _leg(self, spec: TripSpec, a: Place, b: Place, row: dict) -> TransportOffer:
+    def _fetched_at(self, src: str, dst: str, day: date) -> datetime:
+        """When the answer was fetched: the mtime of its cache file (a fresh fetch wrote it)."""
+        path = self.cache_dir / f"{src}-{dst}-{day.isoformat()}.json"
+        try:
+            return datetime.fromtimestamp(path.stat().st_mtime, UTC)
+        except OSError:  # a read-only disk: the answer is from this request
+            return datetime.now(UTC)
+
+    def _leg(
+        self, spec: TripSpec, a: Place, b: Place, row: dict, fetched_at: datetime
+    ) -> TransportOffer:
         src, dst = row["origin_airport"], row["destination_airport"]
         depart = datetime.fromisoformat(row["departure_at"])
         if depart.tzinfo is None:
@@ -204,4 +215,6 @@ class TravelpayoutsTransport:
             changes=changes,
             price_rub=round(float(row["price"]) * _fares(spec, "flight")),
             synthetic=False,
+            source="travelpayouts",
+            fetched_at=fetched_at,
         )
