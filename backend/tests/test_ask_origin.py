@@ -160,7 +160,7 @@ def test_city_off_the_catalogue_offline_is_no_destination(store):
 # ------------------------------------------------------------- #442: unexpected answers
 
 
-@pytest.mark.parametrize("answer", ["Турция", "Анталья", "Анталия"])
+@pytest.mark.parametrize("answer", ["Анталья", "Анталия"])
 def test_place_abroad_answers_where_to_go_not_where_from(store, answer):
     """#442: «Турция» or «Анталья» to «Откуда?» named the origin; the nearest hub (Сочи) became
     the departure city and the trip lost its place. A place abroad is where the user goes."""
@@ -171,6 +171,20 @@ def test_place_abroad_answers_where_to_go_not_where_from(store, answer):
     s = after.plan.spec
     assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
     assert s.destinations and catalog.resolve(s.destinations[0])["country"] == "Турция"
+
+
+def test_country_answers_where_to_go_not_where_from(store):
+    """#442, #452: «Турция» to «Откуда?» is no origin. #452 (jury, PR #444) is the later rule:
+    a bare country shows the places of that country (inspire), not one place at once."""
+    from api import catalog
+
+    r = say(store, "Хочу отдохнуть")
+    after = say(store, "Турция", r.session_id)
+    s = after.plan.spec
+    assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
+    assert after.stage == "inspire" and s.destinations == []
+    names = [d.name for d in after.plan.destinations]
+    assert names and all(catalog.resolve(n)["country"] == "Турция" for n in names)
 
 
 def test_country_off_the_snapshot_from_the_geocoder_is_no_origin(geo, monkeypatch, store):
@@ -367,3 +381,103 @@ def test_sea_place_abroad_without_a_trip_place_is_the_destination(store, answer)
     s = r.plan.spec
     assert [catalog.resolve(d)["name"] for d in s.destinations] == [catalog.resolve(answer)["name"]]
     assert s.origin == "Москва" and ORIGIN_NOTE in s.assumptions
+
+
+@pytest.mark.parametrize("country", ["Турция", "Египет", "Таиланд"])
+def test_country_on_the_origin_question_shows_its_places(store, country):
+    """#452: a country on «Откуда?» after «тёплое море» shows the places of the country
+    (inspire), not one plan for the whole country. «Египет» extracts as Хургада: still a country."""
+    from api import catalog
+
+    first = say(store, "Тёплое море в ноябре, недорого, двое взрослых")
+    r = say(store, country, first.session_id)
+    assert r.stage == "inspire" and r.plan.spec.destinations == []
+    names = [d.name for d in r.plan.destinations]
+    assert len(names) >= 2
+    assert all(catalog.resolve(n)["country"] == country for n in names)
+
+
+def _only_turkey(r):
+    from api import catalog
+
+    names = [d.name for d in r.plan.destinations]
+    assert names and all(catalog.resolve(n)["country"] == "Турция" for n in names), names
+
+
+def test_country_survives_the_next_message(store):
+    """#452: the country stays in the trip: «в декабре» after «Турция» shows Turkey again."""
+    first = say(store, "Тёплое море в ноябре, недорого, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    _only_turkey(r)
+    r = say(store, "в декабре", r.session_id)
+    assert r.stage == "inspire" and r.plan.spec.destinations == []
+    _only_turkey(r)
+
+
+def test_country_survives_the_party_answer(store):
+    """#452: «Хочу отдохнуть» → «Турция» → the party answer: still the places of Турция."""
+    first = say(store, "Хочу отдохнуть")
+    r = say(store, "Турция", first.session_id)
+    r = say(store, "Двое взрослых и ребёнок 5 лет", r.session_id)
+    assert r.stage == "inspire"
+    _only_turkey(r)
+
+
+def test_country_more_gives_turkey_or_a_hint(store):
+    """#452: «ещё» after «Турция» shows other places of Турция, or says nothing is left."""
+    first = say(store, "Тёплое море в ноябре, недорого, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    shown = {d.name for d in r.plan.destinations}
+    r = say(store, "ещё", r.session_id)
+    names = {d.name for d in r.plan.destinations}
+    if names - shown:
+        from api import catalog
+
+        assert all(catalog.resolve(n)["country"] == "Турция" for n in names - shown)
+    else:
+        assert "Других направлений" in r.reply
+
+
+def test_named_place_or_country_clears_the_country(store):
+    """#452: a place named later ends the country; another country takes its place."""
+    first = say(store, "Тёплое море в ноябре, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    r = say(store, "Анталья", r.session_id)
+    assert r.plan.spec.destinations and not any(
+        a.startswith("страна") for a in r.plan.spec.assumptions
+    )
+    first = say(store, "Тёплое море в ноябре, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    r = say(store, "лучше Египет", r.session_id)
+    assert not any(a.startswith("страна") for a in r.plan.spec.assumptions)
+
+
+@pytest.mark.parametrize("refusal", ["не хочу в Турцию", "кроме Турции"])
+def test_refused_country_leaves_the_country_pool(store, refusal):
+    """#452: the country the user refuses now is no country filter: no «мест нет», no Турция."""
+    from api import catalog
+
+    first = say(store, "Тёплое море в ноябре, недорого, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    r = say(store, refusal, r.session_id)
+    assert "мест нет" not in r.reply
+    assert not any(a.startswith("страна") for a in r.plan.spec.assumptions)
+    names = [d.name for d in r.plan.destinations]
+    assert all(catalog.resolve(n)["country"] != "Турция" for n in names), names
+
+
+def test_country_without_fitting_places_says_so(store, monkeypatch):
+    """#452: no place of Турция fits: the reply says so, it does not fall back silently."""
+    from api import model
+
+    real = model.suggest_destinations
+
+    def none_in_the_country(spec, n, excluded=()):
+        return [] if "Египет" in excluded else real(spec, n, excluded)
+
+    monkeypatch.setattr(model, "suggest_destinations", none_in_the_country)
+    first = say(store, "Тёплое море в ноябре, двое взрослых")
+    r = say(store, "Турция", first.session_id)
+    assert r.stage == "inspire" and r.plan.destinations
+    assert "в стране «Турция» мест нет" in r.reply
+    assert not any(a.startswith("страна") for a in r.plan.spec.assumptions)

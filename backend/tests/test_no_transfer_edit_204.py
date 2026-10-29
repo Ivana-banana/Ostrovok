@@ -1,0 +1,107 @@
+"""#204: an edit and «без трансфера» in one message drop the transfer; a command with «сколько»
+is an edit that names the new sum. Each phrase runs with a stub model and without a model (TRAP-1).
+"""
+
+import pytest
+from talk import say
+from test_party_transfer_edit import at, stub_model, transfers
+
+from api.store import SessionStore
+
+
+@pytest.fixture
+def store(tmp_path):
+    return SessionStore(tmp_path / "sessions.db")
+
+
+COMPOUND = ["без трансфера и на неделю позже", "уберите трансфер и поездку на неделю позже"]
+COMMAND_HOW_MUCH = [
+    "уберите трансфер — сколько теперь выйдет?",
+    "без трансфера, сколько будет?",
+    "удалите трансфер, сколько получится?",
+    "исключите трансфер, сколько выйдет?",
+]
+
+
+def run(monkeypatch, store, stage, text, model):
+    r = at(store, stage)
+    assert transfers(r)
+    if model:
+        stub_model(monkeypatch, [])
+    return r, say(store, text, r.session_id)
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize("text", COMPOUND)
+def test_compound_edit_drops_transfer(monkeypatch, store, text, stage, model):
+    r, r2 = run(monkeypatch, store, stage, text, model)
+    assert r2.plan.spec.date_from > r.plan.spec.date_from
+    assert not transfers(r2)
+    assert all(o.kind != "transfer" for o in r2.cart.items)
+    r3 = say(store, "беру", r2.session_id)  # the refusal holds for the next turns
+    assert not transfers(r3) and all(o.kind != "transfer" for o in r3.cart.items)
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize("text", COMMAND_HOW_MUCH)
+def test_command_with_how_much_is_an_edit(monkeypatch, store, text, stage, model):
+    r, r2 = run(monkeypatch, store, stage, text, model)
+    assert "Это вопрос" not in r2.reply
+    assert not transfers(r2)
+    assert all(o.kind != "transfer" for o in r2.cart.items)
+    assert "синтетика" in r2.reply
+    sold = sum(o.price_rub for o in r2.plan.offers if o.offer_id in r2.plan.selected)
+    assert f"{sold:,}".replace(",", " ") in r2.reply.replace(" ", " ").replace(" ", " ")
+    if stage == "checkout":
+        assert r2.cart.total_rub < r.cart.total_rub
+
+
+NEEDS_TRANSFER = [
+    "без трансфера не поедем, сколько стоит трансфер?",
+    "без трансфера не поедем, и на неделю позже",
+]
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize("text", NEEDS_TRANSFER)
+def test_without_transfer_we_will_not_go_keeps_the_transfer(monkeypatch, store, text, stage, model):
+    r, r2 = run(monkeypatch, store, stage, text, model)
+    assert transfers(r2)
+    if "сколько" in text and not model:  # a question: nothing changes (the stub model adds a wish)
+        assert r2.plan == r.plan and r2.cart == r.cart and r2.stage == stage
+
+
+NOT_A_PROBLEM = [
+    "без трансфера не проблема",
+    "без трансфера не страшно, доберёмся сами",
+    "без трансфера не нужен, давайте дальше",
+]
+
+
+@pytest.mark.parametrize("model", [False, True])
+@pytest.mark.parametrize("stage", ["assemble", "checkout"])
+@pytest.mark.parametrize("text", NOT_A_PROBLEM)
+def test_without_transfer_is_no_problem_still_drops_it(monkeypatch, store, text, stage, model):
+    r, r2 = run(monkeypatch, store, stage, text, model)
+    assert not transfers(r2)
+    assert all(o.kind != "transfer" for o in r2.cart.items)
+    r3 = r2 if stage == "checkout" else say(store, "да", r2.session_id)
+    assert r3.stage == "checkout"
+    sold = sum(o.price_rub for o in r3.plan.offers if o.offer_id in r3.plan.selected)
+    assert (
+        r3.cart.total_rub
+        == sold
+        < sum(o.price_rub for o in r.plan.offers if o.offer_id in r.plan.selected)
+    )
+
+
+@pytest.mark.parametrize(
+    "text", ["без трансфера не обойдёмся", "без трансфера не сможем добраться"]
+)
+def test_more_need_verbs_keep_the_transfer(store, text):
+    r = at(store, "assemble")
+    r2 = say(store, text, r.session_id)
+    assert transfers(r2) == transfers(r)

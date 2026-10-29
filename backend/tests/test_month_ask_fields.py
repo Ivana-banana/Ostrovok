@@ -204,11 +204,13 @@ def test_a_month_question_at_checkout_does_not_reach_the_model(store, model):
     first = named(store)
     r = say(store, "беру", first.session_id)
     r = say(store, "да", r.session_id)
-    # the Sochi cart: level from 101hotels (#119), the same total before and after the question
-    assert r.stage == "checkout" and r.cart.total_rub == 35_800
+    # the same Sochi cart before and after the question; the total is the cart's own (#280: a
+    # train fare moves the ranked hotel, so a fixed number pinned the fares, not this rule)
+    total = r.cart.total_rub
+    assert r.stage == "checkout" and total > 0
     model.patch = {"budget_rub": 50_000}
     r = say(store, "подтверждаю, может в январе?", r.session_id)
-    assert r.stage == "checkout" and r.cart.total_rub == 35_800 and not r.voucher
+    assert r.stage == "checkout" and r.cart.total_rub == total and not r.voucher
     assert r.plan.spec.budget_rub is None and r.llm is False
     asks_to_move(r)
 
