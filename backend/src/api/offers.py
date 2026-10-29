@@ -424,6 +424,7 @@ def _hotel(
                 amenities=base["amenities"],
                 description=base["note"],
                 synthetic=real is None,
+                source="синтетика" if real is None else "101hotels",
             )
             extras = [
                 ("early", time(6, 0), f"Ранний заезд с 06:00 — {base['title']}", 0.5 * night),
