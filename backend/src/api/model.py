@@ -85,6 +85,7 @@ from api.extract import (
     NO_AGE_NOTE,
     NUM,
     NUMS,
+    OWN_KEYS,
     PAST_WINDOW,
     PER_NIGHT_NOTE_RE,
     PLACE_RES,
@@ -103,6 +104,7 @@ from api.extract import (
     is_too_long_note,
     is_unchecked,
     llm_past_dates,
+    own_clock,
     past_year_note,
     too_long_note,
     with_llm,
@@ -2634,6 +2636,9 @@ def step(
     # #179: «А дети бесплатно?» at a built plan is a question, not a party: nobody is added.
     asking = old.stage in PLAN_STAGES and is_child_question(message)
     rules_found, rules_notes = extract(message, bool(old.plan.spec.destinations), asking=asking)
+    if not old.plan.spec.own_transport and rules_found.get("own_transport") is False:
+        for k in OWN_KEYS:  # #424: «купите билеты» ends own tickets only where they are
+            rules_found.pop(k)
     # #193: «без трансфера» is an edit even with «давай» in it; it never reaches the cart as a consent.
     no_transfer = (
         prev
@@ -2790,6 +2795,9 @@ def step(
         old.plan.spec.adults,
         asking,
     )
+    if not old.plan.spec.own_transport and found.get("own_transport") is False:
+        for k in OWN_KEYS:
+            found.pop(k)
     if asking and ASKING_NOTE in notes and no_change(found, old):
         ask = [] if old.plan.spec.children_ages else kids_ask()  # #182: no kids named: asked
         update = {"reply": _text_kids_question(old), "questions": ask, "llm": False}
@@ -2985,6 +2993,10 @@ def step(
         spec_model = merged(with_model)
         if spec_model != spec:
             found, spec, used = with_model, spec_model, True
+    if spec.own_transport and not (spec.arrive_at and spec.leave_at):
+        # #424: the rules read the clock, the model the dates: the clock is put on those dates
+        said = own_clock(message, spec.destinations, spec.date_from, spec.date_to)
+        spec = spec.model_copy(update={k: v for k, v in said.items() if getattr(spec, k) is None})
     swapped = [d for d in old.plan.spec.destinations if d not in spec.destinations]
     # A refusal holds for the next turns; a place named later (even a city of that country) ends it.
     named = found.get("destinations", [])
