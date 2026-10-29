@@ -8,6 +8,7 @@ export type Prefs = { origin?: string; adults?: number; children_ages?: number[]
 export const PREFS_KEY = "trip.prefs";
 
 const AGENT_ORIGIN = (a: string) => a.split(":", 1)[0] === "откуда";
+// Mirrors PARTY_UNKNOWN in backend/src/api/model.py.
 const AGENT_PARTY = "взрослых: 2 (состав не назван)";
 
 // Takes only what the user named himself: a field the agent guessed is not a preference.
@@ -38,13 +39,29 @@ export function loadPrefs(): Prefs {
   }
 }
 
-export function savePrefs(p: Prefs) {
+function savePrefs(p: Prefs) {
   try {
-    if (Object.keys(p).length) localStorage.setItem(PREFS_KEY, JSON.stringify(p));
-    else localStorage.removeItem(PREFS_KEY);
+    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
   } catch {
     // no storage: nothing is remembered
   }
+}
+
+// Named fields overwrite the old ones; fields the agent guessed keep the old value.
+export function rememberPrefs(spec: TripSpec): Prefs {
+  const old = loadPrefs();
+  const next = { ...old, ...prefsFrom(spec) };
+  if (JSON.stringify(next) !== JSON.stringify(old)) savePrefs(next);
+  return next;
+}
+
+export function forgetPrefs(): Prefs {
+  try {
+    localStorage.removeItem(PREFS_KEY);
+  } catch {
+    // nothing to forget
+  }
+  return {};
 }
 
 // «вылет: Москва, 2 взрослых, с питомцем» — shown to the user as «как в прошлый раз».

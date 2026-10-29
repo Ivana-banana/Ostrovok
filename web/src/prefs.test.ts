@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { TripSpec } from "./contracts";
-import { PREFS_KEY, loadPrefs, prefsDraft, prefsFrom, prefsText, savePrefs } from "./prefs";
+import { PREFS_KEY, forgetPrefs, loadPrefs, prefsDraft, prefsText, rememberPrefs } from "./prefs";
 
 beforeEach(() => localStorage.clear());
 
@@ -9,16 +9,24 @@ const spec = (o: Partial<TripSpec>) =>
 
 describe("память предпочтений", () => {
   it("запомненное подставляется в черновик и показывается пользователю", () => {
-    savePrefs(prefsFrom(spec({})));
+    rememberPrefs(spec({}));
     const p = loadPrefs();
     expect(prefsText(p)).toBe("вылет: Москва, 2 взрослых, ребёнок 5 лет");
     expect(prefsDraft(p)).toContain("2 взрослых");
   });
 
   it("цены и догадки агента не сохраняются", () => {
-    savePrefs(prefsFrom(spec({ assumptions: ["откуда: Москва (по умолчанию)", "взрослых: 2 (состав не назван)"] })));
+    rememberPrefs(spec({ assumptions: ["откуда: Москва (по умолчанию)", "взрослых: 2 (состав не назван)"] }));
     expect(localStorage.getItem(PREFS_KEY)).toBeNull();
-    savePrefs(prefsFrom(spec({})));
+    rememberPrefs(spec({}));
     expect(localStorage.getItem(PREFS_KEY)).not.toContain("90000");
+  });
+
+  it("догадка агента не стирает старую память, «Забыть» стирает", () => {
+    rememberPrefs(spec({}));
+    rememberPrefs(spec({ origin: null, assumptions: ["взрослых: 2 (состав не назван)"] }));
+    expect(loadPrefs().origin).toBe("Москва");
+    forgetPrefs();
+    expect(localStorage.getItem(PREFS_KEY)).toBeNull();
   });
 });

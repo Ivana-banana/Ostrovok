@@ -16,7 +16,7 @@ import {
   touchChat,
 } from "./history";
 import { Mascot, moodOf } from "./Mascot";
-import { loadPrefs, prefsDraft, prefsFrom, prefsText, savePrefs } from "./prefs";
+import { loadPrefs, prefsDraft, prefsText, rememberPrefs, forgetPrefs } from "./prefs";
 import {
   type ModeState,
   SourceSwitches,
@@ -239,9 +239,6 @@ export function App() {
       writeSid(id);
       setReply(r);
       setNoAi(!r.llm);
-      const mem = prefsFrom(r.plan.spec);
-      savePrefs(mem);
-      setPrefs(mem);
       setUi({ ...saved, messages });
       const first = saved.messages.find((m) => m.role === "user")?.text ?? "";
       editChats((list) => (list.some((c) => c.session_id === id) ? list : touchChat(list, id, first)));
@@ -333,6 +330,7 @@ export function App() {
       writeSid(r.session_id);
       setReply(r);
       setNoAi(!r.llm);
+      setPrefs(rememberPrefs(r.plan.spec));
       update(
         { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage, reply: r }] },
         r.session_id,
@@ -720,7 +718,7 @@ export function App() {
           </div>
         </div>
         {!ui.messages.length && !restoring && prefsText(prefs) && (
-          <div className="starters" role="note" aria-label="Как в прошлый раз">
+          <div className="prefs-note starters" role="note" aria-label="Как в прошлый раз">
             <span>Как в прошлый раз: {prefsText(prefs)}</span>
             <button
               type="button"
@@ -736,8 +734,7 @@ export function App() {
               type="button"
               className="chip"
               onClick={() => {
-                savePrefs({});
-                setPrefs({});
+                setPrefs(forgetPrefs());
               }}
             >
               Забыть
