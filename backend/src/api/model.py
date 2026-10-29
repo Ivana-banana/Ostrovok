@@ -206,10 +206,12 @@ HYPOTHESIS_RE = re.compile(r"\bесли\b[^?]*\?|\b(?:задерж|опозда)
 CHOICE_RE = re.compile(
     r"\b(?:(?:возьм|давай|хоч|хотим|поменя|смен|замен|переключ|выбер|оформ)\w*|бер(?:у|и|ем|ите|ете)\b)"
 )
+# #204: «без трансфера не поедем» keeps the transfer; «не проблема», «не страшно» do not.
+NEED = r"\s+не\s+(?:поед|обойд|смож|можем|получ|вариант|выйд|справ)"
 # #193: «давайте без трансфера» is an edit even with a consent word in it. «нужен ли трансфер?»
 # and «а трансфер нужен?» ask; they are not here.
 NO_TRANSFER_RE = re.compile(
-    r"(?<!\bне\s)\bбез\s+(?:\w+\s+)?трансфер\w*"
+    rf"(?<!\bне\s)\bбез\s+(?:\w+\s+)?трансфер\w*\b(?!{NEED})"  # #204: «без трансфера не поедем»
     r"|\b(?:убер\w+|убра\w+|удал\w+|исключ\w+)\s+(?:\w+\s+)?трансфер\w*"
     r"|\bоткаж\w*\s+от\s+(?:\w+\s+)?трансфер\w*"
     r"|\bне\s+нуж(?:ен|на|но|ны)\s+(?:\w+\s+)?трансфер\w*"
@@ -219,6 +221,12 @@ NO_TRANSFER_RE = re.compile(
 # A bare «трансфер не нужен?» asks too; «а давайте без трансфера?» and «можно без трансфера?» order.
 ASKS_RE = re.compile(r"(?<!\bтак\s)\bкак\b(?!-)|\bсколько\b|\bли\b")
 ASKS_COMPARE_RE = re.compile(r"\b(?:дороже|дешевле|выгодн\w*)\b")
+# #204: a command and then «сколько» asks the new sum: «уберите трансфер — сколько выйдет?»,
+# «без трансфера, сколько будет?». It is an edit. «Сколько стоит без трансфера?» asks first.
+COMMAND_SUM_RE = re.compile(
+    r"\b(?:(?:убер(?:и|ите|ём|ем)|удал(?:и|ите)|исключ(?:и|ите)|откаж(?:ись|итесь)\w*)\s+"
+    rf"(?:\w+\s+)?(?:от\s+)?|без\s+(?:\w+\s+)?)трансфер\w*\b(?!{NEED})[^?]*?[,;:—–-]\s*(?:а\s+)?сколько\b"
+)
 
 EDIT_KEYS = {
     "destinations", "date_from", "date_to", "month", "nights", "adults", "children_ages",
@@ -260,9 +268,14 @@ EDIT_ITEM_RE = re.compile(r"«([^«»]*)»")
 # #18: after the voucher «ранний заезд» and «можно заселиться раньше?» ask the hotel's rule, not a
 # move of the dates; «на два дня раньше» and a move verb are the date edit (#503).
 EARLY_RE = re.compile(
-    r"\bранн(?:ий|его|ем|ему|им)\s+(?:заезд\w*|заселени\w*)"
+    r"\bранн(?:ий|ее|его|ем|ему|им)\s+(?:заезд\w*|заселени\w*|чек[\s-]?ин\w*|check[\s-]?in)"
     r"|\b(?:засел\w+|заех\w+|заезж\w+)\s+(?:по)?раньше|\b(?:по)?раньше\s+(?:засел\w+|заех\w+)"
 )
+# #637: «заехать раньше на день» is the date edit, not the question of the hotel's rule.
+EARLY_SHIFT_RE = re.compile(
+    r"\b(?:раньше|позже)\s+на\s+(?:\w+\s+)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
+)
+TRIP_MOVE_KEYS = ("destinations", "date_from", "date_to", "month", "nights")
 MOVE_VERB_RE = re.compile(r"\b(?:сдвин|перенес|перенос|передвин|подвин|измен|поменя)\w*")
 TRANSFER_RE = re.compile(r"\bтрансфер\w*")
 AFTER_BOOKING = (
@@ -2601,7 +2614,13 @@ def _booking_edits(prev: ChatReply, message: str) -> list[str]:
     # A field the booked trip already has is a remark («отличные 3 ночи были»), not an edit.
     # After an earlier edit it may undo that edit («трое взрослых» -> «нет, двое»): it counts.
     changed = {k for k in EDIT_KEYS & set(found) if edits or getattr(spec, k, None) != found[k]}
-    if changed or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low):
+    if (
+        changed
+        or SHIFT_RE.search(low)
+        or DATE_EDIT_RE.search(low)
+        or EARLY_SHIFT_RE.search(low)
+        or OTHER_RE.search(low)
+    ):
         edits.append(re.sub(r"[«»]", '"', message).strip())
     return edits
 
@@ -2613,19 +2632,31 @@ def _after_chip(edits: list[str]) -> Question:
     return Question(text=ask, options=[CHANGE_CHIP, RESTART_CHIP])
 
 
-def _after_purchase(prev: ChatReply, low: str) -> str | None:
+def _moves_trip(prev: ChatReply, low: str, message: str) -> bool:
+    """#637: the message moves the dates or the city of the booked trip. A date or a city the
+    booking already has («ранний заезд 20 ноября», «трансфер в Сочи») is a remark, not a move."""
+    if EARLY_SHIFT_RE.search(low) or OTHER_RE.search(low):
+        return True
+    found = extract(message, True)[0]
+    return any(k in found and getattr(prev.plan.spec, k, None) != found[k] for k in TRIP_MOVE_KEYS)
+
+
+def _after_purchase(prev: ChatReply, low: str, message: str) -> str | None:
     """#18: the reply to «ранний заезд» and «трансфер до отеля» after the voucher, from the
     booking and the plan offers only (TRAP-4); None for any other message. The voucher stays."""
     v = prev.voucher
     if SHIFT_RE.search(low) or MOVE_VERB_RE.search(low) or NO_TRANSFER_RE.search(low):
         return None
+    if _moves_trip(prev, low, message):
+        return None  # #637: a date or city edit goes to «Изменить бронь», even with «трансфер»
     hotel = next((o for o in v.items if isinstance(o, HotelOffer)), None)
     if EARLY_RE.search(low):
         if hotel is None:
             return f"Бронь {v.booking_id} без отеля: времени заселения у меня нет."
         return (
-            f"Бронь {v.booking_id} не меняю. {hotel.title}: заселение с {hotel.check_in:%H:%M} "
-            f"по времени отеля. Ранний заезд — просьба к отелю, гарантии нет. Цены раннего заезда "
+            f"Бронь {v.booking_id} не меняю. {hotel.title}: обычно с {hotel.check_in:%H:%M}, "
+            "точное время уточните у отеля: в данных его нет. Ранний заезд — просьба к отелю, "
+            "гарантии нет. Цены раннего заезда "
             "в брони нет: её назовёт отель."
         )
     if not TRANSFER_RE.search(low):
@@ -2709,7 +2740,7 @@ def step(
         return fresh.model_copy(update={"reply": f"Начинаем заново.{kept} {fresh.reply}"})
     if prev and prev.voucher and CHANGE_RE.match(message):
         return _change_booking(prev, sid, use_llm, origin)
-    if prev and prev.voucher and (own := _after_purchase(prev, low)):
+    if prev and prev.voucher and (own := _after_purchase(prev, low, message)):
         return prev.model_copy(
             update={
                 "reply": own,
@@ -2749,7 +2780,12 @@ def step(
     # also states trip fields or moves the dates («давай в Сочи поездом») is a re-plan, as before.
     # #179: «А дети бесплатно?» at a built plan is a question, not a party: nobody is added.
     asking = old.stage in PLAN_STAGES and is_child_question(message)
-    rules_found, rules_notes = extract(message, bool(old.plan.spec.destinations), asking=asking)
+    rules_found, rules_notes = extract(
+        message,
+        bool(old.plan.spec.destinations),
+        asking=asking,
+        kept_ages=old.plan.spec.children_ages,
+    )
     if not old.plan.spec.own_transport and rules_found.get("own_transport") is False:
         for k in OWN_KEYS:  # #424: «купите билеты» ends own tickets only where they are
             rules_found.pop(k)
@@ -2764,6 +2800,7 @@ def step(
         no_transfer
         and set(rules_found) <= {"wishes"}
         and not SHIFT_RE.search(low)
+        and not COMMAND_SUM_RE.search(low)
         and (
             ASKS_RE.search(low)
             or QUESTION_WORD_RE.search(low)
@@ -2908,6 +2945,7 @@ def step(
         old.plan.spec.nights or DEFAULT_NIGHTS,
         old.plan.spec.adults,
         asking,
+        old.plan.spec.children_ages,
     )
     if not old.plan.spec.own_transport and found.get("own_transport") is False:
         for k in OWN_KEYS:
@@ -3316,6 +3354,14 @@ def step(
             if plan.changes:  # the dropped hotel must show as a change (#136)
                 text = "\n".join(["Было → стало:", *describe(plan.changes), text])
             return reply(stage, plan, text, cart, questions=questions)
+        if no_transfer:
+            # #204: «без трансфера и на неделю позже»: the new plan keeps no transfer, and the
+            # refusal stays for the next turns. The timeline is built again (TRAP-5).
+            plan = remember_refusal(plan, {"out", "back"})
+            plan.selected = keep_refusal(plan, plan.selected)
+            plan.timeline, plan.issues = build_timeline(plan)
+            plan.changes = plan_changes(old.plan, plan, old.cart, cart)
+            lines.append("Трансфер убран: до отеля и обратно добираетесь сами.")
         why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
         if why and why != plan.explanations:
             plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)

@@ -58,6 +58,9 @@ DEFAULT_WEIGHTS: dict[Priority, float] = {
     "meal": 0.03,
     "location": 0.02,
 }
+# Team estimate without a source (D-045): with no named priority, a tariff with free cancellation
+# whose hotel costs at most this share more than the cheapest hotel of the same legs is the default.
+REFUNDABLE_NEAR = 0.15
 MEAL_LEVEL = {"RO": 0, "BB": 1, "HB": 2, "FB": 3, "AI": 4}
 MEAL_TEXT = {
     "RO": "без питания",
@@ -102,6 +105,9 @@ class Trip:
     over: int = 0  # overrun of the trip budget and of the hotel budget together, roubles
     hotel_over: int = 0  # the part of `over` that is the hotel above the hotel budget
     score: float = 0.0
+    near_refund: "Trip | None" = (
+        None  # the cheaper non-refundable trip that D-045 moved this one past
+    )
 
     @property
     def legs(self) -> list[TransportOffer]:
@@ -315,6 +321,27 @@ def pets_ok(t: Trip) -> bool:
     return t.hotel.pets_allowed and all(leg.pets_allowed for leg in t.legs)
 
 
+def _prefer_refundable(spec: TripSpec, pool: list[Trip]) -> None:
+    """Near-equal hotel price: the default is a free-cancellation tariff, not the cheapest (D-045).
+
+    Moves in place the first refundable trip of the same legs to the front and notes the trip it
+    passed in `near_refund`. A user who named priorities has chosen.
+    """
+    best = pool[0]
+    if spec.priorities or best.hotel.cancellation.refundable:
+        return
+    for i, t in enumerate(pool):
+        if (
+            t.hotel.cancellation.refundable
+            and (t.over, t.slow) == (best.over, best.slow)
+            and (t.there, t.back) == (best.there, best.back)
+            and t.hotel.price_rub <= best.hotel.price_rub * (1 + REFUNDABLE_NEAR)
+        ):
+            t.near_refund = best
+            pool.insert(0, pool.pop(i))
+            return
+
+
 def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
     """Trips to choose from and whether they break nothing; sorted best first.
 
@@ -343,6 +370,7 @@ def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
         pool.sort(key=lambda t: (t.over, demote and t.slow, *t.key))
     else:
         pool.sort(key=lambda t: (demote and t.slow, *t.key))
+    _prefer_refundable(spec, pool)
     return pool, fewest == 0 and not pool[0].over
 
 
@@ -430,6 +458,15 @@ def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
     if spec.hotel_budget_rub is not None and not t.hotel_over:
         why += f"; отель в бюджете отеля {_rub(spec.hotel_budget_rub)}"
     order = list(dict.fromkeys(spec.priorities))
+    if t.near_refund is not None and pool[0] is t:
+        cheaper = t.near_refund
+        diff = t.hotel.price_rub - cheaper.hotel.price_rub
+        pct = diff / cheaper.hotel.price_rub if cheaper.hotel.price_rub else 0
+        why += (
+            f"; выбран тариф с бесплатной отменой: отель дороже самого дешёвого невозвратного "
+            f"на {_m(diff, [*t.offers, *cheaper.offers])} ({pct:.0%}), "
+            f"разница в пределах {REFUNDABLE_NEAR:.0%} цены отеля"
+        )
     if order:
         why += "; ваш порядок важности: " + " → ".join(PRIORITY_TEXT[p] for p in order)
     elif "недорого" in spec.wishes:

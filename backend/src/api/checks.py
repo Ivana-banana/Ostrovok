@@ -357,7 +357,7 @@ def _s1_items(r: ChatReply, asked: int, messages: int) -> dict[str, bool]:
     bad = [d for d in dests if d.travel_hours > MAX_FLIGHT_H or (d.water_c or 0) < WARM_WATER_C]
     stated = asked > 0 or bool(r.plan.spec.assumptions)
     return {
-        # #630 (D-NNN): up to MAX_ASKS questions in up to two turns before the first plan
+        # #630 (D-046): up to MAX_ASKS questions in up to two turns before the first plan
         "1": bool(dests) and stated and asked <= MAX_ASKS and messages <= 2,
         "2": 2 <= len(dests) <= 4 and complete,
         "3": all(d.violates for d in bad),

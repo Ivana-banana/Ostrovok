@@ -32,7 +32,16 @@ export type TripSpec = {
 
 export type Cancellation = { refundable: boolean; free_until: string | null };
 
-type Priced = { offer_id: string; title: string; price_rub: number; synthetic: boolean };
+// #469: source is the provider of the price ("101hotels", "travelpayouts", "tutu", "синтетика"),
+// fetched_at when it answered (null for a synthetic offer).
+type Priced = {
+  offer_id: string;
+  title: string;
+  price_rub: number;
+  synthetic: boolean;
+  source: string;
+  fetched_at: string | null;
+};
 
 export type HotelOffer = Priced & {
   kind: "hotel";
