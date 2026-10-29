@@ -1159,11 +1159,6 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   );
   return (
     <div className="board">
-      {!reply.llm && (
-        <p className="badge" role="note">
-          без ИИ — упрощённый режим: модель недоступна, агент работает по правилам
-        </p>
-      )}
       {destinationsInChat(stage) && destinations}
       {voucher && <VoucherView voucher={voucher} />}
       {past && (

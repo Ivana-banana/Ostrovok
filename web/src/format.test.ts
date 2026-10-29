@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 import type { ChatReply } from "./contracts";
-import { brief, browserTime, offerParts, describe, withoutNoAi, fieldLabel, guestsText, nightsText, priorityMessage, yearsText, zoneLabel, zonedTime } from "./format";
+import { brief, browserTime, offerParts, describe, fieldLabel, guestsText, nightsText, priorityMessage, yearsText, zoneLabel, zonedTime } from "./format";
 
 const reply = (llm: boolean): ChatReply => ({
   session_id: "s",
@@ -46,8 +46,8 @@ const reply = (llm: boolean): ChatReply => ({
 });
 
 suite("describe", () => {
-  it("помечает режим без модели", () => {
-    expect(describe(reply(false))).toContain("без ИИ");
+  it("режим без модели — без хвоста про ИИ", () => {
+    expect(describe(reply(false))).toBe("e");
   });
   it("без пометки с моделью", () => {
     expect(describe(reply(true))).toBe("e");
@@ -194,11 +194,6 @@ suite("короткий текст агента: списки показаны �
     expect(brief(rows(5))).toBe("Нашёл 5 направлений — выберите карточку ниже.");
   });
 
-  it("TRAP-1: пометка «без ИИ» снимается с текста, только когда её показывает значок", () => {
-    const text = describe(reply(false));
-    expect(withoutNoAi(text)).toBe("e");
-    expect(withoutNoAi("e")).toBe("e");
-  });
 
   it("строки после списка снова видны; пустой итог — исходный текст", () => {
     expect(brief("Отели:\n1. А — 3★, рейтинг 8, BB, невозвратный — 1 ₽\n1. Свой пункт")).toBe("1. Свой пункт");

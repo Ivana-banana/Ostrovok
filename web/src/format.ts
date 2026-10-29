@@ -1,15 +1,8 @@
 import type { Cart, ChatReply, Meal, Mode, Priority, TripSpec } from "./contracts";
 
-// One reply line for the user; the no-model mode is labelled honestly (TRAP-1).
-const NO_AI = " — упрощённый режим без ИИ";
+// One reply line for the user. The rule mode adds no label (TRAP-1): the agent always runs live.
 export function describe(r: ChatReply): string {
-  return r.llm ? r.reply : `${r.reply}${NO_AI}`;
-}
-
-// The bubble text without the no-model label: only while the «Без ИИ» badge is on the screen
-// (TRAP-1 stays honest by the badge, the label after every answer is noise, #434).
-export function withoutNoAi(text: string): string {
-  return text.endsWith(NO_AI) ? text.slice(0, -NO_AI.length) : text;
+  return r.reply;
 }
 
 export const MEALS: Record<Meal, string> = {
