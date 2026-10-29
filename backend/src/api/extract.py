@@ -2369,7 +2369,7 @@ ANOTHER_RE = re.compile(
 
 
 # #205: «добавь сына», «ещё сына», «у нас родился сын»: a child is added, not named again.
-ADD_CHILD_RE = re.compile(r"(?:добав\w*|ещ[её]|плюс|родил\w*|появил\w*)")
+ADD_CHILD_RE = re.compile(r"\b(?:добав\w*|ещ[её]|плюс|родил\w*|появил\w*)\b")
 
 
 def _named_again(
