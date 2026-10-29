@@ -973,6 +973,30 @@ button.icon {
   font-size: var(--fs-s);
 }
 
+/* #652: folded assumptions and bullet items of a labelled line */
+.msg.agent details.aside {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: var(--fs-s);
+}
+
+.msg.agent details.aside summary {
+  cursor: pointer;
+}
+
+.msg.agent ul.items {
+  margin: 4px 0 10px;
+  padding-left: 20px;
+}
+
+.msg.agent ul.items li {
+  margin: 2px 0;
+}
+
+.msg.agent div.line {
+  margin: 0 0 10px;
+}
+
 /* #468: the proposed trip in the answer, one item per row; details folded under «Подробнее» */
 .msg.agent ul.offer {
   margin: 0 0 10px;
