@@ -132,6 +132,25 @@ suite("приложение", () => {
     await flush();
   });
 
+  it("#596: «Свой вариант» ставит фокус в поле и ничего не отправляет; другая кнопка отправляет ответ", async () => {
+    const options = ["ноябрь (рекомендуем)", "декабрь", "Не важно, решите сами", "Свой вариант"];
+    const clarify: ChatReply = {
+      ...structuredClone(checkoutStage),
+      stage: "clarify",
+      questions: [{ text: "Когда хотите поехать?", options }],
+    };
+    routes["POST /api/chat"] = () => ({ status: 200, body: clarify });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const sent = calls.filter((c) => c.key === "POST /api/chat").length;
+    await click("Свой вариант");
+    expect(calls.filter((c) => c.key === "POST /api/chat")).toHaveLength(sent);
+    expect(document.activeElement).toBe(box.querySelector("textarea[aria-label='Запрос']"));
+    await click("Не важно, решите сами");
+    expect(calls.at(-1)?.body).toMatchObject({ message: "Не важно, решите сами" });
+  });
+
   it("неизвестная сессия: начинаем заново без ошибки", async () => {
     localStorage.setItem(SESSION_KEY, "gone");
     await mount();

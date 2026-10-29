@@ -163,6 +163,9 @@ const dataNote = (offers: Offer[]) => {
     : "Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже.";
 };
 
+// #596: the backend adds this button to each clarifying question; it sends nothing.
+export const OWN_ANSWER = "Свой вариант";
+
 export function App() {
   const [text, setText] = useState("");
   const [reply, setReply] = useState<ChatReply | null>(null);
@@ -483,7 +486,13 @@ export function App() {
               <p>{q.text}</p>
               <div className="chips">
                 {q.options.map((o) => (
-                  <button key={o} type="button" className="chip" disabled={busy} onClick={() => send(o)}>
+                  <button
+                    key={o}
+                    type="button"
+                    className="chip"
+                    disabled={busy}
+                    onClick={() => (o === OWN_ANSWER ? box.current?.focus() : send(o))}
+                  >
                     {o}
                   </button>
                 ))}
