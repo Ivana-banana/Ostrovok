@@ -43,6 +43,7 @@ PAUSE_S = 3.0  # between two successful requests to the host only
 TIMEOUT_S = 3  # one offline wait stays under 4 s (TRAP-6, #533)
 MIN_N = 3  # a median of fewer than this many 3-star hotels is not stable enough to calibrate
 MIN_REAL = 3  # fewer named real cards than this: show the synthetic list instead, not a short one
+MAX_REAL = 5  # #675: the board and the chat pick a hotel by «первый…пятый» (web/src/format.ts)
 REAL_NOTE = (
     "Отель и цена «от» — вживую с 101hotels. Итог за выбранные ночи, питание и срок бесплатной "
     "отмены — оценка от этой цены."
@@ -372,7 +373,7 @@ class Live101Hotels:
                     "free_cancel_share": agg["free_cancel_share"],
                 }
             cards = _city_cards(place)
-            bases = _real_bases(place, cards) if cards else []
+            bases = _real_bases(place, cards)[:MAX_REAL] if cards else []
         except Exception:  # live pricing must never break a search; the log says why
             log.warning(
                 "live 101hotels %s: сбой слоя, отели на синтетике", place.get("name"), exc_info=True

@@ -202,3 +202,14 @@ def test_trap7_every_live_hotel_offer_names_101hotels_and_the_fetch_time(monkeyp
     out = lh.Live101Hotels(FakeBase()).hotels(spec(), place(), datetime.now(MSK))
     assert out and all(h.source == "101hotels" and h.fetched_at for h, _ in out)
     assert all(e.source == "синтетика" and e.fetched_at is None for _, es in out for e in es)
+
+
+def test_live_list_has_at_most_five_hotels_675(monkeypatch):
+    """#675: a city page has many cards, but the board picks a hotel by «первый…пятый» only."""
+    many = "<html>" + "".join(
+        card(f"Отель {i}", 2000 + i, 3, True, hid=str(20 + i)) for i in range(8)
+    )
+    monkeypatch.setattr(lh, "_get", lambda p: many)
+    out = lh.Live101Hotels(FakeBase()).hotels(spec(), place(), datetime.now(MSK))
+    assert {h.title for h, _ in out} == {f"Отель {i}" for i in range(lh.MAX_REAL)}
+    assert lh.MAX_REAL == 5
