@@ -58,10 +58,10 @@ SLUG_101 = {
     "Геленджик": "gelendjik",
     "Дивеево": "diveevo",
     "Йошкар-Ола": "yoshkar_ola",
-    "Санкт-Петербург": "saint_petersburg",
+    "Санкт-Петербург": "sankt-peterburg",
     "Сергиев Посад": "sergiev_posad",
     "Старая Русса": "staraya_russa",
-    "Нижний Новгород": "nizhny_novgorod",
+    "Нижний Новгород": "nizhniy_novgorod",
     "Великий Новгород": "velikiy_novgorod",
 }
 _TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
