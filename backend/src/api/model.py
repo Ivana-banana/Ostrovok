@@ -475,6 +475,20 @@ def _month_number(word: str) -> int:
     return next(n for k, n in MONTHS.items() if word.startswith(k))  # «март» before «ма»
 
 
+def _own_refusal(m: re.Match | None, joined: bool = False) -> bool:
+    """A «не» after the month refuses it, unless the words between belong to a neighbour (#227).
+
+    «январь или не едем», «в январе, а то не едем»: the «не» is the other branch.
+    «январь подходит декабрь не подходит»: the «не» goes with the other month («и февраль не» joins both, the part is cut at «и»).
+    """
+    if not m:
+        return False
+    skip = (m.groupdict().get("skip") or "").strip()
+    if re.match(r"(?:или|иначе|а\s+то)\b", skip):
+        return False
+    return joined or not re.search(rf"\b{MONTH}", skip)
+
+
 def month_call(text: str, month: int) -> tuple[str, int | None]:
     """What a month in the message means for dates the user named (#190).
 
@@ -494,6 +508,13 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     if negated and re.match(r"\s*,?\s*(?:а|но|лучше|давай)\b", rest):
         other = re.search(rf"\b{MONTH}", rest)  # «не в январе, а в феврале»: the month to ask about
         return "ask", _month_number(other.group(1)) if other else None
+    # «январь нет, лучше февраль», «в январе, нет, в феврале»: no to a month, a second one named (#227)
+    swap = re.match(
+        rf"[\s,—–-]*(?:нет\b|не\s*,)[\s,—–-]*(?:(?:а|но|лучше|давай)\b[\s,—–-]*)?(?:в|во|на)?\s*{MONTH}",
+        rest,
+    )
+    if swap:
+        return "ask", _month_number(swap.group(1))
     unclear = (
         r"\bможет\b|\bможно\b|\bа если\b|\bчто если\b|\bкак насч|\b(?:был|была|были|было)\b|побывал"
         r"|\bли\b"  # «а не поедем ли в феврале» (#220)
@@ -508,6 +529,7 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     # Any other «— не X» stays a refusal: «январь — не пойдёт», «в январе — не»
     neighbour = r"(?=не\s+(?:очень\s+)?(?:дорог|дешев|жарк|шумн|далек)\w*)"
     parts = re.split(rf",|\s[—–-]\s+{neighbour}|\s(?:но|и|а)\s", clause, maxsplit=1)
+    joined = bool(re.search(rf"\sи\s(?:в\s)?{MONTH}", clause))  # «в январе и феврале не поедем»
     near, after = parts[0], parts[1] if len(parts) > 1 else ""
     strong = r"нельзя|отпадает|отпадают|исключен|невозможн"  # a refusal anywhere near the month
     weak = r"отменя|неудобн"  # a refusal only as the whole part (#215)
@@ -522,15 +544,19 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     bare = rf"(?:нет|никак|мимо){end}"
     # The weak words follow the month directly or after a filler: «январь или никак» is a move
     filler = r"(?:(?:—|–|-|точно|уже|вообще|совсем|тоже|нам)\s+)*"
-    gone = rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\b|{strong})|{filler}(?:{weak}|{bare}))"
+    gone = rf"\s*(?:(?P<skip>(?:\S+\s+){{0,2}}?)(?:не\b|{strong})|{filler}(?:{weak}|{bare}))"
     # After a comma «не» + a verb and the strong words may follow up to two words («увы, не
     # получится», «увы, нельзя»). A «нет» or «неудобно» deeper in the part belongs to a
     # neighbour: «детей нет», «в декабре никак».
     refusing = (
-        rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
+        rf"\s*(?:(?P<skip>(?:\S+\s+){{0,2}}?)(?:не\s+(?:очень\s+)?(?:{verbs})"
         rf"|не\s+{moves}{end}|не{end}|{strong})|(?:{weak})\w*{end}|{bare})"
     )
-    if negated or re.match(gone, near) or re.match(refusing, after):
+    if (
+        negated
+        or _own_refusal(re.match(gone, near))
+        or _own_refusal(re.match(refusing, after), joined)
+    ):
         return "stay", month
     return "move", month
 
