@@ -2064,7 +2064,7 @@ def _question_answer(
     if old.stage == "compare":
         return f"{head}\n{HINTS['compare']}"
     if old.stage == "assemble":
-        return f"{head}\n{_text_assemble(old.plan)}"
+        return f"{head}\n{_text_assemble(old.plan, choice=False)}"
     rows = [f"{o.title} — {_priced(o.price_rub, [o])}" for o in old.cart.items]
     cart = (
         "В корзине:\n" + "\n".join(rows) + f"\nИтого {_priced(old.cart.total_rub, old.cart.items)}."
@@ -2315,8 +2315,10 @@ def _pet_flies(plan: Plan) -> bool:
     )
 
 
-def _text_assemble(plan: Plan) -> str:
-    lines = ["План поездки:"]
+def _text_assemble(plan: Plan, choice: bool = True) -> str:
+    # #664: the choice is repeated first; the lines are the offers' fields (TRAP-4)
+    lines = ["Ваш выбор:", *_offer_lines(plan)[1:-1]] if choice else []
+    lines.append("План поездки:")
     lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
     lines += [f"Внимание: {i.text.rstrip('.')}." for i in plan.issues]
     chosen = [o for o in plan.offers if o.kind == "hotel" and o.offer_id in plan.selected]
