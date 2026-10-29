@@ -400,7 +400,7 @@ AHEAD_RE = re.compile(r"\bчерез\s+\S+\s*(?:ноч|дн|сут)")  # «вы�
 OR_RE = re.compile(r"\b(?:или|либо)\b")  # cities joined by «или», «либо» are candidates
 # The adults are not named: 2 by default. With a child this becomes a question (#112).
 PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
-PARTY_SKIPPED = "состав: вы ответили «не важно»"  # #660: the question is not asked again
+PARTY_SKIPPED = "взрослых: ответ «не важно» на вопрос о составе"  # #660: the question is not asked again
 KIDS_UNKNOWN = "возраст ребёнка: «с детьми» — число и возраст не названы"  # #182: asked, not 7
 # #113: the refused places live in this assumption (TripSpec has no field for them).
 EXCLUDED = "исключено"
@@ -3264,7 +3264,8 @@ def step(
 
     # #630: «кто едет» was asked in the turn before: the cards do not ask it again
     party_asked = old.stage == "clarify" and bool({q.text for q in old.questions} & PARTY_TEXTS)
-    if party_asked and message.strip() == SKIP_ASK and PARTY_UNKNOWN in spec.assumptions:
+    who_asked = {q.text for q in old.questions} & {PARTY_ASK, PARTY_ASK_KIDS, WHO_ASK}
+    if who_asked and message.strip() == SKIP_ASK and PARTY_UNKNOWN in spec.assumptions:
         # #660: the refusal stays in the spec, so the comparison does not ask the party again
         spec = spec.model_copy(update={"assumptions": [*spec.assumptions, PARTY_SKIPPED]})
     asked = second_turn(prev, old, message)  # #630

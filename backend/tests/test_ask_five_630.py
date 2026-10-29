@@ -74,3 +74,14 @@ def test_skipped_party_question_stays_skipped_on_the_comparison(store):
     cards = ask(store, SKIP_ASK, party.session_id)
     compare = ask(store, "1", cards.session_id)
     assert compare.stage == "compare" and PARTY_ASK not in texts(compare)
+
+
+def test_party_answer_after_skip_drops_the_skip_note(store):
+    """#660: «нас трое взрослых» after «Не важно»: the note of the skip goes with the guess."""
+    first = ask(store, "тёплое море в ноябре, недорого, с ребёнком")
+    party = ask(store, "Из Москвы", first.session_id)
+    cards = ask(store, SKIP_ASK, party.session_id)
+    r = ask(store, "1", cards.session_id)
+    r = ask(store, "Нас трое взрослых и ребёнок", r.session_id)
+    assert r.plan.spec.adults == 3
+    assert not any("не важно" in a for a in r.plan.spec.assumptions)
