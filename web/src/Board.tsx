@@ -470,7 +470,27 @@ function Hotels({ plan, stage, busy, onSend }: {
   );
 }
 
-// The backend picks a leg by the row number of this table ("возьми рейс 2", S6).
+// Legs split by direction (#658): the first route is «Туда», its reverse «Обратно», any other
+// «Переезд». The row number stays global: the backend picks a leg by it ("возьми рейс 3", S6).
+export function legGroups(legs: TransportOffer[]): { title: string; rows: { t: TransportOffer; i: number }[] }[] {
+  const groups = new Map<string, { title: string; rows: { t: TransportOffer; i: number }[] }>();
+  const first = legs[0];
+  legs.forEach((t, i) => {
+    const key = `${t.origin} → ${t.destination}`;
+    if (!groups.has(key)) {
+      const role =
+        t.origin === first.origin && t.destination === first.destination
+          ? "Туда"
+          : t.origin === first.destination && t.destination === first.origin
+            ? "Обратно"
+            : "Переезд";
+      groups.set(key, { title: `${role} · ${key}`, rows: [] });
+    }
+    groups.get(key)!.rows.push({ t, i });
+  });
+  return [...groups.values()];
+}
+
 function Transport({ plan, stage, busy, onSend }: {
   plan: Plan;
   stage: Stage;
@@ -479,72 +499,78 @@ function Transport({ plan, stage, busy, onSend }: {
 }) {
   const legs = plan.offers.filter((o): o is TransportOffer => o.kind === "transport");
   if (!legs.length) return null;
+  const groups = legGroups(legs);
   return (
     <section className="sec" aria-label="Сравнение транспорта">
       <h2>{legs.every((t) => t.mode === "flight") ? "Перелёт" : "Транспорт"}</h2>
-      <div className="scroll">
-        <table className="grid-table">
-          <thead>
-            <tr>
-              <th className="num">№</th>
-              <th>Рейс</th>
-              <th>Тип</th>
-              <th>Отправление</th>
-              <th>Прибытие</th>
-              <th className="num">В пути</th>
-              <th className="num">Пересадки</th>
-              <th>Питомцы</th>
-              <th className="num">Цена</th>
-              <th className="act">
-                <span className="sr-only">Действие</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {legs.map((t, i) => {
-              const chosen = plan.selected.includes(t.offer_id);
-              return (
-                <tr key={t.offer_id} className={chosen ? "chosen" : undefined}>
-                  <td className="num no">{i + 1}</td>
-                  <td className="name">
-                    {t.title}
-                    {chosen && <span className="tag">выбран</span>}
-                  </td>
-                  <td>{MODES[t.mode]}</td>
-                  <td data-label="Отправление">
-                    <span className="when">{localTime(t.depart_at)}</span> <small>{t.origin}</small>{zoneTag(t.depart_at)}
-                  </td>
-                  <td data-label="Прибытие">
-                    <span className="when">{localTime(t.arrive_at)}</span> <small>{t.destination}</small>{zoneTag(t.arrive_at)}
-                  </td>
-                  <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
-                  <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
-                  {/* #475: the pet mark of a leg, as for the hotels */}
-                  <td data-label="Питомцы">
-                    {/* #575: a flight has no confirmed pet rule; the mark means "ask the airline" */}
-                    {t.pets_allowed ? (t.mode === "flight" ? "уточнить у авиакомпании" : "можно") : "нет отметки"}
-                  </td>
-                  <td className="num cost">
-                    <Price value={t.price_rub} synthetic={t.synthetic} source={sourceOf([t])} />
-                  </td>
-                  <td className="act">
-                    {(stage === "compare" || stage === "assemble") && !chosen && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        aria-label={`Выбрать рейс ${i + 1}: ${t.title}`}
-                        onClick={() => onSend(`возьми рейс ${i + 1}`)}
-                      >
-                        Выбрать
-                      </button>
-                    )}
-                  </td>
+      {groups.map((g) => (
+        <div key={g.title} className="leg-group">
+          {groups.length > 1 && <h3>{g.title}</h3>}
+          <div className="scroll">
+            <table className="grid-table">
+              <thead>
+                <tr>
+                  <th className="num">№</th>
+                  <th>Рейс</th>
+                  <th>Тип</th>
+                  <th>Отправление</th>
+                  <th>Прибытие</th>
+                  <th className="num">В пути</th>
+                  <th className="num">Пересадки</th>
+                  <th>Питомцы</th>
+                  <th className="num">Цена</th>
+                  <th className="act">
+                    <span className="sr-only">Действие</span>
+                  </th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              </thead>
+              <tbody>
+                {g.rows.map(({ t, i }) => {
+                  const chosen = plan.selected.includes(t.offer_id);
+                  return (
+                    <tr key={t.offer_id} className={chosen ? "chosen" : undefined}>
+                      <td className="num no">{i + 1}</td>
+                      <td className="name">
+                        {t.title}
+                        {chosen && <span className="tag">выбран</span>}
+                      </td>
+                      <td>{MODES[t.mode]}</td>
+                      <td data-label="Отправление">
+                        <span className="when">{localTime(t.depart_at)}</span> <small>{t.origin}</small>{zoneTag(t.depart_at)}
+                      </td>
+                      <td data-label="Прибытие">
+                        <span className="when">{localTime(t.arrive_at)}</span> <small>{t.destination}</small>{zoneTag(t.arrive_at)}
+                      </td>
+                      <td className="num" data-label="В пути">{duration(t.depart_at, t.arrive_at)}</td>
+                      <td className={t.changes ? "num" : "num zero"} data-label="Пересадки">{t.changes || "нет"}</td>
+                      {/* #475: the pet mark of a leg, as for the hotels */}
+                      <td data-label="Питомцы">
+                        {/* #575: a flight has no confirmed pet rule; the mark means "ask the airline" */}
+                        {t.pets_allowed ? (t.mode === "flight" ? "уточнить у авиакомпании" : "можно") : "нет отметки"}
+                      </td>
+                      <td className="num cost">
+                        <Price value={t.price_rub} synthetic={t.synthetic} source={sourceOf([t])} />
+                      </td>
+                      <td className="act">
+                        {(stage === "compare" || stage === "assemble") && !chosen && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            aria-label={`Выбрать рейс ${i + 1}: ${t.title}`}
+                            onClick={() => onSend(`возьми рейс ${i + 1}`)}
+                          >
+                            Выбрать
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
       <p className="muted">Время местное для пункта отправления и прибытия.</p>
     </section>
   );

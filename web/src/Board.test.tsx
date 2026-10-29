@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe as suite, expect, it } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { Board, EarlierChoices, Price, PriorityRow, TripParams } from "./Board";
+import { Board, EarlierChoices, legGroups, Price, PriorityRow, TripParams } from "./Board";
 import type { ChatReply, HotelOffer, Priority, TransportOffer } from "./contracts";
 import { changeValue, localTime } from "./format";
 
@@ -172,6 +172,14 @@ suite("доска поездки", () => {
     const head = render(base).querySelector("[aria-label='Сравнение отелей'] thead")?.textContent;
     for (const col of ["Цена за всё", "Отмена", "Питание", "До центра", "Рейтинг", "Звёзды"])
       expect(head).toContain(col);
+  });
+
+  it("сравнение транспорта: туда и обратно — разные блоки, номер рейса сквозной (#658)", () => {
+    const leg = (offer_id: string, origin: string, destination: string) =>
+      ({ offer_id, origin, destination }) as TransportOffer;
+    const g = legGroups([leg("a", "Казань", "Сочи"), leg("b", "Сочи", "Казань"), leg("c", "Казань", "Сочи")]);
+    expect(g.map((x) => x.title)).toEqual(["Туда · Казань → Сочи", "Обратно · Сочи → Казань"]);
+    expect(g.map((x) => x.rows.map((r) => r.i + 1))).toEqual([[1, 3], [2]]);
   });
 
   it("сравнение транспорта: время прибытия и время в пути", () => {
