@@ -1959,6 +1959,13 @@ tr .tag {
   color: #17653a;
 }
 
+/* #469: the time the source answered, after the chip: «101hotels · 08:41» */
+.synth-time {
+  margin-left: 2px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
 /* lists with prices: cart, voucher; same rhythm as a table row */
 
 ul.plain {

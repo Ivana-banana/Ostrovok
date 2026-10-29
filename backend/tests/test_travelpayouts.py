@@ -234,3 +234,11 @@ def test_spec_without_date_gives_no_legs_and_no_request(tmp_path):
     origin, place = (offers._complete(resolve_place(c)) for c in ("Москва", "Анталия"))
     assert tp.legs(spec(date_from=None, date_to=None), origin, place) == []
     assert fake.calls == []
+
+
+def test_trap7_every_real_flight_names_travelpayouts_and_the_fetch_time(adapter):
+    adapter(Fake())
+    got = legs(spec())
+    real = [x for x in got if not x.synthetic]
+    assert real and all(x.source == "travelpayouts" and x.fetched_at for x in real)
+    assert all(x.source == "синтетика" and x.fetched_at is None for x in got if x.synthetic)
