@@ -227,7 +227,13 @@ CHILD_RE = re.compile(
 NO_CHILD_BEFORE = re.compile(r"\bбез\s+(?:\w+\s+и\s+|\w+[иы]х\s+)?$")
 # A number word or a number right after the child noun: the children are named. A negation
 # later in the clause is a double negation («без детей не поедем»): the children stay.
-NO_CHILD_AFTER = re.compile(r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)|[^,.;!?]*\b(?:не|ни\w*)\b")
+# #206: the negation words are listed: «ни\w*» would catch «Ницца», «Нижний», «ниже». «не» before
+# a comparison («не дороже 100 тысяч», «не позже 10 мая») is a budget or a date, not a refusal.
+NO_CHILD_AFTER = re.compile(
+    r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)"
+    r"|[^,.;!?]*\b(?:не(?!\s+(?:дороже|дешевле|больше|меньше|более|менее|выше|ниже|позже|раньше)\b)"
+    r"|ни|никуда|никак|никогда|ничего)\b"
+)
 NO_CHILD_FORM = ("детей", "ребенка", "сына", "дочери", "малыша")
 # #202: «отель без детей» is a wish for the hotel (adults only), not the party.
 HOTEL_NO_KIDS_BEFORE = re.compile(
@@ -561,6 +567,10 @@ NO_DATA_WISHES = (
     "северное сияние", "киты", "термальные источники", "фестиваль", "дайвинг", "серфинг",
     "рыбалка", "сафари", "шопинг", "музеи", "йога", *HARD_WISHES,
 )  # fmt: skip
+# Other wishes the catalogue does not check (inspire.UNCHECKED): a refusal drops them too (#383)
+FREE_WISHES = ("вино и еда", "романтика", "красиво", "с удобствами")
+# «кухня не важна»: no refusal of a flight or a meal, but no wish either (#383)
+NOT_IMPORTANT_RE = re.compile(r"\w*\s*(?:[—–:-]\s*)?(?:(?:мне|нам|совсем|вообще)\s+)?не\s+важ")
 # «отель у Технопарка», «возле Технопарка»: the landmark is the next capitalized word. The lookahead
 # needs \b: without it the word backtracks («у Чёрного моря» -> «Чёрног»).
 LANDMARK_RE = re.compile(
@@ -613,8 +623,8 @@ def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
         return not _warm_refused(t, x)
     if wish == "природа":
         return not negated.search(t[: x.start()])
-    if wish in NO_DATA_WISHES:  # #361: «без музеев», «шопинг не нужен»
-        return not _refused(t, x)
+    if wish in NO_DATA_WISHES or wish in FREE_WISHES:  # #361, #383: «без музеев», «без удобств»
+        return not _refused(t, x) and not NOT_IMPORTANT_RE.match(t, x.end())
     return True
 
 
@@ -2792,6 +2802,11 @@ def extract(
     if modes:
         found["modes"] = modes
     wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
+    # «без удобств, в палатке»: one refusal of a free wish outweighs its other words (#383)
+    wishes = [
+        w for w in wishes
+        if w not in FREE_WISHES or all(_wished(w, t, x, negated) for x in re.finditer(dict(WISHES)[w], t))
+    ]  # fmt: skip
     for m in LANDMARK_RE.finditer(text):  # #338: «отель у Технопарка»; cities are no landmark
         if not _known(m.group(1)) and not _is_destination(m.group(1), found):
             adjective = m.group(1).lower().endswith(ADJ_ENDINGS)
