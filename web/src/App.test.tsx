@@ -132,6 +132,25 @@ suite("приложение", () => {
     await flush();
   });
 
+  it("#596: «Свой вариант» ставит фокус в поле и ничего не отправляет; другая кнопка отправляет ответ", async () => {
+    const options = ["ноябрь (рекомендуем)", "декабрь", "Не важно, решите сами", "Свой вариант"];
+    const clarify: ChatReply = {
+      ...structuredClone(checkoutStage),
+      stage: "clarify",
+      questions: [{ text: "Когда хотите поехать?", options }],
+    };
+    routes["POST /api/chat"] = () => ({ status: 200, body: clarify });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const sent = calls.filter((c) => c.key === "POST /api/chat").length;
+    await click("Свой вариант");
+    expect(calls.filter((c) => c.key === "POST /api/chat")).toHaveLength(sent);
+    expect(document.activeElement).toBe(box.querySelector("textarea[aria-label='Запрос']"));
+    await click("Не важно, решите сами");
+    expect(calls.at(-1)?.body).toMatchObject({ message: "Не важно, решите сами" });
+  });
+
   it("неизвестная сессия: начинаем заново без ошибки", async () => {
     localStorage.setItem(SESSION_KEY, "gone");
     await mount();
@@ -282,7 +301,7 @@ suite("приложение", () => {
     await click("В корзину");
     const sum = String(total).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     const last = [...box.querySelectorAll(".msg.agent")].at(-1)?.textContent;
-    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
+    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽синтетика.`); // the label is a chip (#567)
   });
 
   it("#161: корзина изменилась, а план не обновился — ошибка вместо тихого устаревшего плана", async () => {
@@ -428,7 +447,7 @@ suite("приложение", () => {
     expect(box.querySelector("[aria-label='Корзина']")?.textContent).not.toContain("Вернуть");
   });
 
-  it("S9: сдвиг чипа отправляет агенту сообщение с полным порядком приоритетов", async () => {
+  it("S9: клик по чипу отправляет агенту сообщение с полным порядком приоритетов", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };
     compare.plan.spec.priorities = ["price", "cancellation"];
@@ -437,15 +456,15 @@ suite("приложение", () => {
     after.plan.spec.priorities = ["cancellation", "price"];
     routes["POST /api/chat"] = () => ({ status: 200, body: after });
     await mount();
-    const down = box.querySelector("button[aria-label='Опустить приоритет цена']") as HTMLButtonElement;
-    await act(async () => down.click());
+    const other = [...box.querySelectorAll("[aria-label='Приоритеты'] button")].find((b) => b.textContent === "отмена") as HTMLButtonElement;
+    await act(async () => other.click());
     await flush();
     expect(calls.at(-1)).toMatchObject({
       key: "POST /api/chat",
       body: { session_id: "s1", message: "Мои приоритеты по важности: отмена, цена." },
     });
-    const chips = [...box.querySelectorAll("[aria-label='Приоритеты'] .chip span")].map((c) => c.textContent);
-    expect(chips).toEqual(["1. отмена", "2. цена"]);
+    const on = [...box.querySelectorAll("[aria-label='Приоритеты'] [aria-pressed='true']")].map((c) => c.textContent);
+    expect(on).toEqual(["отмена"]);
   });
 
   it("подписи про хранение чатов и синтетику спрятаны под «?» и есть в разметке", async () => {
@@ -827,5 +846,27 @@ suite("чат как в мессенджере", () => {
     expect(localStorage.getItem(SESSION_KEY)).toBe("s1");
     expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
     expect([...box.querySelectorAll(".chat-open")].map((b) => b.textContent)).toEqual(["Казань"]);
+  });
+
+  it("#19: запомненное видно на пустом чате; ответ обновляет память; пустая спека её не стирает", async () => {
+    localStorage.setItem("trip.prefs", JSON.stringify({ origin: "Казань", adults: 3 }));
+    await mount();
+    const note = box.querySelector("[aria-label='Как в прошлый раз']")!;
+    expect(note.textContent).toContain("вылет: Казань, 3 взрослых");
+    await click("Подставить");
+    expect(box.querySelector("textarea")!.value).toContain("Казань");
+    const reply = structuredClone(booked);
+    routes["POST /api/chat"] = () => ({ status: 200, body: reply });
+    await click("Отправить");
+    expect(JSON.parse(localStorage.getItem("trip.prefs")!)).toMatchObject({ origin: "Москва", adults: 2 });
+    reply.plan.spec.origin = null;
+    reply.plan.spec.assumptions = ["взрослых: 2 (состав не назван)"];
+    const area = box.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "дальше");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("Отправить");
+    expect(JSON.parse(localStorage.getItem("trip.prefs")!)).toMatchObject({ origin: "Москва", adults: 2 });
   });
 });
