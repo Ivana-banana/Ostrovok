@@ -450,12 +450,13 @@ function Hotels({ plan, stage, busy, onSend }: {
                   </td>
                   <td data-label="Питомцы">{h.pets_allowed ? "можно" : "нет отметки"}</td>
                   <td className="act">
-                    {stage === "compare" && word && !chosen && (
+                    {(stage === "compare" || stage === "assemble") && word && !chosen && (
                       <button
                         type="button"
                         disabled={busy}
                         aria-label={`Выбрать ${h.title}`}
-                        onClick={() => onSend(`беру ${word}`)}
+                        // «беру» on assemble is a consent: there the row is named («второй отель», #677)
+                        onClick={() => onSend(stage === "compare" ? `беру ${word}` : `${word} отель`)}
                       >
                         Выбрать
                       </button>

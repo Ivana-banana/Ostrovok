@@ -204,6 +204,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [prefs, setPrefs] = useState(loadPrefs); // #19: fields of the last trip, offered as defaults
   const [thinking, setThinking] = useState(false);
+  const [picking, setPicking] = useState(false); // a quiet pick: «думаю» above the plan, not under it
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const lastMsg = useRef<HTMLDivElement>(null); // the last agent message: its block sits under it
@@ -307,17 +308,16 @@ export function App() {
     setError(null);
     setNote(null);
     const withUser = { ...ui, messages: [...ui.messages, { role: "user" as const, text: m }] };
-    if (!quiet) {
-      setUi(withUser);
-      setThinking(true);
-    }
+    if (!quiet) setUi(withUser);
+    setThinking(true);
+    setPicking(quiet);
     const no = loadNo.current;
     try {
       const t0 = Date.now();
       const r = await chat({ session_id: sid, message: m, ...requested() });
       // A fast offline reply still shows the thinking indicator for a moment (not with reduced motion).
       const rest = MIN_THINK_MS - (Date.now() - t0);
-      if (!quiet && motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
+      if (motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
       if (no !== loadNo.current) return; // the user switched the chat while the agent thought
       writeSid(r.session_id);
       setReply(r);
@@ -334,6 +334,7 @@ export function App() {
       setError(userError(e));
     } finally {
       setThinking(false);
+      setPicking(false);
       setBusy(false);
     }
   }
@@ -471,7 +472,7 @@ export function App() {
   const questions = reply
     ? reply.questions.filter((q) => reply.stage !== "inspire" || !(q.options.length > 0 && q.options.every((o) => cardNames.includes(o))))
     : [];
-  const block = reply && !thinking && (
+  const block = reply && (!thinking || picking) && ( // a quiet pick keeps the plan in view (#677)
     <div key="stage-block" className="attach">
       {/* #458: a question whose options only repeat the names of the cards below is redundant */}
       {questions.length > 0 && (
@@ -715,10 +716,11 @@ export function App() {
               // One key for the block: it moves under a new last answer without losing its state.
               const old = m.role === "agent" && i !== lastAgent ? m.reply : undefined;
               if (old && reply) return [msg, <EarlierChoices key={`earlier-${i}`} reply={old} current={reply} busy={busy} onSend={send} />];
-              return i === lastAgent && block ? [msg, block] : [msg];
+              const pick = picking && <Thinking key="picking" variant={asked % 2 ? "banana" : "plane"} />;
+              return i === lastAgent && block ? [msg, pick, block] : [msg];
             })}
             {lastAgent < 0 && block}
-            {thinking && <Thinking variant={asked % 2 ? "banana" : "plane"} />}
+            {thinking && !(picking && lastAgent >= 0 && block) && <Thinking variant={asked % 2 ? "banana" : "plane"} />}
             {error && (
               <p className="error" role="alert">
                 {error}
