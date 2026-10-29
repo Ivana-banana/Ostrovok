@@ -847,4 +847,26 @@ suite("чат как в мессенджере", () => {
     expect(box.querySelector("[aria-label='Корзина']")).not.toBeNull();
     expect([...box.querySelectorAll(".chat-open")].map((b) => b.textContent)).toEqual(["Казань"]);
   });
+
+  it("#19: запомненное видно на пустом чате; ответ обновляет память; пустая спека её не стирает", async () => {
+    localStorage.setItem("trip.prefs", JSON.stringify({ origin: "Казань", adults: 3 }));
+    await mount();
+    const note = box.querySelector("[aria-label='Как в прошлый раз']")!;
+    expect(note.textContent).toContain("вылет: Казань, 3 взрослых");
+    await click("Подставить");
+    expect(box.querySelector("textarea")!.value).toContain("Казань");
+    const reply = structuredClone(booked);
+    routes["POST /api/chat"] = () => ({ status: 200, body: reply });
+    await click("Отправить");
+    expect(JSON.parse(localStorage.getItem("trip.prefs")!)).toMatchObject({ origin: "Москва", adults: 2 });
+    reply.plan.spec.origin = null;
+    reply.plan.spec.assumptions = ["взрослых: 2 (состав не назван)"];
+    const area = box.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "дальше");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("Отправить");
+    expect(JSON.parse(localStorage.getItem("trip.prefs")!)).toMatchObject({ origin: "Москва", adults: 2 });
+  });
 });

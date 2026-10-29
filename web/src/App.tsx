@@ -16,6 +16,7 @@ import {
   touchChat,
 } from "./history";
 import { Mascot, moodOf } from "./Mascot";
+import { loadPrefs, prefsDraft, prefsText, rememberPrefs, forgetPrefs } from "./prefs";
 import {
   type ModeState,
   SourceSwitches,
@@ -179,6 +180,7 @@ export function App() {
   const [road, setRoad] = useState(false); // the roadmap sheet below 1100 px
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [query, setQuery] = useState("");
+  const [prefs, setPrefs] = useState(loadPrefs); // #19: fields of the last trip, offered as defaults
   const [thinking, setThinking] = useState(false);
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
   const [switches, setSwitches] = useState<Switches>(loadSwitches); // #566: «Синтетика» off — real data
@@ -328,6 +330,7 @@ export function App() {
       writeSid(r.session_id);
       setReply(r);
       setNoAi(!r.llm);
+      setPrefs(rememberPrefs(r.plan.spec));
       update(
         { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage, reply: r }] },
         r.session_id,
@@ -714,6 +717,30 @@ export function App() {
             <div ref={end} />
           </div>
         </div>
+        {!ui.messages.length && !restoring && prefsText(prefs) && (
+          <div className="prefs-note starters" role="note" aria-label="Как в прошлый раз">
+            <span>Как в прошлый раз: {prefsText(prefs)}</span>
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                setText(prefsDraft(prefs));
+                box.current?.focus();
+              }}
+            >
+              Подставить
+            </button>
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                setPrefs(forgetPrefs());
+              }}
+            >
+              Забыть
+            </button>
+          </div>
+        )}
         {!ui.messages.length && !restoring && (
           <div className="starters" aria-label="Примеры для начала">
             {EXAMPLES.map((ex) => (
