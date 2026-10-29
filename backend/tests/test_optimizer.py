@@ -1028,3 +1028,16 @@ def test_no_best_value_when_the_best_is_already_refundable():
     """#640: the best tariff has free cancellation -> no «самый выгодный» bundle."""
     items = offers([hotel("cheap", 10_000, refundable=True), hotel("pricey", 11_000)], FLIGHTS)
     assert all(b.label != "самый выгодный" for b in bundles(spec(), items))
+
+
+def test_best_value_names_the_gap_to_the_cheapest_when_it_is_not_the_best():
+    """#640: the cheapest trip is neither the best nor «самый выгодный»: the gap to it is named."""
+    cheap = hotel("cheap", 10_000, rating=5.0)
+    best = hotel("best", 12_000, rating=9.9, meal="BB")
+    refund = hotel("refund", 14_000, refundable=True, rating=8.0)
+    items = offers([cheap, best, refund], FLIGHTS)
+    s = spec(priorities=["rating"])
+    assert hotel_of(s, items) == best
+    value = next(b for b in bundles(s, items) if b.label == "самый выгодный")
+    text = " ".join(value.tradeoffs).replace("\xa0", " ")
+    assert "дороже самого дешёвого варианта на 4 000 ₽" in text

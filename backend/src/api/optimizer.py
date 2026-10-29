@@ -678,10 +678,9 @@ def optimize(spec: TripSpec, offers: list[Offer]) -> Ranked:
     cheapest = min(pool, key=lambda t: (t.total, t.key))
     for lb, t in _alternatives(spec, best, pool, trips):
         tradeoffs = _versus(t, best)
-        if lb == "самый выгодный" and cheapest is not best and cheapest is not t:
-            tradeoffs.append(
-                f"{_diff(t.total - cheapest.total, t.offers + cheapest.offers)} самого дешёвого варианта"
-            )
+        if lb == "самый выгодный" and cheapest is not best and t.total > cheapest.total:
+            gap = _m(t.total - cheapest.total, t.offers + cheapest.offers)
+            tradeoffs.append(f"дороже самого дешёвого варианта на {gap}")
         bundles.append(_bundle(lb, t, tradeoffs))
     return Ranked(best.ids, explanations, bundles)
 
