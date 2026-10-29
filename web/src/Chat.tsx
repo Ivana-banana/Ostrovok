@@ -173,10 +173,62 @@ function Rich({ text, synthetic }: { text: string; synthetic: boolean }) {
   );
 }
 
-function Line({ text, synthetic }: { text: string; synthetic: boolean }) {
+// #652: «Метка: значение» — the label bold; «a; b; c» — one item per row.
+const LABEL = /^([А-ЯЁа-яё][а-яё ]{1,30}):\s+(.+)$/;
+
+function Item({ text, synthetic }: { text: string; synthetic: boolean }) {
+  const m = LABEL.exec(text);
+  if (!m) return <Rich text={text} synthetic={synthetic} />;
   return (
-    <p className={ASIDE.test(text) ? "aside" : undefined}>
-      <Rich text={text} synthetic={synthetic} />
+    <>
+      <b>{m[1]}:</b> <Rich text={m[2]} synthetic={synthetic} />
+    </>
+  );
+}
+
+function Line({ text, synthetic }: { text: string; synthetic: boolean }) {
+  const m = LABEL.exec(text);
+  const aside = ASIDE.test(text);
+  if (!m) {
+    return (
+      <p className={aside ? "aside" : undefined}>
+        <Rich text={text} synthetic={synthetic} />
+      </p>
+    );
+  }
+  const items = m[2].split(/;\s+/);
+  const list = (
+    <ul className="items">
+      {items.map((it, i) => (
+        <li key={i}>
+          <Item text={it} synthetic={synthetic} />
+        </li>
+      ))}
+    </ul>
+  );
+  if (aside) {
+    // Assumptions and unchecked wishes are folded by default: the reply stays short.
+    return (
+      <details className="aside">
+        <summary>
+          {m[1]}
+          {items.length > 1 ? ` (${items.length})` : ""}
+        </summary>
+        {list}
+      </details>
+    );
+  }
+  if (items.length > 1) {
+    return (
+      <div className="line">
+        <b>{m[1]}:</b>
+        {list}
+      </div>
+    );
+  }
+  return (
+    <p>
+      <b>{m[1]}:</b> <Rich text={m[2]} synthetic={synthetic} />
     </p>
   );
 }

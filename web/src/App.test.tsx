@@ -707,18 +707,21 @@ suite("чат как в мессенджере", () => {
     expect([...box.querySelectorAll(".questions p")].map((p) => p.textContent)).toEqual(["Какой город берём?"]);
   });
 
-  it("строки «Допущения» и «Не проверяю» ответа — приглушённой строкой", async () => {
-    const reply = "Нашёл варианты.\nДопущения: даты не названы.\nНе проверяю по данным: детская анимация.";
+  it("«Допущения» и «Не проверяю» свёрнуты, пункты — списком; метка строки — жирным (#652)", async () => {
+    const reply =
+      "Нашёл варианты.\nДопущения: взрослых: 2; даты: 07.11–14.11\nНе проверяю по данным: детская анимация.\nитог: 51 700 ₽";
     routes["POST /api/chat"] = () => ({ status: 200, body: { ...checkoutStage, reply } });
     await mount();
     await click("Выходные в Казани");
     await click("Отправить");
-    const lines = [...box.querySelectorAll("[role='status'] p")].map((p) => [p.className, p.textContent]);
-    expect(lines).toEqual([
-      ["", "Нашёл варианты."],
-      ["aside", "Допущения: даты не названы."],
-      ["aside", "Не проверяю по данным: детская анимация."],
+    const status = box.querySelector("[role='status']")!;
+    const folded = [...status.querySelectorAll("details.aside")];
+    expect(folded.map((d) => [d.hasAttribute("open"), d.querySelector("summary")!.textContent])).toEqual([
+      [false, "Допущения (2)"],
+      [false, "Не проверяю по данным"],
     ]);
+    expect([...folded[0].querySelectorAll("li b")].map((b) => b.textContent)).toEqual(["взрослых:", "даты:"]);
+    expect([...status.querySelectorAll("p > b")].map((b) => b.textContent)).toContain("итог:");
   });
 
   it("пустой чат: без серого текста-дубля, примеры стоят прямо над полем ввода", async () => {
