@@ -260,8 +260,12 @@ EDIT_ITEM_RE = re.compile(r"«([^«»]*)»")
 # #18: after the voucher «ранний заезд» and «можно заселиться раньше?» ask the hotel's rule, not a
 # move of the dates; «на два дня раньше» and a move verb are the date edit (#503).
 EARLY_RE = re.compile(
-    r"\bранн(?:ий|его|ем|ему|им)\s+(?:заезд\w*|заселени\w*)"
+    r"\bранн(?:ий|ее|его|ем|ему|им)\s+(?:заезд\w*|заселени\w*|чек[\s-]?ин\w*|check[\s-]?in)"
     r"|\b(?:засел\w+|заех\w+|заезж\w+)\s+(?:по)?раньше|\b(?:по)?раньше\s+(?:засел\w+|заех\w+)"
+)
+# #637: «заехать раньше на день» is the date edit, not the question of the hotel's rule.
+EARLY_SHIFT_RE = re.compile(
+    r"\b(?:раньше|позже)\s+на\s+(?:\w+\s+)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
 )
 MOVE_VERB_RE = re.compile(r"\b(?:сдвин|перенес|перенос|передвин|подвин|измен|поменя)\w*")
 TRANSFER_RE = re.compile(r"\bтрансфер\w*")
@@ -2558,7 +2562,13 @@ def _booking_edits(prev: ChatReply, message: str) -> list[str]:
     # A field the booked trip already has is a remark («отличные 3 ночи были»), not an edit.
     # After an earlier edit it may undo that edit («трое взрослых» -> «нет, двое»): it counts.
     changed = {k for k in EDIT_KEYS & set(found) if edits or getattr(spec, k, None) != found[k]}
-    if changed or SHIFT_RE.search(low) or DATE_EDIT_RE.search(low):
+    if (
+        changed
+        or SHIFT_RE.search(low)
+        or DATE_EDIT_RE.search(low)
+        or EARLY_SHIFT_RE.search(low)
+        or OTHER_RE.search(low)
+    ):
         edits.append(re.sub(r"[«»]", '"', message).strip())
     return edits
 
@@ -2570,19 +2580,25 @@ def _after_chip(edits: list[str]) -> Question:
     return Question(text=ask, options=[CHANGE_CHIP, RESTART_CHIP])
 
 
-def _after_purchase(prev: ChatReply, low: str) -> str | None:
+def _after_purchase(prev: ChatReply, low: str, message: str) -> str | None:
     """#18: the reply to «ранний заезд» and «трансфер до отеля» after the voucher, from the
     booking and the plan offers only (TRAP-4); None for any other message. The voucher stays."""
     v = prev.voucher
     if SHIFT_RE.search(low) or MOVE_VERB_RE.search(low) or NO_TRANSFER_RE.search(low):
         return None
+    if (
+        EARLY_SHIFT_RE.search(low)
+        or OTHER_RE.search(low)
+        or EDIT_KEYS & set(extract(message, True)[0])
+    ):
+        return None  # #637: a date or city edit goes to «Изменить бронь», even with «трансфер»
     hotel = next((o for o in v.items if isinstance(o, HotelOffer)), None)
     if EARLY_RE.search(low):
         if hotel is None:
             return f"Бронь {v.booking_id} без отеля: времени заселения у меня нет."
         return (
-            f"Бронь {v.booking_id} не меняю. {hotel.title}: заселение с {hotel.check_in:%H:%M} "
-            f"по времени отеля. Ранний заезд — просьба к отелю, гарантии нет. Цены раннего заезда "
+            f"Бронь {v.booking_id} не меняю. {hotel.title}: обычно с {hotel.check_in:%H:%M}, "
+            f"точное время уточните у отеля: в данных его нет. Ранний заезд — просьба к отелю, гарантии нет. Цены раннего заезда "
             "в брони нет: её назовёт отель."
         )
     if not TRANSFER_RE.search(low):
@@ -2666,7 +2682,7 @@ def step(
         return fresh.model_copy(update={"reply": f"Начинаем заново.{kept} {fresh.reply}"})
     if prev and prev.voucher and CHANGE_RE.match(message):
         return _change_booking(prev, sid, use_llm, origin)
-    if prev and prev.voucher and (own := _after_purchase(prev, low)):
+    if prev and prev.voucher and (own := _after_purchase(prev, low, message)):
         return prev.model_copy(
             update={
                 "reply": own,

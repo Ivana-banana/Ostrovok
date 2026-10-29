@@ -66,3 +66,30 @@ def test_transfer_already_in_the_booking_is_not_offered_again(store):
     a = say(store, "трансфер до отеля", r.session_id)
     assert a.reply.startswith(f"Трансфер уже в брони {r.voucher.booking_id}")
     assert "₽" not in a.reply
+
+
+def test_check_in_time_is_not_the_hotel_rule_637(store):
+    r = booked(store)
+    a = say(store, "ранний заезд", r.session_id)
+    assert "обычно с " in a.reply and "уточните у отеля" in a.reply
+
+
+@pytest.mark.parametrize("text", ["раннее заселение", "возможен ранний чекин?"])
+def test_early_check_in_wordings_637(store, text):
+    r = booked(store)
+    a = say(store, text, r.session_id)
+    assert "гарантии нет" in a.reply and "Правка для новой поездки" not in a.questions[0].text
+
+
+def test_arrive_a_day_earlier_is_a_date_edit_637(store):
+    r = booked(store)
+    a = say(store, "хочу заехать раньше на день", r.session_id)
+    assert "гарантии нет" not in a.reply
+    assert "заехать раньше на день" in a.questions[0].text
+
+
+def test_other_city_and_transfer_is_an_edit_637(store):
+    r = booked(store)
+    a = say(store, "другой город и трансфер", r.session_id)
+    assert not a.reply.startswith("Трансфер") and "Трансфера" not in a.reply
+    assert "другой город и трансфер" in a.questions[0].text
