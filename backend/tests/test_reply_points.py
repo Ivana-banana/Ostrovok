@@ -38,12 +38,12 @@ def test_one_line_per_item_with_prices_of_the_selected_offers(store):
     lines = points(r.reply)
     assert [line.split(":")[0] for line in lines[:4]] == ["Отель", "Туда", "Обратно", "Трансферы"]
     assert lines[0].startswith(f"Отель: {hotel.title}, ")
-    assert lines[0].endswith(f" — {_rub(hotel.price_rub)}")
+    assert lines[0].endswith(f" — {_rub(hotel.price_rub)} (синтетика)")
     for line, leg in ((lines[1], there), (lines[2], back)):
         assert f"{leg.depart_at:%d.%m %H:%M} → {leg.arrive_at:%d.%m %H:%M}" in line
-        assert line.endswith(f" — {_rub(leg.price_rub)}")
-    assert lines[3].endswith(f" — {_rub(sum(o.price_rub for o in rides))}")
-    assert lines[-1] == f"Итого {_rub(sum(o.price_rub for o in chosen))}."
+        assert line.endswith(f" — {_rub(leg.price_rub)} (синтетика)")
+    assert lines[3].endswith(f" — {_rub(sum(o.price_rub for o in rides))} (синтетика)")
+    assert lines[-1] == f"Итого {_rub(sum(o.price_rub for o in chosen))} (синтетика)."
 
 
 def test_own_tickets_give_no_legs_in_the_list(store):
@@ -69,6 +69,6 @@ def test_paid_extras_are_items_so_the_items_sum_to_the_total(store):
     extra = next(o for o in r.plan.offers if o.kind == "extra" and o.for_offer_id == hotel.offer_id)
     plan = r.plan.model_copy(update={"selected": [*r.plan.selected, extra.offer_id]})
     lines = _offer_lines(plan)[1:]
-    assert f"Доп. услуга: {extra.title} — {_rub(extra.price_rub)}" in lines
-    prices = [int(line.rsplit(" — ", 1)[1][:-2].replace(" ", "")) for line in lines[:-1]]
-    assert lines[-1] == f"Итого {_rub(sum(prices))}."
+    assert f"Доп. услуга: {extra.title} — {_rub(extra.price_rub)} (синтетика)" in lines  # TRAP-7
+    prices = [int(line.rsplit(" — ", 1)[1].split(" ₽")[0].replace(" ", "")) for line in lines[:-1]]
+    assert lines[-1] == f"Итого {_rub(sum(prices))} (синтетика)."

@@ -104,7 +104,8 @@ def test_after_the_voucher_there_is_a_next_step(store, text):
 def test_after_the_voucher_the_chip_starts_over(store):
     r = to_stage(store, "booked")
     again = say(store, "а если на 2 дня позже", r.session_id)
-    chip = again.questions[0].options[0]
+    chip = "Начать заново"
+    assert chip in again.questions[0].options
     fresh = say(store, chip, r.session_id)
     assert fresh.stage == "clarify" and fresh.plan.spec.destinations == [] and fresh.voucher is None
     assert f"Бронь {r.voucher.booking_id} остаётся оформленной" in fresh.reply

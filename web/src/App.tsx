@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
-import { Board, EarlierChoices, TripParams } from "./Board";
+import { Board, EarlierChoices, PriorityRow, TripParams } from "./Board";
 import { MIN_THINK_MS, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
 import type { ChatReply, Guest, LlmMode, Offer, Stage } from "./contracts";
@@ -16,6 +16,7 @@ import {
   touchChat,
 } from "./history";
 import { Mascot, moodOf } from "./Mascot";
+import { loadPrefs, prefsDraft, prefsText, rememberPrefs, forgetPrefs } from "./prefs";
 import {
   type ModeState,
   SourceSwitches,
@@ -142,9 +143,13 @@ export const MODE_RETRY_MS = 2000; // #534: the second GET /api/mode
 // The help texts name the real sources found in the offers of the plan (#547, TRAP-7).
 const HOTELS_REAL = "Отели — 101hotels (цена «от» на сегодня)";
 const FLIGHTS_REAL = "перелёты — Авиасейлс (цены из кэша поиска)";
+const TRAINS_REAL = "поезда — tutu";
 const realParts = (offers: Offer[]) => {
-  const real = (kind: Offer["kind"]) => offers.some((o) => o.kind === kind && !o.synthetic);
-  return [real("hotel") && HOTELS_REAL, real("transport") && FLIGHTS_REAL].filter(Boolean) as string[];
+  const real = (kind: string) =>
+    offers.some((o) => !o.synthetic && (o.kind === kind || (o.kind === "transport" && o.mode === kind)));
+  return [real("hotel") && HOTELS_REAL, real("flight") && FLIGHTS_REAL, real("train") && TRAINS_REAL].filter(
+    Boolean,
+  ) as string[];
 };
 const priceSources = (offers: Offer[]) => {
   const parts = realParts(offers);
@@ -159,6 +164,9 @@ const dataNote = (offers: Offer[]) => {
     : "Цены, рейсы, тарифы, трансферы и рейтинги — синтетика; отели вне снимка OSM — тоже.";
 };
 
+// #596: the backend adds this button to each clarifying question; it sends nothing.
+export const OWN_ANSWER = "Свой вариант";
+
 export function App() {
   const [text, setText] = useState("");
   const [reply, setReply] = useState<ChatReply | null>(null);
@@ -172,6 +180,7 @@ export function App() {
   const [road, setRoad] = useState(false); // the roadmap sheet below 1100 px
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [query, setQuery] = useState("");
+  const [prefs, setPrefs] = useState(loadPrefs); // #19: fields of the last trip, offered as defaults
   const [thinking, setThinking] = useState(false);
   const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
   const [switches, setSwitches] = useState<Switches>(loadSwitches); // #566: «Синтетика» off — real data
@@ -321,6 +330,7 @@ export function App() {
       writeSid(r.session_id);
       setReply(r);
       setNoAi(!r.llm);
+      setPrefs(rememberPrefs(r.plan.spec));
       update(
         { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage, reply: r }] },
         r.session_id,
@@ -479,7 +489,13 @@ export function App() {
               <p>{q.text}</p>
               <div className="chips">
                 {q.options.map((o) => (
-                  <button key={o} type="button" className="chip" disabled={busy} onClick={() => send(o)}>
+                  <button
+                    key={o}
+                    type="button"
+                    className="chip"
+                    disabled={busy}
+                    onClick={() => (o === OWN_ANSWER ? box.current?.focus() : send(o))}
+                  >
                     {o}
                   </button>
                 ))}
@@ -647,6 +663,7 @@ export function App() {
             onSend={send}
           />
         )}
+        {reply && <PriorityRow order={reply.plan.spec.priorities} stage={reply.stage} busy={busy} onSend={send} />}
         <div className="feed" role="log" aria-live="polite">
           <div className="thread">
             {note && (
@@ -700,6 +717,30 @@ export function App() {
             <div ref={end} />
           </div>
         </div>
+        {!ui.messages.length && !restoring && prefsText(prefs) && (
+          <div className="prefs-note starters" role="note" aria-label="Как в прошлый раз">
+            <span>Как в прошлый раз: {prefsText(prefs)}</span>
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                setText(prefsDraft(prefs));
+                box.current?.focus();
+              }}
+            >
+              Подставить
+            </button>
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                setPrefs(forgetPrefs());
+              }}
+            >
+              Забыть
+            </button>
+          </div>
+        )}
         {!ui.messages.length && !restoring && (
           <div className="starters" aria-label="Примеры для начала">
             {EXAMPLES.map((ex) => (

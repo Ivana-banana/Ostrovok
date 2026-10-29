@@ -3,7 +3,7 @@ from collections.abc import Callable
 
 import pytest
 
-from api import catalog
+from api import catalog, offers
 
 # Tests never call Travelpayouts (TRAP-6): api.main picks the real adapter by this token at
 # import, and test modules import api.main after this file.
@@ -12,6 +12,8 @@ os.environ.pop("TRAVELPAYOUTS_TOKEN", None)
 # (on by default). The suite stays offline and deterministic; the adapter is tested directly in
 # test_live_hotels.py.
 os.environ["LIVE_HOTELS"] = "0"
+# Same for the live tutu.ru trains (#569); the adapter is tested directly in test_tutu.py.
+os.environ["LIVE_TRAINS"] = "0"
 
 
 @pytest.fixture(autouse=True)
@@ -49,3 +51,19 @@ def geo():
         return fetch
 
     return make
+
+
+@pytest.fixture
+def flights_refuse_pets(monkeypatch):
+    """#575: a provider whose flights do not take pets, as the real flights of travelpayouts.py.
+    The synthetic flights take a pet as a condition of the airline (offers.PET_FLIGHT)."""
+    real = offers._leg
+
+    def leg(spec, mode, *args, **kwargs):
+        out = real(spec, mode, *args, **kwargs)
+        if mode != "flight":
+            return out
+        title = out.title.replace(f", {offers.PET_FLIGHT}", "")
+        return out.model_copy(update={"pets_allowed": False, "title": title})
+
+    monkeypatch.setattr(offers, "_leg", leg)
