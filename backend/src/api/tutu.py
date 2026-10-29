@@ -34,7 +34,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -196,6 +196,7 @@ class TutuTrains:
         """Real trains a -> b for `day`; [] means the trains of the base adapter stay."""
         legs: dict[str, TransportOffer] = {}
         earliest = _back_from(place, "train", day) if a is place else None
+        fetched_at = self._fetched_at(a, b)
         try:
             for r in rows:
                 za, zb = ZoneInfo(r["from_tz"] or a["tz"]), ZoneInfo(r["to_tz"] or b["tz"])
@@ -209,7 +210,7 @@ class TutuTrains:
                         at = arrive.astimezone(ZoneInfo(place["tz"]))
                         ok = at.date() == day and not _night(at)
                     if ok:
-                        leg = self._leg(spec, a, b, r, depart, arrive)
+                        leg = self._leg(spec, a, b, r, depart, arrive, fetched_at)
                         legs[leg.offer_id] = min(legs.get(leg.offer_id, leg), leg,
                                                  key=lambda x: x.price_rub)  # fmt: skip
         except (KeyError, TypeError, ValueError) as e:
@@ -219,8 +220,23 @@ class TutuTrains:
             log.warning("tutu %s-%s %s: no train that day, synthetic", a["name"], b["name"], day)
         return sorted(legs.values(), key=lambda x: (x.price_rub, x.depart_at))[:MAX_LEGS]
 
+    def _fetched_at(self, a: Place, b: Place) -> datetime:
+        """When the page was fetched: the mtime of its cache file (a fresh fetch wrote it)."""
+        file = self.cache_dir / f"{slug_of(a['name'])}-{slug_of(b['name'])}.json"
+        try:
+            return datetime.fromtimestamp(file.stat().st_mtime, UTC)
+        except OSError:  # a read-only disk: the page is from this request
+            return datetime.now(UTC)
+
     def _leg(
-        self, spec: TripSpec, a: Place, b: Place, r: dict, depart: datetime, arrive: datetime
+        self,
+        spec: TripSpec,
+        a: Place,
+        b: Place,
+        r: dict,
+        depart: datetime,
+        arrive: datetime,
+        fetched_at: datetime,
     ) -> TransportOffer:
         name = f" «{r['name']}»" if r["name"] else ""
         title = f"Поезд {r['number']}{name} {r['from']} → {r['to']}, {depart:%d.%m %H:%M}"
@@ -241,6 +257,8 @@ class TutuTrains:
             arrive_at=arrive,
             price_rub=max(1, round(r["price"] * _fares(spec, "train"))),
             synthetic=False,
+            source="tutu",
+            fetched_at=fetched_at,
             pets_allowed=True,  # as the synthetic train: pets ride in the cars that take them
         )
 

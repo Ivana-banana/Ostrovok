@@ -100,6 +100,21 @@ suite("доска поездки", () => {
     expect(row?.querySelector(".synth-real")?.textContent).toBe("101hotels");
   });
 
+  it("TRAP-7: у реальной цены рядом с источником время ответа, у синтетики его нет (#469)", () => {
+    const real = structuredClone(base);
+    real.plan.offers = real.plan.offers.map((o) => ({
+      ...o,
+      synthetic: false,
+      source: "101hotels",
+      fetched_at: "2026-10-29T08:41:00+00:00",
+    }));
+    const row = [...render(real).querySelectorAll("tr")].find((r) => r.textContent?.includes("Отель у Кремля"));
+    expect(row?.querySelector(".synth-time")?.textContent).toMatch(/^ · \d\d:\d\d$/);
+    expect(row?.querySelector(".synth-real")?.textContent).toBe("101hotels");
+    const synth = [...render(base).querySelectorAll("tr")].find((r) => r.textContent?.includes("Отель у Кремля"));
+    expect(synth?.querySelector(".synth-time")).toBeNull();
+  });
+
   it("TRAP-1: плашка «без ИИ», когда модель недоступна", () => {
     expect(render({ ...base, llm: false }).body.textContent).toContain("без ИИ");
     expect(render({ ...base, llm: true }).body.textContent).not.toContain("без ИИ");
@@ -435,8 +450,8 @@ suite("доска поездки", () => {
     r.cart.items = [];
     r.plan.issues = [];
     r.plan.offers.push(
-      { kind: "transfer", offer_id: "tr2", title: "Такси на вокзал", depart_at: "2026-12-13T15:25:00+03:00", arrive_at: "2026-12-13T15:45:00+03:00", price_rub: 600, synthetic: true, hotel_offer_id: "h1", leg_offer_id: "t2" },
-      { kind: "transport", offer_id: "t2", title: "Поезд 001", mode: "train", origin: "Казань", destination: "Москва", depart_at: "2026-12-13T16:20:00+03:00", arrive_at: "2026-12-14T05:05:00+03:00", changes: 0, price_rub: 9800, synthetic: true, pets_allowed: false },
+      { kind: "transfer", offer_id: "tr2", title: "Такси на вокзал", depart_at: "2026-12-13T15:25:00+03:00", arrive_at: "2026-12-13T15:45:00+03:00", price_rub: 600, synthetic: true, source: "синтетика", fetched_at: null, hotel_offer_id: "h1", leg_offer_id: "t2" },
+      { kind: "transport", offer_id: "t2", title: "Поезд 001", mode: "train", origin: "Казань", destination: "Москва", depart_at: "2026-12-13T16:20:00+03:00", arrive_at: "2026-12-14T05:05:00+03:00", changes: 0, price_rub: 9800, synthetic: true, source: "синтетика", fetched_at: null, pets_allowed: false },
     );
     r.plan.timeline = [
       { at: "2026-12-10T19:30:00+03:00", title: "Отправление: Москва → Казань", offer_id: "t1" },
