@@ -86,6 +86,7 @@ from api.extract import (
     NO_AGE_NOTE,
     NUM,
     NUMS,
+    OWN_KEYS,
     PAST_WINDOW,
     PER_NIGHT_NOTE_RE,
     PLACE_RES,
@@ -104,6 +105,7 @@ from api.extract import (
     is_too_long_note,
     is_unchecked,
     llm_past_dates,
+    own_clock,
     past_year_note,
     too_long_note,
     with_llm,
@@ -639,12 +641,16 @@ def with_refused(spec: TripSpec, refused: list[str]) -> TripSpec:
     return spec.model_copy(update={"assumptions": kept + note})
 
 
+PARTY_ASK = "Кто едет с ребёнком — сколько взрослых?"
+MONTH_ASK = "Когда хотите поехать?"
+
+
 def party_question(spec: TripSpec) -> list[Question]:
     """A child and no word about the adults: 2 adults stay an assumption, the user can fix it."""
     if not (spec.children_ages and PARTY_UNKNOWN in spec.assumptions):
         return []
     options = ["Один взрослый", "Двое взрослых", "Трое взрослых"]  # no «ребёнок»: age stays
-    return [Question(text="Кто едет с ребёнком — сколько взрослых?", options=options)]
+    return [Question(text=PARTY_ASK, options=options)]
 
 
 def _round_trip(probe: TripSpec, origin: str) -> int | None:
@@ -838,7 +844,31 @@ def children_question(spec: TripSpec) -> list[Question]:
     return kids_ask()
 
 
+# #596: every clarifying question has the same two last buttons. SKIP_ASK: the agent takes the
+# assumptions of assume() and names them; OWN_ANSWER: the web focuses the input, sends nothing.
+# The default of assume() gets RECOMMENDED in its place (tests pin the order of the party
+# chips, test_party.py); the mark is cut from the answer (step).
+RECOMMENDED = " (рекомендуем)"
+SKIP_ASK = "Не важно, решите сами"
+OWN_ANSWER = "Свой вариант"
+
+
+def with_buttons(q: Question, default: str | None = None) -> Question:
+    """`default` gets the mark; SKIP_ASK and OWN_ANSWER go last. No price is added (TRAP-4)."""
+    marked = [o + RECOMMENDED if o == default else o for o in q.options]
+    return q.model_copy(update={"options": [*marked, SKIP_ASK, OWN_ANSWER]})
+
+
 def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
+    """The questions of _blocking_questions with the buttons of #596."""
+    defaults = {PARTY_ASK: "Двое взрослых", MONTH_ASK: MONTH_NAMES[date.today().month % 12]}
+    return [
+        with_buttons(q, defaults.get(q.text)) if q.options else q
+        for q in _blocking_questions(spec, message)
+    ]
+
+
+def _blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     """At most 2 questions in one turn of a new session; the rest becomes assumptions named in
     the reply.
 
@@ -864,10 +894,10 @@ def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     out = [*origin]
     if not spec.month and not spec.date_from:
         m = date.today().month
-        options = [MONTH_NAMES[(m + i) % 12] for i in range(3)] + ["пока не знаю"]
-        out.append(Question(text="Когда хотите поехать?", options=options))
+        options = [MONTH_NAMES[(m + i) % 12] for i in range(3)]  # «не знаю»: SKIP_ASK
+        out.append(Question(text=MONTH_ASK, options=options))
     if spec.budget_rub is None and spec.hotel_budget_rub is None:
-        options = ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽", "не важно"]
+        options = ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽"]  # «не важно»: SKIP_ASK
         out.append(Question(text="Какой бюджет на всю поездку?", options=options))
     return out[:2]  # the origin first; a budget not asked is an assumption the user sees
 
@@ -2616,6 +2646,7 @@ def step(
     «подтверждаю» at checkout raises _Confirm instead of a reply: the booking calls the
     provider and the store, so only chat() catches it and books (#382).
     """
+    message = message.replace(RECOMMENDED, "")  # #596: the mark of a button is no user word
     low = message.lower().replace("ё", "е")
     restart = RESTART_RE.search(message) and not NOT_RESTART_RE.search(low)
     if prev and restart and not REFUSE_RE.search(low):
@@ -2670,6 +2701,9 @@ def step(
     # #179: «А дети бесплатно?» at a built plan is a question, not a party: nobody is added.
     asking = old.stage in PLAN_STAGES and is_child_question(message)
     rules_found, rules_notes = extract(message, bool(old.plan.spec.destinations), asking=asking)
+    if not old.plan.spec.own_transport and rules_found.get("own_transport") is False:
+        for k in OWN_KEYS:  # #424: «купите билеты» ends own tickets only where they are
+            rules_found.pop(k)
     # #193: «без трансфера» is an edit even with «давай» in it; it never reaches the cart as a consent.
     no_transfer = (
         prev
@@ -2826,6 +2860,9 @@ def step(
         old.plan.spec.adults,
         asking,
     )
+    if not old.plan.spec.own_transport and found.get("own_transport") is False:
+        for k in OWN_KEYS:
+            found.pop(k)
     if asking and ASKING_NOTE in notes and no_change(found, old):
         ask = [] if old.plan.spec.children_ages else kids_ask()  # #182: no kids named: asked
         update = {"reply": _text_kids_question(old), "questions": ask, "llm": False}
@@ -2914,6 +2951,7 @@ def step(
         or other
         or not use_llm
         or is_chip_message(message)  # chips: S9, #76
+        or message.strip() == SKIP_ASK  # #596: assume() decides, the model has nothing to read
         or (refused_month and old.stage == "checkout")  # the cart stays (#197)
         else llm.extract_spec(message, old.plan.spec, deadline)
     )
@@ -3020,6 +3058,10 @@ def step(
         spec_model = merged(with_model)
         if spec_model != spec:
             found, spec, used = with_model, spec_model, True
+    if spec.own_transport and not (spec.arrive_at and spec.leave_at):
+        # #424: the rules read the clock, the model the dates: the clock is put on those dates
+        said = own_clock(message, spec.destinations, spec.date_from, spec.date_to)
+        spec = spec.model_copy(update={k: v for k, v in said.items() if getattr(spec, k) is None})
     swapped = [d for d in old.plan.spec.destinations if d not in spec.destinations]
     # A refusal holds for the next turns; a place named later (even a city of that country) ends it.
     named = found.get("destinations", [])
