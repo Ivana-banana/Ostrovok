@@ -27,7 +27,7 @@ def say(store, text, sid=None):
 
 def test_every_question_ends_with_skip_and_own_answer(store):
     r = say(store, "Хочу отдохнуть")
-    assert r.stage == "clarify" and len(r.questions) == 2  # D-031: the limit stays
+    assert r.stage == "clarify" and len(r.questions) == 3  # #630: the trip turn
     for q in r.questions:
         assert q.options[-2:] == [SKIP_ASK, OWN_ANSWER]
 
@@ -40,10 +40,11 @@ def test_the_default_has_the_mark(store):
 
 
 def test_TRAP_4_no_price_in_the_options(store):
-    r = say(store, "Хочу отдохнуть из Казани в июле")  # origin and month known: the budget is asked
-    assert [q.text for q in r.questions] == ["Какой бюджет на всю поездку?"]
+    # origin, month and nights known: the party and the budget are asked (#630)
+    r = say(store, "Хочу отдохнуть из Казани в июле на 5 ночей")
+    assert [q.text for q in r.questions][1:] == ["Какой бюджет на всю поездку?"]
     priced = [o for q in r.questions for o in q.options if "₽" in o]
-    assert priced == ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽"]
+    assert priced == ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽"]  # TRAP-4: no sum of a trip
 
 
 def test_recommended_button_fills_the_field(store):

@@ -6,12 +6,13 @@ card of a named place (inspire.card), as it no longer reaches the warm list.
 """
 
 import pytest
+import talk
 
 from api import catalog
-from api.contracts import ChatRequest, TripSpec
+from api.contracts import TripSpec
 from api.fixtures import WARM_WATER_C, future_date
 from api.inspire import card
-from api.model import chat, suggest_destinations
+from api.model import suggest_destinations
 from api.store import SessionStore
 
 UNCHECKED = "климат месяца не проверен"
@@ -26,7 +27,8 @@ def store(tmp_path):
 
 
 def say(store, text):
-    return chat(ChatRequest(session_id=None, message=text), store)
+    """#630: the open slots get «Не важно, решите сами» (talk.say)."""
+    return talk.say(store, text)
 
 
 def names(r):

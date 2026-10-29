@@ -60,11 +60,11 @@ def test_late_check_in_is_by_the_hour(text, late):
 
 @pytest.mark.parametrize(("text", "answer"), CASES)
 def test_reply_names_the_hard_wish_as_checked_or_not(tmp_path, text, answer):
-    from talk import say
+    from talk import planned
 
     from api.store import SessionStore
 
-    r = say(SessionStore(tmp_path / "s.db"), text)
+    r = planned(SessionStore(tmp_path / "s.db"), text)  # #630: the open slots are assumed
     assert answer in r.plan.spec.wishes, r.plan.spec.wishes
     if answer != "тяжело ходить":  # the optimizer checks the lift data of a built plan
         assert "Не проверяю по данным" in r.reply and answer.split(": ")[-1] in r.reply, r.reply

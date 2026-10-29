@@ -64,20 +64,22 @@ def with_model(monkeypatch, reply):
 
 def test_clarify_reply_in_model_words(store, monkeypatch):
     calls = with_model(monkeypatch, OWN)
-    r = ask(store, "хочу в отпуск")
+    r = ask(store, "хочу в отпуск на неделю")  # #630: the nights named, the origin and month asked
     assert r.stage == "clarify" and r.reply == OWN and r.llm is True
     assert r.questions and any(c["messages"][0]["content"] == llm.ASK_PROMPT for c in calls)
 
 
 def test_trap_1_no_key_keeps_the_template_clarify_text(store):
-    r = ask(store, "хочу в отпуск")  # any request out fails: urlopen is the real one, no URL set
+    r = ask(
+        store, "хочу в отпуск на неделю"
+    )  # #630: the nights named, the origin and month asked  # any request out fails: urlopen is the real one, no URL set
     assert r.stage == "clarify" and r.llm is False
     assert r.reply.startswith("Чтобы подобрать поездку, уточню: ")
 
 
 def test_trap_4_made_up_number_keeps_the_template_clarify_text(store, monkeypatch):
     with_model(monkeypatch, "Какой бюджет — например, 77 777 ₽ на всю поездку?")
-    r = ask(store, "хочу в отпуск")
+    r = ask(store, "хочу в отпуск на неделю")  # #630: the nights named, the origin and month asked
     assert r.llm is False and r.reply.startswith("Чтобы подобрать поездку, уточню: ")
 
 

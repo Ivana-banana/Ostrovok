@@ -7,6 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from talk import say
 
 from api import catalog
 from api.contracts import ChatRequest, TripSpec
@@ -45,7 +46,7 @@ def test_trap_5_every_place_has_a_road():
 def test_trap_5_altai_plan_has_a_flight_and_a_transfer(tmp_path):
     """TRAP-5: «Алтай из Москвы» in rules mode reaches the cart with the road, not a hotel alone."""
     store = SessionStore(tmp_path / "sessions.db")
-    r = chat(ChatRequest(message="Хочу на Алтай в июле на неделю из Москвы, двое взрослых"), store)
+    r = say(store, "Хочу на Алтай в июле на неделю из Москвы, двое взрослых")  # #630: budget
     for text in ("беру", "да"):
         r = chat(ChatRequest(session_id=r.session_id, message=text), store)
     assert r.stage == "checkout" and r.llm is False

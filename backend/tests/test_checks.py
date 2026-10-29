@@ -274,14 +274,14 @@ def test_metric_counts_booked_sessions_questions_and_first_recommendation_time()
         exact = checks._quotes(BY_ID["S3"])[0]
         checks._walk(client, "T", "до брони", exact)
         checks._walk(client, "T", "до выбора", exact, stop=("compare",))
-        vague = checks._walk(client, "T", "без места и желания", "привет")  # two questions
-    assert vague.asked == 2
+        vague = checks._walk(client, "T", "без места и желания", "привет")  # all 5 slots, #630
+    assert vague.asked == checks.MAX_ASKS
     m = checks.metric("visible")
     assert m["system"] == 0.67 and m["baseline"] == 0.0
     lines = m["details"]
     assert any(x.startswith("сессий 3, из них идут до брони 3, с ваучером 2") for x in lines)
-    # «привет» asks 2; the exact request of S3 names no origin: 1 question in each walk (#436)
-    assert any(x.startswith("уточняющих вопросов: всего 4,") for x in lines)
+    # «привет» asks 5 (#630); the exact request of S3 names no origin: 1 question in each walk
+    assert any(x.startswith("уточняющих вопросов: всего 7,") for x in lines)
     assert any("время до первой рекомендации" in x and "нет" not in x for x in lines)
     assert any("ошибки стыковок" in x for x in lines)
 

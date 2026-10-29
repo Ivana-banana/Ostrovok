@@ -4,9 +4,10 @@ No model (TRAP-1): the rules read the messages. The answer spellings are TRAP-3.
 """
 
 import pytest
+from talk import new_only
 
 from api.contracts import ChatRequest
-from api.model import ORIGIN_ASK, SAME_PLACE, chat
+from api.model import BUDGET_ASK, MAX_ASKS, NIGHTS_ASK, ORIGIN_ASK, SAME_PLACE, SKIP_ASK, chat
 from api.store import SessionStore
 
 CHIPS = ["Из Москвы", "Из Санкт-Петербурга", "Из Екатеринбурга", "Из Новосибирска", "Из Казани"]
@@ -19,7 +20,11 @@ def store(tmp_path):
 
 
 def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
+    """An answer gets «Не важно, решите сами» on the party and budget questions of #630."""
+    r = chat(ChatRequest(session_id=sid, message=text), store)
+    if sid is not None and new_only(r):
+        r = chat(ChatRequest(session_id=sid, message=SKIP_ASK), store)
+    return r
 
 
 def origin_q(r):
@@ -42,7 +47,7 @@ def test_unnamed_origin_is_the_first_question(store, text):
     assert r.questions[0].text.startswith(ORIGIN_ASK)
     assert r.questions[0].options[: len(CHIPS)] == CHIPS
     assert ORIGIN_NOTE not in r.plan.spec.assumptions
-    assert len(r.questions) <= 2  # one turn, not an interrogation
+    assert len(r.questions) <= MAX_ASKS  # #630: not an interrogation
 
 
 @pytest.mark.parametrize(
@@ -73,14 +78,15 @@ def test_answer_keeps_the_trip_and_asks_nothing_again(store, answer, origin):
 
 
 def test_origin_named_asks_nothing(store):
+    """#630: the origin is not asked; the budget is the one open slot."""
     r = say(store, "Сочи на 4 ночи в июле, двое взрослых, из Казани")
-    assert r.stage == "compare" and not origin_q(r)
+    assert not origin_q(r) and [q.text for q in r.questions] == [BUDGET_ASK]
 
 
 def test_own_tickets_ask_no_origin(store):
     """C5 (#408): own tickets need no departure city."""
     r = say(store, "Сочи с 14 ноября на 4 ночи, двое взрослых, билеты уже куплены")
-    assert not origin_q(r) and r.stage != "clarify"
+    assert not origin_q(r) and [q.text for q in r.questions] == [BUDGET_ASK]  # #630
 
 
 def test_origin_goes_first_next_to_the_children(store):
@@ -94,9 +100,9 @@ def test_origin_goes_first_next_to_the_children(store):
 
 
 def test_vague_request_asks_origin_with_the_month(store):
-    """Two questions at most: the origin and the month; the budget becomes an assumption."""
+    """#630: the trip turn: the origin, the month and the nights; the party and budget follow."""
     r = say(store, "Хочу отдохнуть")
-    assert [q.text for q in r.questions][1:] == ["Когда хотите поехать?"]
+    assert [q.text for q in r.questions][1:] == ["Когда хотите поехать?", NIGHTS_ASK]
     after = say(store, "Питер, декабрь", r.session_id)
     assert after.stage == "inspire" and after.plan.spec.origin == "Санкт-Петербург"
     assert after.plan.spec.month == 12

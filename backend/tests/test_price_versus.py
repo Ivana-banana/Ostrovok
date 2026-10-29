@@ -3,9 +3,8 @@ no «недорого» wish, no re-plan. The answer comes from the plan; a pric
 invented (TRAP-4)."""
 
 import pytest
+from talk import say
 
-from api.contracts import ChatRequest
-from api.model import chat
 from api.store import SessionStore
 
 SOCHI = "Сочи из Москвы с 3 по 8 декабря, двое взрослых"
@@ -14,10 +13,6 @@ SOCHI = "Сочи из Москвы с 3 по 8 декабря, двое взр�
 @pytest.fixture
 def store(tmp_path):
     return SessionStore(tmp_path / "sessions.db")
-
-
-def say(store, text, sid=None):
-    return chat(ChatRequest(session_id=sid, message=text), store)
 
 
 def at(store, stage):

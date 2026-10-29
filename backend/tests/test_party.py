@@ -4,7 +4,7 @@ Without a model (TRAP-1). A wrong guest count is a wrong price and a wrong booki
 """
 
 import pytest
-from talk import say
+from talk import planned, say
 
 from api.extract import extract
 from api.store import SessionStore
@@ -173,14 +173,14 @@ def test_i_with_a_child_is_unknown():
     ],
 )
 def test_child_without_a_place_still_gets_destinations(store, text):
-    r = say(store, text)
+    r = planned(store, text)  # #630: the party turn skipped, the question stays next to the cards
     assert r.stage == "inspire" and len(r.plan.destinations) > 0
     assert NOT_NAMED in r.plan.spec.assumptions  # the default stays visible
     assert any(" едет " in q.text for q in r.questions)  # asked next to the options
 
 
 def test_party_question_follows_to_the_comparison(store):
-    first = say(store, "Тёплое море в ноябре, недорого, с ребёнком")
+    first = planned(store, "Тёплое море в ноябре, недорого, с ребёнком")
     second = say(store, first.plan.destinations[0].name, first.session_id)
     assert second.stage == "compare"
     assert any(" едет " in q.text for q in second.questions)
@@ -265,7 +265,7 @@ def test_kids_question_with_other_fields_replans_without_children(store):
 
 
 def test_children_statement_in_the_first_message_stays_a_party(store):
-    r = say(store, "Тёплое море в ноябре, недорого, с ребёнком")
+    r = planned(store, "Тёплое море в ноябре, недорого, с ребёнком")
     assert r.stage == "inspire" and r.plan.spec.children_ages == [7]
     found, _ = extract("Куда поехать с детьми в ноябре?")
     assert found["children_ages"] == [7, 7]
