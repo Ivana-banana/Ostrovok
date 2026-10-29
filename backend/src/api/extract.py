@@ -227,7 +227,13 @@ CHILD_RE = re.compile(
 NO_CHILD_BEFORE = re.compile(r"\bбез\s+(?:\w+\s+и\s+|\w+[иы]х\s+)?$")
 # A number word or a number right after the child noun: the children are named. A negation
 # later in the clause is a double negation («без детей не поедем»): the children stay.
-NO_CHILD_AFTER = re.compile(r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)|[^,.;!?]*\b(?:не|ни\w*)\b")
+# #206: the negation words are listed: «ни\w*» would catch «Ницца», «Нижний», «ниже». «не» before
+# a comparison («не дороже 100 тысяч», «не позже 10 мая») is a budget or a date, not a refusal.
+NO_CHILD_AFTER = re.compile(
+    r"\s*(?:\d|двое|трое|четверо|пятеро|шестеро)"
+    r"|[^,.;!?]*\b(?:не(?!\s+(?:дороже|дешевле|больше|меньше|более|менее|выше|ниже|позже|раньше)\b)"
+    r"|ни|никуда|никак|никогда|ничего)\b"
+)
 NO_CHILD_FORM = ("детей", "ребенка", "сына", "дочери", "малыша")
 # #202: «отель без детей» is a wish for the hotel (adults only), not the party.
 HOTEL_NO_KIDS_BEFORE = re.compile(
