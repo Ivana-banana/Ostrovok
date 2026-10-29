@@ -2953,9 +2953,15 @@ def step(
         and not SHIFT_RE.search(low)
         and not (HYPOTHESIS_RE.search(low) and not CHOICE_RE.search(low))
     )
-    if pure and prev and old.stage == "assemble" and (row := hotel_row(message)) is not None:
-        if not leg_commands(message):  # «отель 1 и поезд» goes to switch_transport below
-            return _swap_hotel(old, row)
+    # «отель 1 и поезд» has leg commands: it goes to switch_transport below
+    if (
+        pure
+        and prev
+        and old.stage == "assemble"
+        and (row := hotel_row(message)) is not None
+        and not leg_commands(message)
+    ):
+        return _swap_hotel(old, row)
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
         row = hotel_row(message)
         plan, note = switch_transport(old.plan, message, row if old.stage == "compare" else None)
