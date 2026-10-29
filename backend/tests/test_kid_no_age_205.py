@@ -45,3 +45,13 @@ def test_a_named_age_or_a_count_still_changes_the_ages():
     assert extract("с дочкой 9 лет", kept_ages=[5])[0]["children_ages"] == [9]
     assert extract("теперь с двумя детьми", kept_ages=[5])[0]["children_ages"] == [7, 7]
     assert extract("и ещё один ребёнок", kept_ages=[5])[0]["children_ages"] == [7]
+
+
+def test_a_new_child_with_a_kept_one_adds_to_the_ages():
+    assert extract("с дочкой и сыном", kept_ages=[5])[0]["children_ages"] == [5, 7]
+    assert extract("добавь сына", kept_ages=[5])[0]["children_ages"] == [5, 7]
+    assert extract("с дочкой и сыном", kept_ages=[5, 6])[0].get("children_ages", [5, 6]) == [5, 6]
+
+
+def test_children_without_a_number_still_default_to_two():
+    assert extract("с детьми", kept_ages=[5])[0]["children_ages"] == [7, 7]

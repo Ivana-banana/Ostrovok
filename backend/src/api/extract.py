@@ -2245,6 +2245,10 @@ ANOTHER_RE = re.compile(
 )
 
 
+# #205: «добавь сына», «ещё сына», «у нас родился сын»: a child is added, not named again.
+ADD_CHILD_RE = re.compile(r"(?:добав\w*|ещ[её]|плюс|родил\w*|появил\w*)")
+
+
 def _named_again(
     seen: list[tuple[str, list[int], int]], kind: str, said: list[int], ages: list, notes: list
 ) -> bool:
@@ -2287,6 +2291,7 @@ def _people(
     seen: list[tuple[str, list[int], int]] = []  # (kind, ages said, position in ages) (#359)
     last: int | None = None  # the end of the previous child word (#359)
     no_kids = False
+    skipped = 0  # #205: children of kept_ages named again with no age
     # #385: «давай на 1 человека?» asks for a party edit, not for a price
     edit = asking and not PRICE_CUE_RE.search(t) and PARTY_EDIT_RE.search(t) and "номер" not in t
     if built and (PRICE_CUE_RE.search(t) or asking) and not edit:  # only at a built plan
@@ -2342,10 +2347,15 @@ def _people(
             t[: m.start()]
         )
         last = m.end()
+        new_one = bool(ANOTHER_RE.search(t[: m.start()]))
         if single and not new and len(said) <= 1 and _named_again(seen, kind, said, ages, notes):
             continue  # #359: «дети: 5 и 8 лет, сын любит море»: the same child again
-        if kept_ages and not said and not m.group(1) and not m.group("twin") and not new:
-            continue  # #205: the child of the plan is named again, no age changes
+        if single and not said and kept_ages:
+            if ADD_CHILD_RE.search(t[max(m.start() - 25, 0) : m.start()]) or new_one:
+                skipped = len(kept_ages)  # #205: a child is added to the children of the plan
+            elif skipped < len(kept_ages):
+                skipped += 1  # #205: a child of the plan is named again, no age changes
+                continue
         if asking and len(said) < count:  # no age for every counted child: nobody is added
             if ASKING_NOTE not in notes:
                 notes.append(ASKING_NOTE)
@@ -2355,7 +2365,7 @@ def _people(
         seen.append((kind, said, len(ages)))
         ages += (said + [7] * count)[:count]
     if ages:
-        found["children_ages"] = ages
+        found["children_ages"] = list(kept_ages or [])[:skipped] + ages  # #205
     elif no_kids and asking:  # a question «а без детей можно?» changes nothing (#179)
         if ASKING_NOTE not in notes:
             notes.append(ASKING_NOTE)
