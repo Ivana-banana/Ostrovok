@@ -2050,26 +2050,63 @@ OWN_TICKETS_RE = re.compile(
     r"\bбилет\w*\s+(?:у\s+(?:нас|меня)\s+)?(?:уже\s+)?(?:есть|куплен\w*|взят\w*)"
     r"|\bсво\w+\s+билет\w*|\bуже\s+(?:купил\w*|взял\w*)\s+билет\w*"
 )
+# «подбери перелёт», «нужны билеты», «без своих билетов»: the transport is ours again (#424).
+NOT_OWN_RE = re.compile(
+    r"\b(?:подбер\w*|найди\w*|купи(?:те)?)\s+(?:\w+\s+)?(?:перел|рейс|билет|поезд|самол|авиабил)\w*"
+    r"|(?<!не )\bнужн[ыо]\s+(?:\w+\s+)?билет\w*"
+    r"|\b(?:без|нет)\s+сво\w+\s+билет\w*|\bсво\w+\s+билет\w*\s+нет\b"
+)
+OWN_KEYS = ("own_transport", "arrive_at", "leave_at")
 # The clock time of the own arrival and departure in one clause: «прилетаем 14 ноября в 01:30».
-CLOCK = r"[^.,;!?]*?\bв\s+(\d{1,2})[:.](\d{2})\b"
+# A dot between digits («14.11») does not end the clause; that day is read from it.
+CLOCK = r"(?P<clause>(?:[^.,;!?]|(?<=\d)\.(?=\d))*?)\bв\s+(?P<h>\d{1,2})[:.](?P<mi>\d{2})\b"
 ARRIVE_RE = re.compile(rf"\b(?:прилет|приезж|прибыв|приезд|прибыт)\w*{CLOCK}")
 LEAVE_RE = re.compile(rf"\b(?:улет|уезжа|отъезд|обратн)\w*{CLOCK}")
+DAY_DOT_RE = re.compile(r"\b(\d{1,2})\.(\d{1,2})\b")
+
+
+def own_clock(text: str, destinations: list[str], start: date | None, end: date | None) -> dict:
+    """arrive_at and leave_at said in the text, at the clock of the first destination.
+
+    A day in the clause («прилетаем 14.11 в 01:30») is used; else start and end of the stay."""
+    t = text.lower().replace("ё", "е")
+    place = resolve_place(destinations[0]) if destinations else None
+    if place is None:
+        return {}  # no zone for the clock time
+    tz, out = ZoneInfo(place["tz"]), {}
+    for key, day, rx in (("arrive_at", start, ARRIVE_RE), ("leave_at", end, LEAVE_RE)):
+        m = rx.search(t)
+        if not m or int(m["h"]) > 23 or int(m["mi"]) > 59:
+            continue
+        if d := DAY_DOT_RE.search(m["clause"]):
+            try:
+                day = future_date(int(d.group(2)), int(d.group(1)))
+            except ValueError:  # «31.02» is no day
+                continue
+        if day:
+            out[key] = datetime.combine(day, time(int(m["h"]), int(m["mi"])), tz)
+    return out
 
 
 def _own_tickets(t: str, found: dict) -> None:
     """Own tickets and their times at the destination of this message (offers.own_legs)."""
+    if NOT_OWN_RE.search(t):
+        found.update(dict.fromkeys(OWN_KEYS[1:]), own_transport=False)
+        return
     if not OWN_TICKETS_RE.search(t):
         return
     found["own_transport"] = True
-    place = resolve_place(found["destinations"][0]) if found.get("destinations") else None
-    if place is None:
-        return  # no zone for the clock time
-    tz = ZoneInfo(place["tz"])
-    for key, day, rx in (("arrive_at", "date_from", ARRIVE_RE), ("leave_at", "date_to", LEAVE_RE)):
-        m = rx.search(t)
-        if m and found.get(day) and int(m.group(1)) < 24 and int(m.group(2)) < 60:
-            at = time(int(m.group(1)), int(m.group(2)))
-            found[key] = datetime.combine(found[day], at, tz)
+    times = own_clock(
+        t, found.get("destinations", []), found.get("date_from"), found.get("date_to")
+    )
+    found.update(times)
+    if "date_from" not in found and "arrive_at" in times:  # «прилетаем 14.11»: the stay starts
+        found["date_from"] = times["arrive_at"].date()
+        found["month"] = found["date_from"].month
+    back = times.get("leave_at")
+    if "date_to" not in found and back and found.get("date_from", back.date()) < back.date():
+        found["date_to"] = back.date()
+        found["nights"] = (found["date_to"] - found["date_from"]).days
 
 
 def _nights(t: str, found: dict, notes: list[str], kept: int) -> None:
