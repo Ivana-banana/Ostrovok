@@ -290,3 +290,10 @@ def test_trap6_tests_and_eval_never_see_live_trains(monkeypatch):
     monkeypatch.setenv("LIVE_TRAINS", "0")
     importlib.reload(api.main)
     assert offers.REAL_TRANSPORT is None
+
+
+def test_trap7_every_real_train_names_tutu_and_the_fetch_time_synthetic_stays_marked(tmp_path):
+    got = run(Fake(), spec(), tmp_path)
+    real = [x for x in got if not x.synthetic]
+    assert real and all(x.source == "tutu" and x.fetched_at for x in real)
+    assert all(x.source == "синтетика" and x.fetched_at is None for x in got if x.synthetic)

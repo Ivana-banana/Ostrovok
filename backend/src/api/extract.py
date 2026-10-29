@@ -1323,6 +1323,16 @@ def _whole_word_hits(t: str, hits: list[tuple[int, str, int]]) -> list[tuple[int
     return out
 
 
+def _respelled(name: str, notes: list[str]) -> dict | None:
+    """The place of a colloquial name or a typo (#274). A typo is not silent: the note
+    «город: Калининрад → Калининград» (#347, TRAP-3). An alias or a case form makes no note."""
+    place = catalog.respelled(name)
+    note = f"город: {name} → {place['name']}" if place else ""
+    if place and not catalog.is_colloquial(name) and note not in notes:
+        notes.append(note)
+    return place
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -1351,7 +1361,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         ):
             m, name = mm, n
     if m:
-        if home := catalog.respelled(name):
+        if home := _respelled(name, notes):
             name = home["name"]  # «Ебург» -> Екатеринбург (#274)
         else:
             name = _genitive_name(name)
@@ -1462,7 +1472,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         place = resolve_place(name)
         if place and place.get("source") == "online":
             name = place["name"]  # the geocoder's name: «Бледе» is the place «Блед» (TRAP-3)
-        elif fixed := catalog.respelled(name):
+        elif fixed := _respelled(name, notes):
             name = fixed["name"]  # «Ебург», «Кисловоцк» are the places of the catalogue (#274)
         if s in pair_sides and place and place["country"] in refused:
             continue  # «Турция или Египет, в Египте уже были»: no Хургада (#151)
@@ -2368,6 +2378,10 @@ ANOTHER_RE = re.compile(
 )
 
 
+# #205: «добавь сына», «ещё сына», «у нас родился сын»: a child is added, not named again.
+ADD_CHILD_RE = re.compile(r"\b(?:добав\w*|ещ[её]|плюс|родил\w*|появил\w*)\b")
+
+
 def _named_again(
     seen: list[tuple[str, list[int], int]], kind: str, said: list[int], ages: list, notes: list
 ) -> bool:
@@ -2390,18 +2404,27 @@ def _named_again(
 
 
 def _people(
-    t: str, found: dict, notes: list[str], asking: bool = False, built: bool = False
+    t: str,
+    found: dict,
+    notes: list[str],
+    asking: bool = False,
+    built: bool = False,
+    kept_ages: list[int] | None = None,
 ) -> None:
     """Adults, children with ages; «нас четверо» counts children out.
 
     built: the plan exists; «на 1 человека» near a price word is then a unit, not a party (#369).
 
     asking: the message is a question at a built plan; a child without a number or an age in
-    it adds nobody (#179)."""
+    it adds nobody (#179).
+
+    kept_ages: the ages of the children in the plan. A child named with no number and no age
+    («с дочкой», «без дочери не поедем») is one of them: the ages stay (#205)."""
     ages: list[int] = []
     seen: list[tuple[str, list[int], int]] = []  # (kind, ages said, position in ages) (#359)
     last: int | None = None  # the end of the previous child word (#359)
     no_kids = False
+    skipped = 0  # #205: children of kept_ages named again with no age
     # #385: «давай на 1 человека?» asks for a party edit, not for a price
     edit = asking and not PRICE_CUE_RE.search(t) and PARTY_EDIT_RE.search(t) and "номер" not in t
     if built and (PRICE_CUE_RE.search(t) or asking) and not edit:  # only at a built plan
@@ -2468,8 +2491,15 @@ def _people(
             t[: m.start()]
         )
         last = m.end()
+        new_one = bool(ANOTHER_RE.search(t[: m.start()]))
         if single and not new and len(said) <= 1 and _named_again(seen, kind, said, ages, notes):
             continue  # #359: «дети: 5 и 8 лет, сын любит море»: the same child again
+        if single and not said and kept_ages:
+            if ADD_CHILD_RE.search(t[max(m.start() - 25, 0) : m.start()]) or new_one:
+                skipped = len(kept_ages)  # #205: a child is added to the children of the plan
+            elif skipped < len(kept_ages):
+                skipped += 1  # #205: a child of the plan is named again, no age changes
+                continue
         if asking and len(said) < count:  # no age for every counted child: nobody is added
             if ASKING_NOTE not in notes:
                 notes.append(ASKING_NOTE)
@@ -2479,7 +2509,7 @@ def _people(
         seen.append((kind, said, len(ages)))
         ages += (said + [7] * count)[:count]
     if ages:
-        found["children_ages"] = ages
+        found["children_ages"] = list(kept_ages or [])[:skipped] + ages  # #205
     elif no_kids and asking:  # a question «а без детей можно?» changes nothing (#179)
         if ASKING_NOTE not in notes:
             notes.append(ASKING_NOTE)
@@ -2744,13 +2774,15 @@ def extract(
     nights: int = 7,
     adults: int = 2,
     asking: bool = False,
+    kept_ages: list[int] | None = None,
 ) -> tuple[dict, list[str]]:
     """TripSpec fields stated in one message, plus assumptions made while reading it.
 
     has_destination: the plan has a city already; an unknown first word is then never a city.
     nights, adults: the plan's values (TripSpec defaults); only a «в сутки» or «на каждого»
     budget reads them (#158).
-    asking: a question at a built plan; a child without a number or an age adds nobody (#179)."""
+    asking: a question at a built plan; a child without a number or an age adds nobody (#179).
+    kept_ages: the ages of the children in the plan; a child without a number or an age keeps them (#205)."""
     t = text.lower().replace("ё", "е")  # same length: positions match the original text
     found: dict = {}
     notes: list[str] = []
@@ -2770,7 +2802,7 @@ def extract(
     if november:
         _november_end(*november, found, notes)
     _own_tickets(t, found)
-    _people(t, found, notes, asking, has_destination)
+    _people(t, found, notes, asking, has_destination, kept_ages)
     _budget(t, found, notes, nights, adults)
     if (pets := _pets(t)) is not None:
         found["pets"] = pets

@@ -194,3 +194,11 @@ def test_snapshot_on_disk_is_served_offline_TRAP_6(monkeypatch, tmp_path):
     monkeypatch.setattr(lh, "_get", lambda p: pytest.fail("offline: must read the snapshot"))
     lh._offline["on"] = True
     assert lh.city_level(place(), SOON) == {"level": 2339, "free_cancel_share": 0.75}
+
+
+def test_trap7_every_live_hotel_offer_names_101hotels_and_the_fetch_time(monkeypatch):
+    """#469: a real offer has source and fetched_at; its modelled add-ons stay «синтетика»."""
+    monkeypatch.setattr(lh, "_get", lambda p: CITY_HTML)
+    out = lh.Live101Hotels(FakeBase()).hotels(spec(), place(), datetime.now(MSK))
+    assert out and all(h.source == "101hotels" and h.fetched_at for h, _ in out)
+    assert all(e.source == "синтетика" and e.fetched_at is None for _, es in out for e in es)
