@@ -59,20 +59,24 @@ def test_spb_petrozavodsk_is_no_longer_two_hours():
 
 def test_TRAP_4_train_price_does_not_follow_the_speed():
     """TRAP-4: the fare comes from the route length of the same table, not from the hours:
-    the prices are those of main before #343."""
-    assert [x.price_rub for x in trains("Москва", "Санкт-Петербург")] == [9000, 9600, 8500, 9500]
-    assert [x.price_rub for x in trains("Санкт-Петербург", "Петрозаводск")] == [5200, 4900]
-    assert [x.price_rub for x in trains("Москва", "Казань")] == [10300, 10500]
+    the prices are those of offers.TRAIN_FARE calibrated to tutu.ru (#280)."""
+    assert [x.price_rub for x in trains("Москва", "Санкт-Петербург")] == [5300, 5500, 5000, 5500]
+    assert [x.price_rub for x in trains("Санкт-Петербург", "Петрозаводск")] == [3800, 3600]
+    assert [x.price_rub for x in trains("Москва", "Казань")] == [6000, 6100]
 
 
 def _trip(key: str, hours: float, total: int):
     from types import SimpleNamespace
 
     hotel = SimpleNamespace(
-        title=f"Отель {key}", rating=8.0, cancellation=SimpleNamespace(refundable=True)
+        title=f"Отель {key}",
+        rating=8.0,
+        cancellation=SimpleNamespace(refundable=True),
+        synthetic=True,
+        kind="hotel",
     )
     return SimpleNamespace(
-        key=key, hours=hours, total=total, hotel=hotel, slow_leg=None, slow=False
+        key=key, hours=hours, total=total, hotel=hotel, offers=[hotel], slow_leg=None, slow=False
     )
 
 

@@ -3,6 +3,14 @@
 
     python3 scripts/calibrate_prices.py aggregate --facts <data/prices>  # raw facts -> AGGREGATE
     python3 scripts/calibrate_prices.py                                   # AGGREGATE -> catalog.json
+    python3 scripts/calibrate_prices.py trains --facts <data/prices>     # tutu facts -> TRAINS, fit
+
+TRAINS (#280, in git): per route from Moscow only numbers: tutu.ru offers (n), the median and the
+lowest fare of all classes, the date and the page. `trains` prints the fit of api/offers.py
+TRAIN_FARE (base + per km of route at SEASON 1.0: least squares, scaled to the median ratio 1) and the ratio synthetic /
+tutu before and after; the constants are set by hand from it, the test checks the ratio.
+Assumptions: a tutu fare is the cheapest seat of a train and class on the day of the run, without
+dates; the synthetic train has no class, so it matches the median of all classes.
 
 AGGREGATE (in git) has per city only numbers: hotels with a price (n), of them 3-star (n3), the
 medians «от N ₽» of all, starred and 3-star hotels, the share of free cancellation among 3+ star hotels, the date and the
@@ -38,6 +46,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / "backend" / "src" / "api" / "catalog.json"
 AGGREGATE = ROOT / "backend" / "src" / "api" / "prices_101hotels.json"
 FOREIGN = ROOT / "backend" / "src" / "api" / "prices_offers.json"  # Booking/Agoda, #497
+TRAINS = ROOT / "backend" / "src" / "api" / "prices_tutu.json"  # tutu.ru, #280
 MIN_N = 5
 STAR3 = 0.95  # api/offers.py STAR_FACTOR[3]; the test checks it
 SEASON = {10: 0.95, 11: 0.9}  # api/offers.py SEASON for the months of the runs; the test checks it
@@ -182,9 +191,97 @@ def apply() -> None:
         print("новый level / прежний:", _q([n / o for _, o, n in changed if o]))
 
 
+def _when(facts_dir: Path) -> dict[str, str]:
+    when = {}
+    for line in (facts_dir / "manifest.jsonl").open(encoding="utf-8"):
+        m = json.loads(line)
+        when[m["url"]] = m["fetched_at"][:10]  # the last fetch of a page wins
+    return when
+
+
+def route_row(facts: dict, fetched_at: str) -> dict:
+    """Aggregate of one tutu.ru route page: numbers only."""
+    fares = [t["price_rub"] for t in facts["trains"]]
+    return {
+        "route": facts["route"],
+        "url": facts["source_url"],
+        "fetched_at": fetched_at,
+        "n": len(fares),
+        "median_rub": round(statistics.median(fares)),
+        "low_rub": min(fares),
+    }
+
+
+def train_kinds(row: dict) -> list[str]:
+    """Kinds of the synthetic trains api/offers.py runs on this route (transport_offers)."""
+    from api import catalog as cat, offers
+
+    a, b = (cat.resolve(n) for n in row["route"])
+    if not a or not b or a["station_km"] is None or b["station_km"] is None:
+        return []
+    route = offers.km_between(a, b) * offers.RAIL_DETOUR
+    if route > 3000:
+        return []
+    day = offers._day_train_hours(a, b, route) is not None
+    return [k for k, on in (("day", day), ("night", route >= 600)) if on]
+
+
+def train_ratios(rows: list[dict], fare: dict) -> dict[str, list[float]]:
+    """Synthetic full fare in the month of the run / tutu median, per kind of train."""
+    from api import catalog as cat, offers
+
+    out: dict[str, list[float]] = {"day": [], "night": []}
+    for r in rows:
+        a, b = (cat.resolve(n) for n in r["route"])
+        for kind in train_kinds(r):
+            route = offers.km_between(a, b) * offers.RAIL_DETOUR
+            fixed, per_km = fare[kind]
+            month = int(r["fetched_at"][5:7])
+            out[kind].append((fixed + per_km * route) * offers.SEASON[month] / r["median_rub"])
+    return out
+
+
+def trains(facts_dir: Path) -> None:
+    sys.path.insert(0, str(ROOT / "backend" / "src"))
+    from api import catalog as cat, offers
+
+    when = _when(facts_dir)
+    rows = []
+    for f in sorted((facts_dir / "tutu").glob("*.json")):
+        facts = json.loads(f.read_text("utf-8"))
+        if facts["trains"]:
+            rows.append(route_row(facts, when[facts["source_url"]]))
+    rows.sort(key=lambda r: r["route"])
+    text = "[\n" + ",\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n]\n"
+    TRAINS.write_text(text, encoding="utf-8")
+    print(f"маршрутов {len(rows)}")
+    fit = {}
+    for kind in ("day", "night"):
+        xs, ys = [], []
+        for r in rows:
+            if kind in train_kinds(r):
+                a, b = (cat.resolve(n) for n in r["route"])
+                xs.append(offers.km_between(a, b) * offers.RAIL_DETOUR)
+                ys.append(r["median_rub"] / offers.SEASON[int(r["fetched_at"][5:7])])
+        lr = statistics.linear_regression(xs, ys)
+        # least squares gives the shape; the scale makes the median ratio 1
+        k = statistics.median(y / (lr.intercept + lr.slope * x) for x, y in zip(xs, ys))
+        fit[kind] = (round(k * lr.intercept / 50) * 50, round(k * lr.slope, 1))
+        print(f"{kind}: маршрутов {len(xs)}, МНК {lr.intercept:.0f} + {lr.slope:.3f}·км,"
+              f" масштаб {k:.3f} -> {fit[kind]}")  # fmt: skip
+    for name, fare in (("TRAIN_FARE", offers.TRAIN_FARE), ("подбор", fit)):
+        for kind, xs in train_ratios(rows, fare).items():
+            print(f"{name} {kind}: синтетика / tutu — {_q(xs)}")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", nargs="?", choices=["aggregate"])
+    ap.add_argument("cmd", nargs="?", choices=["aggregate", "trains"])
     ap.add_argument("--facts", type=Path, default=ROOT / "data" / "prices")
     args = ap.parse_args()
-    aggregate(args.facts) if args.cmd == "aggregate" else apply()
+    if args.cmd == "aggregate":
+        aggregate(args.facts)
+    elif args.cmd == "trains":
+        trains(args.facts)
+    else:
+        apply()

@@ -651,6 +651,7 @@ def test_s10_fails_when_a_card_without_the_theme_has_no_mark(monkeypatch):
     assert not ok and "п.2" in note, note
 
 
+@pytest.mark.usefixtures("flights_refuse_pets")  # #575: flights without pets
 def test_s10_fails_when_the_product_does_not_extract_the_dog(monkeypatch):
     """The dog is fixed by the check, not read from the spec the product extracted."""
     real = model.extract
@@ -664,6 +665,7 @@ def test_s10_fails_when_the_product_does_not_extract_the_dog(monkeypatch):
     assert not ok and "п.4" in note, note
 
 
+@pytest.mark.usefixtures("flights_refuse_pets")  # #575: flights without pets
 def test_s10_fails_when_non_pet_places_are_on_top(monkeypatch):
     real = inspire.suggest_destinations
 

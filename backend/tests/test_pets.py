@@ -77,11 +77,13 @@ def test_without_a_pet_the_city_keeps_its_five_hotels_and_a_choice(store):
     assert "животн" not in r.reply
 
 
+@pytest.mark.usefixtures("flights_refuse_pets")  # #575: flights without pets
 def test_optimizer_selects_nothing_when_no_leg_takes_the_pet(store):
     r = say(store, FLIGHT_ONLY)
     assert optimize(r.plan.spec, find_offers(r.plan.spec, "Анталия")).selected == []
 
 
+@pytest.mark.usefixtures("flights_refuse_pets")  # #575: flights without pets
 def test_flight_only_dead_end_says_so_and_never_fills_the_cart(store):
     r = say(store, FLIGHT_ONLY)
     assert r.stage == "select" and not r.plan.selected and not r.cart.items
@@ -94,6 +96,7 @@ def test_flight_only_dead_end_says_so_and_never_fills_the_cart(store):
     assert final.voucher is None and final.stage != "booked"
 
 
+@pytest.mark.usefixtures("flights_refuse_pets")  # #575: flights without pets
 def test_a_click_after_the_flight_only_dead_end_has_no_catalogue_phrase(store):
     r = say(store, FLIGHT_ONLY)
     other = say(store, r.questions[0].options[0], r.session_id)
@@ -118,6 +121,7 @@ def test_the_fifth_hotel_is_picked_by_number(store, pick):
     assert any(o.kind == "hotel" and o.title.startswith("Казантель") for o in chosen(picked))
 
 
+@pytest.mark.usefixtures("flights_refuse_pets")  # #575: flights without pets
 def test_no_second_dead_end_after_the_select_dead_end(store):
     r = say(store, "Тбилиси, 5 ночей с 14 ноября, двое взрослых, из Москвы, с собакой")
     assert r.stage == "select"

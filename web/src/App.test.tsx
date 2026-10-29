@@ -132,6 +132,25 @@ suite("приложение", () => {
     await flush();
   });
 
+  it("#596: «Свой вариант» ставит фокус в поле и ничего не отправляет; другая кнопка отправляет ответ", async () => {
+    const options = ["ноябрь (рекомендуем)", "декабрь", "Не важно, решите сами", "Свой вариант"];
+    const clarify: ChatReply = {
+      ...structuredClone(checkoutStage),
+      stage: "clarify",
+      questions: [{ text: "Когда хотите поехать?", options }],
+    };
+    routes["POST /api/chat"] = () => ({ status: 200, body: clarify });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const sent = calls.filter((c) => c.key === "POST /api/chat").length;
+    await click("Свой вариант");
+    expect(calls.filter((c) => c.key === "POST /api/chat")).toHaveLength(sent);
+    expect(document.activeElement).toBe(box.querySelector("textarea[aria-label='Запрос']"));
+    await click("Не важно, решите сами");
+    expect(calls.at(-1)?.body).toMatchObject({ message: "Не важно, решите сами" });
+  });
+
   it("неизвестная сессия: начинаем заново без ошибки", async () => {
     localStorage.setItem(SESSION_KEY, "gone");
     await mount();
@@ -282,7 +301,7 @@ suite("приложение", () => {
     await click("В корзину");
     const sum = String(total).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     const last = [...box.querySelectorAll(".msg.agent")].at(-1)?.textContent;
-    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽ (синтетика).`);
+    expect(last).toBe(`Теперь в корзине ${after.length} поз. на ${sum} ₽синтетика.`); // the label is a chip (#567)
   });
 
   it("#161: корзина изменилась, а план не обновился — ошибка вместо тихого устаревшего плана", async () => {
@@ -428,7 +447,7 @@ suite("приложение", () => {
     expect(box.querySelector("[aria-label='Корзина']")?.textContent).not.toContain("Вернуть");
   });
 
-  it("S9: сдвиг чипа отправляет агенту сообщение с полным порядком приоритетов", async () => {
+  it("S9: клик по чипу отправляет агенту сообщение с полным порядком приоритетов", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };
     compare.plan.spec.priorities = ["price", "cancellation"];
@@ -437,15 +456,15 @@ suite("приложение", () => {
     after.plan.spec.priorities = ["cancellation", "price"];
     routes["POST /api/chat"] = () => ({ status: 200, body: after });
     await mount();
-    const down = box.querySelector("button[aria-label='Опустить приоритет цена']") as HTMLButtonElement;
-    await act(async () => down.click());
+    const other = [...box.querySelectorAll("[aria-label='Приоритеты'] button")].find((b) => b.textContent === "отмена") as HTMLButtonElement;
+    await act(async () => other.click());
     await flush();
     expect(calls.at(-1)).toMatchObject({
       key: "POST /api/chat",
       body: { session_id: "s1", message: "Мои приоритеты по важности: отмена, цена." },
     });
-    const chips = [...box.querySelectorAll("[aria-label='Приоритеты'] .chip span")].map((c) => c.textContent);
-    expect(chips).toEqual(["1. отмена", "2. цена"]);
+    const on = [...box.querySelectorAll("[aria-label='Приоритеты'] [aria-pressed='true']")].map((c) => c.textContent);
+    expect(on).toEqual(["отмена"]);
   });
 
   it("подписи про хранение чатов и синтетику спрятаны под «?» и есть в разметке", async () => {
