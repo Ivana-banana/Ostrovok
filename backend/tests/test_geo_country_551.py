@@ -33,7 +33,8 @@ def test_trap_2_country_record_is_no_place(geo):
 def test_trap_2_country_outside_the_catalogue_asks_for_a_city(geo, monkeypatch, store):
     monkeypatch.setattr(catalog, "_get", country_geo(geo))
     r = chat(
-        ChatRequest(message="Из Москвы в Новую Зеландию в ноябре на неделю, двое взрослых"), store
+        ChatRequest(message="Из Москвы в Новую Зеландию в ноябре на неделю, вдвоём, до 400 тысяч"),
+        store,
     )
     assert "это страна" in r.reply
     assert not r.plan.offers
