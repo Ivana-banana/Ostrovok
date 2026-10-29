@@ -1002,16 +1002,43 @@ def test_bundles_of_a_pick_stay_empty_when_nothing_takes_the_pet():
     assert bundles(s, items, ids) == []
 
 
+def _why_of(s, items, hotel_id, selected=None):
+    ids = selected or rank(s, items)[0]
+    return next(e.why for e in explain(s, items, ids) if e.offer_id == hotel_id)
+
+
 def test_near_price_default_is_the_refundable_tariff():
-    """#606 (D-045): within 5 % the default is free cancellation and the text says so;
-    farther, or with named priorities, the cheapest wins as before."""
+    """#606 (D-045): the hotel is within 15 % -> the default is free cancellation, also with
+    «недорого», and the text names the real difference; farther, or with named priorities,
+    the cheapest wins as before."""
     cheap = hotel("cheap", 10_000)
-    refund = hotel("refund", 10_900, refundable=True)
+    refund = hotel("refund", 11_000, refundable=True)
     far = hotel("far", 10_000)
-    pricey = hotel("pricey", 14_000, refundable=True)
+    pricey = hotel("pricey", 12_000, refundable=True)
     items = offers([cheap, refund], FLIGHTS)
-    assert hotel_of(spec(), items) == refund
-    why = next(e.why for e in rank(spec(), items)[1] if e.offer_id == "h-refund")
-    assert "выбран тариф с бесплатной отменой" in why
+    for s in (spec(), spec(wishes=["недорого"])):
+        assert hotel_of(s, items) == refund
+    why = _why_of(spec(), items, "h-refund")
+    assert "выбран тариф с бесплатной отменой" in why and "(10%)" in why
     assert hotel_of(spec(priorities=["price"]), items) == cheap
     assert hotel_of(spec(), offers([far, pricey], FLIGHTS)) == far
+
+
+def test_refundable_won_by_weights_has_no_near_price_phrase():
+    """The refundable trip is first by weights, 20 % above the cheapest hotel: no D-045 phrase."""
+    cheap = hotel("cheap", 10_000, rating=5.0)
+    refund = hotel("refund", 12_000, refundable=True, rating=9.9, meal="BB")
+    rich = hotel("rich", 60_000, rating=6.0)
+    items = offers([cheap, refund, rich], FLIGHTS)
+    assert hotel_of(spec(), items) == refund
+    assert "выбран тариф с бесплатной отменой" not in _why_of(spec(), items, "h-refund")
+
+
+def test_manual_hotel_has_no_near_price_phrase():
+    """The user picks a refundable hotel 40 % above the cheapest: the text keeps no D-045 phrase."""
+    cheap = hotel("cheap", 10_000)
+    refund = hotel("refund", 11_000, refundable=True)
+    manual = hotel("manual", 14_000, refundable=True)
+    items = offers([cheap, refund, manual], FLIGHTS)
+    trip = next(t for t in enumerate_trips(items) if t.hotel is manual)
+    assert "выбран тариф" not in _why_of(spec(), items, "h-manual", trip.ids)
