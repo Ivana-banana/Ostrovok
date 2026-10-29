@@ -234,11 +234,16 @@ def _months(m: re.Match) -> int:
     return 6 if unit.startswith("пол") else n * 12 if unit.startswith("год") else n
 
 
-def _moved(at: datetime | None, delta: timedelta, places: list[str]) -> datetime | None:
-    """The same local clock time delta days on, at the offset of that day (TRAP-5: DST)."""
+def _moved(
+    at: datetime | None, delta: timedelta, places: list[str], last: bool = False
+) -> datetime | None:
+    """The same local clock time delta days on, at the offset of that day (TRAP-5: DST).
+
+    The zone is the first city; `last` takes the last one (the departure leaves from there).
+    """
     if at is None:
         return None
-    place = resolve_place(places[0]) if places else None
+    place = resolve_place(places[-1 if last else 0]) if places else None
     tz = ZoneInfo(place["tz"]) if place else at.tzinfo
     return (at.astimezone(tz).replace(tzinfo=None) + delta).replace(tzinfo=tz)
 
@@ -302,7 +307,7 @@ def shift_dates(spec: TripSpec, text: str, planned: bool = True) -> TripSpec:
             "assumptions": kept,
             # Own tickets move with their end of the stay, the clock time stays (#424)
             "arrive_at": _moved(spec.arrive_at, start - spec.date_from, spec.destinations),
-            "leave_at": _moved(spec.leave_at, end - spec.date_to, spec.destinations),
+            "leave_at": _moved(spec.leave_at, end - spec.date_to, spec.destinations, last=True),
         }
     )
 
