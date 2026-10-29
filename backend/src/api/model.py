@@ -633,6 +633,7 @@ def with_refused(spec: TripSpec, refused: list[str]) -> TripSpec:
 
 
 PARTY_ASK = "Кто едет с ребёнком — сколько взрослых?"
+PARTY_ASK_KIDS = "Кто едет с детьми — сколько взрослых?"
 MONTH_ASK = "Когда хотите поехать?"
 
 
@@ -641,7 +642,8 @@ def party_question(spec: TripSpec) -> list[Question]:
     if not (spec.children_ages and PARTY_UNKNOWN in spec.assumptions):
         return []
     options = ["Один взрослый", "Двое взрослых", "Трое взрослых"]  # no «ребёнок»: age stays
-    return [Question(text=PARTY_ASK, options=options)]
+    text = PARTY_ASK_KIDS if len(spec.children_ages) > 1 else PARTY_ASK
+    return [Question(text=text, options=options)]
 
 
 def _round_trip(probe: TripSpec, origin: str) -> int | None:
@@ -852,7 +854,11 @@ def with_buttons(q: Question, default: str | None = None) -> Question:
 
 def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     """The questions of _blocking_questions with the buttons of #596."""
-    defaults = {PARTY_ASK: "Двое взрослых", MONTH_ASK: MONTH_NAMES[date.today().month % 12]}
+    defaults = {
+        PARTY_ASK: "Двое взрослых",
+        PARTY_ASK_KIDS: "Двое взрослых",
+        MONTH_ASK: MONTH_NAMES[date.today().month % 12],
+    }
     return [
         with_buttons(q, defaults.get(q.text)) if q.options else q
         for q in _blocking_questions(spec, message)
