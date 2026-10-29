@@ -1654,6 +1654,11 @@ mark {
   margin: 6px 0 0;
 }
 
+/* #658: legs there and back in separate blocks */
+.leg-group + .leg-group {
+  margin-top: 14px;
+}
+
 .sec .cards {
   margin: 0;
 }
