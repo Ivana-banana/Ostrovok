@@ -44,3 +44,34 @@ def test_no_kids_gives_zero_children(text):
 def test_double_negation_keeps_children(text):
     found, _ = extract(text)
     assert found.get("children_ages") == [7, 7]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "без детей — не поедем",
+        "без детей - не поедем",
+        "без детей – никуда",
+        "без детей (никуда)",
+        "без детей\nникуда",
+        "без детей\nне поедем",
+    ],
+)
+def test_double_negation_across_dash_bracket_newline_keeps_children(text):
+    found, _ = extract(text)
+    assert found.get("children_ages") == [7, 7]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "без детей — не больше 100 тысяч",
+        "без детей (не более 100 тысяч)",
+        "без детей\nне позже 10 мая",
+        "без детей – не раньше июня",
+        "без детей не дороже 100 тысяч",
+    ],
+)
+def test_budget_or_date_tail_is_no_negation(text):
+    found, _ = extract(text)
+    assert found.get("children_ages") == []
