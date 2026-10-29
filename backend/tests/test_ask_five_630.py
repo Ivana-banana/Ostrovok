@@ -4,7 +4,16 @@
 import pytest
 from talk import ask
 
-from api.model import BUDGET_ASK, MAX_ASKS, MONTH_ASK, NIGHTS_ASK, ORIGIN_ASK, WHO_ASK
+from api.model import (
+    BUDGET_ASK,
+    MAX_ASKS,
+    MONTH_ASK,
+    NIGHTS_ASK,
+    ORIGIN_ASK,
+    PARTY_ASK,
+    SKIP_ASK,
+    WHO_ASK,
+)
 from api.store import SessionStore
 
 
@@ -37,3 +46,22 @@ def test_independent_questions_go_in_one_turn(store):
     plan = ask(store, "Трое взрослых, до 200 000 ₽", r.session_id)
     assert plan.stage == "compare"
     assert plan.plan.spec.adults == 3 and plan.plan.spec.budget_rub == 200_000
+
+
+def test_skipped_party_question_is_not_asked_again(store):
+    """«Не важно, решите сами» on «кто едет»: the cards come without the same question."""
+    first = ask(store, "тёплое море в ноябре, недорого, с ребёнком")
+    party = ask(store, "Из Москвы", first.session_id)
+    assert PARTY_ASK in texts(party)
+    cards = ask(store, SKIP_ASK, party.session_id)
+    assert cards.stage == "inspire" and PARTY_ASK not in texts(cards)
+
+
+def test_cap_cuts_the_party_turn(store):
+    """A hotel without a city: 4 trip questions, so the second turn has 1 of 2 (5 in all)."""
+    first = ask(store, "хочу отель")
+    assert len(first.questions) == 4
+    second = ask(store, "Из Москвы, Казань, декабрь, 3 ночи", first.session_id)
+    assert texts(second) == [WHO_ASK]
+    plan = ask(store, "Двое взрослых", second.session_id)
+    assert plan.stage != "clarify"

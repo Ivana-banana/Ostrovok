@@ -23,13 +23,13 @@ def kids_questions(reply):
     return [q for q in reply.questions if q.text == KIDS_ASK]
 
 
-def test_inspire_keeps_the_options_and_asks_the_children(store):
+def test_inspire_keeps_the_options_after_the_skipped_children_question(store):
     reply = planned(store, "Тёплое море в ноябре, недорого, с детьми")  # #630: skipped
     assert reply.stage == "inspire"
     assert reply.plan.destinations  # the options are shown at once
     assert reply.plan.spec.children_ages == []
     assert not any("7 лет" in a for a in reply.plan.spec.assumptions)
-    assert len(kids_questions(reply)) == 1
+    assert kids_questions(reply) == []  # #630: asked before the cards and skipped, not again
 
 
 def test_a_named_place_asks_the_children_in_the_party_turn(store):

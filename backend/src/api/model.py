@@ -3209,6 +3209,8 @@ def step(
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
         )
 
+    # #630: «кто едет» was asked in the turn before: the cards do not ask it again
+    party_asked = old.stage == "clarify" and bool({q.text for q in old.questions} & PARTY_TEXTS)
     asked = second_turn(prev, old, message)  # #630
     if (prev is None or asked) and (questions := blocking_questions(spec, message, asked)):
         text = _text_clarify(questions)
@@ -3260,12 +3262,13 @@ def step(
                 if no_country
                 else ""
             )
-            ask = children_question(spec) or party_question(spec)  # next to the options
+            ask = [] if party_asked else children_question(spec) or party_question(spec)
             return reply("inspire", plan, sorry + _text_inspire(plan), questions=ask)
         gone_text = f"Убираю «{', '.join(gone)}» из плана, корзину очищаю. " if gone else ""
         question = Question(text="Куда поедем?", options=[d.name for d in dests])
         text = gone_text + _text_inspire(plan)
-        return reply("inspire", plan, text, Cart(), questions=[question, *party_question(spec)])
+        party = [] if party_asked else party_question(spec)
+        return reply("inspire", plan, text, Cart(), questions=[question, *party])
 
     if month_note and not (dirty_nodes(old.plan.spec, spec) or shifts or picks or lines):
         # Nothing else changed: the answer is about the dates only.
@@ -3390,7 +3393,7 @@ def step(
             # the reply says so, the new city never comes silently (#93).
             gone, now = ", ".join(swapped), spec.destinations[0]
             text = f"«{gone}» {NOT_IN_CATALOG}. По вашему выбору — {now}.\n{text}"
-        questions = party_question(spec)
+        questions = [] if party_asked else party_question(spec)
         if route:
             notice, chips = route_reply(spec.destinations, route)
             return reply("compare", plan, f"{notice}\n{text}", cart, questions=[*chips, *questions])

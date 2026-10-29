@@ -218,8 +218,8 @@ def _post_from_origin(
 
 def _answer(r: ChatReply) -> str:
     """#630: the eval user takes the recommended button of each question, else the first one.
-    The budget is left open, as before #630: its first button («до 50 000 ₽») would change the
-    trips the cases were written for; the open budget stays an assumption."""
+    The budget stays open: with «до 50 000 ₽» the S10 check no longer sees a lost dog
+    (test_s10_fails_when_the_product_does_not_extract_the_dog)."""
     picks = [
         next((o for o in q.options if o.endswith(RECOMMENDED)), q.options[0])
         for q in r.questions

@@ -176,7 +176,7 @@ def test_child_without_a_place_still_gets_destinations(store, text):
     r = planned(store, text)  # #630: the party turn skipped, the question stays next to the cards
     assert r.stage == "inspire" and len(r.plan.destinations) > 0
     assert NOT_NAMED in r.plan.spec.assumptions  # the default stays visible
-    assert any(" едет " in q.text for q in r.questions)  # asked next to the options
+    assert not any(" едет " in q.text for q in r.questions)  # #630: asked before, not again
 
 
 def test_party_question_follows_to_the_comparison(store):
