@@ -206,10 +206,12 @@ HYPOTHESIS_RE = re.compile(r"\bесли\b[^?]*\?|\b(?:задерж|опозда)
 CHOICE_RE = re.compile(
     r"\b(?:(?:возьм|давай|хоч|хотим|поменя|смен|замен|переключ|выбер|оформ)\w*|бер(?:у|и|ем|ите|ете)\b)"
 )
+# #204: «без трансфера не поедем» keeps the transfer; «не проблема», «не страшно» do not.
+NEED = r"\s+не\s+(?:поед|обойд|смож|можем|получ|вариант|выйд|справ)"
 # #193: «давайте без трансфера» is an edit even with a consent word in it. «нужен ли трансфер?»
 # and «а трансфер нужен?» ask; they are not here.
 NO_TRANSFER_RE = re.compile(
-    r"(?<!\bне\s)\bбез\s+(?:\w+\s+)?трансфер\w*"
+    rf"(?<!\bне\s)\bбез\s+(?:\w+\s+)?трансфер\w*\b(?!{NEED})"  # #204: «без трансфера не поедем»
     r"|\b(?:убер\w+|убра\w+|удал\w+|исключ\w+)\s+(?:\w+\s+)?трансфер\w*"
     r"|\bоткаж\w*\s+от\s+(?:\w+\s+)?трансфер\w*"
     r"|\bне\s+нуж(?:ен|на|но|ны)\s+(?:\w+\s+)?трансфер\w*"
@@ -219,6 +221,12 @@ NO_TRANSFER_RE = re.compile(
 # A bare «трансфер не нужен?» asks too; «а давайте без трансфера?» and «можно без трансфера?» order.
 ASKS_RE = re.compile(r"(?<!\bтак\s)\bкак\b(?!-)|\bсколько\b|\bли\b")
 ASKS_COMPARE_RE = re.compile(r"\b(?:дороже|дешевле|выгодн\w*)\b")
+# #204: a command and then «сколько» asks the new sum: «уберите трансфер — сколько выйдет?»,
+# «без трансфера, сколько будет?». It is an edit. «Сколько стоит без трансфера?» asks first.
+COMMAND_SUM_RE = re.compile(
+    r"\b(?:(?:убер(?:и|ите|ём|ем)|удал(?:и|ите)|исключ(?:и|ите)|откаж(?:ись|итесь)\w*)\s+"
+    rf"(?:\w+\s+)?(?:от\s+)?|без\s+(?:\w+\s+)?)трансфер\w*\b(?!{NEED})[^?]*?[,;:—–-]\s*(?:а\s+)?сколько\b"
+)
 
 EDIT_KEYS = {
     "destinations", "date_from", "date_to", "month", "nights", "adults", "children_ages",
@@ -2744,6 +2752,7 @@ def step(
         no_transfer
         and set(rules_found) <= {"wishes"}
         and not SHIFT_RE.search(low)
+        and not COMMAND_SUM_RE.search(low)
         and (
             ASKS_RE.search(low)
             or QUESTION_WORD_RE.search(low)
@@ -3295,6 +3304,14 @@ def step(
             if plan.changes:  # the dropped hotel must show as a change (#136)
                 text = "\n".join(["Было → стало:", *describe(plan.changes), text])
             return reply(stage, plan, text, cart, questions=questions)
+        if no_transfer:
+            # #204: «без трансфера и на неделю позже»: the new plan keeps no transfer, and the
+            # refusal stays for the next turns. The timeline is built again (TRAP-5).
+            plan = remember_refusal(plan, {"out", "back"})
+            plan.selected = keep_refusal(plan, plan.selected)
+            plan.timeline, plan.issues = build_timeline(plan)
+            plan.changes = plan_changes(old.plan, plan, old.cart, cart)
+            lines.append("Трансфер убран: до отеля и обратно добираетесь сами.")
         why = llm.explain(plan, deadline) if use_llm and "ranking" in done else None
         if why and why != plan.explanations:
             plan.explanations, used = why, True  # checked against the plan facts (TRAP-4)
