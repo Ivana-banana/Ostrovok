@@ -70,13 +70,21 @@ def assert_marked(reply):
 # 1
 
 
+def short(hotel):
+    """«Старый город» of «Отель «Старый город», Сочи»."""
+    return re.search(r"«(.+?)»", hotel.title).group(1)
+
+
 @pytest.mark.parametrize("stage", STAGES)
 @pytest.mark.parametrize(
-    "question", ["почему Панорама, а не Бульвар?", "почему Бульвар, а не Панорама?"]
+    "question", ["почему {plan}, а не Бульвар?", "почему Бульвар, а не {plan}?"]
 )
 def test_the_hotel_outside_the_plan_is_found_when_the_plan_hotel_is_named(store, stage, question):
-    r, r2 = ask(store, stage, question)
-    assert chosen(r).title.count("Панорама")
+    # #280: the plan hotel comes from the plan (a fare change moves it), the same in every stage
+    plan = short(chosen(at(store, stage)))
+    assert plan != "Бульвар"
+    r, r2 = ask(store, stage, question.format(plan=plan))
+    assert short(chosen(r)) == plan
     row = next(h for h in hotel_rows(r.plan.offers, r.plan.selected) if "Бульвар" in h.title)
     assert f"{money(row.price_rub)} (синтетика)" in r2.reply
     assert f"{money(chosen(r).price_rub)} (синтетика)" in r2.reply
@@ -87,8 +95,26 @@ def test_the_hotel_outside_the_plan_is_found_when_the_plan_hotel_is_named(store,
 # 2
 
 
+ORDINAL_WORDS = ["первый", "второй", "третий", "четвёртый", "пятый"]
+
+
 def test_the_free_cancellation_tariff_of_the_named_hotel_is_named(store):
-    r, r2 = ask(store, "compare", "почему не Бульвар?")
+    # #280: the plan hotel is the row of the table without a free cancellation tariff in the
+    # data, picked by the user; a fare change moves the ranked hotel, not this premise
+    first = at(store, "compare")
+    rows = hotel_rows(first.plan.offers, first.plan.selected)
+    n, plan = next(
+        (i, short(h))
+        for i, h in enumerate(rows)
+        if not any(o.cancellation.refundable for o in tariffs(first, short(h)))
+    )
+    assert plan != "Бульвар"
+    r = say(store, ORDINAL_WORDS[n], first.session_id)
+    r2 = say(store, "почему не Бульвар?", r.session_id)
+    assert r2.stage == r.stage and r2.plan == r.plan and r2.cart == r.cart and r2.llm is False
+    assert short(chosen(r)) == plan
+    shown = next(h for h in hotel_rows(r.plan.offers, r.plan.selected) if "Бульвар" in h.title)
+    assert not shown.cancellation.refundable and not chosen(r).cancellation.refundable
     free = min(
         (o for o in tariffs(r, "Бульвар") if o.cancellation.refundable), key=lambda o: o.price_rub
     )
@@ -96,7 +122,7 @@ def test_the_free_cancellation_tariff_of_the_named_hotel_is_named(store):
     assert (
         f"Тариф с бесплатной отменой: «Бульвар» — {money(free.price_rub)} (синтетика)" in r2.reply
     )
-    assert "«Панорама» — в данных нет" in r2.reply  # no such tariff at the plan hotel: said so
+    assert f"«{plan}» — в данных нет" in r2.reply  # no such tariff at the plan hotel: said so
     assert_marked(r2.reply)
 
 

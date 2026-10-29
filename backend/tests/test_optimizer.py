@@ -159,7 +159,7 @@ def test_s7_transfer_eats_the_hotel_saving():
     assert out[first].total_rub == 37_500 + 16_000 + 1_200
     assert out[second].total_rub == 32_000 + 16_000 + 7_200
     assert any("трансфер" in t for t in out[second].tradeoffs)
-    assert "съедают экономию 5 500 ₽ на отеле" in " ".join(out[second].tradeoffs)
+    assert "съедают экономию 5 500 ₽ (синтетика) на отеле" in " ".join(out[second].tradeoffs)
 
 
 def test_budget_filter_drops_a_better_trip_over_the_budget():
@@ -182,7 +182,7 @@ def test_budget_fallback_names_the_overrun_and_picks_the_cheapest():
     over = r.bundles[0].total_rub - 30_000
     risks = " ".join(r.explanations[0].risks)
     assert "не укладывается в бюджет 30 000 ₽" in risks
-    assert f"на {over:,} ₽ больше".replace(",", " ") in risks
+    assert f"на {over:,} ₽ (синтетика) больше".replace(",", " ") in risks
     assert "самая дешёвая поездка из найденных" in risks
     assert r.bundles[0].label == "ближе всего к условиям"
 
@@ -210,7 +210,10 @@ def test_hotel_budget_fallback_names_the_overrun_of_the_hotel():
     r = optimize(s, items)
     assert r.selected[0] == "h-a"
     risks = " ".join(r.explanations[0].risks)
-    assert "отель не укладывается в бюджет отеля 20 000 ₽: 25 000 ₽, на 5 000 ₽ больше" in risks
+    assert (
+        "отель не укладывается в бюджет отеля 20 000 ₽: 25 000 ₽ (синтетика), на 5 000 ₽ (синтетика) больше"
+        in risks
+    )
     assert "самая дешёвая поездка из найденных" in risks
     assert "в бюджете отеля" not in r.explanations[0].why
 
@@ -236,7 +239,7 @@ def test_budget_risk_looks_at_every_hotel_not_only_the_meal_ones():
     risks = " ".join(r.explanations[0].risks)
     assert "не укладывается в бюджет 40 000 ₽" in risks
     assert "в бюджет укладывается Отель ro" in risks and "без питания" in risks
-    assert "отель 30 000 ₽ укладывается" in risks  # the road makes the overrun
+    assert "отель 30 000 ₽ (синтетика) укладывается" in risks  # the road makes the overrun
     alt = next(b for b in r.bundles if b.label == "в бюджете")
     assert "h-ro" in alt.offer_ids and any(t.startswith("нарушает") for t in alt.tradeoffs)
 
@@ -997,3 +1000,45 @@ def test_bundles_of_a_pick_stay_empty_when_nothing_takes_the_pet():
     assert optimize(s, items).bundles == []
     ids = [o.offer_id for o in items if o.kind in ("hotel", "transport")]
     assert bundles(s, items, ids) == []
+
+
+def _why_of(s, items, hotel_id, selected=None):
+    ids = selected or rank(s, items)[0]
+    return next(e.why for e in explain(s, items, ids) if e.offer_id == hotel_id)
+
+
+def test_near_price_default_is_the_refundable_tariff():
+    """#606 (D-045): the hotel is within 15 % -> the default is free cancellation, also with
+    «недорого», and the text names the real difference; farther, or with named priorities,
+    the cheapest wins as before."""
+    cheap = hotel("cheap", 10_000)
+    refund = hotel("refund", 11_000, refundable=True)
+    far = hotel("far", 10_000)
+    pricey = hotel("pricey", 12_000, refundable=True)
+    items = offers([cheap, refund], FLIGHTS)
+    for s in (spec(), spec(wishes=["недорого"])):
+        assert hotel_of(s, items) == refund
+    why = _why_of(spec(), items, "h-refund")
+    assert "выбран тариф с бесплатной отменой" in why and "(10%)" in why
+    assert hotel_of(spec(priorities=["price"]), items) == cheap
+    assert hotel_of(spec(), offers([far, pricey], FLIGHTS)) == far
+
+
+def test_refundable_won_by_weights_has_no_near_price_phrase():
+    """The refundable trip is first by weights, 20 % above the cheapest hotel: no D-045 phrase."""
+    cheap = hotel("cheap", 10_000, rating=5.0)
+    refund = hotel("refund", 12_000, refundable=True, rating=9.9, meal="BB")
+    rich = hotel("rich", 60_000, rating=6.0)
+    items = offers([cheap, refund, rich], FLIGHTS)
+    assert hotel_of(spec(), items) == refund
+    assert "выбран тариф с бесплатной отменой" not in _why_of(spec(), items, "h-refund")
+
+
+def test_manual_hotel_has_no_near_price_phrase():
+    """The user picks a refundable hotel 40 % above the cheapest: the text keeps no D-045 phrase."""
+    cheap = hotel("cheap", 10_000)
+    refund = hotel("refund", 11_000, refundable=True)
+    manual = hotel("manual", 14_000, refundable=True)
+    items = offers([cheap, refund, manual], FLIGHTS)
+    trip = next(t for t in enumerate_trips(items) if t.hotel is manual)
+    assert "выбран тариф" not in _why_of(spec(), items, "h-manual", trip.ids)

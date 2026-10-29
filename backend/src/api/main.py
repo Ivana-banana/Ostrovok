@@ -31,14 +31,15 @@ from api.model import chat
 from api.partner import checkout_once, cors_options, plan_reply, require_key
 from api.store import SessionStore, db_path
 from api.travelpayouts import TravelpayoutsTransport
+from api.tutu import TutuTrains
 
 V1 = "Партнёрский API /api/v1"
 WEB = "Веб-клиент /api"
 DESCRIPTION = """\
 Агент путешествий «О!дин запрос»: одно сообщение путешественника → план, корзина и
 имитированная бронь. Цены, время и стыковки — из провайдеров, не из LLM. По умолчанию
-(`real_data=true`) отели — 101hotels, перелёты — Авиасейлс, у них `synthetic=false`; остальное
-и любой сбой источника — синтетика. `real_data=false` — всё синтетика.
+(`real_data=true`) отели — 101hotels, перелёты — Авиасейлс, поезда — tutu.ru, у них
+`synthetic=false`; остальное и любой сбой источника — синтетика. `real_data=false` — всё синтетика.
 
 **Партнёрам — `/api/v1`.** `POST /api/v1/plan` — одним вызовом текст запроса → план с
 корзиной. `POST /api/v1/chat` — диалог по шагам. `POST /api/v1/checkout` — бронь,
@@ -56,6 +57,10 @@ DESCRIPTION = """\
 # Built once; a chat request uses it only with real_data (#490, offers.transport()).
 token = os.environ.get("TRAVELPAYOUTS_TOKEN", "").strip()
 offers.REAL_TRANSPORT = TravelpayoutsTransport(token) if token else None
+# Real trains from tutu.ru (#569) over it, on by default, no key; LIVE_TRAINS=0 keeps them off.
+# Same gate: only a real_data request; any miss falls back to the synthetic train (TRAP-6).
+if os.environ.get("LIVE_TRAINS", "1").strip().lower() not in ("0", "false", "no", ""):
+    offers.REAL_TRANSPORT = TutuTrains(offers.REAL_TRANSPORT or offers.TRANSPORT)
 
 # Live hotel price level from 101hotels (#511), on by default; LIVE_HOTELS=0 forces synthetic.
 # The adapter falls back to the base provider on any miss or network failure (TRAP-1, TRAP-6).
