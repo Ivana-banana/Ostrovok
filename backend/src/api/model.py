@@ -267,6 +267,7 @@ EARLY_RE = re.compile(
 EARLY_SHIFT_RE = re.compile(
     r"\b(?:раньше|позже)\s+на\s+(?:\w+\s+)?(?:дн\w*|день|сут\w*|недел\w*|ноч\w*)"
 )
+TRIP_MOVE_KEYS = ("destinations", "date_from", "date_to", "month", "nights")
 MOVE_VERB_RE = re.compile(r"\b(?:сдвин|перенес|перенос|передвин|подвин|измен|поменя)\w*")
 TRANSFER_RE = re.compile(r"\bтрансфер\w*")
 AFTER_BOOKING = (
@@ -2580,17 +2581,22 @@ def _after_chip(edits: list[str]) -> Question:
     return Question(text=ask, options=[CHANGE_CHIP, RESTART_CHIP])
 
 
+def _moves_trip(prev: ChatReply, low: str, message: str) -> bool:
+    """#637: the message moves the dates or the city of the booked trip. A date or a city the
+    booking already has («ранний заезд 20 ноября», «трансфер в Сочи») is a remark, not a move."""
+    if EARLY_SHIFT_RE.search(low) or OTHER_RE.search(low):
+        return True
+    found = extract(message, True)[0]
+    return any(k in found and getattr(prev.plan.spec, k, None) != found[k] for k in TRIP_MOVE_KEYS)
+
+
 def _after_purchase(prev: ChatReply, low: str, message: str) -> str | None:
     """#18: the reply to «ранний заезд» and «трансфер до отеля» after the voucher, from the
     booking and the plan offers only (TRAP-4); None for any other message. The voucher stays."""
     v = prev.voucher
     if SHIFT_RE.search(low) or MOVE_VERB_RE.search(low) or NO_TRANSFER_RE.search(low):
         return None
-    if (
-        EARLY_SHIFT_RE.search(low)
-        or OTHER_RE.search(low)
-        or EDIT_KEYS & set(extract(message, True)[0])
-    ):
+    if _moves_trip(prev, low, message):
         return None  # #637: a date or city edit goes to «Изменить бронь», even with «трансфер»
     hotel = next((o for o in v.items if isinstance(o, HotelOffer)), None)
     if EARLY_RE.search(low):
@@ -2598,7 +2604,8 @@ def _after_purchase(prev: ChatReply, low: str, message: str) -> str | None:
             return f"Бронь {v.booking_id} без отеля: времени заселения у меня нет."
         return (
             f"Бронь {v.booking_id} не меняю. {hotel.title}: обычно с {hotel.check_in:%H:%M}, "
-            f"точное время уточните у отеля: в данных его нет. Ранний заезд — просьба к отелю, гарантии нет. Цены раннего заезда "
+            "точное время уточните у отеля: в данных его нет. Ранний заезд — просьба к отелю, "
+            "гарантии нет. Цены раннего заезда "
             "в брони нет: её назовёт отель."
         )
     if not TRANSFER_RE.search(low):

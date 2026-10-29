@@ -93,3 +93,23 @@ def test_other_city_and_transfer_is_an_edit_637(store):
     a = say(store, "другой город и трансфер", r.session_id)
     assert not a.reply.startswith("Трансфер") and "Трансфера" not in a.reply
     assert "другой город и трансфер" in a.questions[0].text
+
+
+@pytest.mark.parametrize("text", ["трансфер до отеля в Сочи?", "трансфер для двоих взрослых"])
+def test_transfer_remark_of_the_booked_trip_is_not_an_edit_637(store, text):
+    r = booked(store)
+    a = say(store, text, r.session_id)
+    assert a.reply.startswith("Трансфер уже в брони")
+
+
+@pytest.mark.parametrize("text", ["ранний заезд 20 ноября", "ранний заезд на 3 ночи"])
+def test_early_check_in_with_booked_dates_is_not_an_edit_637(store, text):
+    r = booked(store)
+    a = say(store, text, r.session_id)
+    assert "гарантии нет" in a.reply and "Правка для новой поездки" not in a.questions[0].text
+
+
+def test_early_check_in_price_question_is_not_a_budget_edit_637(store):
+    r = booked(store)
+    a = say(store, "ранний заезд за 1000 рублей?", r.session_id)
+    assert "гарантии нет" in a.reply and "Цены раннего заезда в брони нет" in a.reply
