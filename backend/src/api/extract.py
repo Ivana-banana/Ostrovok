@@ -567,6 +567,10 @@ NO_DATA_WISHES = (
     "северное сияние", "киты", "термальные источники", "фестиваль", "дайвинг", "серфинг",
     "рыбалка", "сафари", "шопинг", "музеи", "йога", *HARD_WISHES,
 )  # fmt: skip
+# Other wishes the catalogue does not check (inspire.UNCHECKED): a refusal drops them too (#383)
+FREE_WISHES = ("вино и еда", "романтика", "красиво", "с удобствами")
+# «кухня не важна»: no refusal of a flight or a meal, but no wish either (#383)
+NOT_IMPORTANT_RE = re.compile(r"\w*\s*(?:[—–:-]\s*)?(?:(?:мне|нам|совсем|вообще)\s+)?не\s+важ")
 # «отель у Технопарка», «возле Технопарка»: the landmark is the next capitalized word. The lookahead
 # needs \b: without it the word backtracks («у Чёрного моря» -> «Чёрног»).
 LANDMARK_RE = re.compile(
@@ -619,8 +623,8 @@ def _wished(wish: str, t: str, x: re.Match, negated: re.Pattern) -> bool:
         return not _warm_refused(t, x)
     if wish == "природа":
         return not negated.search(t[: x.start()])
-    if wish in NO_DATA_WISHES:  # #361: «без музеев», «шопинг не нужен»
-        return not _refused(t, x)
+    if wish in NO_DATA_WISHES or wish in FREE_WISHES:  # #361, #383: «без музеев», «без удобств»
+        return not _refused(t, x) and not NOT_IMPORTANT_RE.match(t, x.end())
     return True
 
 
@@ -2364,6 +2368,10 @@ ANOTHER_RE = re.compile(
 )
 
 
+# #205: «добавь сына», «ещё сына», «у нас родился сын»: a child is added, not named again.
+ADD_CHILD_RE = re.compile(r"\b(?:добав\w*|ещ[её]|плюс|родил\w*|появил\w*)\b")
+
+
 def _named_again(
     seen: list[tuple[str, list[int], int]], kind: str, said: list[int], ages: list, notes: list
 ) -> bool:
@@ -2386,18 +2394,27 @@ def _named_again(
 
 
 def _people(
-    t: str, found: dict, notes: list[str], asking: bool = False, built: bool = False
+    t: str,
+    found: dict,
+    notes: list[str],
+    asking: bool = False,
+    built: bool = False,
+    kept_ages: list[int] | None = None,
 ) -> None:
     """Adults, children with ages; «нас четверо» counts children out.
 
     built: the plan exists; «на 1 человека» near a price word is then a unit, not a party (#369).
 
     asking: the message is a question at a built plan; a child without a number or an age in
-    it adds nobody (#179)."""
+    it adds nobody (#179).
+
+    kept_ages: the ages of the children in the plan. A child named with no number and no age
+    («с дочкой», «без дочери не поедем») is one of them: the ages stay (#205)."""
     ages: list[int] = []
     seen: list[tuple[str, list[int], int]] = []  # (kind, ages said, position in ages) (#359)
     last: int | None = None  # the end of the previous child word (#359)
     no_kids = False
+    skipped = 0  # #205: children of kept_ages named again with no age
     # #385: «давай на 1 человека?» asks for a party edit, not for a price
     edit = asking and not PRICE_CUE_RE.search(t) and PARTY_EDIT_RE.search(t) and "номер" not in t
     if built and (PRICE_CUE_RE.search(t) or asking) and not edit:  # only at a built plan
@@ -2464,8 +2481,15 @@ def _people(
             t[: m.start()]
         )
         last = m.end()
+        new_one = bool(ANOTHER_RE.search(t[: m.start()]))
         if single and not new and len(said) <= 1 and _named_again(seen, kind, said, ages, notes):
             continue  # #359: «дети: 5 и 8 лет, сын любит море»: the same child again
+        if single and not said and kept_ages:
+            if ADD_CHILD_RE.search(t[max(m.start() - 25, 0) : m.start()]) or new_one:
+                skipped = len(kept_ages)  # #205: a child is added to the children of the plan
+            elif skipped < len(kept_ages):
+                skipped += 1  # #205: a child of the plan is named again, no age changes
+                continue
         if asking and len(said) < count:  # no age for every counted child: nobody is added
             if ASKING_NOTE not in notes:
                 notes.append(ASKING_NOTE)
@@ -2475,7 +2499,7 @@ def _people(
         seen.append((kind, said, len(ages)))
         ages += (said + [7] * count)[:count]
     if ages:
-        found["children_ages"] = ages
+        found["children_ages"] = list(kept_ages or [])[:skipped] + ages  # #205
     elif no_kids and asking:  # a question «а без детей можно?» changes nothing (#179)
         if ASKING_NOTE not in notes:
             notes.append(ASKING_NOTE)
@@ -2740,13 +2764,15 @@ def extract(
     nights: int = 7,
     adults: int = 2,
     asking: bool = False,
+    kept_ages: list[int] | None = None,
 ) -> tuple[dict, list[str]]:
     """TripSpec fields stated in one message, plus assumptions made while reading it.
 
     has_destination: the plan has a city already; an unknown first word is then never a city.
     nights, adults: the plan's values (TripSpec defaults); only a «в сутки» or «на каждого»
     budget reads them (#158).
-    asking: a question at a built plan; a child without a number or an age adds nobody (#179)."""
+    asking: a question at a built plan; a child without a number or an age adds nobody (#179).
+    kept_ages: the ages of the children in the plan; a child without a number or an age keeps them (#205)."""
     t = text.lower().replace("ё", "е")  # same length: positions match the original text
     found: dict = {}
     notes: list[str] = []
@@ -2766,7 +2792,7 @@ def extract(
     if november:
         _november_end(*november, found, notes)
     _own_tickets(t, found)
-    _people(t, found, notes, asking, has_destination)
+    _people(t, found, notes, asking, has_destination, kept_ages)
     _budget(t, found, notes, nights, adults)
     if (pets := _pets(t)) is not None:
         found["pets"] = pets
@@ -2798,6 +2824,11 @@ def extract(
     if modes:
         found["modes"] = modes
     wishes = [w for w, p in WISHES if any(_wished(w, t, x, negated) for x in re.finditer(p, t))]
+    # «без удобств, в палатке»: one refusal of a free wish outweighs its other words (#383)
+    wishes = [
+        w for w in wishes
+        if w not in FREE_WISHES or all(_wished(w, t, x, negated) for x in re.finditer(dict(WISHES)[w], t))
+    ]  # fmt: skip
     for m in LANDMARK_RE.finditer(text):  # #338: «отель у Технопарка»; cities are no landmark
         if not _known(m.group(1)) and not _is_destination(m.group(1), found):
             adjective = m.group(1).lower().endswith(ADJ_ENDINGS)

@@ -396,3 +396,9 @@ def test_free_cancel_share_of_the_place_sets_the_refundable_hotels(share, refund
         any(t.cancellation.refundable for t in ts) for ts in by_title.values() if ts[0].stars >= 3
     }
     assert sold == {refundable}
+
+
+def test_trap7_synthetic_offers_are_marked_synthetic_with_no_fetch_time():
+    out = find_offers(spec(), "Сочи")
+    assert out and {o.kind for o in out} >= {"hotel", "transport", "transfer", "extra"}
+    assert all(o.synthetic and o.source == "синтетика" and o.fetched_at is None for o in out)

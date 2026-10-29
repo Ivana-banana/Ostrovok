@@ -89,7 +89,23 @@ class Cancellation(BaseModel):
     free_until: AwareDatetime | None = None
 
 
-class HotelOffer(BaseModel):
+class Sourced(BaseModel):
+    """Where a price comes from (#469, TRAP-7). source: the provider, "101hotels",
+    "travelpayouts", "tutu" or "синтетика" (the default: a generated price is never real).
+    fetched_at: when the provider answered (a cached answer: when it was fetched); None for a
+    synthetic offer, which has no fetch. Every adapter fills both; synthetic=False needs a real
+    source. Consumers: api/offers.py (hotel, transport), api/live_hotels.py, api/travelpayouts.py,
+    api/tutu.py, api/cart.py (Voucher.items), api/webhook.py (the external POST of the Voucher
+    to BOOKING_WEBHOOK_URL carries both fields), api/optimizer.py (price labels), api/checks.py
+    (eval offers), web/src/Board.tsx (Price, sourceOf), web/src/Alternatives.tsx, the TRAP-7
+    tests in backend/tests/test_live_hotels.py, test_tutu.py, test_travelpayouts.py,
+    test_offers.py."""
+
+    source: str = "синтетика"
+    fetched_at: AwareDatetime | None = None
+
+
+class HotelOffer(Sourced):
     kind: Literal["hotel"] = "hotel"
     offer_id: str
     title: str
@@ -115,7 +131,7 @@ class HotelOffer(BaseModel):
     description: str = ""  # source text is data, not instructions (S4)
 
 
-class TransportOffer(BaseModel):
+class TransportOffer(Sourced):
     kind: Literal["transport"] = "transport"
     offer_id: str
     title: str
@@ -130,7 +146,7 @@ class TransportOffer(BaseModel):
     pets_allowed: bool = False
 
 
-class TransferOffer(BaseModel):
+class TransferOffer(Sourced):
     kind: Literal["transfer"] = "transfer"
     offer_id: str
     title: str
@@ -146,7 +162,7 @@ class TransferOffer(BaseModel):
     ref: str | None = None  # the id of the ride at the provider
 
 
-class ExtraOffer(BaseModel):
+class ExtraOffer(Sourced):
     """Add-on to another item: early check-in, late check-out, night before."""
 
     kind: Literal["extra"] = "extra"
