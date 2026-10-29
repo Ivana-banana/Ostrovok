@@ -2315,6 +2315,31 @@ def _text_assemble(plan: Plan, choice: bool = True) -> str:
     return "\n".join(lines)
 
 
+def _swap_hotel(old: ChatReply, row: int) -> ChatReply:
+    """#677: «третий отель» on assemble takes the hotel of the row (hotel_rows, as «беру 3» on
+    compare); the stage stays. «беру …» on assemble is a consent and never reaches here."""
+    plan = old.plan
+    rows = hotel_rows(plan.offers, plan.selected)
+    if not 0 <= row < len(rows):
+        text = f"Отеля {row + 1} нет: в таблице их {len(rows)}. {HINTS['assemble']}"
+        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    # The hotel brings its own transfers for the selected legs (T7, #13).
+    picked = pick_hotel(plan.selected, plan.offers, rows[row].offer_id)
+    new = plan.model_copy(update={"selected": keep_refusal(plan, picked)})
+    new.explanations = explain(new.spec, new.offers, new.selected)
+    new.bundles = bundles(new.spec, new.offers, new.selected)
+    new.timeline, new.issues = build_timeline(new)
+    new.changes = plan_changes(plan, new, old.cart, old.cart)
+    if any(i.severity == "error" for i in new.issues):  # #276: no cart with an error
+        stage, body = "compare", _text_blocked(new)
+    else:
+        stage, body = "assemble", _text_assemble(new)
+    text = "\n".join(["Было → стало:", *describe(new.changes), body]) if new.changes else body
+    return old.model_copy(
+        update={"stage": stage, "plan": new, "reply": text, "questions": [], "llm": False}
+    )
+
+
 def _text_blocked(plan: Plan) -> str:
     """#276: the timeline has an error, so the plan stays at compare. The fixes are offers of
     the plan (TRAP-4): a leg is named by its row in the compare table («рейс N»)."""
@@ -2928,6 +2953,15 @@ def step(
         and not SHIFT_RE.search(low)
         and not (HYPOTHESIS_RE.search(low) and not CHOICE_RE.search(low))
     )
+    # «отель 1 и поезд» has leg commands: it goes to switch_transport below
+    if (
+        pure
+        and prev
+        and old.stage == "assemble"
+        and (row := hotel_row(message)) is not None
+        and not leg_commands(message)
+    ):
+        return _swap_hotel(old, row)
     if pure and prev and old.stage in ("compare", "assemble", "checkout"):
         row = hotel_row(message)
         plan, note = switch_transport(old.plan, message, row if old.stage == "compare" else None)

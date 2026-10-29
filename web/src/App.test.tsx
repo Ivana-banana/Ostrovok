@@ -12,7 +12,8 @@ import type { ChatReply } from "./contracts";
 const booked = fixture as unknown as ChatReply;
 const checkoutStage: ChatReply = { ...structuredClone(booked), stage: "checkout", voucher: null };
 
-type Route = (body: unknown) => { status: number; body?: unknown };
+type Reply = { status: number; body?: unknown };
+type Route = (body: unknown) => Reply | Promise<Reply>;
 let routes: Record<string, Route>;
 let calls: { key: string; body: unknown }[];
 let root: Root;
@@ -35,7 +36,7 @@ beforeEach(() => {
     calls.push({ key, body });
     const route = routes[key];
     if (!route) return json(404, { detail: "Not Found" });
-    const out = route(body);
+    const out = await route(body);
     return json(out.status, out.body);
   });
   box = document.createElement("div");
@@ -357,6 +358,41 @@ suite("приложение", () => {
     await mount();
     await click("Выбрать");
     expect(calls.at(-1)?.body).toMatchObject({ message: "беру первый" });
+  });
+
+  it("#677: «Выбрать» отеля — без нового сообщения в чате, план меняется на месте", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };
+    compare.plan.selected = [];
+    const assemble = { ...structuredClone(checkoutStage), stage: "assemble" as const };
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: compare });
+    routes["POST /api/chat"] = () => ({ status: 200, body: assemble });
+    await mount();
+    const before = box.querySelectorAll(".msg").length;
+    await click("Выбрать");
+    expect(calls.at(-1)?.body).toMatchObject({ message: "беру первый" });
+    expect(box.querySelectorAll(".msg").length).toBe(before);
+    expect(box.querySelector(".msg.user")).toBeNull();
+    expect(box.querySelector("[aria-label='Сравнение отелей'] tr.chosen")).not.toBeNull();
+  });
+
+  it("#677: на сборке «Выбрать» отеля шлёт «второй отель», не «беру» (это согласие)", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const assemble = { ...structuredClone(checkoutStage), stage: "assemble" as const };
+    const hotel = assemble.plan.offers.find((o) => o.kind === "hotel")!;
+    assemble.plan.offers.push({ ...hotel, offer_id: "h-other", title: "Отель Другой" });
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: assemble });
+    let release = () => {};
+    routes["POST /api/chat"] = () => new Promise<Reply>((res) => (release = () => res({ status: 200, body: assemble })));
+    await mount();
+    await act(async () => button("Выбрать").click());
+    expect(calls.at(-1)?.body).toMatchObject({ message: "второй отель" });
+    // «думаю» while the agent works, the plan stays in view, no user bubble
+    expect(box.querySelector("[aria-label='Агент думает']")).not.toBeNull();
+    expect(box.querySelector("[aria-label='Сравнение отелей']")).not.toBeNull();
+    expect(box.querySelector(".msg.user")).toBeNull();
+    await act(async () => release());
+    await flush();
   });
 
   it("выбор транспорта на этапе сравнения — сообщение агенту «возьми рейс N»", async () => {

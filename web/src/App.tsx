@@ -26,6 +26,8 @@ const KEEP_REPLIES = 6; // the last agent replies stored with the chat; older on
 type Ui = { messages: Msg[]; removed: Offer[] };
 
 const STALE_PLAN = "Не удалось обновить план — перезагрузите страницу";
+// #677: a quiet pick changes the last message in place only between these stages.
+const IN_PLACE: Stage[] = ["compare", "assemble"];
 
 export const SESSION_KEY = "trip.session";
 const uiKey = (sid: string) => `trip.ui.${sid}`;
@@ -210,6 +212,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [prefs, setPrefs] = useState(loadPrefs); // #19: fields of the last trip, offered as defaults
   const [thinking, setThinking] = useState(false);
+  const [picking, setPicking] = useState(false); // a quiet pick: «думаю» above the plan, not under it
   const [picks, setPicks] = useState<Record<string, string>>({}); // #681: question text → option
   useEffect(() => setPicks({}), [reply]);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -305,15 +308,19 @@ export function App() {
     else end.current?.scrollIntoView?.({ block: "end" });
   }, [ui.messages.length]);
 
-  async function send(message: string) {
+  // quiet: «Выбрать» of a hotel or a leg (#677). No user bubble and no new answer: the last agent
+  // message and the plan under it change in place. The backend takes a hotel pick on compare as
+  // consent (compare → assemble); a reply off the plan stages is a normal turn.
+  async function send(message: string, quiet = false) {
     const m = message.trim();
     if (!m || busy || restoring) return;
     setBusy(true);
     setError(null);
     setNote(null);
     const withUser = { ...ui, messages: [...ui.messages, { role: "user" as const, text: m }] };
-    setUi(withUser);
+    if (!quiet) setUi(withUser);
     setThinking(true);
+    setPicking(quiet);
     const no = loadNo.current;
     try {
       const t0 = Date.now();
@@ -325,17 +332,19 @@ export function App() {
       writeSid(r.session_id);
       setReply(r);
       setPrefs(rememberPrefs(r.plan.spec));
-      update(
-        { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage, reply: r }] },
-        r.session_id,
-      );
+      const at = ui.messages.map((x) => x.role).lastIndexOf("agent");
+      const answer = { role: "agent" as const, text: describe(r), stage: r.stage, reply: r };
+      if (quiet && at >= 0 && reply && IN_PLACE.includes(reply.stage) && IN_PLACE.includes(r.stage)) {
+        update({ ...ui, messages: ui.messages.map((x, i) => (i === at ? answer : x)) }, r.session_id);
+      } else update({ ...withUser, messages: [...withUser.messages, answer] }, r.session_id);
       const first = withUser.messages.find((x) => x.role === "user")?.text ?? m;
       editChats((list) => touchChat(list, r.session_id, first));
-      setText("");
+      if (!quiet) setText("");
     } catch (e) {
       setError(userError(e));
     } finally {
       setThinking(false);
+      setPicking(false);
       setBusy(false);
     }
   }
@@ -488,7 +497,7 @@ export function App() {
     if (done && questions.length === asking.length) void send(joinPicks(asking, next));
     else setPicks(next);
   };
-  const block = reply && !thinking && (
+  const block = reply && (!thinking || picking) && ( // a quiet pick keeps the plan in view (#677)
     <div key="stage-block" className="attach">
       {/* #458: a question whose options only repeat the names of the cards below is redundant */}
       {questions.length > 0 && (
@@ -531,6 +540,7 @@ export function App() {
           (o) => o.kind !== "extra" || !ui.removed.some((p) => p.offer_id === o.for_offer_id),
         )}
         onSend={send}
+        onPick={(t) => void send(t, true)}
         onCart={onCart}
         onCheckout={onCheckout}
       />
@@ -742,10 +752,11 @@ export function App() {
               // One key for the block: it moves under a new last answer without losing its state.
               const old = m.role === "agent" && i !== lastAgent ? m.reply : undefined;
               if (old && reply) return [msg, <EarlierChoices key={`earlier-${i}`} reply={old} current={reply} busy={busy} onSend={send} />];
-              return i === lastAgent && block ? [msg, block] : [msg];
+              const wait = picking && <Thinking key="picking" variant={asked % 2 ? "banana" : "plane"} />;
+              return i === lastAgent && block ? [msg, wait, block] : [msg];
             })}
             {lastAgent < 0 && block}
-            {thinking && <Thinking variant={asked % 2 ? "banana" : "plane"} />}
+            {thinking && !(picking && lastAgent >= 0 && block) && <Thinking variant={asked % 2 ? "banana" : "plane"} />}
             {error && (
               <p className="error" role="alert">
                 {error}
