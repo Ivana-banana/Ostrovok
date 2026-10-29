@@ -2764,6 +2764,32 @@ def _change_booking(prev: ChatReply, sid: str, use_llm: bool, origin: str | None
     return done.model_copy(update={"reply": f"{head} {kept}\n{done.reply}"})
 
 
+BUNDLE_PICK_RE = re.compile(
+    r"^\s*вариант\s+(\d+)\s*$", re.IGNORECASE
+)  # #665: the card of the board
+
+
+def _pick_bundle(old: ChatReply, sid: str, n: int) -> ChatReply:
+    """#665: «вариант N» takes the offers of the N-th whole-trip card; the reply is a hotel pick's."""
+    bs = old.plan.bundles
+    if not 1 <= n <= len(bs):
+        text = f"Вариантов поездки — {len(bs)}, номер {n} среди них нет. {HINTS[old.stage]}"
+        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    ids = {o.offer_id for o in old.plan.offers}
+    plan = old.plan.model_copy(update={"changes": []})
+    plan.selected = keep_refusal(plan, [i for i in bs[n - 1].offer_ids if i in ids])
+    plan.explanations = explain(plan.spec, plan.offers, plan.selected)
+    plan.bundles = bundles(plan.spec, plan.offers, plan.selected)
+    plan.timeline, plan.issues = build_timeline(plan)
+    if any(i.severity == "error" for i in plan.issues):
+        text, stage = _text_blocked(plan), "compare"  # #276: no cart with an error
+    elif not _hotel_selected(plan):
+        text, stage = f"{NO_HOTEL} {HINTS['compare']}", "compare"
+    else:
+        text, stage = _text_assemble(plan), "assemble"
+    return ChatReply(session_id=sid, stage=stage, reply=text, plan=plan, cart=old.cart, llm=False)
+
+
 def step(
     prev: ChatReply | None, sid: str, message: str, use_llm: bool = False, origin: str | None = None
 ) -> ChatReply:
@@ -2819,6 +2845,8 @@ def step(
         llm=False,
     )
     t = message.lower()
+    if prev and old.stage in ("compare", "assemble") and (m := BUNDLE_PICK_RE.match(message)):
+        return _pick_bundle(old, sid, int(m.group(1)))
     booking = old.stage == "checkout" and BOOK_RE.search(t) and not NOT_BOOK_RE.search(t)
     if REFUSE_RE.search(t.replace("ё", "е")) and not booking:
         # The message goes to no model and changes nothing: the plan and the cart stay.
