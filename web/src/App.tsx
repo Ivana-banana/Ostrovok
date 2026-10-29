@@ -159,6 +159,14 @@ const dataNote = (offers: Offer[]) => {
 
 // #596: the backend adds this button to each clarifying question; it sends nothing.
 export const OWN_ANSWER = "Свой вариант";
+export const SKIP_ASK = "Не важно, решите сами";
+
+// #681: the picks of a turn with several questions go as one message; a skipped slot is left out.
+export function joinPicks(order: string[], picks: Record<string, string>, typed = ""): string {
+  const parts = order.map((q) => picks[q]).filter((o) => o && o !== SKIP_ASK && o !== OWN_ANSWER);
+  if (typed.trim()) parts.push(typed.trim());
+  return parts.length ? parts.join(". ") : order.some((q) => picks[q] === SKIP_ASK) ? SKIP_ASK : "";
+}
 
 export function App() {
   const [text, setText] = useState("");
@@ -202,6 +210,8 @@ export function App() {
   const [query, setQuery] = useState("");
   const [prefs, setPrefs] = useState(loadPrefs); // #19: fields of the last trip, offered as defaults
   const [thinking, setThinking] = useState(false);
+  const [picks, setPicks] = useState<Record<string, string>>({}); // #681: question text → option
+  useEffect(() => setPicks({}), [reply]);
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const lastMsg = useRef<HTMLDivElement>(null); // the last agent message: its block sits under it
@@ -463,6 +473,21 @@ export function App() {
   const questions = reply
     ? reply.questions.filter((q) => reply.stage !== "inspire" || !(q.options.length > 0 && q.options.every((o) => cardNames.includes(o))))
     : [];
+  // #681: with several questions a click picks; the answer goes when every question has a pick
+  const asking = questions.filter((q) => q.options.length > 0).map((q) => q.text);
+  const multi = asking.length > 1;
+  const reply1 = (typed = "") => (multi ? joinPicks(asking, picks, typed) : typed);
+  const pick = (q: string, o: string) => {
+    if (o === OWN_ANSWER) box.current?.focus();
+    if (!multi) {
+      if (o !== OWN_ANSWER) void send(o);
+      return;
+    }
+    const next = { ...picks, [q]: o };
+    const done = asking.every((t) => next[t]) && !Object.values(next).includes(OWN_ANSWER);
+    if (done && questions.length === asking.length) void send(joinPicks(asking, next));
+    else setPicks(next);
+  };
   const block = reply && !thinking && (
     <div key="stage-block" className="attach">
       {/* #458: a question whose options only repeat the names of the cards below is redundant */}
@@ -478,7 +503,8 @@ export function App() {
                     type="button"
                     className="chip"
                     disabled={busy}
-                    onClick={() => (o === OWN_ANSWER ? box.current?.focus() : send(o))}
+                    aria-pressed={multi ? picks[q.text] === o : undefined}
+                    onClick={() => pick(q.text, o)}
                   >
                     {o}
                   </button>
@@ -486,6 +512,16 @@ export function App() {
               </div>
             </div>
           ))}
+          {multi && Object.keys(picks).length > 0 && (
+            <button
+              type="button"
+              className="chip send-picks"
+              disabled={busy || !reply1(text)}
+              onClick={() => void send(reply1(text))}
+            >
+              Отправить ответы ({Object.keys(picks).length} из {asking.length})
+            </button>
+          )}
         </div>
       )}
       <Board
@@ -763,7 +799,7 @@ export function App() {
           className="composer"
           onSubmit={(e) => {
             e.preventDefault();
-            void send(text);
+            void send(reply1(text));
           }}
         >
           <div className="box">
@@ -777,7 +813,7 @@ export function App() {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  void send(text);
+                  void send(reply1(text));
                 }
               }}
             />
@@ -786,7 +822,7 @@ export function App() {
               className="send"
               aria-label="Отправить"
               title="Отправить"
-              disabled={busy || restoring || !text.trim()}
+              disabled={busy || restoring || !reply1(text).trim()}
             >
               ↑
             </button>

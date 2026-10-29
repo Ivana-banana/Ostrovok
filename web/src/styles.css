@@ -1303,6 +1303,19 @@ mark {
   border-color: var(--ink);
 }
 
+/* #681: the picked option of a turn with several questions */
+.questions .chip[aria-pressed="true"],
+.questions .send-picks {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 700;
+}
+
+.questions .send-picks {
+  margin-top: 10px;
+}
+
 .hello {
   margin: 18vh auto 0;
   max-width: 560px;
