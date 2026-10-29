@@ -27,7 +27,7 @@ def say(store, text, sid=None):
 
 def test_every_question_ends_with_skip_and_own_answer(store):
     r = say(store, "Хочу отдохнуть")
-    assert r.stage == "clarify" and len(r.questions) == 3  # #630: the trip turn
+    assert r.stage == "clarify" and len(r.questions) == 5  # #666: every open slot at once
     for q in r.questions:
         assert q.options[-2:] == [SKIP_ASK, OWN_ANSWER]
 

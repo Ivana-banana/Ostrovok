@@ -10,7 +10,7 @@ from api.contracts import Question
 from api.store import SessionStore
 
 NULLS = dict.fromkeys(llm.SPEC_FIELDS)
-OWN = "Откуда вы вылетаете? И когда хотите поехать?"
+OWN = "Откуда вы вылетаете? Когда хотите поехать? Кто едет? Какой бюджет?"  # #666: 4 asks
 
 
 class Resp:
