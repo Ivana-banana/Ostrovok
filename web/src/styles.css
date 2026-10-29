@@ -34,7 +34,6 @@
   --warn-soft: #fff1d6;
   --bad: #b3261e;
   --bad-soft: #fde7e5;
-  --noai: #f0a020;
   --backdrop: rgb(20 20 20 / 55%);
 
   --font: "Onest", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
@@ -620,97 +619,6 @@ button.icon {
   color: var(--side-muted);
 }
 
-.badge-noai {
-  display: inline-flex;
-  align-self: flex-start;
-  gap: 6px;
-  align-items: center;
-  background: var(--ink-2);
-  border: 1px solid var(--ink-3);
-  border-radius: var(--r-pill);
-  padding: 4px 10px;
-  color: #cfcfc8;
-}
-
-.badge-noai i {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--noai);
-}
-
-/* #566: the «Синтетика» switch under the mode badge; off by default */
-.switches {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--side-text);
-  cursor: pointer;
-}
-
-.switch input {
-  appearance: none;
-  flex: none;
-  position: relative;
-  width: 30px;
-  height: 18px;
-  margin: 0;
-  border-radius: var(--r-pill);
-  background: var(--ink-3);
-  border: 1px solid #3a3a3a;
-  cursor: inherit;
-}
-
-.switch input::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--side-muted);
-  transition: transform 0.15s;
-}
-
-.switch input:checked {
-  background: var(--acc);
-  border-color: var(--acc);
-}
-
-.switch input:checked::after {
-  background: var(--acc-ink);
-  transform: translateX(12px);
-}
-
-.switch input:focus-visible {
-  outline: 2px solid var(--acc);
-  outline-offset: 2px;
-}
-
-.switch:has(input:disabled) {
-  color: var(--side-muted);
-  cursor: not-allowed;
-}
-
-.switches-note {
-  color: var(--side-muted);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .switch input::after {
-    transition: none;
-  }
-}
-
 .drawer-close,
 .burger {
   display: none !important;
@@ -1063,6 +971,30 @@ button.icon {
 .msg.agent p.aside {
   color: var(--muted);
   font-size: var(--fs-s);
+}
+
+/* #652: folded assumptions and bullet items of a labelled line */
+.msg.agent details.aside {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: var(--fs-s);
+}
+
+.msg.agent details.aside summary {
+  cursor: pointer;
+}
+
+.msg.agent ul.items {
+  margin: 4px 0 10px;
+  padding-left: 20px;
+}
+
+.msg.agent ul.items li {
+  margin: 2px 0;
+}
+
+.msg.agent div.line {
+  margin: 0 0 10px;
 }
 
 /* #468: the proposed trip in the answer, one item per row; details folded under «Подробнее» */
@@ -2662,6 +2594,28 @@ button.param.chosen {
   }
 }
 
+/* ---------- desktop: the chat list folds to a strip (#657) ---------- */
+
+@media (min-width: 1100px) {
+  .app.side-fold {
+    grid-template-columns: 56px minmax(0, 1fr) var(--road-w);
+  }
+
+  .side-fold .side {
+    padding: 14px 6px;
+  }
+
+  .side-fold .side > :not(.brand),
+  .side-fold .brand b {
+    display: none;
+  }
+
+  .side-fold .brand {
+    flex-direction: column;
+    padding: 4px 0 14px;
+  }
+}
+
 /* ---------- tablet: the chat list slides in from the left ---------- */
 
 @media (max-width: 1099px) {
@@ -2688,6 +2642,19 @@ button.param.chosen {
   .drawer-close,
   .burger {
     display: inline-grid !important;
+  }
+
+  button.fold-toggle {
+    display: none;
+  }
+
+  /* #551: a finger needs 44 px; the drawer icons were 21–31 px */
+  .burger,
+  .drawer-close,
+  .side .icon,
+  .hint summary {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .backdrop {

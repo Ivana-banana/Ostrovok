@@ -364,14 +364,16 @@ CANDIDATES = "варианты"
 # A link word makes a route when a later city of the message stands in its clause:
 # «потом в Казань», «потом поедем в Казань»; not «потом решим», «потом на море».
 LINK_RE = re.compile(
-    r"\b(?:потом|затем|далее|оттуда|следом|а\s+после(?:\s+(?:этого|того|чего))?"
-    r"|после\s+(?:этого|того|чего))\b"
+    r"\b(?:потом|затем|далее|дальше|позже|оттуда|следом|а\s+после(?:\s+(?:этого|того|чего))?"
+    r"|после\s+(?:этого|того|чего)|после(?=\s+во?\s))\b"  # #273: «а дальше», «после в Казань»
     r"(?:[\s,]*(?:может быть|может|наверное|скорее всего|возможно|вероятно|пожалуй)(?=[\s,])[\s,]*)?"
     r"([^,.;!?\n]*)"
 )
 ROUTE_RE = re.compile(
-    r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой)\b)|→|->"  # #141: «— что лучше?»
+    r"\s[—–]\s(?!(?:что|как\S*|где|куда|стоит|лучше|выгодн\S*|чем|какой"  # #141: «— что лучше?»
+    r"|подбер\S*|выбер\S*|сравн\S*|посоветуй\S*|предлож\S*)\b)|→|->"  # #273: «— подбери»
 )
+BACK_RE = re.compile(r"\b(?:обратно|домой|назад)\b")  # #273: «потом обратно в Москву»
 DEFAULT_ORIGIN = "Москва"  # the departure city when none is named
 # #351: an unnamed origin is asked when the fit of a whole-trip budget depends on it: the round
 # trip from DEFAULT_ORIGIN costs ROAD_GAP % of the budget or more over the cheapest big hub, or
@@ -475,6 +477,20 @@ def _month_number(word: str) -> int:
     return next(n for k, n in MONTHS.items() if word.startswith(k))  # «март» before «ма»
 
 
+def _own_refusal(m: re.Match | None, joined: bool = False) -> bool:
+    """A «не» after the month refuses it, unless the words between belong to a neighbour (#227).
+
+    «январь или не едем», «в январе, а то не едем»: the «не» is the other branch.
+    «январь подходит декабрь не подходит»: the «не» goes with the other month («и февраль не» joins both, the part is cut at «и»).
+    """
+    if not m:
+        return False
+    skip = (m.groupdict().get("skip") or "").strip()
+    if re.match(r"(?:или|иначе|а\s+то)\b", skip):
+        return False
+    return joined or not re.search(rf"\b{MONTH}", skip)
+
+
 def month_call(text: str, month: int) -> tuple[str, int | None]:
     """What a month in the message means for dates the user named (#190).
 
@@ -494,6 +510,13 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     if negated and re.match(r"\s*,?\s*(?:а|но|лучше|давай)\b", rest):
         other = re.search(rf"\b{MONTH}", rest)  # «не в январе, а в феврале»: the month to ask about
         return "ask", _month_number(other.group(1)) if other else None
+    # «январь нет, лучше февраль», «в январе, нет, в феврале»: no to a month, a second one named (#227)
+    swap = re.match(
+        rf"[\s,—–-]*(?:нет\b|не\s*,)[\s,—–-]*(?:(?:а|но|лучше|давай)\b[\s,—–-]*)?(?:в|во|на)?\s*{MONTH}",
+        rest,
+    )
+    if swap:
+        return "ask", _month_number(swap.group(1))
     unclear = (
         r"\bможет\b|\bможно\b|\bа если\b|\bчто если\b|\bкак насч|\b(?:был|была|были|было)\b|побывал"
         r"|\bли\b"  # «а не поедем ли в феврале» (#220)
@@ -508,6 +531,7 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     # Any other «— не X» stays a refusal: «январь — не пойдёт», «в январе — не»
     neighbour = r"(?=не\s+(?:очень\s+)?(?:дорог|дешев|жарк|шумн|далек)\w*)"
     parts = re.split(rf",|\s[—–-]\s+{neighbour}|\s(?:но|и|а)\s", clause, maxsplit=1)
+    joined = bool(re.search(rf"\sи\s(?:в\s)?{MONTH}", clause))  # «в январе и феврале не поедем»
     near, after = parts[0], parts[1] if len(parts) > 1 else ""
     strong = r"нельзя|отпадает|отпадают|исключен|невозможн"  # a refusal anywhere near the month
     weak = r"отменя|неудобн"  # a refusal only as the whole part (#215)
@@ -522,15 +546,19 @@ def month_call(text: str, month: int) -> tuple[str, int | None]:
     bare = rf"(?:нет|никак|мимо){end}"
     # The weak words follow the month directly or after a filler: «январь или никак» is a move
     filler = r"(?:(?:—|–|-|точно|уже|вообще|совсем|тоже|нам)\s+)*"
-    gone = rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\b|{strong})|{filler}(?:{weak}|{bare}))"
+    gone = rf"\s*(?:(?P<skip>(?:\S+\s+){{0,2}}?)(?:не\b|{strong})|{filler}(?:{weak}|{bare}))"
     # After a comma «не» + a verb and the strong words may follow up to two words («увы, не
     # получится», «увы, нельзя»). A «нет» or «неудобно» deeper in the part belongs to a
     # neighbour: «детей нет», «в декабре никак».
     refusing = (
-        rf"\s*(?:(?:\S+\s+){{0,2}}?(?:не\s+(?:очень\s+)?(?:{verbs})"
+        rf"\s*(?:(?P<skip>(?:\S+\s+){{0,2}}?)(?:не\s+(?:очень\s+)?(?:{verbs})"
         rf"|не\s+{moves}{end}|не{end}|{strong})|(?:{weak})\w*{end}|{bare})"
     )
-    if negated or re.match(gone, near) or re.match(refusing, after):
+    if (
+        negated
+        or _own_refusal(re.match(gone, near))
+        or _own_refusal(re.match(refusing, after), joined)
+    ):
         return "stay", month
     return "move", month
 
@@ -598,6 +626,11 @@ def merge(spec: TripSpec, found: dict, notes: list[str]) -> TripSpec:
     for k, v in found.items():
         data[k] = data[k] + [w for w in v if w not in data[k]] if k == "wishes" else v
     resolve_hotel_budget(data)
+    # #347: a typo note «город: X → Y» lives while Y is the origin or a destination (TRAP-3)
+    now = {data["origin"], *data["destinations"]}
+    data["assumptions"] = [
+        a for a in data["assumptions"] if _label(a) != "город" or a.split(" → ")[-1] in now
+    ]
     if "budget_rub" not in found:  # a budget stated now is not recounted
         resolve_trip_budget(data)
     return TripSpec.model_validate(data)
@@ -1023,12 +1056,22 @@ def _city_in_clause(message: str, low: str, link: re.Match, later: list[str]) ->
             found += [
                 m.start() for n, rx in CAPITAL_PLACES if n == name and (m := rx.search(message))
             ]
-        # any case of a one-word name («Ригу», «Уфу»), or the name as it is written (not known)
-        known = next((pos for pos, w in words if _known(w) == name or w == name.lower()), None)
+        # any case of a one-word name («Ригу», «Уфу»), or the name as it is written (not known).
+        # A case starts with the first letters of the name: no catalogue scan for other words (#273).
+        head = name.lower().replace("ё", "е")[:2]
+        known = next(
+            (
+                pos
+                for pos, w in words
+                if w.startswith(head) and (_known(w) == name or w == name.lower())
+            ),
+            None,
+        )
         if known is not None:
             found.append(known)
-        # the first mention is inside the clause: a city named before the link is no next stop
-        if found and start <= min(found) < end:
+        # the first mention is inside the clause: a city named before the link is no next stop.
+        # «потом обратно в Москву» is the way home, no stop.
+        if found and start <= min(found) < end and not BACK_RE.search(low, start, min(found)):
             return True
     return False
 
@@ -2416,6 +2459,13 @@ def _unknown_place(plan: Plan, message: str, asked: list[Question]) -> tuple[str
     that country are offered; a later message without a country keeps the one of the last question.
     Without a country the reply asks for it: no unrelated cities."""
     spec, place = plan.spec, plan.spec.destinations[0]
+    if country := catalog.country_record(place):  # #551: a country outside the catalogue
+        ask = f"Какой город страны «{country}» берём?"
+        text = (
+            f"«{country}» — это страна, а не город. Её городов {NOT_IN_CATALOG}. "
+            "Назовите город или курорт этой страны — геокодер найдёт его и я соберу поездку."
+        )
+        return f"{text} Или выберите другое направление.", [Question(text=ask)]
     text = (
         f"Направления «{place}» пока {NOT_IN_CATALOG}, "
         "и геокодер его не нашёл (или нет сети). Где это место, не знаю."

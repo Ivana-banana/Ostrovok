@@ -1323,6 +1323,16 @@ def _whole_word_hits(t: str, hits: list[tuple[int, str, int]]) -> list[tuple[int
     return out
 
 
+def _respelled(name: str, notes: list[str]) -> dict | None:
+    """The place of a colloquial name or a typo (#274). A typo is not silent: the note
+    «город: Калининрад → Калининград» (#347, TRAP-3). An alias or a case form makes no note."""
+    place = catalog.respelled(name)
+    note = f"город: {name} → {place['name']}" if place else ""
+    if place and not catalog.is_colloquial(name) and note not in notes:
+        notes.append(note)
+    return place
+
+
 def _places(text: str, t: str, found: dict, notes: list[str], has_destination: bool) -> list[str]:
     """Origin after «из/от», then destinations in text order: known places and capitalized names.
 
@@ -1351,7 +1361,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         ):
             m, name = mm, n
     if m:
-        if home := catalog.respelled(name):
+        if home := _respelled(name, notes):
             name = home["name"]  # «Ебург» -> Екатеринбург (#274)
         else:
             name = _genitive_name(name)
@@ -1462,7 +1472,7 @@ def _places(text: str, t: str, found: dict, notes: list[str], has_destination: b
         place = resolve_place(name)
         if place and place.get("source") == "online":
             name = place["name"]  # the geocoder's name: «Бледе» is the place «Блед» (TRAP-3)
-        elif fixed := catalog.respelled(name):
+        elif fixed := _respelled(name, notes):
             name = fixed["name"]  # «Ебург», «Кисловоцк» are the places of the catalogue (#274)
         if s in pair_sides and place and place["country"] in refused:
             continue  # «Турция или Египет, в Египте уже были»: no Хургада (#151)

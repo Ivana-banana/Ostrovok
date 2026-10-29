@@ -424,7 +424,7 @@ def _reset_llm_breaker() -> None:
 def check_S3(case: dict) -> tuple[bool, str]:
     """A and B reach a booking without a model: key empty (A1) and invalid (A2).
 
-    Rule mode: llm=False, the UI adds «упрощённый режим без ИИ» (web/src/format.ts).
+    Rule mode: llm=False, the UI adds no label.
     """
     quotes = _quotes(case)
     if len(quotes) != 2:
@@ -486,7 +486,7 @@ def check_S3(case: dict) -> tuple[bool, str]:
         f"; не выполнено: {', '.join(fails)}" if fails else "; A1, A2, B без 5xx"
     )
     note += (
-        "; п.2 (плашка «без ИИ») — web/src/App.test.tsx (TRAP-1, make check); "
+        "; п.2 (ответ без модели без пометки) — web/src/App.test.tsx (TRAP-1, make check); "
         "п.1 (docker compose ≤ 10 мин) — командой не проверяется, задача #17"
     )
     return not fails, note

@@ -12,7 +12,7 @@ describe("память предпочтений", () => {
     rememberPrefs(spec({}));
     const p = loadPrefs();
     expect(prefsText(p)).toBe("вылет: Москва, 2 взрослых, ребёнок 5 лет");
-    expect(prefsDraft(p)).toBe("из Москва, 2 взрослых, ребёнок 5 лет. ");
+    expect(prefsDraft(p)).toBe("из Москвы, 2 взрослых, ребёнок 5 лет. ");
   });
 
   it("цены и догадки агента не сохраняются", () => {
@@ -29,4 +29,10 @@ describe("память предпочтений", () => {
     forgetPrefs();
     expect(localStorage.getItem(PREFS_KEY)).toBeNull();
   });
+});
+
+it("origin in the draft is in the genitive case", () => {
+  expect(["Москва", "Казань", "Санкт-Петербург", "Нижний Новгород", "Ростов-на-Дону"].map((origin) => prefsDraft({ origin }))).toEqual([
+    "из Москвы. ", "из Казани. ", "из Санкт-Петербурга. ", "из Нижнего Новгорода. ", "из Ростова-на-Дону. ",
+  ]);
 });
