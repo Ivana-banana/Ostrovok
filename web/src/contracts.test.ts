@@ -63,6 +63,8 @@ const sample: ChatReply = {
         "children_ages": [],
         "price_rub": 19600,
         "synthetic": true,
+        "source": "синтетика",
+        "fetched_at": null,
         "stars": 4,
         "rating": 4.6,
         "meal": "BB",
@@ -88,6 +90,8 @@ const sample: ChatReply = {
         "changes": 0,
         "price_rub": 9800,
         "synthetic": true,
+        "source": "синтетика",
+        "fetched_at": null,
         "pets_allowed": false
       },
       {
@@ -98,6 +102,8 @@ const sample: ChatReply = {
         "arrive_at": "2026-12-11T07:50:00+03:00",
         "price_rub": 600,
         "synthetic": true,
+        "source": "синтетика",
+        "fetched_at": null,
         "hotel_offer_id": "h1",
         "leg_offer_id": "t1",
         "ref": null
@@ -109,6 +115,8 @@ const sample: ChatReply = {
         "for_offer_id": "h1",
         "price_rub": 2500,
         "synthetic": true,
+        "source": "синтетика",
+        "fetched_at": null,
         "tag": "early",
         "at": "10:00:00"
       }
@@ -145,6 +153,8 @@ const sample: ChatReply = {
         "arrive_at": "2026-12-11T07:50:00+03:00",
         "price_rub": 600,
         "synthetic": true,
+        "source": "синтетика",
+        "fetched_at": null,
         "hotel_offer_id": "h1",
         "leg_offer_id": "t1",
         "ref": null
@@ -162,6 +172,8 @@ const sample: ChatReply = {
         "for_offer_id": "h1",
         "price_rub": 2500,
         "synthetic": true,
+        "source": "синтетика",
+        "fetched_at": null,
         "tag": "early",
         "at": "10:00:00"
       }
