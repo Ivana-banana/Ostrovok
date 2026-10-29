@@ -502,13 +502,27 @@ SPEC_VIEWS = {  # LABELS key -> TripSpec as text
 }
 
 
-def _hotel(plan: Plan) -> str:
+def _hotel_parts(plan: Plan) -> list[str]:
     h = next((o for o in _chosen(plan) if o.kind == "hotel"), None)
     if not h:
-        return "не выбран"
-    return (
-        f"{h.title}, {MEALS[h.meal]}, {_refundable(h.cancellation.refundable)}, {_rub(h.price_rub)}"
-    )
+        return []
+    return [h.title, MEALS[h.meal], _refundable(h.cancellation.refundable), _rub(h.price_rub)]
+
+
+def _hotel(old: Plan, new: Plan) -> tuple[str, str]:
+    """Same hotel: only the parts that differ. Another hotel: full lines."""
+    a, b = _hotel_parts(old), _hotel_parts(new)
+    if a and b and a[0] == b[0]:
+        keep = [i for i in range(1, 4) if a[i] != b[i]]
+        a, b = [a[i] for i in keep], [b[i] for i in keep]
+    return ", ".join(a) or "не выбран", ", ".join(b) or "не выбран"
+
+
+_SEATS = re.compile(r", \d+ мест\w*|, [^,]*₽$")
+
+
+def _fares(plan: Plan) -> int:
+    return sum(o.price_rub for o in _chosen(plan) if o.kind == "transport")
 
 
 def _legs(plan: Plan) -> list[str]:
@@ -518,6 +532,8 @@ def _legs(plan: Plan) -> list[str]:
 def _transport(old: Plan, new: Plan) -> tuple[str, str]:
     """Only the legs that differ, so a kept flight is not repeated."""
     a, b = _legs(old), _legs(new)
+    if len(a) == len(b) and [_SEATS.sub("", x) for x in a] == [_SEATS.sub("", x) for x in b]:
+        return _rub(_fares(old)), _rub(_fares(new))
     gone = "; ".join(x for x in a if x not in b) or "нет"
     added = "; ".join(x for x in b if x not in a) or "нет"
     return gone, added
@@ -540,7 +556,7 @@ def changes(old: Plan, new: Plan, old_cart: Cart, new_cart: Cart) -> list[Change
         del views["month"]  # the dates already show the new month
     pairs = [(what, view(old.spec), view(new.spec)) for what, view in views.items()]
     pairs += [
-        ("hotel", _hotel(old), _hotel(new)),
+        ("hotel", *_hotel(old, new)),
         ("transport", *_transport(old, new)),
         ("total_rub", _rub(_total(old)), _rub(_total(new))),
     ]

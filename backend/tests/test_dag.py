@@ -696,3 +696,37 @@ def test_manual_pick_stays_when_nothing_fits_the_budget(store):
     assert ranked_total > 1000  # nothing fits
     assert _hotel(r).title == pick.title and r.plan.explanations[0].why == dag.MANUAL_WHY
     assert "ваш выбор" not in {c.what for c in r.plan.changes}
+
+
+def _cheaper(plan, f):
+    """Copy of the plan: every chosen offer of the plan goes through f."""
+    offers = [f(o) if o.offer_id in plan.selected else o for o in plan.offers]
+    return plan.model_copy(update={"offers": offers})
+
+
+def test_changes_same_hotel_shows_only_the_price(booked):
+    new = _cheaper(
+        booked.plan,
+        lambda o: o.model_copy(update={"price_rub": o.price_rub // 2}) if o.kind == "hotel" else o,
+    )
+    hotel = next(c for c in dag.changes(booked.plan, new, Cart(), Cart()) if c.what == "отель")
+    assert hotel.before.count("₽") == hotel.after.count("₽") == 1
+    assert "," not in hotel.before and "," not in hotel.after
+
+
+def test_changes_same_legs_with_fewer_seats_show_the_fare_totals(booked):
+    def one_seat(o):
+        if o.kind != "transport":
+            return o
+        title = o.title.replace("2 места", "1 место")
+        return o.model_copy(update={"title": title, "price_rub": o.price_rub // 2})
+
+    old = _cheaper(
+        booked.plan,
+        lambda o: (
+            o.model_copy(update={"title": o.title + ", 2 места"}) if o.kind == "transport" else o
+        ),
+    )
+    new = _cheaper(old, one_seat)
+    way = next(c for c in dag.changes(old, new, Cart(), Cart()) if c.what == "дорога")
+    assert way.before.count("₽") == way.after.count("₽") == 1 and "Перелёт" not in way.before
