@@ -178,6 +178,16 @@ export function App() {
       return false;
     }
   }); // the chat list folded to a strip, 1100 px and wider (#657)
+  // #671: 1100 px and wider the trip parameters replace the chat list in the sidebar.
+  const [wide, setWide] = useState(() => window.matchMedia?.("(min-width: 1100px)").matches ?? false);
+  const [showChats, setShowChats] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia?.("(min-width: 1100px)");
+    if (!mq) return;
+    const on = () => setWide(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
   const toggleFold = () => {
     setFold((f) => {
       try {
@@ -407,6 +417,7 @@ export function App() {
 
   function openChat(id: string) {
     setDrawer(false);
+    setShowChats(false);
     if (busy || id === sid) return;
     const prev = { reply, ui };
     setReply(null);
@@ -442,6 +453,7 @@ export function App() {
     setRoad(false);
     document.querySelector(`[data-msg="${n}"]`)?.scrollIntoView?.({ block: "start", behavior: motionOk() ? "smooth" : "auto" });
   };
+  const sideParams = wide && !fold && !showChats && !!reply;
   const cls = ["app", drawer && "drawer-open", road && "road-open", fold && "side-fold"].filter(Boolean).join(" ");
   const synthetic = !reply || !reply.plan.offers.length || reply.plan.offers.some((o) => o.synthetic);
   const groups = groupChats(filterChats(chats, query));
@@ -524,7 +536,21 @@ export function App() {
         <button type="button" className="newchat" onClick={newChat} disabled={busy}>
           ＋ Новый чат
         </button>
-        {chats.length > 0 && (
+        {wide && reply && (
+          <button type="button" className="side-switch" onClick={() => setShowChats((v) => !v)}>
+            {showChats ? "← Параметры поездки" : "Все чаты →"}
+          </button>
+        )}
+        {sideParams && reply && (
+          <div className="side-params">
+            <TripParams
+              spec={reply.plan.spec}
+              locked={busy || reply.stage === "clarify" || reply.stage === "booked"}
+              onSend={send}
+            />
+          </div>
+        )}
+        {!sideParams && chats.length > 0 && (
           <input
             type="search"
             className="search"
@@ -534,7 +560,7 @@ export function App() {
             onChange={(e) => setQuery(e.target.value)}
           />
         )}
-        <nav className="grow" aria-label="Прошлые чаты">
+        <nav className="grow" aria-label="Прошлые чаты" hidden={sideParams}>
           {groups.map((g) => (
             <div key={g.label}>
               <div className="group">{g.label}</div>
@@ -631,7 +657,7 @@ export function App() {
           <h1 title={current?.title}>{current?.title ?? "Новая поездка"}</h1>
         </header>
         <StepCaption stage={reply?.stage ?? null} onOpen={() => setRoad(true)} />
-        {reply && (
+        {reply && !sideParams && (
           <TripParams
             spec={reply.plan.spec}
             locked={busy || reply.stage === "clarify" || reply.stage === "booked"}
