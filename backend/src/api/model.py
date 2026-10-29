@@ -53,6 +53,7 @@ from api.contracts import (
     Plan,
     Question,
     Stage,
+    TransferOffer,
     TransportOffer,
     TripSpec,
 )
@@ -254,6 +255,14 @@ CHANGE_RE = re.compile(rf"^\s*{CHANGE_CHIP}\s*[.!]*\s*$", re.IGNORECASE)
 EDIT_NOTE = "Правка для новой поездки: "
 EDIT_NOTE_RE = re.compile(rf"{EDIT_NOTE}(.*)\.$", re.DOTALL)
 EDIT_ITEM_RE = re.compile(r"«([^«»]*)»")
+# #18: after the voucher «ранний заезд» and «можно заселиться раньше?» ask the hotel's rule, not a
+# move of the dates; «на два дня раньше» and a move verb are the date edit (#503).
+EARLY_RE = re.compile(
+    r"\bранн(?:ий|его|ем|ему|им)\s+(?:заезд\w*|заселени\w*)"
+    r"|\b(?:засел\w+|заех\w+|заезж\w+)\s+(?:по)?раньше|\b(?:по)?раньше\s+(?:засел\w+|заех\w+)"
+)
+MOVE_VERB_RE = re.compile(r"\b(?:сдвин|перенес|перенос|передвин|подвин|измен|поменя)\w*")
+TRANSFER_RE = re.compile(r"\bтрансфер\w*")
 AFTER_BOOKING = (
     "Другое направление, другие даты или состав — это новая поездка. Нажмите "
     f"«{CHANGE_CHIP}»: возьму те же условия и вашу правку. Или нажмите «{RESTART_CHIP}» "
@@ -2518,6 +2527,55 @@ def _booking_edits(prev: ChatReply, message: str) -> list[str]:
     return edits
 
 
+def _after_chip(edits: list[str]) -> Question:
+    """The chips after the voucher; the text carries the edits written so far (#503)."""
+    notes = "; ".join(f"«{e}»" for e in edits)
+    ask = f"Что дальше? {EDIT_NOTE}{notes}." if edits else "Что дальше?"
+    return Question(text=ask, options=[CHANGE_CHIP, RESTART_CHIP])
+
+
+def _after_purchase(prev: ChatReply, low: str) -> str | None:
+    """#18: the reply to «ранний заезд» and «трансфер до отеля» after the voucher, from the
+    booking and the plan offers only (TRAP-4); None for any other message. The voucher stays."""
+    v = prev.voucher
+    if SHIFT_RE.search(low) or MOVE_VERB_RE.search(low) or NO_TRANSFER_RE.search(low):
+        return None
+    hotel = next((o for o in v.items if isinstance(o, HotelOffer)), None)
+    if EARLY_RE.search(low):
+        if hotel is None:
+            return f"Бронь {v.booking_id} без отеля: времени заселения у меня нет."
+        return (
+            f"Бронь {v.booking_id} не меняю. {hotel.title}: заселение с {hotel.check_in:%H:%M} "
+            f"по времени отеля. Ранний заезд — просьба к отелю, гарантии нет. Цены раннего заезда "
+            "в брони нет: её назовёт отель."
+        )
+    if not TRANSFER_RE.search(low):
+        return None
+    if hotel is None:
+        return f"Бронь {v.booking_id} без отеля: трансфер до него не строю."
+    have = {o.offer_id for o in v.items}
+    legs = {o.offer_id for o in v.items if isinstance(o, TransportOffer)}
+    rides = [
+        o
+        for o in prev.plan.offers
+        if isinstance(o, TransferOffer)
+        and o.hotel_offer_id == hotel.offer_id
+        and o.leg_offer_id in legs
+    ]
+    if not rides:
+        return f"Бронь {v.booking_id} не меняю. Трансфера до «{hotel.title}» в данных нет."
+    new = [o for o in rides if o.offer_id not in have]
+    if not new:
+        rows = "\n".join(f"{o.title} — {_at(o.depart_at)}" for o in rides)
+        return f"Трансфер уже в брони {v.booking_id}:\n{rows}"
+    rows = "\n".join(f"{o.title} — {_at(o.depart_at)}, {_priced(o.price_rub, [o])}" for o in new)
+    return (
+        f"В брони {v.booking_id} трансфера нет. Предложение из каталога:\n{rows}\n"
+        "Это была бы отдельная докупка, бронь остаётся как есть. Докупить трансфер в чате пока "
+        "нельзя: корзина без отеля не оформляется."
+    )
+
+
 def _change_booking(prev: ChatReply, sid: str, use_llm: bool, origin: str | None) -> ChatReply:
     """#503: a new trip from the booked one: the same spec and plan, no cart, no voucher, plus
     the edits written before the press. The first booking stays: nothing is cancelled or rebooked."""
@@ -2571,6 +2629,14 @@ def step(
         return fresh.model_copy(update={"reply": f"Начинаем заново.{kept} {fresh.reply}"})
     if prev and prev.voucher and CHANGE_RE.match(message):
         return _change_booking(prev, sid, use_llm, origin)
+    if prev and prev.voucher and (own := _after_purchase(prev, low)):
+        return prev.model_copy(
+            update={
+                "reply": own,
+                "questions": [_after_chip(_booking_edits(prev, ""))],
+                "llm": False,
+            }
+        )
     if prev and prev.voucher:
         text = f"Бронь {prev.voucher.booking_id} уже оформлена."
         if GUEST_DATA_RE.search(message):  # #367: an e-mail or a phone after the booking
@@ -2580,10 +2646,9 @@ def step(
         # #98: no dead end — another city or other dates mean a new trip; the booking stays
         text += f" {AFTER_BOOKING}"
         edits = _booking_edits(prev, message)
-        notes = "; ".join(f"«{e}»" for e in edits)
-        ask = f"Что дальше? {EDIT_NOTE}{notes}." if edits else "Что дальше?"
-        chip = Question(text=ask, options=[CHANGE_CHIP, RESTART_CHIP])
-        return prev.model_copy(update={"reply": text, "questions": [chip], "llm": False})
+        return prev.model_copy(
+            update={"reply": text, "questions": [_after_chip(edits)], "llm": False}
+        )
     old = prev or ChatReply(
         session_id=sid,
         stage="clarify",
