@@ -3,6 +3,7 @@ assume() goes first with «(рекомендуем)». A button is read by the r
 (TRAP-1). The options name no price except the fixed budget ranges (TRAP-4)."""
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -39,9 +40,10 @@ def test_the_default_has_the_mark(store):
 
 
 def test_TRAP_4_no_price_in_the_options(store):
-    r = say(store, "Хочу отдохнуть")
+    r = say(store, "Хочу отдохнуть из Казани в июле")  # origin and month known: the budget is asked
+    assert [q.text for q in r.questions] == ["Какой бюджет на всю поездку?"]
     priced = [o for q in r.questions for o in q.options if "₽" in o]
-    assert priced == ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽"] or priced == []
+    assert priced == ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽"]
 
 
 def test_recommended_button_fills_the_field(store):
@@ -49,6 +51,19 @@ def test_recommended_button_fills_the_field(store):
     after = say(store, NEXT_MONTH + RECOMMENDED, r.session_id)
     assert after.plan.spec.month == date.today().month % 12 + 1
     assert not any(RECOMMENDED.strip() in a for a in after.plan.spec.assumptions)
+
+
+def test_the_mark_is_cut_before_the_rules_read_the_answer(store):
+    # «Казань (рекомендуем)» is read as a destination, bare «Казань» as the origin: the strip in step()
+    r = say(store, "Хочу отдохнуть")
+    s = say(store, "Казань" + RECOMMENDED, r.session_id).plan.spec
+    assert s.origin == "Казань" and s.destinations == []
+
+
+def test_own_answer_matches_the_web():
+    # the web compares the button text with its own constant; a drift makes the button send a text
+    src = (Path(__file__).parents[2] / "web/src/App.tsx").read_text(encoding="utf-8")
+    assert f'export const OWN_ANSWER = "{OWN_ANSWER}";' in src
 
 
 def test_skip_names_the_assumptions(store):
