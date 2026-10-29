@@ -1000,3 +1000,18 @@ def test_bundles_of_a_pick_stay_empty_when_nothing_takes_the_pet():
     assert optimize(s, items).bundles == []
     ids = [o.offer_id for o in items if o.kind in ("hotel", "transport")]
     assert bundles(s, items, ids) == []
+
+
+def test_near_price_default_is_the_refundable_tariff():
+    """#606 (D-045): within 5 % the default is free cancellation and the text says so;
+    farther, or with named priorities, the cheapest wins as before."""
+    cheap = hotel("cheap", 10_000)
+    refund = hotel("refund", 10_900, refundable=True)
+    far = hotel("far", 10_000)
+    pricey = hotel("pricey", 14_000, refundable=True)
+    items = offers([cheap, refund], FLIGHTS)
+    assert hotel_of(spec(), items) == refund
+    why = next(e.why for e in rank(spec(), items)[1] if e.offer_id == "h-refund")
+    assert "выбран тариф с бесплатной отменой" in why
+    assert hotel_of(spec(priorities=["price"]), items) == cheap
+    assert hotel_of(spec(), offers([far, pricey], FLIGHTS)) == far

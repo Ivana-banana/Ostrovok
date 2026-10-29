@@ -58,6 +58,9 @@ DEFAULT_WEIGHTS: dict[Priority, float] = {
     "meal": 0.03,
     "location": 0.02,
 }
+# Team estimate without a source (D-045): with no named priority, a tariff with free cancellation
+# whose trip costs at most this share more than the cheapest trip becomes the default.
+REFUNDABLE_NEAR = 0.05
 MEAL_LEVEL = {"RO": 0, "BB": 1, "HB": 2, "FB": 3, "AI": 4}
 MEAL_TEXT = {
     "RO": "без питания",
@@ -315,6 +318,25 @@ def pets_ok(t: Trip) -> bool:
     return t.hotel.pets_allowed and all(leg.pets_allowed for leg in t.legs)
 
 
+def _prefer_refundable(spec: TripSpec, pool: list[Trip]) -> None:
+    """Near-equal price: the default is a free-cancellation tariff, not the cheapest one (D-045).
+
+    It moves in place the first such trip to the front. A user who named priorities has chosen.
+    """
+    best = pool[0]
+    if spec.priorities or best.hotel.cancellation.refundable:
+        return
+    for i, t in enumerate(pool):
+        if (
+            t.hotel.cancellation.refundable
+            and (t.over, t.slow) == (best.over, best.slow)
+            and len(t.rules) == len(best.rules)
+            and t.total <= best.total * (1 + REFUNDABLE_NEAR)
+        ):
+            pool.insert(0, pool.pop(i))
+            return
+
+
 def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
     """Trips to choose from and whether they break nothing; sorted best first.
 
@@ -343,6 +365,7 @@ def _pool(spec: TripSpec, trips: list[Trip]) -> tuple[list[Trip], bool]:
         pool.sort(key=lambda t: (t.over, demote and t.slow, *t.key))
     else:
         pool.sort(key=lambda t: (demote and t.slow, *t.key))
+    _prefer_refundable(spec, pool)
     return pool, fewest == 0 and not pool[0].over
 
 
@@ -430,6 +453,18 @@ def _hotel_why(spec: TripSpec, t: Trip, pool: list[Trip]) -> str:
     if spec.hotel_budget_rub is not None and not t.hotel_over:
         why += f"; отель в бюджете отеля {_rub(spec.hotel_budget_rub)}"
     order = list(dict.fromkeys(spec.priorities))
+    cheaper = min(pool, key=lambda x: (x.total, x.key))
+    if (
+        not order
+        and h.cancellation.refundable
+        and not cheaper.hotel.cancellation.refundable
+        and cheaper.total < t.total
+    ):
+        why += (
+            f"; выбран тариф с бесплатной отменой: он дороже самого дешёвого невозвратного "
+            f"на {_m(t.total - cheaper.total, t.offers)}, разница в пределах "
+            f"{REFUNDABLE_NEAR:.0%}"
+        )
     if order:
         why += "; ваш порядок важности: " + " → ".join(PRIORITY_TEXT[p] for p in order)
     elif "недорого" in spec.wishes:
