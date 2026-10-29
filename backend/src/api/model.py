@@ -2416,6 +2416,13 @@ def _unknown_place(plan: Plan, message: str, asked: list[Question]) -> tuple[str
     that country are offered; a later message without a country keeps the one of the last question.
     Without a country the reply asks for it: no unrelated cities."""
     spec, place = plan.spec, plan.spec.destinations[0]
+    if country := catalog.country_record(place):  # #551: a country outside the catalogue
+        ask = f"Какой город страны «{country}» берём?"
+        text = (
+            f"«{country}» — это страна, а не город. Её городов {NOT_IN_CATALOG}. "
+            "Назовите город или курорт этой страны — геокодер найдёт его и я соберу поездку."
+        )
+        return f"{text} Или выберите другое направление.", [Question(text=ask)]
     text = (
         f"Направления «{place}» пока {NOT_IN_CATALOG}, "
         "и геокодер его не нашёл (или нет сети). Где это место, не знаю."
