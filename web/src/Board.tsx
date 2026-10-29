@@ -576,7 +576,13 @@ function Transport({ plan, stage, busy, onSend }: {
   );
 }
 
-function Bundles({ plan }: { plan: Plan }) {
+function Bundles({ plan, stage, busy, onSend }: {
+  plan: Plan;
+  stage: Stage;
+  busy: boolean;
+  onSend: (t: string) => void;
+}) {
+  const [picked, setPicked] = useState<string | null>(null); // #665: the card the guest looks at
   if (!plan.bundles.length) return null;
   const title = (id: string) => plan.offers.find((o) => o.offer_id === id)?.title;
   const of = (b: Bundle) => plan.offers.filter((o) => b.offer_ids.includes(o.offer_id));
@@ -586,29 +592,60 @@ function Bundles({ plan }: { plan: Plan }) {
   const heading = plan.bundles.every((b) => b.offer_ids.some((id) => kind(id) === "transport"))
     ? "Варианты поездки целиком"
     : "Варианты проживания: дороги в плане нет";
+  const canPick = stage === "compare" || stage === "assemble";
   return (
     <section className="sec" aria-label={heading}>
       <h2>{heading}</h2>
       <div className="cards">
-        {plan.bundles.map((b) => (
-          <article key={b.bundle_id} className="card">
-            <h3>{b.label}</h3>
-            <p>
-              <Price value={b.total_rub} synthetic={synthetic(b)} source={sourceOf(of(b))} />, в пути {hours(b.travel_hours)}
-            </p>
-            <ul>
-              {b.offer_ids.flatMap((id) => {
-                const t = title(id); // an id outside the plan is no text for the guest (#549)
-                return t ? [<li key={id}>{t}</li>] : [];
-              })}
-            </ul>
-            {b.tradeoffs.length > 0 && (
-              <p className="muted">
-                Минусы: <Money text={b.tradeoffs.join("; ")} synthetic={isSynthetic(of(b))} />
-              </p>
-            )}
-          </article>
-        ))}
+        {plan.bundles.map((b, i) => {
+          const on = canPick && picked === b.bundle_id;
+          const toggle = () => canPick && setPicked(on ? null : b.bundle_id);
+          return (
+            <div key={b.bundle_id} className="bundle">
+              <article
+                className={on ? "card bundle-card picked" : "card bundle-card"}
+                role={canPick ? "button" : undefined}
+                tabIndex={canPick ? 0 : undefined}
+                aria-pressed={canPick ? on : undefined}
+                onClick={toggle}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggle();
+                  }
+                }}
+              >
+                <h3>{b.label}</h3>
+                <p className="bundle-total">
+                  <Price value={b.total_rub} synthetic={synthetic(b)} source={sourceOf(of(b))} />, в пути {hours(b.travel_hours)}
+                </p>
+                <ul className="bundle-items">
+                  {b.offer_ids.flatMap((id) => {
+                    const t = title(id); // an id outside the plan is no text for the guest (#549)
+                    return t ? [<li key={id}>{t}</li>] : [];
+                  })}
+                </ul>
+                {b.tradeoffs.length > 0 && (
+                  <div className="muted">
+                    Минусы:
+                    <ul className="bundle-minus">
+                      {b.tradeoffs.map((x) => (
+                        <li key={x}>
+                          <Money text={x} synthetic={isSynthetic(of(b))} />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </article>
+              {on && (
+                <button type="button" className="bundle-confirm" disabled={busy} onClick={() => onSend(`вариант ${i + 1}`)}>
+                  Подтвердить
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -1130,7 +1167,7 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
     <>
       <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
       <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
-      <Bundles plan={plan} />
+      <Bundles plan={plan} stage={stage} busy={busy} onSend={onSend} />
     </>
   );
   // Folded: the destinations after one is picked; after the cart, the hotels and transport too.

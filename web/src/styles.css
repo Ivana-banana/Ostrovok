@@ -1453,6 +1453,50 @@ mark {
   font-weight: 600;
 }
 
+.bundle {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bundle-card {
+  cursor: pointer;
+}
+
+.bundle-card.picked {
+  border-color: var(--acc);
+  box-shadow: var(--shadow-card);
+}
+
+.bundle-card:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+.bundle-total {
+  font-weight: 600;
+}
+
+.bundle-items,
+.bundle-minus {
+  margin: 2px 0 6px;
+  padding-left: 18px;
+}
+
+.bundle-confirm {
+  width: 100%;
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 8px;
+  background: var(--ink);
+  color: var(--acc);
+  font-weight: 600;
+}
+
+.bundle-confirm:disabled {
+  opacity: 0.5;
+}
+
 .tags {
   margin: 6px 0 8px;
   display: flex;
