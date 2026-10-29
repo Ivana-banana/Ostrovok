@@ -96,3 +96,13 @@ def test_a_remark_after_the_booking_is_no_edit(store):
     r = booked(store)
     again = say(store, "отличные 3 ночи были", r.session_id)
     assert "Правка" not in again.questions[0].text
+
+
+def test_two_edits_show_one_was_now_against_the_booking(store):
+    r = booked(store)
+    say(store, "в Казань", r.session_id)
+    say(store, "с 27 ноября", r.session_id)
+    new = say(store, "Изменить бронь", r.session_id)
+    block = new.reply.split("Было → стало:")[1].split("\n\n")[0]
+    assert "Сочи → Казань" in block  # the city of the booking, not of the middle plan
+    assert "20.11" in block and "27.11" in block  # the dates of the booking -> the final ones
