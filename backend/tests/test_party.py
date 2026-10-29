@@ -183,7 +183,7 @@ def test_party_question_follows_to_the_comparison(store):
     first = planned(store, "Тёплое море в ноябре, недорого, с ребёнком")
     second = say(store, first.plan.destinations[0].name, first.session_id)
     assert second.stage == "compare"
-    assert any(" едет " in q.text for q in second.questions)
+    assert not any(" едет " in q.text for q in second.questions)  # #660: «Не важно» was said
     third = say(store, "Двое взрослых", first.session_id)
     assert third.plan.spec.adults == 2 and third.plan.spec.children_ages == [7]
     assert not any(" едет " in q.text for q in third.questions)
