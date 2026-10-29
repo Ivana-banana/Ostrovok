@@ -131,9 +131,9 @@ BALI = "Бали на 12 ночей вдвоём, перелёт и отель �
 
 def test_far_trip_with_a_whole_budget_asks_the_origin(store):
     """A whole budget the road from Москва eats over half of, and no origin: one question about
-    the origin, not a silent «Москва»."""
+    the origin, not a silent «Москва». #630: the month goes next to it."""
     r = ask(store, BALI)
-    assert r.stage == "clarify" and len(r.questions) == 1
+    assert r.stage == "clarify" and [q.text for q in r.questions[1:]] == [model.MONTH_ASK]
     q = r.questions[0]
     assert "откуда" in q.text.lower() and q.options[0] == "Из Москвы"
     after = say(store, "из Новосибирска", r.session_id)
@@ -196,7 +196,7 @@ def test_neighbour_hub_does_not_ask_the_origin(store, place):
     """#380: Ростов-на-Дону is 318–427 км from these places. Its cheap road measured the
     distance to the place, not the origin: the origin question names no road sums (#436)."""
     r = ask(store, f"{place} в июле вдвоём, 100 тысяч на всё")
-    assert r.stage == "clarify" and len(r.questions) == 1
+    assert r.stage == "clarify" and [q.text for q in r.questions[1:]] == [model.NIGHTS_ASK]
     assert r.questions[0].text.startswith(model.ORIGIN_ASK) and "≈" not in r.questions[0].text
 
 
@@ -297,10 +297,11 @@ def test_counted_children_ask_nothing(store, text):
 
 
 def test_one_turn_the_origin_first(store):
-    """The road over half of the whole budget, no origin and «с детьми»: one turn, the origin
-    first, the children next to it (#436): no second turn of questions."""
+    """The road over half of the whole budget, no origin and «с детьми»: the origin first (#436),
+    the children in the second turn (#630); then the plan."""
     r = ask(store, "Бали на 12 ночей, двое взрослых с детьми, перелёт и отель до 100 тысяч")
-    assert len(r.questions) == 2 and "откуда" in r.questions[0].text.lower()
-    assert "дет" in r.questions[1].text
-    after = ask(store, "Из Москвы, двое детей 5 и 10 лет", r.session_id)
+    assert "откуда" in r.questions[0].text.lower()
+    kids = ask(store, "Из Москвы", r.session_id)
+    assert [q.text for q in kids.questions] == [model.KIDS_ASK]
+    after = ask(store, "двое детей 5 и 10 лет", kids.session_id)
     assert after.stage == "compare" and after.plan.spec.children_ages == [5, 10]

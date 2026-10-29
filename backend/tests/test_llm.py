@@ -238,7 +238,7 @@ def test_llm_work_of_one_turn_has_a_deadline(monkeypatch, store, fake):
 
 def test_llm_fills_what_rules_missed(store, fake):
     """A request the rules cannot read: the LLM names the place, the session goes on."""
-    text = "Махнём куда-нибудь, где тепло, на три ночки, из Москвы"
+    text = "Махнём куда-нибудь, где тепло, на три ночки в июле вдвоём, бюджет 100 тысяч, из Москвы"
     assert extract(text)[0].get("destinations") is None
     fake.spec = lambda p: answer({**NULLS, "destinations": ["Сочи"], "wishes": ["тепло"]})
     r = say(store, text)
@@ -248,7 +248,7 @@ def test_llm_fills_what_rules_missed(store, fake):
 
 def test_llm_hotel_budget_gets_an_assumption_the_user_sees(store, fake):
     """#41: the model reads «на проживание не больше сорока пяти тысяч»; the budget is shown."""
-    text = "Махнём в Сочи на три ночки из Москвы, на проживание не больше сорока пяти тысяч"
+    text = "Махнём в Сочи на три ночки в июле вдвоём из Москвы, на проживание не больше сорока пяти тысяч"
     assert "hotel_budget_rub" not in extract(text)[0]
     fake.spec = lambda p: answer({**NULLS, "destinations": ["Сочи"], "hotel_budget_rub": 45_000})
     r = say(store, text)

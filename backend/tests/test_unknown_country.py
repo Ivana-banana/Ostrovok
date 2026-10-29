@@ -43,7 +43,7 @@ def test_trap_2_the_country_answer_gives_the_cities_of_that_country(store):
 
 
 def test_trap_2_country_in_the_first_message_is_used_at_once(store):
-    r = say(store, "хочу в Ушуайю, Аргентина на 10 дней в январе, из Москвы")
+    r = say(store, "хочу в Ушуайю, Аргентина на 10 дней в январе, из Москвы, вдвоём, до 300 тысяч")
     assert r.stage == "select" and NOT_IN_CATALOG in r.reply
     assert [q.options for q in r.questions] == [["Буэнос-Айрес"]]
     assert not any(c in r.reply for c in UNRELATED)

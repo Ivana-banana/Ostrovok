@@ -10,7 +10,7 @@ from talk import say
 
 from api.contracts import ChatRequest
 from api.extract import extract, is_chip_message
-from api.model import chat, step
+from api.model import SKIP_ASK, chat, step
 from api.store import SessionStore
 
 S3A = "Сочи, 3 ночи с 20 ноября, двое взрослых, отель до 40 тысяч за всё, нужен завтрак."
@@ -512,6 +512,7 @@ def test_trap3_name_with_comma_in_the_first_message_goes_to_inspire():
     r = step(None, "s", "Владимир, хочу на море в ноябре")
     assert r.stage == "clarify" and r.plan.spec.destinations == []  # #436: the origin first
     r = step(r, "s", "Из Москвы")
+    r = step(r, "s", SKIP_ASK)  # #630: the party and the budget turn
     assert r.stage == "inspire" and r.plan.spec.destinations == []
 
 
@@ -549,7 +550,7 @@ def test_trap3_unknown_city_without_a_plan_is_the_destination_and_has_no_note():
 
 
 def test_trap3_unknown_city_after_a_plan_says_so_and_changes_only_the_nights():
-    first = step(None, "s", "Сочи на неделю в декабре")
+    first = step(None, "s", "Сочи на неделю в декабре из Москвы, вдвоём, бюджет 200 тысяч")
     r = step(first, "s", "Ухта, 3 ночи")
     spec = r.plan.spec
     assert spec.destinations == ["Сочи"] and spec.nights == 3
@@ -703,8 +704,8 @@ def test_weekday_respects_the_named_month(tuesday):
 def test_hotel_budget_survives_a_follow_up_with_a_pet(tmp_path):
     """#41: «отель до 40 тысяч» stays on the hotel after the pet changes the pick."""
     store = SessionStore(tmp_path / "s.db")
-    r = chat(ChatRequest(message="Отель до 40 тысяч, Сочи на неделю"), store)
-    r = chat(ChatRequest(session_id=r.session_id, message="с собакой"), store)
+    r = say(store, "Отель до 40 тысяч, Сочи на неделю")
+    r = say(store, "с собакой", r.session_id)
     hotels = [o for o in r.plan.offers if o.kind == "hotel" and o.offer_id in r.plan.selected]
     assert r.plan.spec.hotel_budget_rub == 40_000 and r.plan.spec.budget_rub is None
     assert len(hotels) == 1 and hotels[0].price_rub <= 40_000 and hotels[0].pets_allowed

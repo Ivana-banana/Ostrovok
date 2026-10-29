@@ -5,7 +5,7 @@ may not guess them (TRAP-1: no model here). A wrong guest count is a wrong price
 """
 
 import pytest
-from talk import ask, say
+from talk import ask, planned, say
 
 from api.contracts import ChatRequest
 from api.model import chat
@@ -23,17 +23,19 @@ def kids_questions(reply):
     return [q for q in reply.questions if q.text == KIDS_ASK]
 
 
-def test_inspire_keeps_the_options_and_asks_the_children(store):
-    reply = say(store, "Тёплое море в ноябре, недорого, с детьми")
+def test_inspire_keeps_the_options_after_the_skipped_children_question(store):
+    reply = planned(store, "Тёплое море в ноябре, недорого, с детьми")  # #630: skipped
     assert reply.stage == "inspire"
     assert reply.plan.destinations  # the options are shown at once
     assert reply.plan.spec.children_ages == []
     assert not any("7 лет" in a for a in reply.plan.spec.assumptions)
-    assert len(kids_questions(reply)) == 1
+    assert kids_questions(reply) == []  # #630: asked before the cards and skipped, not again
 
 
-def test_a_named_place_asks_the_children_in_the_first_turn(store):
-    reply = ask(store, "Сочи, если можно с детьми, в ноябре")
+def test_a_named_place_asks_the_children_in_the_party_turn(store):
+    """#630: the trip turn first (откуда, ночи), then the children."""
+    first = ask(store, "Сочи, если можно с детьми, в ноябре")
+    reply = ask(store, "Из Москвы, 7 ночей", first.session_id)
     assert reply.plan.spec.children_ages == []
     assert not any("7 лет" in a for a in reply.plan.spec.assumptions)
     assert len(kids_questions(reply)) == 1

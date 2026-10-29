@@ -6,7 +6,7 @@ import pytest
 from talk import ask, say
 
 from api.extract import extract
-from api.model import ORIGIN_ASK, _genitive
+from api.model import MONTH_ASK, ORIGIN_ASK, _genitive
 from api.store import SessionStore
 
 ORIGIN_NOTE = "откуда: Москва (город вылета не назван)"
@@ -135,7 +135,7 @@ def test_single_negation_still_refuses(text):
 def test_ticket_request_asks_where_not_the_hotel(store, text):
     """The origin goes first in the same turn (#436), the place is the second question."""
     r = ask(store, text)
-    assert r.stage == "clarify" and len(r.questions) == 2
+    assert r.stage == "clarify" and len(r.questions) >= 2
     assert r.questions[0].text.startswith(ORIGIN_ASK)
     q = r.questions[1].text.lower()
     assert "гостиниц" not in q and "куда" in q
@@ -150,7 +150,7 @@ def test_tickets_in_a_budget_ask_nothing_new(store):
 @pytest.mark.parametrize("text", ["Забронируй гостиницу на пятницу", "Забронируй отель на 2 ночи"])
 def test_hotel_booking_asks_the_city(store, text):
     r = ask(store, text)
-    assert len(r.questions) == 2 and "гостиниц" in r.questions[1].text.lower()
+    assert len(r.questions) >= 2 and "гостиниц" in r.questions[1].text.lower()
 
 
 # ---------------------------------------------------------------- 4. «эта пятница» on a Friday
@@ -179,7 +179,7 @@ def test_bare_friday_on_a_friday_stays_the_next_one(monkeypatch):
 def test_road_over_half_of_the_budget_asks_the_origin(store):
     """Бали, 100 000 ₽ on all: the cheapest Москва round trip is over half of it (offers)."""
     r = ask(store, "Бали на 12 ночей вдвоём, перелёт и отель до 100 тысяч")
-    assert r.stage == "clarify" and len(r.questions) == 1
+    assert r.stage == "clarify" and [q.text for q in r.questions[1:]] == [MONTH_ASK]
     assert r.questions[0].options[0] == "Из Москвы"
 
 
@@ -202,8 +202,8 @@ def test_egypt_and_turkey_are_alike(store, text):
 def test_without_a_budget_the_origin_is_asked_without_sums(store):
     """#436: no budget, the origin is still asked; «не важно» leaves Москва as an assumption."""
     r = ask(store, "Бали на 12 ночей вдвоём")
-    assert len(r.questions) == 1 and "≈" not in r.questions[0].text
-    after = ask(store, "не важно", r.session_id)
+    assert r.questions[0].text.startswith(ORIGIN_ASK) and "≈" not in r.questions[0].text
+    after = say(store, "не важно", r.session_id)  # #630: the budget turn gets «решите сами»
     assert after.questions == [] and ORIGIN_NOTE in after.plan.spec.assumptions
 
 

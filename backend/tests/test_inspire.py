@@ -4,7 +4,7 @@ Rules only, no model (TRAP-1). The requests are the jury and operator comments o
 """
 
 import pytest
-from talk import say
+from talk import planned, say
 
 from api import catalog, inspire
 from api.contracts import ChatRequest, TripSpec
@@ -20,7 +20,7 @@ def store(tmp_path):
 
 
 def inspired(store, text):
-    r = say(store, text)
+    r = planned(store, text)  # #630: the open slots are assumed
     assert r.stage == "inspire" and r.plan.spec.destinations == [], r.reply
     assert 2 <= len(r.plan.destinations) <= 4
     return r.plan.destinations

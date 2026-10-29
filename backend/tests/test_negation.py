@@ -6,7 +6,7 @@ assumption «исключено: …» (no TripSpec field), so it holds for the 
 """
 
 import pytest
-from talk import say
+from talk import ask, say
 
 from api.extract import excluded_places, extract, is_excluded
 from api.inspire import suggest_destinations
@@ -134,9 +134,11 @@ def test_refused_places_are_not_booked_or_offered(store, text):
 
 
 def test_clarify_first_keeps_the_refusal(store):
-    r = say(store, "Едем в ноябре. В Турции и Египте уже были, не хочется.")
+    r = ask(store, "Едем в ноябре. В Турции и Египте уже были, не хочется.")
     assert r.stage == "clarify"
-    r = say(store, "ноябрь, до 100 000 ₽", r.session_id)
+    r = ask(store, "Из Москвы, 7 ночей", r.session_id)
+    assert r.stage == "clarify"  # #630: the party and the budget
+    r = say(store, "Двое взрослых, до 100 000 ₽", r.session_id)
     assert r.stage == "inspire" and not {"Анталия", "Хургада"} & set(names(r))
 
 

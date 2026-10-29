@@ -11,7 +11,24 @@ from api.main import app
 
 client = TestClient(app)
 SOON = date.today() + timedelta(days=60)
-CHAT = "Хочу в Сочи из Москвы на 4 ночи вдвоём, с " + SOON.strftime("%d.%m.%Y")
+GEN = [
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+]
+# #630: the month and the budget are named, so the first reply is a plan, not a question
+CHAT = (
+    f"Хочу в Сочи из Москвы на 4 ночи вдвоём, бюджет 200 тысяч, с {SOON.day} {GEN[SOON.month - 1]}"
+)
 
 
 class Broken:

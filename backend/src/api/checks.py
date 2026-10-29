@@ -43,7 +43,7 @@ from api.contracts import (
 )
 from api.fixtures import WARM_WATER_C
 from api.live_hotels import Live101Hotels
-from api.model import NOT_IN_CATALOG, ORIGIN_ASK
+from api.model import BUDGET_ASK, MAX_ASKS, NOT_IN_CATALOG, ORIGIN_ASK, RECOMMENDED, SKIP_ASK
 from api.offers import (
     _norm,
     find_offers,
@@ -194,14 +194,38 @@ def _origin_only(r: ChatReply | None) -> bool:
     )
 
 
+def _asks_origin(r: ChatReply | None) -> bool:
+    return (
+        r is not None
+        and r.stage == "clarify"
+        and any(q.text.startswith(ORIGIN_ASK) for q in r.questions)
+    )
+
+
 def _post_from_origin(
     client: TestClient, text: str, sid: str | None = None
 ) -> tuple[int, ChatReply | None]:
-    """_post; the origin question of #436 gets its first chip, as in _walk."""
+    """_post; the origin question of #436 gets its first chip, as in _walk. The other questions
+    of #630 get «Не важно, решите сами»: the plan has the assumptions it had before #630."""
     code, r = _post(client, text, sid)
-    if _origin_only(r):
-        code, r = _post(client, r.questions[0].options[0], r.session_id)
+    if _asks_origin(r):
+        origin = next(q for q in r.questions if q.text.startswith(ORIGIN_ASK))
+        code, r = _post(client, origin.options[0], r.session_id)
+    if r is not None and r.stage == "clarify" and r.questions:
+        code, r = _post(client, SKIP_ASK, r.session_id)
     return code, r
+
+
+def _answer(r: ChatReply) -> str:
+    """#630: the eval user takes the recommended button of each question, else the first one.
+    The budget stays open: with «до 50 000 ₽» the S10 check no longer sees a lost dog
+    (test_s10_fails_when_the_product_does_not_extract_the_dog)."""
+    picks = [
+        next((o for o in q.options if o.endswith(RECOMMENDED)), q.options[0])
+        for q in r.questions
+        if q.options and q.text != BUDGET_ASK
+    ]
+    return " ".join(picks) or "пока не знаю"
 
 
 def _walk(
@@ -211,11 +235,11 @@ def _walk(
     text: str,
     *,
     stop: tuple[str, ...] = ("booked", "select"),
-    limit: int = 8,
+    limit: int = 10,  # #630: up to two question turns before the first plan
     attempt: bool = True,
     record: bool = True,
 ) -> Run:
-    """POST /api/chat up to `stop`; clarify gets the first option of each question.
+    """POST /api/chat up to `stop`; clarify gets the recommended or first option (_answer).
 
     The session is in RUNS from the first message on, so a check that stops early cannot hide
     a failed session from the metrics.
@@ -238,7 +262,7 @@ def _walk(
         if dead_end:  # nothing takes the pet there (#131): the user takes the offered city
             text = r.questions[0].options[0]
         elif r.stage == "clarify":
-            text = " ".join(q.options[0] for q in r.questions if q.options) or "пока не знаю"
+            text = _answer(r)
         elif r.stage in ANSWERS:
             text = ANSWERS[r.stage]
         else:
@@ -333,7 +357,8 @@ def _s1_items(r: ChatReply, asked: int, messages: int) -> dict[str, bool]:
     bad = [d for d in dests if d.travel_hours > MAX_FLIGHT_H or (d.water_c or 0) < WARM_WATER_C]
     stated = asked > 0 or bool(r.plan.spec.assumptions)
     return {
-        "1": bool(dests) and stated and asked <= 2 and messages <= 1,
+        # #630 (D-046): up to MAX_ASKS questions in up to two turns before the first plan
+        "1": bool(dests) and stated and asked <= MAX_ASKS and messages <= 2,
         "2": 2 <= len(dests) <= 4 and complete,
         "3": all(d.violates for d in bad),
         "4": all(d.synthetic for d in dests) and "синтетика" in r.reply,

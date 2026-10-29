@@ -2,7 +2,7 @@
 
 import pytest
 from fastapi.testclient import TestClient
-from talk import say
+from talk import ask, say
 
 from api import catalog
 from api.extract import extract
@@ -27,10 +27,13 @@ def test_s1_goes_ahead_with_stated_assumptions(store):
 
 
 def test_vague_request_asks_at_most_two_questions_once(store):
-    r = say(store, "привет")
-    assert r.stage == "clarify" and len(r.questions) == 2
+    """#630: the trip turn, then the party and the budget turn, then no more questions."""
+    r = ask(store, "привет")
+    assert r.stage == "clarify" and len(r.questions) == 3
     assert all(q.options for q in r.questions)
-    again = say(store, "пока не знаю", r.session_id)
+    party = ask(store, "пока не знаю", r.session_id)
+    assert party.stage == "clarify" and len(party.questions) == 2
+    again = ask(store, "пока не знаю", r.session_id)
     assert again.stage != "clarify" and again.questions == []
     assert any(a.startswith("бюджет:") for a in again.plan.spec.assumptions)
 
@@ -120,8 +123,9 @@ def test_unknown_session_is_404(store):
     try:
         client = TestClient(app)
         assert client.get("/api/session/nope").status_code == 404
-        sid = client.post("/api/chat", json={"message": S1}).json()["session_id"]
-        assert client.get(f"/api/session/{sid}").json()["stage"] == "inspire"
+        body = client.post("/api/chat", json={"message": S1}).json()
+        sid = body["session_id"]  # #630: the first reply may be a question
+        assert client.get(f"/api/session/{sid}").json()["stage"] == body["stage"]
     finally:
         app.dependency_overrides.clear()
 

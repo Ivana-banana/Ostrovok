@@ -1,7 +1,7 @@
 """Agent: the stage state machine of ADR-0001 (T2, #6).
 
 One user message moves the session as far as the known TripSpec allows:
-- clarify: only the first reply of a session, at most 2 blocking questions;
+- clarify: before the first plan, at most 5 questions in at most two replies (#630);
 - inspire: no destination yet, 2–4 destinations to choose from;
 - select: the destination is known, but no offers were found;
 - compare: offers are found and ranked, the best set is pre-selected;
@@ -881,7 +881,7 @@ def bare_origin(message: str, has_place: bool = True) -> str | None:
 
 def kids_ask() -> list[Question]:
     options = ["Один ребёнок, 5 лет", "Двое детей, 5 и 10 лет", "Трое детей, 3, 6 и 10 лет"]
-    return [Question(text="Сколько детей едет и сколько им лет?", options=options)]
+    return [Question(text=KIDS_ASK, options=options)]
 
 
 def children_question(spec: TripSpec) -> list[Question]:
@@ -907,51 +907,94 @@ def with_buttons(q: Question, default: str | None = None) -> Question:
     return q.model_copy(update={"options": [*marked, SKIP_ASK, OWN_ANSWER]})
 
 
-def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
+NIGHTS_ASK = "На сколько ночей?"
+WHO_ASK = "Кто едет — сколько взрослых?"
+BUDGET_ASK = "Какой бюджет на всю поездку?"
+KIDS_ASK = "Сколько детей едет и сколько им лет?"
+MAX_ASKS = 5  # #630: never more questions before the first plan
+ONE_TURN = 2  # this many questions or fewer go in one turn
+# #630: the second turn asks these; a turn that asked one of them is the last question turn
+PARTY_TEXTS = {PARTY_ASK, PARTY_ASK_KIDS, WHO_ASK, KIDS_ASK, BUDGET_ASK}
+
+
+def blocking_questions(spec: TripSpec, message: str = "", asked: int = 0) -> list[Question]:
     """The questions of _blocking_questions with the buttons of #596."""
     defaults = {
         PARTY_ASK: "Двое взрослых",
         PARTY_ASK_KIDS: "Двое взрослых",
+        WHO_ASK: "Двое взрослых",
         MONTH_ASK: MONTH_NAMES[date.today().month % 12],
+        NIGHTS_ASK: f"{DEFAULT_NIGHTS} ночей",
     }
     return [
         with_buttons(q, defaults.get(q.text)) if q.options else q
-        for q in _blocking_questions(spec, message)
+        for q in _blocking_questions(spec, message, asked)
     ]
 
 
-def _blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
-    """At most 2 questions in one turn of a new session; the rest becomes assumptions named in
-    the reply.
+def _slots(spec: TripSpec, message: str) -> tuple[list[Question], list[Question]]:
+    """#630: the open slots in the order откуда → когда → ночи → кто → бюджет; a slot the
+    message named is skipped. The first list is the trip, the second is the party and its budget.
 
     #436: an unnamed origin is the first question (origin_question), not a silent Москва. Own
-    tickets need none. Next to it goes one question of the old order (#302): the city of a hotel
-    request (F14) or the place of a booking (#351); the children without a number (F25); the
-    adults next to a child (#112). The guest count sets the price and the booking, so it is
-    asked, not assumed. A message with neither a place nor a wish asks the month, then the
-    budget. Without a place the adults question only goes next to the options
-    (party_question), it never replaces them.
+    tickets need none. Next to it goes the city of a hotel request (F14) or the place of a
+    booking (#351). «Кто»: the children without a number (F25), the adults next to a child
+    (#112), else the adults. «недорого» names the budget: it is not asked.
     """
-    origin = origin_question(spec)  # #436: the origin goes first, in the same turn as the rest
+    trip = origin_question(spec)
     if not (spec.destinations or spec.wishes) and asks_stay(message):
-        return [*origin, Question(text=STAY_ASK, options=[])]
-    if not (spec.destinations or spec.wishes) and asks_booking(message):
-        return [*origin, Question(text=BOOKING_ASK, options=[])]  # #351: tickets
-    kids = children_question(spec)
-    if spec.destinations:
-        return [*origin, *(kids or party_question(spec))[:1]]
-    if spec.wishes or spec.max_travel_hours is not None:
-        # #365 (C21): «недалеко» is a wish of the road: the agent shows the near places at once
-        return origin
-    out = [*origin]
+        trip.append(Question(text=STAY_ASK, options=[]))
+    elif not (spec.destinations or spec.wishes) and asks_booking(message):
+        trip.append(Question(text=BOOKING_ASK, options=[]))  # #351: tickets
     if not spec.month and not spec.date_from:
         m = date.today().month
         options = [MONTH_NAMES[(m + i) % 12] for i in range(3)]  # «не знаю»: SKIP_ASK
-        out.append(Question(text=MONTH_ASK, options=options))
-    if spec.budget_rub is None and spec.hotel_budget_rub is None:
+        trip.append(Question(text=MONTH_ASK, options=options))
+    if not spec.nights and not spec.date_to:
+        trip.append(Question(text=NIGHTS_ASK, options=["3 ночи", "7 ночей", "10 ночей"]))
+    party = (children_question(spec) or party_question(spec) or who_question(spec))[:1]
+    if spec.budget_rub is None and spec.hotel_budget_rub is None and "недорого" not in spec.wishes:
         options = ["до 50 000 ₽", "до 100 000 ₽", "до 200 000 ₽"]  # «не важно»: SKIP_ASK
-        out.append(Question(text="Какой бюджет на всю поездку?", options=options))
-    return out[:2]  # the origin first; a budget not asked is an assumption the user sees
+        party.append(Question(text=BUDGET_ASK, options=options))
+    return trip, party
+
+
+def _blocking_questions(spec: TripSpec, message: str = "", asked: int = 0) -> list[Question]:
+    """#630: at most MAX_ASKS questions before the first plan, in at most two turns.
+
+    asked: the number of questions of the first turn; then only the party and the budget are
+    left to ask. ONE_TURN questions or fewer go in one turn. A slot not asked is an assumption
+    the user sees in the plan.
+    """
+    trip, party = _slots(spec, message)
+    if asked:
+        return party[: max(MAX_ASKS - asked, 0)]
+    trip = trip[:MAX_ASKS]
+    party = party[: MAX_ASKS - len(trip)]
+    if not trip or len(trip) + len(party) <= ONE_TURN:
+        return [*trip, *party]
+    return trip
+
+
+def who_question(spec: TripSpec) -> list[Question]:
+    """#630: no word about the party: 2 adults stay an assumption until the user answers."""
+    if spec.children_ages or KIDS_UNKNOWN in spec.assumptions:
+        return []
+    if PARTY_UNKNOWN not in spec.assumptions:
+        return []
+    options = ["Один взрослый", "Двое взрослых", "Трое взрослых"]
+    return [Question(text=WHO_ASK, options=options)]
+
+
+def second_turn(prev: ChatReply | None, old: ChatReply, message: str) -> int:
+    """#630: the number of questions of a first turn that asked the trip only; 0 when no
+    second question turn is due. «Не важно, решите сами» ends the questions."""
+    if prev is None or old.stage != "clarify" or message.strip() == SKIP_ASK:
+        return 0
+    texts = {q.text for q in old.questions}
+    if not texts or texts & PARTY_TEXTS or any(SAME_PLACE in t for t in texts):
+        return 0  # #453: after the origin is asked again, the plan comes with its line
+    return len(old.questions)
 
 
 def assume(spec: TripSpec) -> TripSpec:
@@ -3216,7 +3259,10 @@ def step(
             session_id=sid, stage=stage, reply=text, plan=plan, cart=cart, llm=used, **kw
         )
 
-    if prev is None and (questions := blocking_questions(spec, message)):
+    # #630: «кто едет» was asked in the turn before: the cards do not ask it again
+    party_asked = old.stage == "clarify" and bool({q.text for q in old.questions} & PARTY_TEXTS)
+    asked = second_turn(prev, old, message)  # #630
+    if (prev is None or asked) and (questions := blocking_questions(spec, message, asked)):
         text = _text_clarify(questions)
         if use_llm and (own := llm.rewrite_questions(questions, deadline)):
             text, used = own, True  # checked against the question texts (TRAP-4)
@@ -3266,12 +3312,13 @@ def step(
                 if no_country
                 else ""
             )
-            ask = children_question(spec) or party_question(spec)  # next to the options
+            ask = [] if party_asked else children_question(spec) or party_question(spec)
             return reply("inspire", plan, sorry + _text_inspire(plan), questions=ask)
         gone_text = f"Убираю «{', '.join(gone)}» из плана, корзину очищаю. " if gone else ""
         question = Question(text="Куда поедем?", options=[d.name for d in dests])
         text = gone_text + _text_inspire(plan)
-        return reply("inspire", plan, text, Cart(), questions=[question, *party_question(spec)])
+        party = [] if party_asked else party_question(spec)
+        return reply("inspire", plan, text, Cart(), questions=[question, *party])
 
     if month_note and not (dirty_nodes(old.plan.spec, spec) or shifts or picks or lines):
         # Nothing else changed: the answer is about the dates only.
@@ -3396,7 +3443,7 @@ def step(
             # the reply says so, the new city never comes silently (#93).
             gone, now = ", ".join(swapped), spec.destinations[0]
             text = f"«{gone}» {NOT_IN_CATALOG}. По вашему выбору — {now}.\n{text}"
-        questions = party_question(spec)
+        questions = [] if party_asked else party_question(spec)
         if route:
             notice, chips = route_reply(spec.destinations, route)
             return reply("compare", plan, f"{notice}\n{text}", cart, questions=[*chips, *questions])

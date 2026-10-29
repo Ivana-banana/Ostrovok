@@ -87,8 +87,8 @@ def test_candidates_and_one_city_have_no_route_notice(store, text):
 
 
 def test_route_with_a_child_shows_the_notice_after_the_party_question(store):
-    r = say(store, ROUTE + " с ребёнком 5 лет")
-    assert r.stage == "clarify"
+    r = say(store, ROUTE + " в ноябре с ребёнком 5 лет")
+    assert r.stage == "clarify"  # #630: the party and the budget in one turn
     r = say(store, "Один взрослый", r.session_id)
     assert r.stage == "compare"
     assert "В плане только: Санкт-Петербург" in r.reply

@@ -27,7 +27,7 @@ def test_dropped_default_origin_is_told(store, text, dests):
     r = ask(store, text)
     assert r.stage == "clarify" and r.plan.spec.destinations == dests
     assert any(TOLD in a and "«из …»" in a for a in r.plan.spec.assumptions)
-    r = ask(store, "пока не знаю", r.session_id)
+    r = say(store, "пока не знаю", r.session_id)  # #630: the party turn gets «решите сами»
     assert r.plan.spec.destinations == dests and r.plan.spec.origin == "Москва"
     assert any(TOLD in a and "«из …»" in a for a in r.plan.spec.assumptions)
 
