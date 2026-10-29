@@ -33,9 +33,8 @@ def test_inspire_keeps_the_options_after_the_skipped_children_question(store):
 
 
 def test_a_named_place_asks_the_children_in_the_party_turn(store):
-    """#630: the trip turn first (откуда, ночи), then the children."""
-    first = ask(store, "Сочи, если можно с детьми, в ноябре")
-    reply = ask(store, "Из Москвы, 7 ночей", first.session_id)
+    """#666: the children are asked in the first turn, next to откуда and ночи."""
+    reply = ask(store, "Сочи, если можно с детьми, в ноябре")
     assert reply.plan.spec.children_ages == []
     assert not any("7 лет" in a for a in reply.plan.spec.assumptions)
     assert len(kids_questions(reply)) == 1

@@ -118,7 +118,7 @@ def test_unknown_city_answer_has_two_or_three_variants(store):
 def test_restart_drops_the_plan_on_any_stage(store, stage):
     r = to_stage(store, stage)
     r = say(store, "начать заново", r.session_id)
-    assert r.stage == "clarify" and len(r.questions) == 2
+    assert r.stage == "clarify" and len(r.questions) == 4  # #666: когда, ночи, кто, бюджет
     assert r.plan.spec.destinations == [] and r.plan.offers == []
     assert r.cart.items == [] and r.voucher is None
     assert say(store, "Сочи", r.session_id).stage == "compare"  # the session works again

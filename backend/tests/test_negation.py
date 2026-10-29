@@ -136,9 +136,7 @@ def test_refused_places_are_not_booked_or_offered(store, text):
 def test_clarify_first_keeps_the_refusal(store):
     r = ask(store, "Едем в ноябре. В Турции и Египте уже были, не хочется.")
     assert r.stage == "clarify"
-    r = ask(store, "Из Москвы, 7 ночей", r.session_id)
-    assert r.stage == "clarify"  # #630: the party and the budget
-    r = say(store, "Двое взрослых, до 100 000 ₽", r.session_id)
+    r = say(store, "Из Москвы, 7 ночей. Двое взрослых, до 100 000 ₽", r.session_id)  # #666
     assert r.stage == "inspire" and not {"Анталия", "Хургада"} & set(names(r))
 
 

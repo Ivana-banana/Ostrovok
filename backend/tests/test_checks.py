@@ -275,7 +275,7 @@ def test_metric_counts_booked_sessions_questions_and_first_recommendation_time()
         checks._walk(client, "T", "до брони", exact)
         checks._walk(client, "T", "до выбора", exact, stop=("compare",))
         vague = checks._walk(client, "T", "без места и желания", "привет")  # all 5 slots, #630
-    assert vague.asked == checks.MAX_ASKS
+    assert vague.asked == 5  # #666: откуда, когда, ночи, кто, бюджет in one turn
     m = checks.metric("visible")
     assert m["system"] == 0.67 and m["baseline"] == 0.0
     lines = m["details"]
