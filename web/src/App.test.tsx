@@ -787,7 +787,7 @@ suite("чат как в мессенджере", () => {
     const note = box.querySelector("[aria-label='Как в прошлый раз']")!;
     expect(note.textContent).toContain("вылет: Казань, 3 взрослых");
     await click("Подставить");
-    expect(box.querySelector("textarea")!.value).toContain("Казань");
+    expect(box.querySelector("textarea")!.value).toContain("из Казани");
     const reply = structuredClone(booked);
     routes["POST /api/chat"] = () => ({ status: 200, body: reply });
     await click("Отправить");
