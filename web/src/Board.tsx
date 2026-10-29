@@ -60,8 +60,11 @@ const PRICE_SOURCES: Record<string, { chip: string; hint: string }> = {
 const OTHER_SOURCE = { chip: "реальные данные", hint: "цена не синтетическая" };
 // A sum of real and synthetic prices (TRAP-7, #567): neither «синтетика» nor a source alone.
 const MIXED = "часть цен — синтетика";
-export type PriceSource = { chip: string; hint: string };
-type Priced = { kind: string; mode?: string; synthetic?: boolean };
+export type PriceSource = { chip: string; hint: string; at?: string }; // at: the fetch time (#469)
+type Priced = { kind: string; mode?: string; synthetic?: boolean; fetched_at?: string | null };
+// «08:41»: the local time of the user when the provider answered (#469).
+const fetchedAt = (iso: string) =>
+  new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 const keyOf = (o: Priced) => (o.kind === "transport" ? (o.mode ?? "flight") : o.kind);
 export const sourceOf = (items: Priced[]): PriceSource => {
   const real = items.filter((o) => !o.synthetic);
@@ -69,9 +72,10 @@ export const sourceOf = (items: Priced[]): PriceSource => {
     return { chip: MIXED, hint: `реальные цены: ${sourceOf(real).chip}; остальные — синтетика` };
   }
   const kinds = [...new Set(items.map(keyOf))];
-  if (kinds.length === 1) return PRICE_SOURCES[kinds[0]] ?? OTHER_SOURCE;
+  const at = items.map((o) => o.fetched_at).filter((t): t is string => !!t).sort().at(-1);
+  if (kinds.length === 1) return { ...(PRICE_SOURCES[kinds[0]] ?? OTHER_SOURCE), at };
   const known = kinds.map((k) => PRICE_SOURCES[k] ?? OTHER_SOURCE);
-  return { chip: known.map((x) => x.chip).join(" + "), hint: known.map((x) => x.hint).join("; ") };
+  return { chip: known.map((x) => x.chip).join(" + "), hint: known.map((x) => x.hint).join("; "), at };
 };
 
 // Every price carries the "синтетика" label when the data is mock (TRAP-7); a real price carries
@@ -85,6 +89,9 @@ export function Price({ value, synthetic = true, source }: { value: number; synt
         <span className={source?.chip === MIXED ? "synth" : "synth synth-real"} title={(source ?? OTHER_SOURCE).hint}>
           {(source ?? OTHER_SOURCE).chip}
         </span>
+      )}
+      {!synthetic && source?.at && source.chip !== MIXED && (
+        <span className="synth-time" title="когда источник ответил"> · {fetchedAt(source.at)}</span>
       )}
     </span>
   );
@@ -1159,11 +1166,6 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   );
   return (
     <div className="board">
-      {!reply.llm && (
-        <p className="badge" role="note">
-          без ИИ — упрощённый режим: модель недоступна, агент работает по правилам
-        </p>
-      )}
       {destinationsInChat(stage) && destinations}
       {voucher && <VoucherView voucher={voucher} />}
       {past && (

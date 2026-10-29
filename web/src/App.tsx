@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, cartAction, chat, checkout, getMode, getSession } from "./api";
+import { ApiError, cartAction, chat, checkout, getSession } from "./api";
 import { Board, EarlierChoices, PriorityRow, TripParams } from "./Board";
 import { MIN_THINK_MS, PRODUCT_NAME, motionOk } from "./brand";
 import { AgentText, Roadmap, STEPS, StepCaption, Thinking, stepOf } from "./Chat";
-import type { ChatReply, Guest, LlmMode, Offer, Stage } from "./contracts";
-import { SOURCES, brief, cartLine, describe, withoutNoAi } from "./format";
+import type { ChatReply, Guest, Offer, Stage } from "./contracts";
+import { SOURCES, brief, cartLine, describe } from "./format";
 import {
   type ChatEntry,
   filterChats,
@@ -17,14 +17,7 @@ import {
 } from "./history";
 import { Mascot, moodOf } from "./Mascot";
 import { loadPrefs, prefsDraft, prefsText, rememberPrefs, forgetPrefs } from "./prefs";
-import {
-  type ModeState,
-  SourceSwitches,
-  type Switches,
-  loadSwitches,
-  requested,
-  saveSwitches,
-} from "./Sources";
+import { requested } from "./Sources";
 
 // stage: the stage after an agent message; the roadmap links a done step to it (#434).
 // An agent message keeps its reply: the choices under it stay after «ещё», a reload or a chat switch.
@@ -138,8 +131,6 @@ const userError = (e: unknown) =>
 
 const EMPTY_UI: Ui = { messages: [], removed: [] };
 
-export const MODE_RETRY_MS = 2000; // #534: the second GET /api/mode
-
 // The help texts name the real sources found in the offers of the plan (#547, TRAP-7).
 const HOTELS_REAL = "Отели — 101hotels (цена «от» на сегодня)";
 const FLIGHTS_REAL = "перелёты — Авиасейлс (цены из кэша поиска)";
@@ -182,10 +173,6 @@ export function App() {
   const [query, setQuery] = useState("");
   const [prefs, setPrefs] = useState(loadPrefs); // #19: fields of the last trip, offered as defaults
   const [thinking, setThinking] = useState(false);
-  const [noAi, setNoAi] = useState(false); // the backend answered without a model (TRAP-1)
-  const [switches, setSwitches] = useState<Switches>(loadSwitches); // #566: «Синтетика» off — real data
-  const [can, setCan] = useState<LlmMode>({ llm: false, real_data: false }); // /api/mode: keys in .env
-  const [mode, setMode] = useState<ModeState>("loading"); // /api/mode: failed after a retry (#534)
   const box = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const lastMsg = useRef<HTMLDivElement>(null); // the last agent message: its block sits under it
@@ -238,7 +225,6 @@ export function App() {
         : [{ role: "agent" as const, text: describe(r), stage: r.stage }];
       writeSid(id);
       setReply(r);
-      setNoAi(!r.llm);
       setUi({ ...saved, messages });
       const first = saved.messages.find((m) => m.role === "user")?.text ?? "";
       editChats((list) => (list.some((c) => c.session_id === id) ? list : touchChat(list, id, first)));
@@ -253,36 +239,6 @@ export function App() {
     } finally {
       if (no === loadNo.current) setRestoring(false);
     }
-  }
-
-  // The switches and the mode badge must not wait for the first reply.
-  // #534: one retry after MODE_RETRY_MS (the container may still start), then a visible note.
-  useEffect(() => {
-    let live = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const ask = (retry: boolean) =>
-      getMode()
-        .then((m) => {
-          if (!live) return;
-          setCan({ llm: m.llm === true, real_data: m.real_data === true });
-          setMode("ok");
-        })
-        .catch((e) => {
-          console.warn("GET /api/mode failed", retry ? "; retrying" : "; the switches stay off", e);
-          if (!live) return;
-          if (retry) timer = setTimeout(() => ask(false), MODE_RETRY_MS);
-          else setMode("failed");
-        });
-    ask(true);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, []);
-
-  function switchSources(next: Switches) {
-    setSwitches(next);
-    saveSwitches(next);
   }
 
   // Reload restores the last open chat.
@@ -322,14 +278,13 @@ export function App() {
     const no = loadNo.current;
     try {
       const t0 = Date.now();
-      const r = await chat({ session_id: sid, message: m, ...requested(switches) });
+      const r = await chat({ session_id: sid, message: m, ...requested() });
       // A fast offline reply still shows the thinking indicator for a moment (not with reduced motion).
       const rest = MIN_THINK_MS - (Date.now() - t0);
       if (motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
       if (no !== loadNo.current) return; // the user switched the chat while the agent thought
       writeSid(r.session_id);
       setReply(r);
-      setNoAi(!r.llm);
       setPrefs(rememberPrefs(r.plan.spec));
       update(
         { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage, reply: r }] },
@@ -457,8 +412,6 @@ export function App() {
 
   const lastAgent = ui.messages.map((m) => m.role).lastIndexOf("agent");
   const asked = ui.messages.filter((m) => m.role === "user").length; // the thinking banana and plane take turns
-  // The «Без ИИ» badge of the sidebar (TRAP-1): no model key, or the last reply was rule-based.
-  const badgeNoAi = !can.llm || (!!reply && noAi);
   // A done step links to the first answer after which the trip was past it.
   const doneAt = STEPS.map((_, i) => {
     const n = ui.messages.findIndex(
@@ -624,13 +577,6 @@ export function App() {
           {chats.length > 0 && !groups.length && <p className="side-empty">Не нашёл чатов по запросу.</p>}
         </nav>
         <div className="foot">
-          {badgeNoAi && (
-            <span className="badge-noai">
-              <i />
-              Без ИИ — упрощённый режим
-            </span>
-          )}
-          <SourceSwitches on={switches} can={can} mode={mode} onChange={switchSources} />
           <details className="hint">
             <summary aria-label="Где хранятся чаты">
               <span className="qmark" aria-hidden="true">?</span>
@@ -702,7 +648,7 @@ export function App() {
                     <Mascot size={30} state={i === lastAgent ? moodOf(reply, !!error) : "idle"} />
                     <div className="b">
                       <AgentText
-                        text={badgeNoAi ? withoutNoAi(brief(m.text, i === lastAgent)) : brief(m.text, i === lastAgent)}
+                        text={brief(m.text, i === lastAgent)}
                         synthetic={synthetic}
                         choice={i === lastAgent && reply ? { reply, busy, onSend: send } : undefined}
                       />

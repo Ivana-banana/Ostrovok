@@ -252,6 +252,12 @@ def respelled(text: str) -> dict | None:
     return None if known or not q else _respelled(q)
 
 
+def is_colloquial(text: str) -> bool:
+    """The text is a colloquial name of a place («Ебург», «Минводы»), not a typo (#347)."""
+    q = _query(text)
+    return any(_same_words(q.split(), k.split()) for k in COLLOQUIAL)
+
+
 def month_climate(place: dict, month: int) -> tuple[float | None, float | None]:
     """Mean daily maximum of the air and the sea surface, °C, for the month; None: no data."""
     c = place.get("climate")

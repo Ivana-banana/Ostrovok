@@ -176,6 +176,7 @@ _robots: dict[str, str] = {}
 _last = {"t": -1e9}  # time of the last successful request; failures do not count
 _mem: dict[str, dict] = {}  # slug -> aggregate; the process cache
 _cards: dict[str, list[dict] | None] = {}  # slug -> parsed cards (None: refused); names stay here
+_fetched: dict[str, datetime] = {}  # slug -> time the cards were fetched (#469)
 _offline = {"on": False}  # True after the first network failure: skip live, stay fast
 
 
@@ -281,6 +282,7 @@ def _city_cards(place: Place) -> list[dict] | None:
         _cards[slug] = None
         return None
     _cards[slug] = cards
+    _fetched[slug] = _now()
     return cards
 
 
@@ -377,5 +379,10 @@ class Live101Hotels:
             )
             bases = []
         if len(bases) >= MIN_REAL:
-            return [pair for b in bases for pair in offers._hotel(spec, place, b, now)]
+            at = _fetched.get(slug_of(place))  # when the cards (the prices) were fetched
+            return [
+                (h.model_copy(update={"fetched_at": at}), extras)
+                for b in bases
+                for h, extras in offers._hotel(spec, place, b, now)
+            ]
         return self.base.hotels(spec, place, now)

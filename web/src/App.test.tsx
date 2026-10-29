@@ -2,10 +2,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe as suite, expect, it, vi } from "vitest";
 import fixture from "../../tests/fixtures/chat_reply.json";
-import { App, MODE_RETRY_MS, SESSION_KEY } from "./App";
+import { App, SESSION_KEY } from "./App";
 import { VERBS } from "./brand";
 import { HISTORY_KEY } from "./history";
-import { LOADING_NOTE, NO_MODE_NOTE, SWITCHES_KEY } from "./Sources";
 import type { ChatReply } from "./contracts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -159,72 +158,16 @@ suite("приложение", () => {
     expect(box.textContent).toContain("Куда поедем?");
   });
 
-  it("TRAP-1: ответ без модели помечен «без ИИ» значком и в блоке этапа, текст ответа — без хвоста", async () => {
+  it("TRAP-1: ответ без модели — без значка и без хвоста «упрощённый режим без ИИ»", async () => {
     routes["POST /api/chat"] = () => ({ status: 200, body: { ...booked, llm: false } });
     await mount();
     await click("Выходные в Казани");
     await click("Отправить");
     expect(calls.at(-1)?.body).toMatchObject({ session_id: null });
     expect(localStorage.getItem(SESSION_KEY)).toBe("s1");
-    // #434: the badge says it once; the label after every answer is not repeated in the bubble.
-    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
-    expect(box.querySelector(".board")?.textContent).toContain("без ИИ");
+    expect(box.textContent).not.toContain("без ИИ");
+    expect(box.textContent).not.toContain("упрощённый режим");
     expect(box.querySelector("[role='status'] .b")?.textContent).toBe("Бронь оформлена.");
-  });
-
-  it("TRAP-1: пометка «Без ИИ» видна до первого сообщения, если /api/mode сообщает llm=false", async () => {
-    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: false } });
-    await mount();
-    expect(box.querySelector("aside .badge-noai")?.textContent).toContain("Без ИИ");
-  });
-
-  it("#534: /api/mode не ответил с первого раза — повтор включает переключатели", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      let n = 0;
-      routes["GET /api/mode"] = () =>
-        ++n === 1 ? { status: 503 } : { status: 200, body: { llm: true, real_data: true } };
-      await act(async () => root.render(<App />));
-      await act(async () => vi.advanceTimersByTimeAsync(MODE_RETRY_MS + 10));
-      expect(n).toBe(2);
-      const sw = [...box.querySelectorAll<HTMLInputElement>("aside input[role='switch']")];
-      expect(sw.every((x) => !x.disabled)).toBe(true);
-      expect(box.querySelector(".switches-note")).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("#534: /api/mode не ответил дважды — подпись «не загрузились», а не «нет ключа»", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      routes["GET /api/mode"] = () => ({ status: 503 });
-      await act(async () => root.render(<App />));
-      expect(box.querySelector(".switches-note")?.textContent).toBe(LOADING_NOTE); // not «нет ключа»
-      await act(async () => vi.advanceTimersByTimeAsync(MODE_RETRY_MS + 10));
-      expect(calls.filter((c) => c.key === "GET /api/mode")).toHaveLength(2);
-      expect(box.querySelector(".switches-note")?.textContent).toBe(NO_MODE_NOTE);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("#566: с ключом модели GigaChat включён по умолчанию — пометки до первого сообщения нет", async () => {
-    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: false } });
-    await mount();
-    expect(box.querySelector(".badge-noai")).toBeNull();
-  });
-
-  it("#566: «Синтетика» уходит с запросом и хранится в браузере", async () => {
-    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: false, real_data: true } });
-    routes["POST /api/chat"] = () => ({ status: 200, body: checkoutStage });
-    await mount();
-    const synth = box.querySelector<HTMLInputElement>("aside input[role='switch']");
-    await act(async () => synth?.click());
-    expect(JSON.parse(localStorage.getItem(SWITCHES_KEY) ?? "{}")).toEqual({ synthetic: true });
-    await click("Выходные в Казани");
-    await click("Отправить");
-    expect(calls.at(-1)?.body).toMatchObject({ real_data: false, llm: true });
   });
 
   it("ошибка сервера: понятный текст без трассировки", async () => {
@@ -679,16 +622,6 @@ suite("чат как в мессенджере", () => {
     expect(box.querySelector("[role='status']")?.textContent).toContain("Бронь оформлена.");
   });
 
-  it("TRAP-1: ответ без модели — пометка «Без ИИ» в списке чатов", async () => {
-    routes["GET /api/mode"] = () => ({ status: 200, body: { llm: true, real_data: false } });
-    routes["POST /api/chat"] = () => ({ status: 200, body: { ...checkoutStage, llm: false } });
-    await mount();
-    expect(box.querySelector(".badge-noai")).toBeNull();
-    await click("Выходные в Казани");
-    await click("Отправить");
-    expect(box.querySelector("aside[aria-label='Чаты'] .badge-noai")?.textContent).toContain("Без ИИ");
-  });
-
   it("этап вдохновения: карточки направлений в чате с метками из данных, выбор — сообщением", async () => {
     const r = { ...structuredClone(checkoutStage), stage: "inspire" as const };
     const [d] = r.plan.destinations;
@@ -854,7 +787,7 @@ suite("чат как в мессенджере", () => {
     const note = box.querySelector("[aria-label='Как в прошлый раз']")!;
     expect(note.textContent).toContain("вылет: Казань, 3 взрослых");
     await click("Подставить");
-    expect(box.querySelector("textarea")!.value).toContain("Казань");
+    expect(box.querySelector("textarea")!.value).toContain("из Казани");
     const reply = structuredClone(booked);
     routes["POST /api/chat"] = () => ({ status: 200, body: reply });
     await click("Отправить");
