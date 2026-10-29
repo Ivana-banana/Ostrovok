@@ -105,7 +105,9 @@ class Trip:
     over: int = 0  # overrun of the trip budget and of the hotel budget together, roubles
     hotel_over: int = 0  # the part of `over` that is the hotel above the hotel budget
     score: float = 0.0
-    near_refund: "Trip | None" = None  # the cheaper non-refundable trip that D-045 moved this one past
+    near_refund: "Trip | None" = (
+        None  # the cheaper non-refundable trip that D-045 moved this one past
+    )
 
     @property
     def legs(self) -> list[TransportOffer]:
