@@ -111,7 +111,12 @@ def test_origin_goes_first_next_to_the_children(store):
 def test_vague_request_asks_origin_with_the_month(store):
     """#666: one turn: the origin, the month, the nights, the party and the budget."""
     r = say(store, "Хочу отдохнуть")
-    assert [q.text for q in r.questions][1:] == ["Когда хотите поехать?", NIGHTS_ASK, WHO_ASK, BUDGET_ASK]
+    assert [q.text for q in r.questions][1:] == [
+        "Когда хотите поехать?",
+        NIGHTS_ASK,
+        WHO_ASK,
+        BUDGET_ASK,
+    ]
     after = say(store, "Питер, декабрь", r.session_id)
     assert after.stage == "inspire" and after.plan.spec.origin == "Санкт-Петербург"
     assert after.plan.spec.month == 12

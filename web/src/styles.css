@@ -603,6 +603,49 @@ button.icon {
   font-size: 13.5px;
 }
 
+/* #671: the trip parameters in the sidebar, instead of the chat list */
+.side-switch {
+  margin: 10px 0 6px;
+  border: 1px solid var(--ink-3);
+  border-radius: var(--r-sm);
+  padding: 7px 10px;
+  background: var(--ink-2);
+  color: var(--side-text);
+  font-size: var(--fs-s);
+  text-align: left;
+}
+
+.side-params {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--text);
+}
+
+.side-params .strip {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 10px;
+  border-bottom: 0;
+}
+
+.side-params .strip button.param,
+.side-params .strip .spec > div {
+  justify-content: space-between;
+  white-space: normal;
+  text-align: left;
+}
+
+.side-params .strip .spec dd {
+  max-width: none;
+}
+
+.side-params .strip .params > .muted {
+  order: 0;
+}
+
 .side-empty {
   margin: 14px 10px;
   color: var(--side-muted);
@@ -1451,6 +1494,50 @@ mark {
   background: var(--ink);
   color: var(--acc);
   font-weight: 600;
+}
+
+.bundle {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bundle-card {
+  cursor: pointer;
+}
+
+.bundle-card.picked {
+  border-color: var(--acc);
+  box-shadow: var(--shadow-card);
+}
+
+.bundle-card:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+.bundle-total {
+  font-weight: 600;
+}
+
+.bundle-items,
+.bundle-minus {
+  margin: 2px 0 6px;
+  padding-left: 18px;
+}
+
+.bundle-confirm {
+  width: 100%;
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 8px;
+  background: var(--ink);
+  color: var(--acc);
+  font-weight: 600;
+}
+
+.bundle-confirm:disabled {
+  opacity: 0.5;
 }
 
 .tags {

@@ -10,6 +10,7 @@ from api.model import (
     MONTH_ASK,
     NIGHTS_ASK,
     ORIGIN_ASK,
+    PARTY_ASK,
     SKIP_ASK,
     WHO_ASK,
 )
@@ -59,3 +60,21 @@ def test_hotel_without_a_city_asks_every_slot_at_once(store):
     assert len(first.questions) == MAX_ASKS
     plan = ask(store, "Из Москвы, Казань, декабрь, 3 ночи. Двое взрослых", first.session_id)
     assert plan.stage != "clarify"
+
+
+def test_skipped_party_question_stays_skipped_on_the_comparison(store):
+    """#660: «Не важно» on «кто едет», then the choice of a city: no second party question."""
+    first = ask(store, "тёплое море в ноябре, недорого, с ребёнком")
+    cards = ask(store, SKIP_ASK, first.session_id)  # #666: the party is in the first turn
+    compare = ask(store, "1", cards.session_id)
+    assert compare.stage == "compare" and PARTY_ASK not in texts(compare)
+
+
+def test_party_answer_after_skip_drops_the_skip_note(store):
+    """#660: «нас трое взрослых» after «Не важно»: the note of the skip goes with the guess."""
+    first = ask(store, "тёплое море в ноябре, недорого, с ребёнком")
+    cards = ask(store, SKIP_ASK, first.session_id)  # #666: the party is in the first turn
+    r = ask(store, "1", cards.session_id)
+    r = ask(store, "Нас трое взрослых и ребёнок", r.session_id)
+    assert r.plan.spec.adults == 3
+    assert not any("не важно" in a for a in r.plan.spec.assumptions)

@@ -400,6 +400,9 @@ AHEAD_RE = re.compile(r"\bчерез\s+\S+\s*(?:ноч|дн|сут)")  # «вы�
 OR_RE = re.compile(r"\b(?:или|либо)\b")  # cities joined by «или», «либо» are candidates
 # The adults are not named: 2 by default. With a child this becomes a question (#112).
 PARTY_UNKNOWN = "взрослых: 2 (состав не назван)"
+PARTY_SKIPPED = (
+    "взрослых: ответ «не важно» на вопрос о составе"  # #660: the question is not asked again
+)
 KIDS_UNKNOWN = "возраст ребёнка: «с детьми» — число и возраст не названы"  # #182: asked, not 7
 # #113: the refused places live in this assumption (TripSpec has no field for them).
 EXCLUDED = "исключено"
@@ -695,6 +698,8 @@ MONTH_ASK = "Когда хотите поехать?"
 def party_question(spec: TripSpec) -> list[Question]:
     """A child and no word about the adults: 2 adults stay an assumption, the user can fix it."""
     if not (spec.children_ages and PARTY_UNKNOWN in spec.assumptions):
+        return []
+    if PARTY_SKIPPED in spec.assumptions:
         return []
     options = ["Один взрослый", "Двое взрослых", "Трое взрослых"]  # no «ребёнок»: age stays
     text = PARTY_ASK_KIDS if len(spec.children_ages) > 1 else PARTY_ASK
@@ -2042,7 +2047,7 @@ def _question_answer(
     if old.stage == "compare":
         return f"{head}\n{HINTS['compare']}"
     if old.stage == "assemble":
-        return f"{head}\n{_text_assemble(old.plan)}"
+        return f"{head}\n{_text_assemble(old.plan, choice=False)}"
     rows = [f"{o.title} — {_priced(o.price_rub, [o])}" for o in old.cart.items]
     cart = (
         "В корзине:\n" + "\n".join(rows) + f"\nИтого {_priced(old.cart.total_rub, old.cart.items)}."
@@ -2293,8 +2298,10 @@ def _pet_flies(plan: Plan) -> bool:
     )
 
 
-def _text_assemble(plan: Plan) -> str:
-    lines = ["План поездки:"]
+def _text_assemble(plan: Plan, choice: bool = True) -> str:
+    # #664: the choice is repeated first; the lines are the offers' fields (TRAP-4)
+    lines = ["Ваш выбор:", *_offer_lines(plan)[1:-1]] if choice else []
+    lines.append("План поездки:")
     lines += [f"{_at(e.at)} — {e.title}" for e in plan.timeline]
     lines += [f"Внимание: {i.text.rstrip('.')}." for i in plan.issues]
     chosen = [o for o in plan.offers if o.kind == "hotel" and o.offer_id in plan.selected]
@@ -2742,6 +2749,32 @@ def _change_booking(prev: ChatReply, sid: str, use_llm: bool, origin: str | None
     return done.model_copy(update={"reply": f"{head} {kept}\n{done.reply}"})
 
 
+BUNDLE_PICK_RE = re.compile(
+    r"^\s*вариант\s+(\d+)\s*$", re.IGNORECASE
+)  # #665: the card of the board
+
+
+def _pick_bundle(old: ChatReply, sid: str, n: int) -> ChatReply:
+    """#665: «вариант N» takes the offers of the N-th whole-trip card; the reply is a hotel pick's."""
+    bs = old.plan.bundles
+    if not 1 <= n <= len(bs):
+        text = f"Вариантов поездки — {len(bs)}, номер {n} среди них нет. {HINTS[old.stage]}"
+        return old.model_copy(update={"reply": text, "questions": [], "llm": False})
+    ids = {o.offer_id for o in old.plan.offers}
+    plan = old.plan.model_copy(update={"changes": []})
+    plan.selected = keep_refusal(plan, [i for i in bs[n - 1].offer_ids if i in ids])
+    plan.explanations = explain(plan.spec, plan.offers, plan.selected)
+    plan.bundles = bundles(plan.spec, plan.offers, plan.selected)
+    plan.timeline, plan.issues = build_timeline(plan)
+    if any(i.severity == "error" for i in plan.issues):
+        text, stage = _text_blocked(plan), "compare"  # #276: no cart with an error
+    elif not _hotel_selected(plan):
+        text, stage = f"{NO_HOTEL} {HINTS['compare']}", "compare"
+    else:
+        text, stage = _text_assemble(plan), "assemble"
+    return ChatReply(session_id=sid, stage=stage, reply=text, plan=plan, cart=old.cart, llm=False)
+
+
 def step(
     prev: ChatReply | None, sid: str, message: str, use_llm: bool = False, origin: str | None = None
 ) -> ChatReply:
@@ -2797,6 +2830,8 @@ def step(
         llm=False,
     )
     t = message.lower()
+    if prev and old.stage in ("compare", "assemble") and (m := BUNDLE_PICK_RE.match(message)):
+        return _pick_bundle(old, sid, int(m.group(1)))
     booking = old.stage == "checkout" and BOOK_RE.search(t) and not NOT_BOOK_RE.search(t)
     if REFUSE_RE.search(t.replace("ё", "е")) and not booking:
         # The message goes to no model and changes nothing: the plan and the cart stay.
@@ -3239,6 +3274,10 @@ def step(
 
     # #630: «кто едет» was asked in the turn before: the cards do not ask it again
     party_asked = old.stage == "clarify" and bool({q.text for q in old.questions} & PARTY_TEXTS)
+    who_asked = {q.text for q in old.questions} & {PARTY_ASK, PARTY_ASK_KIDS, WHO_ASK}
+    if who_asked and message.strip() == SKIP_ASK and PARTY_UNKNOWN in spec.assumptions:
+        # #660: the refusal stays in the spec, so the comparison does not ask the party again
+        spec = spec.model_copy(update={"assumptions": [*spec.assumptions, PARTY_SKIPPED]})
     if prev is None and (questions := blocking_questions(spec, message)):
         text = _text_clarify(questions)
         if use_llm and (own := llm.rewrite_questions(questions, deadline)):

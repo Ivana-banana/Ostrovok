@@ -778,3 +778,28 @@ suite("#547: безопасный запасной чип", () => {
     expect(renderToStaticMarkup(<Price value={1000} />)).toContain("синтетика");
   });
 });
+
+suite("#665 карточки «Варианты поездки целиком»", () => {
+  it("клик по карточке показывает «Подтвердить»; он шлёт «вариант N»", async () => {
+    const r = structuredClone(base);
+    r.stage = "compare";
+    const sent: string[] = [];
+    const box = document.createElement("div");
+    document.body.append(box);
+    const root = createRoot(box);
+    await act(async () =>
+      root.render(<Board reply={r} busy={false} removed={[]} onSend={(t) => sent.push(t)} onCart={noop} onCheckout={noop} />),
+    );
+    const sec = () => box.querySelector("[aria-label='Варианты поездки целиком']")!;
+    const confirm = () => [...sec().querySelectorAll("button")].find((b) => b.textContent === "Подтвердить");
+    expect(confirm()).toBeUndefined();
+    const cards = sec().querySelectorAll<HTMLElement>("[role='button'][aria-pressed]");
+    expect(cards.length).toBe(r.plan.bundles.length);
+    await act(async () => cards[0].click());
+    expect(cards[0].getAttribute("aria-pressed")).toBe("true");
+    await act(async () => confirm()!.click());
+    expect(sent).toEqual(["вариант 1"]);
+    await act(async () => root.unmount());
+    box.remove();
+  });
+});
