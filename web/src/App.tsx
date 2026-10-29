@@ -35,6 +35,8 @@ const EXAMPLES = [
   "Выходные в Казани, из Москвы, 2 взрослых, 11–13 декабря, до 50 тысяч на всё.",
 ];
 
+const FOLD_KEY = "side-fold";
+
 // Storage can throw (private mode, blocked cookies, quota): the app then works without it.
 function readSid(): string | null {
   try {
@@ -169,6 +171,23 @@ export function App() {
   const [chats, setChats] = useState<ChatEntry[]>(loadChats);
   const [drawer, setDrawer] = useState(false);
   const [road, setRoad] = useState(false); // the roadmap sheet below 1100 px
+  const [fold, setFold] = useState(() => {
+    try {
+      return localStorage.getItem(FOLD_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }); // the chat list folded to a strip, 1100 px and wider (#657)
+  const toggleFold = () => {
+    setFold((f) => {
+      try {
+        localStorage.setItem(FOLD_KEY, f ? "0" : "1");
+      } catch {
+        // no storage: the fold lasts until reload
+      }
+      return !f;
+    });
+  };
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [query, setQuery] = useState("");
   const [prefs, setPrefs] = useState(loadPrefs); // #19: fields of the last trip, offered as defaults
@@ -423,7 +442,7 @@ export function App() {
     setRoad(false);
     document.querySelector(`[data-msg="${n}"]`)?.scrollIntoView?.({ block: "start", behavior: motionOk() ? "smooth" : "auto" });
   };
-  const cls = ["app", drawer && "drawer-open", road && "road-open"].filter(Boolean).join(" ");
+  const cls = ["app", drawer && "drawer-open", road && "road-open", fold && "side-fold"].filter(Boolean).join(" ");
   const synthetic = !reply || !reply.plan.offers.length || reply.plan.offers.some((o) => o.synthetic);
   const groups = groupChats(filterChats(chats, query));
   // The cards of the current stage under the last answer; hidden while the agent thinks.
@@ -483,6 +502,16 @@ export function App() {
         <div className="brand">
           <Mascot size={38} />
           <b>{PRODUCT_NAME}</b>
+          <button
+            type="button"
+            className="icon fold-toggle"
+            aria-label={fold ? "Развернуть список чатов" : "Свернуть список чатов"}
+            aria-expanded={!fold}
+            aria-controls="chats"
+            onClick={toggleFold}
+          >
+            {fold ? "»" : "«"}
+          </button>
           <button
             type="button"
             className="icon drawer-close"
