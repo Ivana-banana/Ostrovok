@@ -480,9 +480,22 @@ def _geocode(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
         _deadline.reset(token)
 
 
+# Names the geocoder knows as a country, not a place (#551): norm(name) -> the country name.
+_countries: dict[str, str] = {}
+
+
+def country_record(name: str) -> str | None:
+    """The country the geocoder named for `name` («Новая Зеландия»), or None."""
+    return _countries.get(norm(name))
+
+
 def _online_place(name: str, fetch: Callable[[str, dict], dict]) -> dict | None:
     g = _geocode(name, fetch)
     if g is None:
+        return None
+    if str(g.get("feature_code", "")).startswith("PCL"):
+        # #551: a country is no point: one hotel and a flight to its nearest airport (BHE) mislead
+        _countries[norm(name)] = g["name"]
         return None
     lat, lon = round(g["latitude"], 4), round(g["longitude"], 4)
     span = {"latitude": lat, "longitude": lon, "start_date": f"{YEAR}-01-01",
