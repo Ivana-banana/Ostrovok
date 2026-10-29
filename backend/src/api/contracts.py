@@ -8,8 +8,8 @@ POST /api/cart (CartAction -> Cart), POST /api/checkout (CheckoutRequest -> Vouc
 409 when the total differs from the cart or the booking provider refuses),
 GET /api/mode -> LlmMode (known before the first reply; consumers: web/src/api.ts getMode,
 web/src/App.tsx, web/src/Sources.tsx, web/e2e/noai-badge.spec.ts, backend/tests/test_api.py).
-ChatRequest.real_data and ChatRequest.llm (#490; consumers: api/main.py, api/offers.py
-real_data, api/llm.py allowed, api/partner.py plan_reply (keeps the switches of the request),
+ChatRequest.real_data and ChatRequest.llm (#490, #566: both on by default; consumers:
+api/main.py, api/offers.py real_data/hotel_port(), api/llm.py allowed, api/partner.py plan_reply (keeps the switches of the request),
 api/checks.py _post (eval: llm on, real_data off), web/src/api.ts, web/src/App.tsx,
 web/src/Sources.tsx, backend/tests/test_sources.py, README.md).
 GET /health stays exactly {"status": "ok"} (task/rules.md): the LLM mode lives only in /api/mode.
@@ -278,11 +278,12 @@ class ChatRequest(BaseModel):
 
     session_id: str | None = None  # None: new session
     message: str = Field(min_length=1)
-    # #490, switches of the web (both off by default). real_data: flights from Travelpayouts
-    # (Aviasales) when TRAVELPAYOUTS_TOKEN is set, else synthetic; llm: the model when it is
-    # configured, else rules (TRAP-1). Per request: parallel sessions do not share them.
-    real_data: bool = False
-    llm: bool = False
+    # #566: both on by default (the web «Синтетика» switch sends real_data=false). real_data:
+    # the live sources (101hotels, Travelpayouts when TRAVELPAYOUTS_TOKEN is set), each with a
+    # synthetic fallback; false: every source synthetic. llm: the model when it is configured,
+    # else rules (TRAP-1). Per request: parallel sessions do not share them.
+    real_data: bool = True
+    llm: bool = True
 
 
 class ChatReply(BaseModel):
@@ -300,7 +301,7 @@ class LlmMode(BaseModel):
     """GET /api/mode: what the switches of ChatRequest can turn on (#490)."""
 
     llm: bool  # False: no model in .env, every reply is rule-based (TRAP-1)
-    real_data: bool  # False: no TRAVELPAYOUTS_TOKEN in .env, every price is synthetic
+    real_data: bool  # False: no live source is set up (LIVE_HOTELS=0, no TRAVELPAYOUTS_TOKEN)
 
 
 class CartAction(BaseModel):
@@ -332,7 +333,8 @@ class CheckoutRequest(BaseModel):
 # is one module variable: api/offers.py (HOTELS, TRANSPORT, TRANSFERS), api/cart.py (BOOKING).
 # Swap it with one assignment at start-up (main.py) or in a test; no factories, no env switch.
 # Exception (#490): offers.REAL_TRANSPORT (Travelpayouts) is built at start-up and serves only
-# the chat requests with real_data (offers.transport()).
+# the chat requests with real_data (offers.transport()); without real_data offers.hotel_port()
+# drops the live layers of HOTELS (#566).
 # Backend only: no mirror in web/src/contracts.ts, the types the web sees do not change.
 # Consumers: api/offers.py (adapters, offers_for_place), via find_offers: api/dag.py (the live
 # ports, only the chosen place). The estimate path (ESTIMATE_* in api/offers.py, synthetic):

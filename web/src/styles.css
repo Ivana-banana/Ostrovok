@@ -639,7 +639,7 @@ button.icon {
   background: var(--noai);
 }
 
-/* #490: the switches of the real sources under the mode badge; off by default */
+/* #566: the «Синтетика» switch under the mode badge; off by default */
 .switches {
   display: flex;
   flex-direction: column;
@@ -2101,7 +2101,86 @@ ul.plain li:last-child {
   margin-top: 6px;
 }
 
-/* «Стыковки»: a timeline with dots */
+/* «Стыковки»: stages of the trip (#597), each folds a timeline with dots */
+
+.legs {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.leg {
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+
+/* the chevron in its own column: a wrapped line stays under the text, not under the chevron */
+.leg > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 2px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.leg > summary::-webkit-details-marker {
+  display: none;
+}
+
+.leg > summary::before {
+  content: "▸";
+  grid-row: 1;
+  align-self: start; /* a stretched box would turn the chevron onto the second line */
+  width: 1em;
+  text-align: center;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+
+.leg[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.leg-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+}
+
+.leg-head time {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.leg-note {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: var(--fs-s);
+  overflow-wrap: anywhere;
+}
+
+.leg-warn {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.leg > summary .gone-note {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.leg > .timeline {
+  margin: 0 12px 8px;
+}
 
 .timeline {
   list-style: none;
@@ -2281,41 +2360,53 @@ button.primary:hover:not(:disabled),
   letter-spacing: 0;
 }
 
-/* priorities */
+/* priorities: «Что для вас важнее», one row under the trip parameters (#577) */
 
-ol.chips {
-  list-style: none;
-  margin: 0 0 8px;
-  padding: 0;
-}
-
-li.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px 2px 12px;
-  border-color: var(--ink);
-  background: var(--chip);
-}
-
-li.chip button {
-  min-width: 30px;
-  min-height: 30px;
-  padding: 0;
-  border-radius: 50%;
-}
-
-.chips-add {
+.priorities {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin: 0 0 8px;
+  gap: 6px 10px;
+  flex: none;
+  padding: 8px max(20px, calc((100% - var(--thread-w)) / 2 + 20px));
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.chips-add button {
-  border-radius: var(--r-pill);
+.priorities .muted {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}
+
+.priorities h2 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.priorities ul {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.priorities .chip {
+  min-height: 30px;
+  padding: 5px 12px;
   font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.priorities .chip[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 700;
 }
 
 .sources {
@@ -2662,6 +2753,16 @@ button.param.chosen {
     overflow-x: auto;
     padding: 6px 12px;
     scrollbar-width: none;
+  }
+
+  .priorities {
+    flex-wrap: wrap;
+    padding: 6px 12px;
+    overflow-x: visible;
+  }
+
+  .priorities ul {
+    flex-wrap: wrap;
   }
 
   .strip:has(.editor) {

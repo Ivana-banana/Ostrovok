@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { NO_KEY_NOTE, SWITCHES_KEY, SourceSwitches, type Switches, loadSwitches } from "./Sources";
+import { NO_KEY_NOTE, SWITCHES_KEY, SourceSwitches, type Switches, loadSwitches, requested } from "./Sources";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -25,32 +25,31 @@ function render(on: Switches, can: { llm: boolean; real_data: boolean }, onChang
   return [...box.querySelectorAll<HTMLInputElement>("input[role='switch']")];
 }
 
-it("по умолчанию оба переключателя выключены", () => {
-  expect(loadSwitches()).toEqual({ real_data: false, llm: false });
+it("#566: по умолчанию «Синтетика» выключена — реальные данные", () => {
+  expect(loadSwitches()).toEqual({ synthetic: false });
   localStorage.setItem(SWITCHES_KEY, "{broken");
-  expect(loadSwitches()).toEqual({ real_data: false, llm: false });
+  expect(loadSwitches()).toEqual({ synthetic: false });
 });
 
-it("TRAP-1: без ключа в .env переключатель недоступен и выключен, с подсказкой", () => {
-  const [real, llm] = render({ real_data: true, llm: true }, { real_data: false, llm: true });
-  expect(real.disabled && !real.checked).toBe(true);
-  expect(real.closest("label")?.title).toBe("нет ключа в .env");
-  expect(llm.disabled || !llm.checked).toBe(false);
-  expect(llm.closest("label")?.textContent).toBe("GigaChat");
-});
-
-it("TRAP-1: без ключа причина видна подписью, не только подсказкой (#262)", () => {
-  const [real] = render({ real_data: false, llm: false }, { real_data: false, llm: true });
-  const note = box.querySelector(".switches-note");
-  expect(note?.textContent).toBe(NO_KEY_NOTE);
-  expect(real.getAttribute("aria-describedby")).toBe(note?.id);
-  render({ real_data: false, llm: false }, { real_data: true, llm: true });
+it("#566: один переключатель «Синтетика», GigaChat без переключателя", () => {
+  const sw = render({ synthetic: false }, { real_data: true, llm: true });
+  expect(sw.map((x) => x.closest("label")?.textContent)).toEqual(["Синтетика"]);
   expect(box.querySelector(".switches-note")).toBeNull();
+});
+
+it("TRAP-1: без ключа модели причина видна подписью (#262)", () => {
+  render({ synthetic: false }, { real_data: true, llm: false });
+  expect(box.querySelector(".switches-note")?.textContent).toBe(NO_KEY_NOTE);
+});
+
+it("#566: запрос — реальные данные без «Синтетики», модель всегда (без ключа backend отвечает правилами)", () => {
+  expect(requested({ synthetic: false })).toEqual({ real_data: true, llm: true });
+  expect(requested({ synthetic: true })).toEqual({ real_data: false, llm: true });
 });
 
 it("включение отдаёт новое состояние", () => {
   let got: Switches | null = null;
-  const [real] = render({ real_data: false, llm: false }, { real_data: true, llm: true }, (s) => (got = s));
-  act(() => real.click());
-  expect(got).toEqual({ real_data: true, llm: false });
+  const [sw] = render({ synthetic: false }, { real_data: true, llm: true }, (s) => (got = s));
+  act(() => sw.click());
+  expect(got).toEqual({ synthetic: true });
 });
