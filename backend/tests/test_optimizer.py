@@ -1002,43 +1002,29 @@ def test_bundles_of_a_pick_stay_empty_when_nothing_takes_the_pet():
     assert bundles(s, items, ids) == []
 
 
-def _why_of(s, items, hotel_id, selected=None):
-    ids = selected or rank(s, items)[0]
-    return next(e.why for e in explain(s, items, ids) if e.offer_id == hotel_id)
-
-
-def test_near_price_default_is_the_refundable_tariff():
-    """#606 (D-045): the hotel is within 15 % -> the default is free cancellation, also with
-    «недорого», and the text names the real difference; farther, or with named priorities,
-    the cheapest wins as before."""
+def test_default_is_the_cheapest_by_weights_not_the_refundable():
+    """#640 (D-045): a refundable tariff 10 % above the cheapest hotel does not replace it."""
     cheap = hotel("cheap", 10_000)
     refund = hotel("refund", 11_000, refundable=True)
-    far = hotel("far", 10_000)
-    pricey = hotel("pricey", 12_000, refundable=True)
-    items = offers([cheap, refund], FLIGHTS)
     for s in (spec(), spec(wishes=["недорого"])):
-        assert hotel_of(s, items) == refund
-    why = _why_of(spec(), items, "h-refund")
-    assert "выбран тариф с бесплатной отменой" in why and "(10%)" in why
-    assert hotel_of(spec(priorities=["price"]), items) == cheap
-    assert hotel_of(spec(), offers([far, pricey], FLIGHTS)) == far
+        assert hotel_of(s, offers([cheap, refund], FLIGHTS)) == cheap
 
 
-def test_refundable_won_by_weights_has_no_near_price_phrase():
-    """The refundable trip is first by weights, 20 % above the cheapest hotel: no D-045 phrase."""
-    cheap = hotel("cheap", 10_000, rating=5.0)
-    refund = hotel("refund", 12_000, refundable=True, rating=9.9, meal="BB")
-    rich = hotel("rich", 60_000, rating=6.0)
-    items = offers([cheap, refund, rich], FLIGHTS)
-    assert hotel_of(spec(), items) == refund
-    assert "выбран тариф с бесплатной отменой" not in _why_of(spec(), items, "h-refund")
-
-
-def test_manual_hotel_has_no_near_price_phrase():
-    """The user picks a refundable hotel 40 % above the cheapest: the text keeps no D-045 phrase."""
+def test_best_value_is_the_cheapest_refundable_when_the_best_is_not():
+    """#640: «самый выгодный» is the cheapest trip with free cancellation, with the rouble gap."""
     cheap = hotel("cheap", 10_000)
     refund = hotel("refund", 11_000, refundable=True)
-    manual = hotel("manual", 14_000, refundable=True)
-    items = offers([cheap, refund, manual], FLIGHTS)
-    trip = next(t for t in enumerate_trips(items) if t.hotel is manual)
-    assert "выбран тариф" not in _why_of(spec(), items, "h-manual", trip.ids)
+    refund2 = hotel("refund2", 15_000, refundable=True)
+    items = offers([cheap, refund, refund2], FLIGHTS)
+    out = bundles(spec(), items)
+    value = [b for b in out if b.label == "самый выгодный"]
+    assert len(value) == 1 and value[0].offer_ids[0] == "h-refund"
+    assert "бесплатная отмена" in " ".join(value[0].tradeoffs)
+    assert "дороже на 1 000 ₽" in " ".join(value[0].tradeoffs).replace("\xa0", " ")
+    assert len({tuple(b.offer_ids) for b in out}) == len(out)
+
+
+def test_no_best_value_when_the_best_is_already_refundable():
+    """#640: the best tariff has free cancellation -> no «самый выгодный» bundle."""
+    items = offers([hotel("cheap", 10_000, refundable=True), hotel("pricey", 11_000)], FLIGHTS)
+    assert all(b.label != "самый выгодный" for b in bundles(spec(), items))
