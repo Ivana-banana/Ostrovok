@@ -74,4 +74,5 @@ export function prefsText(p: Prefs): string {
 }
 
 // The text that fills the composer. The user sees it and can edit it before sending.
-export const prefsDraft = (p: Prefs) => `${prefsText(p)}. `;
+// «из Москва» is read as the origin by the backend extractor; «вылет: Москва» as a destination.
+export const prefsDraft = (p: Prefs) => `${prefsText(p).replace(/^вылет: /, "из ")}. `;

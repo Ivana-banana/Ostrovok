@@ -12,7 +12,7 @@ describe("память предпочтений", () => {
     rememberPrefs(spec({}));
     const p = loadPrefs();
     expect(prefsText(p)).toBe("вылет: Москва, 2 взрослых, ребёнок 5 лет");
-    expect(prefsDraft(p)).toContain("2 взрослых");
+    expect(prefsDraft(p)).toBe("из Москва, 2 взрослых, ребёнок 5 лет. ");
   });
 
   it("цены и догадки агента не сохраняются", () => {
