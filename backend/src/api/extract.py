@@ -1937,9 +1937,11 @@ def _dates_numeric(t: str, found: dict, notes: list[str]) -> None:
         ranged = d2 is not None
         if not (y1 or y2 or ranged or NUMERIC_LEAD_RE.search(t[: m.start()])):
             continue
-        start = _numeric_day(d1, m1, y1, today, None)
-        if start is None:
+        if not y1 and len(m1) < 2:  # «на 1.5 недели», «от 4.5 звезд», «1.2 км» are no dates
             continue
+        start = _numeric_day(d1, m1, y1, today, None)
+        if start is None or found.get("month", start.month) != start.month:
+            continue  # a month said in words wins
         found["date_from"], found["month"] = start, start.month
         if ranged and (end := _numeric_day(d2, m2, y2, today, start)):
             if start < end and (end - start).days <= MAX_NIGHTS:

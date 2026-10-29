@@ -1,4 +1,4 @@
-"""#661: numeric dates «28.12.2026», «28.12», «28.12–03.01» fill date_from / date_to (TRAP-3)."""
+"""#661: numeric dates «28.12.2026», «28.12», «28.12–03.01» fill date_from / date_to."""
 
 from datetime import date, timedelta
 
@@ -45,7 +45,19 @@ def test_invalid_date_is_ignored():
         "Сочи на 2.5 млн",
         "Сочи, рейс в 10.30",
         "Сочи на 12.5 тыс",
+        "Сочи на 2.5 недели",
+        "Сочи на 1.5 месяца",
+        "Сочи на 10.5 дней",
+        "Сочи от 4.5 звезд",
+        "Сочи на 4.5 звезды",
+        "Сочи от 1.2 км до моря",
+        "Сочи с 1.5 детьми",
     ],
 )
 def test_prices_and_times_are_no_dates(text):
     assert dates(text) == (None, None)
+
+
+def test_word_month_wins_over_a_number():
+    found = extract("Сочи в декабре на 1.5 недели")[0]
+    assert found["month"] == 12 and "date_from" not in found
