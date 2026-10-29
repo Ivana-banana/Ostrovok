@@ -65,3 +65,12 @@ def test_cap_cuts_the_party_turn(store):
     assert texts(second) == [WHO_ASK]
     plan = ask(store, "Двое взрослых", second.session_id)
     assert plan.stage != "clarify"
+
+
+def test_skipped_party_question_stays_skipped_on_the_comparison(store):
+    """#660: «Не важно» on «кто едет», then the choice of a city: no second party question."""
+    first = ask(store, "тёплое море в ноябре, недорого, с ребёнком")
+    party = ask(store, "Из Москвы", first.session_id)
+    cards = ask(store, SKIP_ASK, party.session_id)
+    compare = ask(store, "1", cards.session_id)
+    assert compare.stage == "compare" and PARTY_ASK not in texts(compare)
