@@ -298,6 +298,7 @@ def test_warm_up_by_the_fire_in_any_form_is_no_warm_wish():
     assert "тепло" in extract("погреемся в ноябре")[0]["wishes"]
 
 
+@pytest.mark.usefixtures("flights_refuse_pets")  # #575: flights without pets
 def test_sea_with_a_dog_refills_from_the_warmest_sea(store):
     """#356: «С собакой на море в ноябре» gave Петергоф 3.5 °C and Витебск «моря нет», not Сочи."""
     dests = inspired(store, "С собакой на море в ноябре из Москвы")
@@ -420,3 +421,13 @@ def test_c361_weekend_with_a_space_and_distance_in_the_reason(store):
     spec = TripSpec(origin="Краснодар", month=9, wishes=["море", "горы"])
     why = " ".join(d.why for d in inspire.suggest_destinations(spec, 4))
     assert " км" in why and "рядом" not in why
+
+
+def test_c17_train_to_the_sea_from_novosibirsk_says_the_sea_is_out_of_reach(store):
+    """#315: Томск, Барнаул, Кемерово с «моря нет» и без слов, что поездом до моря не доехать."""
+    r = say(store, "Поездом из Новосибирска на море в августе")
+    assert r.stage == "inspire"
+    assert all(any("до моря не доехать" in v for v in d.violates) for d in r.plan.destinations)
+    assert "поездом до моря не доехать" in r.reply
+    assert all(d.travel_hours > 0 for d in r.plan.destinations)
+    assert "в пути 0.0 ч" not in r.reply and "в пути 0 ч" not in r.reply

@@ -489,6 +489,11 @@ def _via_airport(mode: Mode, a: dict, b: dict) -> str:
     return ""
 
 
+# #575: an airline takes a small pet in the cabin or the hold on its own terms. A synthetic
+# flight takes it as a condition to confirm, not a refusal; no fee is named (TRAP-4).
+PET_FLIGHT = "питомец — уточнить у авиакомпании"
+
+
 def _leg(
     spec: TripSpec,
     mode: Mode,
@@ -517,6 +522,8 @@ def _leg(
         title += f", {seats}"
     if mode == "car":
         title += " (бензин и платные дороги, оценка)"
+    if mode == "flight" and spec.pets:
+        title += f", {PET_FLIGHT}"
     return TransportOffer(
         offer_id=f"t-{a['slug']}-{b['slug']}-{mode}-{depart:%Y%m%d%H%M}-{_guests_tag(spec)}",
         title=title,
@@ -527,7 +534,7 @@ def _leg(
         arrive_at=arrive,
         changes=changes,
         price_rub=_rub(price),
-        pets_allowed=mode != "flight",
+        pets_allowed=True,  # a plane: a condition of the airline (#575, PET_FLIGHT)
     )
 
 
@@ -581,6 +588,10 @@ def _span_h(delta: timedelta) -> str:
 # 3:30-4:15; Москва - Нижний Новгород 3:55; Москва - Владимир 1:46. Calibrated on the pairs of
 # tests/test_rail_time.py within ±20 %; the rest are team estimates (D-028). Prices do not
 # depend on the speed.
+# Fares (#280): a full fare = base + per km of route, at SEASON 1.0, by the kind of train. Fit
+# to the medians of tutu.ru fares of all classes on the routes from Moscow of 2026-10-27
+# (prices_tutu.json, scripts/calibrate_prices.py trains); tests/test_calibrate_prices.py checks it.
+TRAIN_FARE = {"day": (1000, 1.2), "night": (500, 1.9)}
 # A day train comes by DAY_ARRIVE_BY (no arrival at night, TRAP-5). Back it leaves at DAY_BACK,
 # earlier when it would come later, never before _back_from (check-out and the way to the
 # station, #370); a longer ride back goes by the overnight train only.
@@ -636,6 +647,12 @@ def _ends(p: dict) -> list[tuple[str, float]]:
         if km <= FAST_END_KM:
             out.append((n, km * RAIL_DETOUR / DAY_TRAIN_KMH))
     return out
+
+
+def _train_base(kind: str, route: float) -> float:
+    """Full train fare at SEASON 1.0 for `route` km (TRAIN_FARE)."""
+    fixed, per_km = TRAIN_FARE[kind]
+    return fixed + per_km * route
 
 
 def _day_train_hours(a: dict, b: dict, route: float) -> float | None:
@@ -717,9 +734,9 @@ def transport_offers(spec: TripSpec, origin: dict, place: dict) -> list[Transpor
             if _shift(out, _minutes(day)).astimezone(tb) <= datetime.combine(
                 there, DAY_ARRIVE_BY, tb
             ):
-                trains.append((day, 700 + 3.4 * route, out, ret, DAY_BACK))
+                trains.append((day, _train_base("day", route), out, ret, DAY_BACK))
         if route >= 600:  # overnight train: arrives in the morning
-            hours, base = route / 70, 1100 + 3.0 * route
+            hours, base = route / 70, _train_base("night", route)
             out = _shift(datetime.combine(there, time(7, 10), tb), -_minutes(hours))
             ret = max(datetime.combine(back, time(21, 40), tb), earliest)
             trains.append((hours, base, out, ret, time(21, 40)))
@@ -763,6 +780,8 @@ def transfer_offers(
             continue
         flight = leg.mode == "flight"
         hub_km = place["airport_km"] if flight else place["station_km"]
+        if hub_km is None:  # #625: no station (or airport) in the catalog: no transfer to invent
+            continue
         hub = "аэропорт" if flight else "вокзал"
         if flight and place.get("airport"):
             hub += " " + place["airport"]["iata"]
@@ -856,6 +875,15 @@ def real_data(on: bool) -> Iterator[None]:
         _real_data.reset(token)
 
 
+def hotel_port() -> HotelProvider:
+    """The hotel port of this request: HOTELS with real_data, else HOTELS without its live layers
+    (#566: the «Синтетика» switch; a live layer has `live_layer` and its fallback port in `base`)."""
+    port = HOTELS
+    while not _real_data.get() and getattr(port, "live_layer", False):
+        port = port.base
+    return port
+
+
 def transport() -> TransportProvider:
     """The transport port of this request: REAL_TRANSPORT when asked and built, else TRANSPORT."""
     return REAL_TRANSPORT if _real_data.get() and REAL_TRANSPORT is not None else TRANSPORT
@@ -900,7 +928,7 @@ def offers_for_place(
     hp, tp, xp = (
         (ESTIMATE_HOTELS, ESTIMATE_TRANSPORT, ESTIMATE_TRANSFERS)
         if estimate
-        else (HOTELS, transport(), TRANSFERS)
+        else (hotel_port(), transport(), TRANSFERS)
     )
     # A port that raises gives [] and a mark in the reply (ops.guarded, #290), not a 500.
     pairs = ops.guarded("hotels", lambda: hp.hotels(spec, place, now), [])

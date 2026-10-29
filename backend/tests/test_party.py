@@ -445,11 +445,22 @@ def test_ages_without_a_unit_after_a_counted_child():
         "Сочи с детьми 3, 5 и 8 ночей",
         "Сочи с детьми 3 и 4 ноя",
         "Сочи с детьми 5 и 8 (июль)",
+        "Сочи с детьми 3 и 4*",
+        "Сочи с детьми 10 и 11/07",
+        "Сочи с детьми 5 и 8 млн",
+        "Сочи с детьми 5 и 8 т.р.",
+        "Сочи с детьми 5 и 8 $",
+        "Сочи с детьми 5 и 8 eur",
+        "Сочи с детьми 1 и 2 раза",
+        "Сочи с детьми 1 и 2 вариант",
+        "Сочи с детьми 1 и 2 линия",
+        "Сочи с сыном 5 и 8",
     ],
 )
 def test_numbers_that_are_not_ages_stay_default(text):
-    found, _ = extract(text)
+    found, notes = extract(text)
     assert set(found.get("children_ages", [])) <= {7}
+    assert "возраст ребёнка: 7 лет (возраст не назван)" in notes
 
 
 def test_grown_son_with_his_wife_is_an_adult_party():
