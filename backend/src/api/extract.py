@@ -1905,6 +1905,50 @@ def _dates_en(t: str, found: dict, notes: list[str]) -> None:
     found["date_to"], found["nights"] = end, (end - start).days
 
 
+# #661: «с 28.12.2026», «28.12», «28.12.26», «28.12–03.01», «с 28.12 по 03.01». A day.month alone
+# is a date only with a year, a range or a lead word: «2.5 тыс», «1.500», «10.30» are no dates.
+_ND = r"(\d{1,2})\.(\d{1,2})(?:\.(\d{4}|\d{2}))?"
+NUMERIC_DATE_RE = re.compile(
+    rf"(?<![\d.,:/-]){_ND}(?:\s*(?:[-–—]|по|до)\s*{_ND})?(?![\d:]|[.,]\d|\s*(?:тыс|к\b|руб|р\b|₽|%|ч\b|час|млн))"
+)
+NUMERIC_LEAD_RE = re.compile(
+    r"(?:\b(?:с|со|на|к|до|от|числа|вылет\w*|прилет\w*|улета\w*|уезжа\w*|обратно|дат\w*)\s+)$"
+)
+
+
+def _numeric_day(d: str, m: str, y: str | None, today: date, after: date | None) -> date | None:
+    try:
+        if y:
+            return date(int(y) + (2000 if len(y) == 2 else 0), int(m), int(d))
+        if after:
+            end = date(after.year, int(m), int(d))
+            return end if end > after else date(after.year + 1, int(m), int(d))
+        return future_date(int(m), int(d), today)
+    except ValueError:
+        return None
+
+
+def _dates_numeric(t: str, found: dict, notes: list[str]) -> None:
+    if "date_from" in found:
+        return
+    today = date.today()
+    for m in NUMERIC_DATE_RE.finditer(t):
+        d1, m1, y1, d2, m2, y2 = m.groups()
+        ranged = d2 is not None
+        if not (y1 or y2 or ranged or NUMERIC_LEAD_RE.search(t[: m.start()])):
+            continue
+        start = _numeric_day(d1, m1, y1, today, None)
+        if start is None:
+            continue
+        found["date_from"], found["month"] = start, start.month
+        if ranged and (end := _numeric_day(d2, m2, y2, today, start)):
+            if start < end and (end - start).days <= MAX_NIGHTS:
+                found["date_to"], found["nights"] = end, (end - start).days
+            else:
+                notes.append(f"даты: «{m.group(0)}» — такого периода нет, конец по длительности")
+        return
+
+
 # «на ноябрьские»: 4 November is the day of national unity, a fixed public holiday (Labour Code
 # of Russia, art. 112). The transfers of days off change by year: the weekend around it is taken.
 # The plural only: «ноябрьский снег» names the month, not the holidays.
@@ -2790,6 +2834,7 @@ def extract(
     _english_places(t, found)
     _dates(t, found, notes, nights)
     _dates_en(t, found, notes)
+    _dates_numeric(t, found, notes)
     november = _november_holidays(t, found)
     holiday = _holiday(t, found, notes)
     range_notes = [i for i, n in enumerate(notes) if is_too_long_note(n)]
