@@ -151,6 +151,31 @@ suite("приложение", () => {
     expect(calls.at(-1)?.body).toMatchObject({ message: "Не важно, решите сами" });
   });
 
+  it("#681: несколько вопросов — клик выбирает, ответ уходит одним сообщением после всех выборов", async () => {
+    const clarify: ChatReply = {
+      ...structuredClone(checkoutStage),
+      stage: "clarify",
+      questions: [
+        { text: "Когда хотите поехать?", options: ["ноябрь (рекомендуем)", "январь", "Не важно, решите сами", "Свой вариант"] },
+        { text: "На сколько ночей?", options: ["3 ночи", "7 ночей (рекомендуем)", "Не важно, решите сами", "Свой вариант"] },
+      ],
+    };
+    routes["POST /api/chat"] = () => ({ status: 200, body: clarify });
+    await mount();
+    await click("Выходные в Казани");
+    await click("Отправить");
+    const posts = () => calls.filter((c) => c.key === "POST /api/chat").length;
+    const sent = posts();
+    await click("январь");
+    expect(posts()).toBe(sent);
+    expect(button("январь").getAttribute("aria-pressed")).toBe("true");
+    await click("Отправить ответы");
+    expect(calls.at(-1)?.body).toMatchObject({ message: "январь" });
+    await click("январь");
+    await click("7 ночей");
+    expect(calls.at(-1)?.body).toMatchObject({ message: "январь. 7 ночей (рекомендуем)" });
+  });
+
   it("неизвестная сессия: начинаем заново без ошибки", async () => {
     localStorage.setItem(SESSION_KEY, "gone");
     await mount();
