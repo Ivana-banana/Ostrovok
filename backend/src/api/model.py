@@ -1,7 +1,7 @@
 """Agent: the stage state machine of ADR-0001 (T2, #6).
 
 One user message moves the session as far as the known TripSpec allows:
-- clarify: before the first plan, at most 5 questions in at most two replies (#630);
+- clarify: only the first reply of a session, every open slot at once (#630);
 - inspire: no destination yet, 2–4 destinations to choose from;
 - select: the destination is known, but no offers were found;
 - compare: offers are found and ranked, the best set is pre-selected;
@@ -911,13 +911,12 @@ NIGHTS_ASK = "На сколько ночей?"
 WHO_ASK = "Кто едет — сколько взрослых?"
 BUDGET_ASK = "Какой бюджет на всю поездку?"
 KIDS_ASK = "Сколько детей едет и сколько им лет?"
-MAX_ASKS = 5  # #630: never more questions before the first plan
-ONE_TURN = 2  # this many questions or fewer go in one turn
-# #630: the second turn asks these; a turn that asked one of them is the last question turn
+MAX_ASKS = 6  # #630: one per slot: откуда, город/место, когда, ночи, кто, бюджет
+# #630: a question turn that asked one of these: the cards do not ask the party again
 PARTY_TEXTS = {PARTY_ASK, PARTY_ASK_KIDS, WHO_ASK, KIDS_ASK, BUDGET_ASK}
 
 
-def blocking_questions(spec: TripSpec, message: str = "", asked: int = 0) -> list[Question]:
+def blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
     """The questions of _blocking_questions with the buttons of #596."""
     defaults = {
         PARTY_ASK: "Двое взрослых",
@@ -928,7 +927,7 @@ def blocking_questions(spec: TripSpec, message: str = "", asked: int = 0) -> lis
     }
     return [
         with_buttons(q, defaults.get(q.text)) if q.options else q
-        for q in _blocking_questions(spec, message, asked)
+        for q in _blocking_questions(spec, message)
     ]
 
 
@@ -959,21 +958,11 @@ def _slots(spec: TripSpec, message: str) -> tuple[list[Question], list[Question]
     return trip, party
 
 
-def _blocking_questions(spec: TripSpec, message: str = "", asked: int = 0) -> list[Question]:
-    """#630: at most MAX_ASKS questions before the first plan, in at most two turns.
-
-    asked: the number of questions of the first turn; then only the party and the budget are
-    left to ask. ONE_TURN questions or fewer go in one turn. A slot not asked is an assumption
-    the user sees in the plan.
-    """
+def _blocking_questions(spec: TripSpec, message: str = "") -> list[Question]:
+    """#630: every open slot is asked at once, in one turn, before the first plan. A slot the
+    user skips («Не важно, решите сами») is an assumption the user sees in the plan."""
     trip, party = _slots(spec, message)
-    if asked:
-        return party[: max(MAX_ASKS - asked, 0)]
-    trip = trip[:MAX_ASKS]
-    party = party[: MAX_ASKS - len(trip)]
-    if not trip or len(trip) + len(party) <= ONE_TURN:
-        return [*trip, *party]
-    return trip
+    return [*trip, *party][:MAX_ASKS]
 
 
 def who_question(spec: TripSpec) -> list[Question]:
@@ -984,17 +973,6 @@ def who_question(spec: TripSpec) -> list[Question]:
         return []
     options = ["Один взрослый", "Двое взрослых", "Трое взрослых"]
     return [Question(text=WHO_ASK, options=options)]
-
-
-def second_turn(prev: ChatReply | None, old: ChatReply, message: str) -> int:
-    """#630: the number of questions of a first turn that asked the trip only; 0 when no
-    second question turn is due. «Не важно, решите сами» ends the questions."""
-    if prev is None or old.stage != "clarify" or message.strip() == SKIP_ASK:
-        return 0
-    texts = {q.text for q in old.questions}
-    if not texts or texts & PARTY_TEXTS or any(SAME_PLACE in t for t in texts):
-        return 0  # #453: after the origin is asked again, the plan comes with its line
-    return len(old.questions)
 
 
 def assume(spec: TripSpec) -> TripSpec:
@@ -3261,8 +3239,7 @@ def step(
 
     # #630: «кто едет» was asked in the turn before: the cards do not ask it again
     party_asked = old.stage == "clarify" and bool({q.text for q in old.questions} & PARTY_TEXTS)
-    asked = second_turn(prev, old, message)  # #630
-    if (prev is None or asked) and (questions := blocking_questions(spec, message, asked)):
+    if prev is None and (questions := blocking_questions(spec, message)):
         text = _text_clarify(questions)
         if use_llm and (own := llm.rewrite_questions(questions, deadline)):
             text, used = own, True  # checked against the question texts (TRAP-4)

@@ -235,10 +235,9 @@ def test_hotel_request_without_a_place_asks_the_city(store):
     """F14: «гостиницу на эту пятницу» used to ask the month and the budget. The origin goes
     first in the same turn (#436); a bare city answers the city of the hotel."""
     r = ask(store, F14)
-    assert r.stage == "clarify" and len(r.questions) == 2
+    assert r.stage == "clarify" and len(r.questions) >= 2  # #666: every open slot at once
     assert r.questions[0].text.startswith(model.ORIGIN_ASK)
     assert "город" in r.questions[1].text.lower()
-    assert "бюджет" not in r.reply.lower()
     after = say(store, "Казань", r.session_id)
     assert after.stage == "compare" and after.plan.spec.destinations == ["Казань"]
     assert after.plan.spec.nights == 2
@@ -247,7 +246,7 @@ def test_hotel_request_without_a_place_asks_the_city(store):
 @pytest.mark.parametrize("text", ["Нужен отель на выходные", "Найди жильё на 3 ночи в декабре"])
 def test_stay_request_asks_the_city(store, text):
     r = ask(store, text)
-    assert r.stage == "clarify" and len(r.questions) == 2
+    assert r.stage == "clarify" and len(r.questions) >= 2  # #666: every open slot at once
     assert "город" in r.questions[1].text.lower()
 
 
@@ -298,10 +297,9 @@ def test_counted_children_ask_nothing(store, text):
 
 def test_one_turn_the_origin_first(store):
     """The road over half of the whole budget, no origin and «с детьми»: the origin first (#436),
-    the children in the second turn (#630); then the plan."""
+    the children in the same turn (#666); then the plan."""
     r = ask(store, "Бали на 12 ночей, двое взрослых с детьми, перелёт и отель до 100 тысяч")
     assert "откуда" in r.questions[0].text.lower()
-    kids = ask(store, "Из Москвы", r.session_id)
-    assert [q.text for q in kids.questions] == [model.KIDS_ASK]
-    after = ask(store, "двое детей 5 и 10 лет", kids.session_id)
+    assert model.KIDS_ASK in [q.text for q in r.questions]
+    after = ask(store, "Из Москвы, двое детей 5 и 10 лет", r.session_id)
     assert after.stage == "compare" and after.plan.spec.children_ages == [5, 10]

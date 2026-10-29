@@ -6,6 +6,7 @@ Without a model (TRAP-1). A wrong guest count is a wrong price and a wrong booki
 import pytest
 from talk import planned, say
 
+from api import model
 from api.extract import extract
 from api.store import SessionStore
 
@@ -110,7 +111,7 @@ def test_the_mother_alone_keeps_her_child(store):
 # An unknown party with a child: the guest count changes the price, so the agent asks.
 def test_child_without_a_party_gets_a_question_not_an_assumption(store):
     r = say(store, "С 6 июня в Турцию с дочкой 7 лет")
-    assert r.stage == "clarify" and len(r.questions) <= 2
+    assert r.stage == "clarify" and len(r.questions) <= model.MAX_ASKS  # #666: one turn
     assert any(" едет " in q.text for q in r.questions)
     spec = r.plan.spec
     assert spec.children_ages == [7] and spec.destinations == ["Турция"]

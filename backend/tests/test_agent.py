@@ -27,12 +27,10 @@ def test_s1_goes_ahead_with_stated_assumptions(store):
 
 
 def test_vague_request_asks_at_most_two_questions_once(store):
-    """#630: the trip turn, then the party and the budget turn, then no more questions."""
+    """#666: one turn asks every open slot, then no more questions."""
     r = ask(store, "привет")
-    assert r.stage == "clarify" and len(r.questions) == 3
+    assert r.stage == "clarify" and len(r.questions) == 5
     assert all(q.options for q in r.questions)
-    party = ask(store, "пока не знаю", r.session_id)
-    assert party.stage == "clarify" and len(party.questions) == 2
     again = ask(store, "пока не знаю", r.session_id)
     assert again.stage != "clarify" and again.questions == []
     assert any(a.startswith("бюджет:") for a in again.plan.spec.assumptions)
