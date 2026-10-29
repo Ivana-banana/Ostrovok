@@ -2737,7 +2737,12 @@ def step(
     # also states trip fields or moves the dates («давай в Сочи поездом») is a re-plan, as before.
     # #179: «А дети бесплатно?» at a built plan is a question, not a party: nobody is added.
     asking = old.stage in PLAN_STAGES and is_child_question(message)
-    rules_found, rules_notes = extract(message, bool(old.plan.spec.destinations), asking=asking)
+    rules_found, rules_notes = extract(
+        message,
+        bool(old.plan.spec.destinations),
+        asking=asking,
+        kept_ages=old.plan.spec.children_ages,
+    )
     if not old.plan.spec.own_transport and rules_found.get("own_transport") is False:
         for k in OWN_KEYS:  # #424: «купите билеты» ends own tickets only where they are
             rules_found.pop(k)
@@ -2897,6 +2902,7 @@ def step(
         old.plan.spec.nights or DEFAULT_NIGHTS,
         old.plan.spec.adults,
         asking,
+        old.plan.spec.children_ages,
     )
     if not old.plan.spec.own_transport and found.get("own_transport") is False:
         for k in OWN_KEYS:
