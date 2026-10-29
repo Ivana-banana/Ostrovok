@@ -334,6 +334,22 @@ suite("приложение", () => {
     expect(calls.at(-1)?.body).toMatchObject({ message: "беру первый" });
   });
 
+  it("#677: «Выбрать» отеля — без нового сообщения в чате, план меняется на месте", async () => {
+    localStorage.setItem(SESSION_KEY, "s1");
+    const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };
+    compare.plan.selected = [];
+    const assemble = { ...structuredClone(checkoutStage), stage: "assemble" as const };
+    routes["GET /api/session/s1"] = () => ({ status: 200, body: compare });
+    routes["POST /api/chat"] = () => ({ status: 200, body: assemble });
+    await mount();
+    const before = box.querySelectorAll(".msg").length;
+    await click("Выбрать");
+    expect(calls.at(-1)?.body).toMatchObject({ message: "беру первый" });
+    expect(box.querySelectorAll(".msg").length).toBe(before);
+    expect(box.querySelector(".msg.user")).toBeNull();
+    expect(box.querySelector("[aria-label='Сравнение отелей'] tr.chosen")).not.toBeNull();
+  });
+
   it("выбор транспорта на этапе сравнения — сообщение агенту «возьми рейс N»", async () => {
     localStorage.setItem(SESSION_KEY, "s1");
     const compare = { ...structuredClone(checkoutStage), stage: "compare" as const };

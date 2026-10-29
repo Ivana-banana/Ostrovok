@@ -26,6 +26,8 @@ const KEEP_REPLIES = 6; // the last agent replies stored with the chat; older on
 type Ui = { messages: Msg[]; removed: Offer[] };
 
 const STALE_PLAN = "Не удалось обновить план — перезагрузите страницу";
+// #677: a quiet pick changes the last message in place only between these stages.
+const IN_PLACE: Stage[] = ["compare", "assemble"];
 
 export const SESSION_KEY = "trip.session";
 const uiKey = (sid: string) => `trip.ui.${sid}`;
@@ -295,33 +297,39 @@ export function App() {
     else end.current?.scrollIntoView?.({ block: "end" });
   }, [ui.messages.length]);
 
-  async function send(message: string) {
+  // quiet: «Выбрать» of a hotel or a leg (#677). No user bubble and no new answer: the last agent
+  // message and the plan under it change in place. The backend takes a hotel pick on compare as
+  // consent (compare → assemble); a reply off the plan stages is a normal turn.
+  async function send(message: string, quiet = false) {
     const m = message.trim();
     if (!m || busy || restoring) return;
     setBusy(true);
     setError(null);
     setNote(null);
     const withUser = { ...ui, messages: [...ui.messages, { role: "user" as const, text: m }] };
-    setUi(withUser);
-    setThinking(true);
+    if (!quiet) {
+      setUi(withUser);
+      setThinking(true);
+    }
     const no = loadNo.current;
     try {
       const t0 = Date.now();
       const r = await chat({ session_id: sid, message: m, ...requested() });
       // A fast offline reply still shows the thinking indicator for a moment (not with reduced motion).
       const rest = MIN_THINK_MS - (Date.now() - t0);
-      if (motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
+      if (!quiet && motionOk() && rest > 0) await new Promise((res) => setTimeout(res, rest));
       if (no !== loadNo.current) return; // the user switched the chat while the agent thought
       writeSid(r.session_id);
       setReply(r);
       setPrefs(rememberPrefs(r.plan.spec));
-      update(
-        { ...withUser, messages: [...withUser.messages, { role: "agent", text: describe(r), stage: r.stage, reply: r }] },
-        r.session_id,
-      );
+      const at = ui.messages.map((x) => x.role).lastIndexOf("agent");
+      const answer = { role: "agent" as const, text: describe(r), stage: r.stage, reply: r };
+      if (quiet && at >= 0 && reply && IN_PLACE.includes(reply.stage) && IN_PLACE.includes(r.stage)) {
+        update({ ...ui, messages: ui.messages.map((x, i) => (i === at ? answer : x)) }, r.session_id);
+      } else update({ ...withUser, messages: [...withUser.messages, answer] }, r.session_id);
       const first = withUser.messages.find((x) => x.role === "user")?.text ?? m;
       editChats((list) => touchChat(list, r.session_id, first));
-      setText("");
+      if (!quiet) setText("");
     } catch (e) {
       setError(userError(e));
     } finally {
@@ -495,6 +503,7 @@ export function App() {
           (o) => o.kind !== "extra" || !ui.removed.some((p) => p.offer_id === o.for_offer_id),
         )}
         onSend={send}
+        onPick={(t) => void send(t, true)}
         onCart={onCart}
         onCheckout={onCheckout}
       />

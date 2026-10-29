@@ -45,6 +45,7 @@ export type BoardProps = {
   busy: boolean;
   removed: Offer[]; // items removed from the cart in this session, to put back
   onSend: (text: string) => void;
+  onPick?: (text: string) => void; // «Выбрать» of a hotel or a leg: the plan changes in place (#677)
   onCart: (action: "add" | "remove", offerId: string) => void;
   onCheckout: (guest: Guest | null) => void;
 };
@@ -1156,7 +1157,7 @@ export function EarlierChoices({ reply, current, busy, onSend }: {
 // first, then the compact «Подробнее» (priorities, assumptions, changes, reasons). The options
 // the user already chose from fold into «Варианты» after the cart is built. Every section stays
 // in the DOM: a folded one is in a closed <details>.
-export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: BoardProps) {
+export function Board({ reply, busy, removed, onSend, onPick = onSend, onCart, onCheckout }: BoardProps) {
   const { plan, stage, cart, voucher } = reply;
   const next = NEXT[stage];
   const past = stage === "checkout" || stage === "booked";
@@ -1165,8 +1166,8 @@ export function Board({ reply, busy, removed, onSend, onCart, onCheckout }: Boar
   );
   const choices = (
     <>
-      <Hotels plan={plan} stage={stage} busy={busy} onSend={onSend} />
-      <Transport plan={plan} stage={stage} busy={busy} onSend={onSend} />
+      <Hotels plan={plan} stage={stage} busy={busy} onSend={onPick} />
+      <Transport plan={plan} stage={stage} busy={busy} onSend={onPick} />
       <Bundles plan={plan} stage={stage} busy={busy} onSend={onSend} />
     </>
   );
